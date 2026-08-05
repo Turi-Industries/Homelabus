@@ -5,6 +5,8 @@ members = [
     "crates/hlb-orchestrator",
     "crates/hlb-resolver",
     "crates/hlb-catalog",
+    "crates/hlb-state",
+    "crates/hlb-engine",
     "crates/hlb-cli",
 ]
 
@@ -21,6 +23,8 @@ hlb-types = { path = "crates/hlb-types" }
 hlb-orchestrator = { path = "crates/hlb-orchestrator" }
 hlb-resolver = { path = "crates/hlb-resolver" }
 hlb-catalog = { path = "crates/hlb-catalog" }
+hlb-state = { path = "crates/hlb-state" }
+hlb-engine = { path = "crates/hlb-engine" }
 hlb-cli = { path = "crates/hlb-cli" }
 
 # --- runtime ---
@@ -30,6 +34,9 @@ async-trait = "0.1"
 
 # --- docker / swarm ---
 bollard = "0.19"
+
+# --- état ---
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 
 # --- sérialisation ---
 serde = { version = "1", features = ["derive"] }

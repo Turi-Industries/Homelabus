@@ -9,7 +9,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use hlb_catalog::Catalog;
 use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
+use hlb_engine::Executor;
 use hlb_resolver::{DependencyGraph, InstallParams};
+use hlb_state::State;
 
 #[derive(Parser)]
 #[command(name = "hlb", version, about = "Gestion d'un homelab sur Docker Swarm")]
@@ -17,6 +19,10 @@ struct Cli {
     /// Racine du catalogue d'applications.
     #[arg(long, global = true, default_value = "catalog", env = "HLB_CATALOG")]
     catalog: PathBuf,
+
+    /// Base d'état locale du controller.
+    #[arg(long, global = true, default_value = "hlb.db", env = "HLB_STATE")]
+    state: PathBuf,
 
     #[command(subcommand)]
     command: Command,
@@ -41,8 +47,23 @@ enum Command {
     /// Ordre de déploiement déduit des dépendances déclarées.
     Order,
 
+    /// Installer une app. Aperçu par défaut : rien n'est modifié sans --apply.
+    Install {
+        app: String,
+        #[arg(long)]
+        domain: Option<String>,
+        #[arg(long)]
+        mail_domain: Option<String>,
+        /// Appliquer réellement le plan.
+        #[arg(long)]
+        apply: bool,
+    },
+
     /// État des services gérés par HomelabUS.
     Ps,
+
+    /// Actions manuelles en attente, toutes apps confondues (§4.6).
+    Todo,
 }
 
 #[derive(Subcommand)]
@@ -159,6 +180,82 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             println!("Plan pour « {app} »  (aucune modification effectuée)\n");
             print!("{plan}");
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Install { app, domain, mail_domain, apply } => {
+            let c = Catalog::load(&cli.catalog)?;
+            let entry = c.get(app)?;
+
+            let params = InstallParams {
+                domain: domain.clone(),
+                mail_domain: mail_domain.clone(),
+                ..Default::default()
+            };
+            let plan = hlb_resolver::resolve(&entry.manifest, &params)?;
+
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                // §4.8 — le manifest est figé maintenant : une évolution ultérieure du
+                // catalogue ne modifiera pas cette installation.
+                state.upsert_app(app, &entry.manifest, domain.as_deref()).await?;
+
+                let orch = SwarmOrchestrator::connect()?;
+                let out = Executor::new(&orch, &state)
+                    .apply(*apply)
+                    .run(app, &plan)
+                    .await?;
+
+                if !apply {
+                    println!("Aperçu pour « {app} » — aucune modification effectuée.\n");
+                    print!("{plan}");
+                    println!("\nRelance avec --apply pour exécuter.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
+                println!(
+                    "{} exécutée(s), {} ignorée(s), {} non implémentée(s)",
+                    out.executed, out.skipped, out.unimplemented
+                );
+
+                if let Some((seq, err)) = &out.failed {
+                    eprintln!("\n✗ échec à l'action {} : {err}", seq + 1);
+                    eprintln!("  relance la même commande pour reprendre à cette étape.");
+                    return Ok(ExitCode::FAILURE);
+                }
+
+                if out.unimplemented > 0 {
+                    println!(
+                        "\n⚠️  {} action(s) nécessitent des briques non encore écrites \
+                         (base de données, secrets, OIDC, ingress).",
+                        out.unimplemented
+                    );
+                    println!("   Elles sont enregistrées comme telles, pas comme réussies.");
+                }
+                Ok(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::Todo => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let guides = state.pending_guides().await?;
+
+                if guides.is_empty() {
+                    println!("Aucune action manuelle en attente.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
+                println!("{} action(s) manuelle(s) en attente :\n", guides.len());
+                for (app, id, title, blocking) in &guides {
+                    println!(
+                        "  {} {app} · {title}  [{id}]",
+                        if *blocking { "🔴" } else { "🟠" }
+                    );
+                }
+                Ok(ExitCode::SUCCESS)
+            })
         }
 
         Command::Ps => {

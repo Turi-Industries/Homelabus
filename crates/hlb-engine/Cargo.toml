@@ -1,0 +1,23 @@
+[package]
+name = "hlb-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Exécuteur de plans : aperçu par défaut, idempotent, reprenable."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-resolver.workspace = true
+hlb-orchestrator.workspace = true
+hlb-state.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+async-trait.workspace = true
+serde_yaml_ng.workspace = true
+
+[lints]
+workspace = true

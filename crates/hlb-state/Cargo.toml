@@ -1,0 +1,20 @@
+[package]
+name = "hlb-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Store d'état : apps installées, progression des plans, actions manuelles."
+
+[dependencies]
+hlb-types.workspace = true
+sqlx.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

@@ -16,10 +16,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
 | `hlb-resolver` — résolution + graphe + plan | ✅ 17 tests |
 | `hlb-catalog` — chargement et validation | ✅ 5 tests |
-| `hlb-cli` — `catalog`, `plan`, `order`, `ps` | ✅ utilisable |
-| Controller (axum), agent, état (sqlx) | ⬜ à venir |
+| `hlb-state` — état persistant, reprise (sqlx/SQLite) | ✅ 8 tests |
+| `hlb-engine` — exécuteur : aperçu, idempotence, reprise | ✅ 7 tests |
+| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `todo`, `ps` | ✅ utilisable |
+| Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**36 tests, 0 avertissement clippy.**
+**51 tests, 0 avertissement clippy.**
 
 ## Essayer
 
@@ -29,6 +31,18 @@ cargo build
 ./target/debug/hlb catalog validate
 ./target/debug/hlb order
 ./target/debug/hlb plan gitea --domain git.example.fr
+
+# Installation — aperçu par défaut, rien n'est modifié
+./target/debug/hlb install valkey
+./target/debug/hlb install valkey --apply    # exécute réellement
+./target/debug/hlb todo                      # actions manuelles en attente
+```
+
+⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. En attendant
+`hlb node add`, il faut poser le label à la main :
+
+```sh
+docker node update --label-add tier=heavy $(docker node ls -q)
 ```
 
 ## Développement
