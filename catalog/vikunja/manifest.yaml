@@ -1,0 +1,31 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: vikunja
+  displayName: Vikunja
+  category: productivity
+  homepage: https://vikunja.io
+spec:
+  image: { repo: vikunja/vikunja, tag: "0.24" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      redirectPaths: ["/auth/openid/pocketid"]
+    - kind: storage
+      name: files
+      path: /app/vikunja/files
+      tier: local
+      backup: true
+    - kind: smtp
+  ingress:
+    - host: "{{ domain }}"
+      port: 3456
+      chain: [caddy-front, anubis, caddy-back]
+      expose: after-guide
+  swarm:
+    replicas: 2          # stateless → HA réelle via le routing mesh (§2bis.3)
+    tier: light
+  update:
+    channel: minor

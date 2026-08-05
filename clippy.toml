@@ -1,0 +1,5 @@
+# `unwrap`/`expect` sont interdits en production (du code qui pilote des clusters ne
+# doit pas paniquer), mais parfaitement légitimes dans les tests : c'est ainsi qu'on
+# exprime une assertion.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

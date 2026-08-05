@@ -1,0 +1,18 @@
+[package]
+name = "hlb-catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Chargement et validation du catalogue d'applications."
+
+[dependencies]
+hlb-types.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hlb-resolver.workspace = true
+
+[lints]
+workspace = true

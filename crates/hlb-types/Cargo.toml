@@ -1,0 +1,17 @@
+[package]
+name = "hlb-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Types partagés : manifests, capacités, état. Source unique de vérité du schéma."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: valkey
+  displayName: Valkey
+  category: platform
+spec:
+  image: { repo: valkey/valkey, tag: "8-alpine" }
+  requires:
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: false      # cache : reconstructible, inutile de le sauvegarder
+  swarm:
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+  update:
+    channel: minor

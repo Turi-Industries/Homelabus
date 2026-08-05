@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# Base d'état locale du controller
+*.db
+*.db-shm
+*.db-wal

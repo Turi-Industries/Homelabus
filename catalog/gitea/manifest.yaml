@@ -1,0 +1,31 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: gitea
+  displayName: Gitea
+  category: development
+  homepage: https://about.gitea.com
+spec:
+  image: { repo: gitea/gitea, tag: "1.24" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      redirectPaths: ["/user/oauth2/PocketID/callback"]
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: true
+  ingress:
+    - host: "{{ domain }}"
+      port: 3000
+      # Pas d'Anubis : un proof-of-work devant l'endpoint Git casserait `git clone`.
+      chain: [caddy-front, caddy-back]
+      expose: after-guide      # §4.6bis — premier inscrit = admin
+  swarm:
+    replicas: 1
+    tier: heavy
+  update:
+    channel: minor

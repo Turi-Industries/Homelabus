@@ -1,0 +1,27 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: pocket-id
+  displayName: Pocket ID
+  category: platform
+  homepage: https://pocket-id.org
+spec:
+  image: { repo: ghcr.io/pocket-id/pocket-id, tag: "v1" }
+  requires:
+    - kind: storage
+      name: data
+      path: /app/data
+      tier: local
+      backup: true
+      sqlite: true       # §3.4 — sauvegarde par snapshot, jamais copie à chaud
+  ingress:
+    - host: "{{ domain }}"
+      port: 1411
+      chain: [caddy-front, caddy-back]   # pas d'Anubis : casserait les callbacks OIDC
+      expose: public
+  swarm:
+    replicas: 1
+    tier: heavy
+  update:
+    # §5.7bis — le service le plus critique du cluster : jamais de MAJ automatique.
+    channel: pin

@@ -1,0 +1,23 @@
+[package]
+name = "hlb-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI hlb."
+
+[[bin]]
+name = "hlb"
+path = "src/main.rs"
+
+[dependencies]
+hlb-types.workspace = true
+hlb-catalog.workspace = true
+hlb-resolver.workspace = true
+hlb-orchestrator.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

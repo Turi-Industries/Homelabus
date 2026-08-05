@@ -1,0 +1,36 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: vaultwarden
+  displayName: Vaultwarden
+  category: security
+  homepage: https://github.com/dani-garcia/vaultwarden
+spec:
+  # §5.6 — SSO OIDC officiel depuis la 1.35.0, image standard, aucun fork.
+  image: { repo: vaultwarden/server, tag: "1.35" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      # Callback dérivé de DOMAIN par Vaultwarden lui-même.
+      redirectPaths: ["/identity/connect/oidc-signin"]
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: true
+    - kind: smtp
+  ingress:
+    - host: "{{ domain }}"
+      port: 80
+      # Pas d'Anubis : casserait les clients mobiles et l'extension navigateur.
+      chain: [caddy-front, caddy-back]
+      expose: after-guide
+  swarm:
+    replicas: 1
+    tier: heavy
+  update:
+    # 🔴 C'est ton gestionnaire de mots de passe ET ton accès de secours (§5.7bis).
+    # Jamais de mise à jour automatique : notification et validation manuelle.
+    channel: pin

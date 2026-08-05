@@ -1,0 +1,29 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: stalwart
+  displayName: Stalwart Mail
+  category: platform
+  homepage: https://stalw.art
+spec:
+  image: { repo: stalwartlabs/stalwart, tag: "v0.13" }
+  # §10.1 — le mail ne va pas dans le Swarm : IP fixe, rDNS, ports SMTP/IMAP,
+  # et surtout il doit survivre à une panne du cluster (§5bis.4).
+  runtime: compose
+  requires:
+    - kind: storage
+      name: data
+      path: /opt/stalwart
+      tier: local        # 🔴 jamais NFS : RocksDB + blobs
+      backup: true
+  ingress:
+    # Seule l'interface web passe par le proxy. Les ports 25/465/587/993/4190
+    # sont exposés en direct : SMTP/IMAP ne sont pas du HTTP, et un proof-of-work
+    # devant du SMTP casserait la réception.
+    - host: "{{ domain }}"
+      port: 8080
+      chain: [caddy-front, caddy-back]
+      expose: public
+  update:
+    # Un serveur mail ne se met pas à jour tout seul la nuit.
+    channel: pin
