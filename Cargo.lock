@@ -972,6 +972,7 @@ dependencies = [
 name = "hlb-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "hlb-catalog",
  "hlb-engine",
@@ -983,6 +984,7 @@ dependencies = [
  "hlb-secrets",
  "hlb-state",
  "hlb-types",
+ "hlb-updater",
  "tokio",
  "tracing-subscriber",
 ]
@@ -1098,6 +1100,22 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hlb-updater"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hlb-orchestrator",
+ "hlb-registry",
+ "hlb-state",
+ "hlb-types",
+ "serde_yaml_ng",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@ members = [
     "crates/hlb-ingress",
     "crates/hlb-platform",
     "crates/hlb-registry",
+    "crates/hlb-updater",
     "crates/hlb-secrets",
     "crates/hlb-state",
     "crates/hlb-engine",
@@ -30,6 +31,7 @@ hlb-catalog = { path = "crates/hlb-catalog" }
 hlb-ingress = { path = "crates/hlb-ingress" }
 hlb-platform = { path = "crates/hlb-platform" }
 hlb-registry = { path = "crates/hlb-registry" }
+hlb-updater = { path = "crates/hlb-updater" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
 hlb-engine = { path = "crates/hlb-engine" }

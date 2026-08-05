@@ -89,6 +89,10 @@ enum Command {
         back_admin: Option<String>,
     },
 
+    /// Mises à jour disponibles et leur application (§7).
+    #[command(subcommand)]
+    Update(UpdateCmd),
+
     /// État des services gérés par HomelabUS.
     Ps,
 
@@ -103,6 +107,19 @@ enum Command {
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
+}
+
+#[derive(Subcommand)]
+enum UpdateCmd {
+    /// Interroger les registres. Purement en lecture.
+    Check,
+    /// Appliquer la mise à jour d'une app.
+    Apply {
+        app: String,
+        /// Passer outre la fenêtre de maintenance.
+        #[arg(long)]
+        force_window: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -455,6 +472,76 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         sont irrécupérables. Garde deux copies hors ligne."
                 );
                 Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::Update(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let registry = hlb_registry::RegistryClient::new();
+                let now = chrono::Local::now().naive_local();
+
+                let candidates = hlb_updater::check(&state, &registry, &now).await?;
+
+                match cmd {
+                    UpdateCmd::Check => {
+                        if candidates.is_empty() {
+                            println!("✓ tout est à jour.");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                        }
+                        println!("{} mise(s) à jour disponible(s) :\n", candidates.len());
+                        for c in &candidates {
+                            let quand = if c.in_window { "applicable" } else { "hors fenêtre" };
+                            let sauv = if c.needs_backup { ", sauvegarde requise" } else { "" };
+                            println!("  • {}  [{quand}{sauv}]", c.describe());
+                        }
+                        println!("\n  hlb update apply <app> pour appliquer.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    UpdateCmd::Apply { app, force_window } => {
+                        let Some(c) = candidates.iter().find(|c| &c.app == app) else {
+                            println!("Rien à mettre à jour pour « {app} ».");
+                            return Ok(ExitCode::SUCCESS);
+                        };
+
+                        if !c.in_window && !force_window {
+                            eprintln!(
+                                "« {app} » est hors de sa fenêtre de maintenance.\n                                   --force-window pour passer outre."
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        // 🔴 §7 — pas de sauvegarde disponible, pas de mise à jour.
+                        hlb_updater::authorize(c, None, *force_window)?;
+
+                        let orch = SwarmOrchestrator::connect()?;
+                        println!("{}…", c.describe());
+                        let outcome = hlb_updater::apply(&orch, &state, c, 180).await?;
+
+                        match outcome {
+                            hlb_updater::UpdateOutcome::Applied { digest } => {
+                                println!("✓ appliquée — {}", &digest[..23.min(digest.len())]);
+                                Ok(ExitCode::SUCCESS)
+                            }
+                            hlb_updater::UpdateOutcome::RolledBack { reason } => {
+                                eprintln!("↩ Swarm a annulé : {reason}");
+                                eprintln!("  le service tourne toujours dans son ancienne version.");
+                                Ok(ExitCode::FAILURE)
+                            }
+                            hlb_updater::UpdateOutcome::Paused => {
+                                eprintln!("⏸ bascule en pause — intervention nécessaire.");
+                                Ok(ExitCode::FAILURE)
+                            }
+                            hlb_updater::UpdateOutcome::Inconclusive => {
+                                eprintln!("? issue indéterminée dans le délai imparti.");
+                                eprintln!("  vérifie avec hlb ps avant de relancer.");
+                                Ok(ExitCode::FAILURE)
+                            }
+                        }
+                    }
+                }
             })
         }
 

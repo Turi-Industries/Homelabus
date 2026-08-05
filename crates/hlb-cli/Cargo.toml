@@ -21,6 +21,8 @@ hlb-secrets.workspace = true
 hlb-platform.workspace = true
 hlb-ingress.workspace = true
 hlb-registry.workspace = true
+hlb-updater.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true

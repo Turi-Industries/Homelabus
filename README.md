@@ -22,11 +22,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 10 + 11 tests |
 | `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
+| `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, volumes, pipeline de MAJ complet | ⬜ à venir |
+| Sauvegardes (restic), client PocketID, volumes | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**136 tests unitaires + 22 tests d'intégration.**
+**157 tests unitaires + 22 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -139,3 +140,16 @@ mettre à jour tes services à 3 h du matin.
 ## Licence
 
 AGPL-3.0-or-later.
+
+## Limites assumées
+
+Ces manques sont **explicites dans le code**, jamais masqués :
+
+- **Aucun moteur de sauvegarde.** Une app dont le manifest déclare
+  `backupBefore: true` voit sa mise à jour **refusée**, avec un message clair.
+  Une migration de schéma n'est pas réversible par un rollback d'image :
+  prétendre avoir sauvegardé serait le pire des mensonges.
+- **Client PocketID et création de volume** restent `Unimplemented` dans
+  l'exécuteur — enregistrés comme tels, jamais comptés comme réussis.
+- `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur
+  Rust. Dépendance transitive, sans action possible de notre côté pour l'instant.

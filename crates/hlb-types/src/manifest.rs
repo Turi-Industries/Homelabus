@@ -166,6 +166,9 @@ pub struct UpdatePolicy {
     /// Dépôt upstream à surveiller quand l'image déployée est un fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_upstream: Option<String>,
+    /// Fenêtre de maintenance, ex. « sun 03:00-05:00 ». Absente = à tout moment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
 }
 
 impl Default for UpdatePolicy {
@@ -175,6 +178,7 @@ impl Default for UpdatePolicy {
             backup_before: true,
             auto_rollback: true,
             watch_upstream: None,
+            window: None,
         }
     }
 }

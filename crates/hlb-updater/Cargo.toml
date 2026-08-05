@@ -1,0 +1,25 @@
+[package]
+name = "hlb-updater"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Veille, politique de version, fenêtres de maintenance et rollback."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-state.workspace = true
+hlb-registry.workspace = true
+hlb-orchestrator.workspace = true
+tokio = { workspace = true }
+async-trait.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_yaml_ng.workspace = true
+
+[lints]
+workspace = true
