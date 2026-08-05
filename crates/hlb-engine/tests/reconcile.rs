@@ -17,6 +17,7 @@ use hlb_state::State;
 struct Fake {
     observed: Mutex<Vec<ServiceStatus>>,
     deployed: Mutex<Vec<String>>,
+    deployed_images: Mutex<Vec<String>>,
     scaled: Mutex<Vec<(String, u64)>>,
     updated: Mutex<Vec<(String, String)>>,
     removed: Mutex<Vec<String>>,
@@ -38,6 +39,7 @@ impl Orchestrator for Fake {
     }
     async fn deploy(&self, s: &ServiceSpec) -> hlb_orchestrator::Result<String> {
         self.deployed.lock().unwrap().push(s.name.clone());
+        self.deployed_images.lock().unwrap().push(s.image.clone());
         Ok("id".into())
     }
     async fn update_image(&self, n: &str, i: &str) -> hlb_orchestrator::Result<()> {
@@ -297,4 +299,27 @@ async fn one_failure_does_not_stop_the_others() {
     assert_eq!(report.failed.len(), 1, "gitea échoue");
     assert_eq!(report.corrected.len(), 1, "vikunja est quand même réparée");
     assert_eq!(*o.0.deployed.lock().unwrap(), vec!["vikunja"]);
+}
+
+/// Le digest résolu pendant l'exécution doit primer sur le tag figé dans le plan.
+#[tokio::test]
+async fn the_deploy_uses_the_digest_resolved_earlier_in_the_same_plan() {
+    use hlb_engine::Executor;
+
+    let o = Fake::default();
+    let s = State::in_memory().await.unwrap();
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
+    s.upsert_app("gitea", &m, None).await.unwrap();
+
+    // Simule ce que fait `ResolveDigest` juste avant le déploiement.
+    s.set_app_digest("gitea", "sha256:deadbeef").await.unwrap();
+
+    let plan = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
+    Executor::new(&o, &s).apply(true).run("gitea", &plan).await.unwrap();
+
+    assert_eq!(
+        *o.deployed_images.lock().unwrap(),
+        vec!["gitea/gitea:1.24@sha256:deadbeef"],
+        "c'est le digest qui doit être déployé, pas le tag"
+    );
 }

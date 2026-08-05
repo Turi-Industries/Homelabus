@@ -174,6 +174,17 @@ impl State {
         }
     }
 
+    /// Fige le digest résolu au déploiement (§7).
+    ///
+    /// Le manifest stocké est réécrit : c'est bien le digest qui fait foi ensuite,
+    /// pas le tag.
+    pub async fn set_app_digest(&self, name: &str, digest: &str) -> Result<()> {
+        let mut m = self.app_manifest(name).await?;
+        m.spec.image.digest = Some(digest.to_string());
+        self.upsert_app(name, &m, self.app_domain(name).await?.as_deref())
+            .await
+    }
+
     pub async fn set_app_status(&self, name: &str, status: &str) -> Result<()> {
         sqlx::query(
             "UPDATE apps SET status = ?2, updated_at = datetime('now') WHERE name = ?1",
@@ -554,6 +565,20 @@ mod tests {
         assert_eq!(g.len(), 2);
         assert!(g[0].3, "les bloquantes d'abord");
         assert_eq!(g[0].1, "admin");
+    }
+
+    #[tokio::test]
+    async fn the_resolved_digest_is_frozen_in_the_manifest() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        assert!(s.app_manifest("gitea").await.unwrap().spec.image.digest.is_none());
+
+        s.set_app_digest("gitea", "sha256:abc").await.unwrap();
+
+        let m = s.app_manifest("gitea").await.unwrap();
+        assert_eq!(m.spec.image.digest.as_deref(), Some("sha256:abc"));
+        // C'est le digest qui est déployé, pas le tag.
+        assert_eq!(m.spec.image.reference(), "a/b:1@sha256:abc");
     }
 
     #[tokio::test]

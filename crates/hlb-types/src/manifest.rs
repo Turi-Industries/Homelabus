@@ -85,10 +85,15 @@ pub struct Image {
 }
 
 impl Image {
-    /// Référence à passer à Docker. Le digest gagne toujours sur le tag.
+    /// Référence à passer à Docker.
+    ///
+    /// Quand le digest est connu, on garde **aussi** le tag : `repo:tag@digest` est la
+    /// forme canonique complète, c'est celle que Swarm produit lui-même, et elle reste
+    /// lisible — sans le tag, personne ne sait de quelle version vient ce digest.
+    /// C'est le digest qui détermine ce qui tourne, le tag n'est plus qu'une étiquette.
     pub fn reference(&self) -> String {
         match &self.digest {
-            Some(d) => format!("{}@{}", self.repo, d),
+            Some(d) => format!("{}:{}@{}", self.repo, self.tag, d),
             None => format!("{}:{}", self.repo, self.tag),
         }
     }
@@ -269,9 +274,9 @@ spec:
     }
 
     #[test]
-    fn digest_wins_over_tag() {
+    fn a_pinned_reference_keeps_the_tag_for_readability() {
         let m: Manifest = serde_yaml_ng::from_str(VIKUNJA).unwrap();
-        assert_eq!(m.spec.image.reference(), "vikunja/vikunja@sha256:abc");
+        assert_eq!(m.spec.image.reference(), "vikunja/vikunja:0.24.6@sha256:abc");
         assert!(m.spec.image.is_pinned());
     }
 

@@ -21,11 +21,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
 | `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 10 + 11 tests |
 | `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
+| `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, veilleur de registre, volumes | ⬜ à venir |
+| Client PocketID, volumes, pipeline de MAJ complet | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**106 tests unitaires + 16 tests d'intégration.**
+**136 tests unitaires + 22 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -37,6 +38,15 @@ docker run -d --name hlb-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgre
 export HLB_TEST_PG=postgres://postgres:test@localhost:55432/postgres
 cargo test -p hlb-platform -- --ignored --test-threads=1 --nocapture
 docker rm -f hlb-test-pg
+```
+
+### Tests contre les vrais registres
+
+La danse d'authentification OCI (401 → `WWW-Authenticate` → jeton → réessai) ne se
+teste pas contre un bouchon : chaque registre a ses particularités.
+
+```sh
+cargo test -p hlb-registry -- --ignored --nocapture   # accès réseau requis
 ```
 
 ## Essayer

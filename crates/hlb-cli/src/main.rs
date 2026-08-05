@@ -255,7 +255,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     None => None,
                 };
 
-                let mut exec = Executor::new(&orch, &state).with_vault(&vault).apply(*apply);
+                let registry = hlb_registry::RegistryClient::new();
+
+                let mut exec = Executor::new(&orch, &state)
+                    .with_vault(&vault)
+                    .with_registry(&registry)
+                    .apply(*apply);
                 if let Some(p) = &pg {
                     exec = exec.with_postgres(p);
                 }

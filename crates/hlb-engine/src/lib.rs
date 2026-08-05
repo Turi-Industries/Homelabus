@@ -15,6 +15,7 @@ pub use reconcile::{Drift, Reconciler, Report};
 
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_platform::PostgresProvisioner;
+use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
 use hlb_state::{ActionStatus, State};
@@ -32,6 +33,9 @@ pub enum Error {
 
     #[error(transparent)]
     Platform(#[from] hlb_platform::Error),
+
+    #[error(transparent)]
+    Registry(#[from] hlb_registry::Error),
 
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
@@ -66,6 +70,8 @@ pub struct Executor<'a, O: Orchestrator> {
     vault: Option<&'a Vault>,
     /// Absent tant que PostgreSQL n'est pas déployé et joignable.
     postgres: Option<&'a PostgresProvisioner>,
+    /// Absent hors ligne : sans registre, aucun digest ne peut être résolu.
+    registry: Option<&'a RegistryClient>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -77,6 +83,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             state,
             vault: None,
             postgres: None,
+            registry: None,
             apply: false,
         }
     }
@@ -88,6 +95,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_postgres(mut self, pg: &'a PostgresProvisioner) -> Self {
         self.postgres = Some(pg);
+        self
+    }
+
+    pub fn with_registry(mut self, r: &'a RegistryClient) -> Self {
+        self.registry = Some(r);
         self
     }
 
@@ -138,7 +150,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 continue;
             }
 
-            match self.execute_one(action).await {
+            match self.execute_one(app, action).await {
                 Ok(Step::Done) => {
                     self.state
                         .set_action_status(app, seq, ActionStatus::Done, None)
@@ -173,10 +185,18 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         Ok(out)
     }
 
-    async fn execute_one(&self, action: &Action) -> Result<Step> {
+    async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService { name, image, replicas, constraints } => {
-                let mut spec = ServiceSpec::new(name, image).replicas(*replicas);
+                // ⚠️ Le plan a été construit AVANT l'exécution, donc son champ `image`
+                // porte encore le tag. Le digest résolu à l'étape précédente vit dans
+                // l'état — c'est lui qui fait foi (§7).
+                let resolved = match self.state.app_manifest(app).await {
+                    Ok(m) if m.spec.image.is_pinned() => m.spec.image.reference(),
+                    _ => image.clone(),
+                };
+
+                let mut spec = ServiceSpec::new(name, &resolved).replicas(*replicas);
                 for c in constraints {
                     spec = spec.constraint(c);
                 }
@@ -231,12 +251,26 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             // c'est l'utilisateur qui agit.
             Action::PendingGuideStep { .. } => Ok(Step::Done),
 
+            Action::ResolveDigest { repo, tag } => {
+                let Some(reg) = self.registry else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                let image = ImageRef::parse(&format!("{repo}:{tag}"));
+                let digest = reg.resolve_digest(&image).await?;
+
+                // §7 — le digest est figé dans l'état : c'est lui qui sera déployé,
+                // pas le tag, qui est mutable.
+                self.state.set_app_digest(app, &digest).await?;
+                tracing::info!(%image, digest, "digest résolu");
+                Ok(Step::Done)
+            }
+
             // Le reste demande des briques pas encore écrites (client PocketID,
-            // générateur Caddyfile, veilleur de registre). On l'enregistre honnêtement.
+            // volumes, génération d'ingress au fil de l'installation).
             Action::CreateOidcClient { .. }
             | Action::CreateVolume { .. }
             | Action::ProvisionMailAccount { .. }
-            | Action::ResolveDigest { .. }
             | Action::ConfigureIngress { .. } => Ok(Step::NotImplemented),
         }
     }

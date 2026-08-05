@@ -978,6 +978,7 @@ dependencies = [
  "hlb-ingress",
  "hlb-orchestrator",
  "hlb-platform",
+ "hlb-registry",
  "hlb-resolver",
  "hlb-secrets",
  "hlb-state",
@@ -993,6 +994,7 @@ dependencies = [
  "async-trait",
  "hlb-orchestrator",
  "hlb-platform",
+ "hlb-registry",
  "hlb-resolver",
  "hlb-secrets",
  "hlb-state",
@@ -1036,6 +1038,18 @@ name = "hlb-platform"
 version = "0.1.0"
 dependencies = [
  "sqlx",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-registry"
+version = "0.1.0"
+dependencies = [
+ "hlb-types",
+ "reqwest",
+ "serde",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

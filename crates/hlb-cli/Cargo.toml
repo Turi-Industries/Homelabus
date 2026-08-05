@@ -20,6 +20,7 @@ hlb-engine.workspace = true
 hlb-secrets.workspace = true
 hlb-platform.workspace = true
 hlb-ingress.workspace = true
+hlb-registry.workspace = true
 clap.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
