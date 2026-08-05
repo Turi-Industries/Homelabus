@@ -23,12 +23,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
-| `hlb-backup` — restic : rétention, instantanés, restauration | ✅ 16 + 6 tests |
+| `hlb-backup` — restic + pg_dump : rétention, restauration vérifiée | ✅ 26 + 10 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, dumps SQL, PITR | ⬜ à venir |
+| Client PocketID, archivage WAL (PITR), planification | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**177 tests unitaires + 28 tests d'intégration.**
+**186 tests unitaires + 32 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -60,6 +60,10 @@ réellement les données et vérifient qu'elles reviennent à l'identique.
 export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
 cargo test -p hlb-backup -- --ignored --test-threads=1 --nocapture
 ```
+
+Dont le cas décisif du §8.1 : un `pg_dump` pris **pendant** des écritures
+concurrentes, restauré, et dont on vérifie que l'invariant transactionnel tient.
+C'est précisément ce qu'une sauvegarde de fichiers ne sait pas faire.
 
 ## Essayer
 
@@ -156,9 +160,10 @@ AGPL-3.0-or-later.
 
 Ces manques sont **explicites dans le code**, jamais masqués :
 
-- **Sauvegarde des volumes seulement.** Les dumps SQL et l'archivage WAL (PITR)
-  du §8.1 n'existent pas encore. Une base de données n'est donc sauvegardée
-  qu'au niveau de ses fichiers, ce qui ne remplace pas un `pg_dump`.
+- **Pas d'archivage WAL.** Le PITR du §8.1 n'existe pas : on ne peut restaurer
+  qu'aux instants où un dump a été pris, pas à une seconde arbitraire.
+- **Les dumps ne sont pas encore planifiés** ni automatiquement chaînés à
+  restic — les briques existent, l'ordonnancement reste à écrire.
 - **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est
   refusée.** De même si l'app n'a aucun volume connu : « rien à sauvegarder »
   ne vaut jamais « sauvegarde réussie ».

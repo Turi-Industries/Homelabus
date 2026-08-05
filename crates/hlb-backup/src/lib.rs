@@ -8,11 +8,15 @@
 //! 3. **Un backup non testé n'est pas un backup** (§8.3) : la vérification de
 //!    restauration fait partie du module, pas d'un raffinement ultérieur.
 
+pub mod pgdump;
+pub mod pgrunner;
 pub mod provider;
 pub mod restic;
 pub mod retention;
 pub mod runner;
 
+pub use pgdump::{PgDumper, PgTarget};
+pub use pgrunner::PgContainerRunner;
 pub use provider::ResticBackupProvider;
 pub use restic::{Repository, Runner, Snapshot};
 pub use retention::RetentionPolicy;
@@ -28,6 +32,9 @@ pub enum Error {
 
     #[error("politique de rétention vide : `forget` supprimerait tous les instantanés")]
     EmptyRetention,
+
+    #[error("dump de « {database} » : {stderr}")]
+    Dump { database: String, stderr: String },
 
     #[error("{0}")]
     Unexpected(String),
