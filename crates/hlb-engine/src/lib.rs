@@ -266,10 +266,24 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
+            Action::CreateVolume { name, backup, .. } => {
+                let info = self.orchestrator.create_volume(name).await?;
+
+                // On mémorise le point de montage RÉEL : c'est ce que la sauvegarde
+                // ira lire (§8). Sans lui, on ne sait pas quoi sauvegarder.
+                self.state
+                    .add_volume(app, &info.name, &info.mountpoint, *backup)
+                    .await?;
+
+                if info.existed {
+                    tracing::info!(name, "volume existant conservé (il porte des données)");
+                }
+                Ok(Step::Done)
+            }
+
             // Le reste demande des briques pas encore écrites (client PocketID,
-            // volumes, génération d'ingress au fil de l'installation).
+            // génération d'ingress au fil de l'installation).
             Action::CreateOidcClient { .. }
-            | Action::CreateVolume { .. }
             | Action::ProvisionMailAccount { .. }
             | Action::ConfigureIngress { .. } => Ok(Step::NotImplemented),
         }
@@ -338,6 +352,16 @@ mod tests {
         async fn scale(&self, name: &str, replicas: u64) -> hlb_orchestrator::Result<()> {
             self.scaled.lock().expect("mutex").push((name.into(), replicas));
             Ok(())
+        }
+        async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+            Ok(hlb_orchestrator::VolumeInfo {
+            name: n.into(),
+            mountpoint: format!("/volumes/{n}"),
+            existed: false,
+            })
+        }
+        async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        self.create_volume(n).await
         }
         async fn status(&self, name: &str) -> hlb_orchestrator::Result<ServiceStatus> {
             Ok(ServiceStatus {

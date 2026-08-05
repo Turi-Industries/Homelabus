@@ -44,6 +44,16 @@ impl Orchestrator for Fake {
     async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> {
         Ok(())
     }
+    async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        Ok(hlb_orchestrator::VolumeInfo {
+            name: n.into(),
+            mountpoint: format!("/volumes/{n}"),
+            existed: false,
+        })
+    }
+    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        self.create_volume(n).await
+    }
     async fn status(&self, _: &str) -> hlb_orchestrator::Result<ServiceStatus> {
         let mut s = self.script.lock().unwrap();
         if s.len() > 1 {

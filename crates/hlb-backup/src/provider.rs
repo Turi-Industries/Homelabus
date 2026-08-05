@@ -7,37 +7,50 @@
 use crate::restic::{Repository, Runner};
 
 /// Adapte un dépôt restic au trait attendu par le pipeline de mise à jour.
+///
+/// Le dépôt est construit **par app**, pas une fois pour toutes : chaque app a ses
+/// propres volumes, et le runner doit pouvoir les rendre visibles à restic (montages
+/// pour un conteneur, chemins directs pour l'agent). D'où une fabrique plutôt qu'un
+/// dépôt figé.
 pub struct ResticBackupProvider<R: Runner> {
-    repo: Repository<R>,
-    /// Où trouver les données d'une app. En production, fourni par l'agent qui connaît
-    /// les points de montage réels des volumes.
-    resolve_path: Box<dyn Fn(&str) -> String + Send + Sync>,
+    #[allow(clippy::type_complexity)]
+    make: Box<dyn Fn(&str) -> Option<(Repository<R>, Vec<String>)> + Send + Sync>,
 }
 
 impl<R: Runner> ResticBackupProvider<R> {
+    /// `make` renvoie le dépôt à utiliser et les chemins à sauvegarder pour une app,
+    /// ou `None` si l'app n'a aucune donnée à sauvegarder.
     pub fn new(
-        repo: Repository<R>,
-        resolve_path: impl Fn(&str) -> String + Send + Sync + 'static,
+        make: impl Fn(&str) -> Option<(Repository<R>, Vec<String>)> + Send + Sync + 'static,
     ) -> Self {
-        Self {
-            repo,
-            resolve_path: Box::new(resolve_path),
-        }
+        Self { make: Box::new(make) }
     }
 }
 
 #[async_trait::async_trait]
 impl<R: Runner> hlb_updater::BackupProvider for ResticBackupProvider<R> {
     async fn snapshot(&self, app: &str) -> std::result::Result<String, String> {
-        let path = (self.resolve_path)(app);
-        let tag = format!("app:{app}");
+        let Some((repo, paths)) = (self.make)(app) else {
+            // 🔴 Pas de « rien à sauvegarder, donc c'est bon ». Si le manifest exige
+            // une sauvegarde et qu'on ne sait pas quoi sauvegarder, c'est une erreur.
+            return Err(format!(
+                "aucun volume connu pour « {app} » — impossible de garantir la sauvegarde"
+            ));
+        };
 
-        // Une erreur ici doit remonter telle quelle : le pipeline ne doit surtout pas
-        // poursuivre en croyant la sauvegarde faite.
-        self.repo
-            .backup(&path, &[&tag, "kind:pre-update"])
-            .await
-            .map_err(|e| e.to_string())
+        repo.init().await.map_err(|e| e.to_string())?;
+
+        let tag = format!("app:{app}");
+        let mut last = String::new();
+        for p in &paths {
+            // Une erreur ici doit remonter telle quelle : le pipeline ne doit surtout
+            // pas poursuivre en croyant la sauvegarde faite.
+            last = repo
+                .backup(p, &[&tag, "kind:pre-update"])
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(last)
     }
 }
 
@@ -62,21 +75,32 @@ mod tests {
     }
 
     fn provider(stdout: &str, status: i32) -> ResticBackupProvider<Fake> {
-        let f = Fake(Mutex::new(vec![Output {
-            status,
-            stdout: stdout.into(),
-            stderr: "échec simulé".into(),
-        }]));
-        ResticBackupProvider::new(
-            Repository::new(f, "/depot", "mdp"),
-            |app| format!("/volumes/{app}"),
-        )
+        let stdout = stdout.to_string();
+        ResticBackupProvider::new(move |app| {
+            let f = Fake(Mutex::new(vec![Output {
+                status,
+                stdout: stdout.clone(),
+                stderr: "échec simulé".into(),
+            }]));
+            Some((
+                Repository::new(f, "/depot", "mdp"),
+                vec![format!("/volumes/{app}")],
+            ))
+        })
     }
 
     #[tokio::test]
     async fn a_successful_snapshot_returns_its_id() {
         let p = provider(r#"{"message_type":"summary","snapshot_id":"abc123"}"#, 0);
         assert_eq!(p.snapshot("gitea").await.expect("instantané"), "abc123");
+    }
+
+    #[tokio::test]
+    async fn an_app_without_known_volumes_is_an_error() {
+        // 🔴 « Rien à sauvegarder » ne doit jamais valoir « sauvegarde réussie ».
+        let p: ResticBackupProvider<Fake> = ResticBackupProvider::new(|_| None);
+        let err = p.snapshot("gitea").await.unwrap_err();
+        assert!(err.contains("aucun volume connu"), "{err}");
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
     ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
@@ -16,7 +17,7 @@ use bollard::query_parameters::{
 };
 use bollard::Docker;
 
-use crate::{Error, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState};
+use crate::{Error, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState, VolumeInfo};
 
 const NS: i64 = 1_000_000_000;
 
@@ -263,6 +264,44 @@ impl Orchestrator for SwarmOrchestrator {
 
         self.docker.update_service(name, spec, opts, None).await?;
         Ok(())
+    }
+
+    async fn create_volume(&self, name: &str) -> Result<VolumeInfo> {
+        // Un volume qui existe déjà porte des données : on ne le recrée jamais.
+        if let Ok(v) = self.inspect_volume(name).await {
+            tracing::debug!(name, "volume déjà présent, conservé");
+            return Ok(VolumeInfo { existed: true, ..v });
+        }
+
+        let opts = CreateVolumeOptions {
+            name: Some(name.to_string()),
+            labels: Some(HashMap::from([(
+                MANAGED_LABEL.to_string(),
+                "true".to_string(),
+            )])),
+            ..Default::default()
+        };
+
+        let v = self.docker.create_volume(opts).await?;
+        tracing::info!(name, mountpoint = %v.mountpoint, "volume créé");
+        Ok(VolumeInfo {
+            name: v.name,
+            mountpoint: v.mountpoint,
+            existed: false,
+        })
+    }
+
+    async fn inspect_volume(&self, name: &str) -> Result<VolumeInfo> {
+        let v = self
+            .docker
+            .inspect_volume(name)
+            .await
+            .map_err(|_| Error::NotFound(name.to_string()))?;
+        Ok(VolumeInfo {
+            name: v.name,
+            mountpoint: v.mountpoint,
+            existed: true,
+        })
     }
 
     async fn status(&self, name: &str) -> Result<ServiceStatus> {

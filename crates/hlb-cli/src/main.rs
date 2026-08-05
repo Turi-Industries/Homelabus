@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POSTGRES_ADMIN")]
     postgres_admin: Option<String>,
 
+    /// Dépôt restic. Sans lui, toute mise à jour exigeant une sauvegarde est refusée.
+    #[arg(long, global = true, env = "HLB_BACKUP_REPO")]
+    backup_repo: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -152,6 +156,68 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Construit le fournisseur de sauvegarde, s'il y a de quoi.
+///
+/// Renvoie `None` si aucun dépôt n'est configuré — ce qui fera refuser toute mise à
+/// jour exigeant une sauvegarde (§7). C'est voulu : mieux vaut un refus clair qu'une
+/// mise à jour silencieusement non sauvegardée.
+async fn build_backup_provider(
+    repo: Option<&str>,
+    state: &State,
+    vault: &Vault,
+) -> Result<Option<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>>, Box<dyn std::error::Error>> {
+    let Some(location) = repo else {
+        return Ok(None);
+    };
+
+    // Le mot de passe du dépôt vit dans le coffre, comme tout le reste. Il est créé
+    // au premier usage et ne change jamais : le dépôt deviendrait illisible.
+    const SECRET: &str = "restic-repo-password";
+    let password = match state.secret(SECRET).await? {
+        Some(ct) => vault.decrypt(&ct)?,
+        None => {
+            let p = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
+            let ct = vault.encrypt(&p)?;
+            state
+                .store_secret_if_absent(SECRET, &ct, "chiffrement du dépôt de sauvegarde")
+                .await?;
+            p
+        }
+    };
+
+    // On capture les volumes maintenant : la fabrique doit rester synchrone.
+    let mut par_app: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (app, _) in state.installed_apps().await? {
+        let v = state.volumes_to_backup(&app).await?;
+        if !v.is_empty() {
+            par_app.insert(app, v);
+        }
+    }
+
+    let location = location.to_string();
+    Ok(Some(hlb_backup::ResticBackupProvider::new(move |app| {
+        let volumes = par_app.get(app)?;
+
+        // Chaque volume de l'app est monté dans le conteneur restic, sous un chemin
+        // prévisible. Le dépôt lui-même est monté séparément.
+        let mut runner = hlb_backup::ContainerRunner::default()
+            .mount(&location, "/depot");
+        let mut paths = Vec::new();
+        for (name, _mountpoint) in volumes {
+            // On monte le volume Docker par son nom : le point de montage de l'hôte
+            // n'est pas accessible depuis la VM Docker sur macOS.
+            runner = runner.mount(name, format!("/donnees/{name}"));
+            paths.push(format!("/donnees/{name}"));
+        }
+
+        Some((
+            hlb_backup::Repository::new(runner, "/depot", password.clone()),
+            paths,
+        ))
+    })))
 }
 
 fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
@@ -514,7 +580,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
 
                         // 🔴 §7 — pas de sauvegarde disponible, pas de mise à jour.
-                        hlb_updater::authorize(c, None, *force_window)?;
+                        let vault = Vault::open_or_init(&cli.master_key)?;
+                        let provider = build_backup_provider(
+                            cli.backup_repo.as_deref(),
+                            &state,
+                            &vault,
+                        )
+                        .await?;
+                        hlb_updater::authorize(
+                            c,
+                            provider.as_ref().map(|p| p as &dyn hlb_updater::BackupProvider),
+                            *force_window,
+                        )?;
+
+                        if let Some(p) = &provider {
+                            use hlb_updater::BackupProvider;
+                            print!("sauvegarde préalable… ");
+                            match p.snapshot(app).await {
+                                Ok(id) => println!("✓ {}", &id[..8.min(id.len())]),
+                                Err(e) => {
+                                    eprintln!("✗");
+                                    eprintln!("  {e}");
+                                    eprintln!("  mise à jour abandonnée : pas de sauvegarde, pas de bascule.");
+                                    return Ok(ExitCode::FAILURE);
+                                }
+                            }
+                        }
 
                         let orch = SwarmOrchestrator::connect()?;
                         println!("{}…", c.describe());

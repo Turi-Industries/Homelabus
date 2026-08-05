@@ -174,6 +174,47 @@ impl State {
         }
     }
 
+    /// Mémorise un volume et son emplacement réel.
+    pub async fn add_volume(
+        &self,
+        app: &str,
+        name: &str,
+        mountpoint: &str,
+        backup: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO app_volumes (app, name, mountpoint, backup)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(app, name) DO UPDATE SET
+                 mountpoint = excluded.mountpoint,
+                 backup = excluded.backup",
+        )
+        .bind(app)
+        .bind(name)
+        .bind(mountpoint)
+        .bind(backup as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Les volumes d'une app à sauvegarder : (nom, point de montage).
+    ///
+    /// Ne renvoie que ceux marqués `backup` — un cache n'a pas à occuper de la place
+    /// dans le dépôt.
+    pub async fn volumes_to_backup(&self, app: &str) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(
+            "SELECT name, mountpoint FROM app_volumes
+             WHERE app = ?1 AND backup = 1 ORDER BY name",
+        )
+        .bind(app)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("name")?, r.try_get("mountpoint")?)))
+            .collect()
+    }
+
     /// Fige le digest résolu au déploiement (§7).
     ///
     /// Le manifest stocké est réécrit : c'est bien le digest qui fait foi ensuite,
@@ -565,6 +606,35 @@ mod tests {
         assert_eq!(g.len(), 2);
         assert!(g[0].3, "les bloquantes d'abord");
         assert_eq!(g[0].1, "admin");
+    }
+
+    #[tokio::test]
+    async fn volumes_are_recorded_with_their_real_path() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+
+        s.add_volume("gitea", "gitea-data", "/var/lib/docker/volumes/gitea-data/_data", true)
+            .await
+            .unwrap();
+        // Un cache : pas de sauvegarde.
+        s.add_volume("gitea", "gitea-cache", "/ailleurs", false).await.unwrap();
+
+        let v = s.volumes_to_backup("gitea").await.unwrap();
+        assert_eq!(v.len(), 1, "seul le volume à sauvegarder doit remonter");
+        assert_eq!(v[0].0, "gitea-data");
+        assert!(v[0].1.ends_with("/_data"));
+    }
+
+    #[tokio::test]
+    async fn recording_a_volume_twice_updates_it() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.add_volume("gitea", "d", "/ancien", true).await.unwrap();
+        s.add_volume("gitea", "d", "/nouveau", true).await.unwrap();
+
+        let v = s.volumes_to_backup("gitea").await.unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].1, "/nouveau");
     }
 
     #[tokio::test]

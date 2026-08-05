@@ -25,10 +25,10 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-backup` — restic : rétention, instantanés, restauration | ✅ 16 + 6 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, volumes, dumps SQL, PITR | ⬜ à venir |
+| Client PocketID, dumps SQL, PITR | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**174 tests unitaires + 28 tests d'intégration.**
+**177 tests unitaires + 28 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -157,9 +157,11 @@ AGPL-3.0-or-later.
 Ces manques sont **explicites dans le code**, jamais masqués :
 
 - **Sauvegarde des volumes seulement.** Les dumps SQL et l'archivage WAL (PITR)
-  du §8.1 n'existent pas encore. Une app dont le manifest déclare
-  `backupBefore: true` reste donc **refusée** à la mise à jour tant que le
-  fournisseur n'est pas branché au CLI.
+  du §8.1 n'existent pas encore. Une base de données n'est donc sauvegardée
+  qu'au niveau de ses fichiers, ce qui ne remplace pas un `pg_dump`.
+- **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est
+  refusée.** De même si l'app n'a aucun volume connu : « rien à sauvegarder »
+  ne vaut jamais « sauvegarde réussie ».
 - **Client PocketID et création de volume** restent `Unimplemented` dans
   l'exécuteur — enregistrés comme tels, jamais comptés comme réussis.
 - `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur

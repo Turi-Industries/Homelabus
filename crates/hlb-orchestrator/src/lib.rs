@@ -88,6 +88,16 @@ impl ServiceSpec {
 }
 
 /// L'état observé d'un service.
+/// Un volume et son emplacement réel sur l'hôte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeInfo {
+    pub name: String,
+    /// Chemin sur le nœud qui l'héberge. C'est ce que restic sauvegarde (§8).
+    pub mountpoint: String,
+    /// Le volume existait-il déjà ?
+    pub existed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceStatus {
     pub name: String,
@@ -143,6 +153,14 @@ pub trait Orchestrator: Send + Sync {
 
     /// Ajuste le nombre de réplicas d'un service existant.
     async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
+
+    /// Crée un volume nommé, étiqueté comme géré par HomelabUS.
+    ///
+    /// Idempotent : un volume existant est conservé tel quel — il porte des données.
+    async fn create_volume(&self, name: &str) -> Result<VolumeInfo>;
+
+    /// Décrit un volume existant.
+    async fn inspect_volume(&self, name: &str) -> Result<VolumeInfo>;
 
     async fn status(&self, name: &str) -> Result<ServiceStatus>;
 

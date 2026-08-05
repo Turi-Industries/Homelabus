@@ -50,6 +50,16 @@ impl Orchestrator for Fake {
         self.scaled.lock().unwrap().push((n.into(), r));
         Ok(())
     }
+    async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        Ok(hlb_orchestrator::VolumeInfo {
+            name: n.into(),
+            mountpoint: format!("/volumes/{n}"),
+            existed: false,
+        })
+    }
+    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        self.create_volume(n).await
+    }
     async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
         self.observed
             .lock()
@@ -265,7 +275,17 @@ async fn one_failure_does_not_stop_the_others() {
         async fn scale(&self, n: &str, r: u64) -> hlb_orchestrator::Result<()> {
             self.0.scale(n, r).await
         }
-        async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
+        async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        Ok(hlb_orchestrator::VolumeInfo {
+            name: n.into(),
+            mountpoint: format!("/volumes/{n}"),
+            existed: false,
+        })
+    }
+    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        self.create_volume(n).await
+    }
+    async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
             self.0.status(n).await
         }
         async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> {
