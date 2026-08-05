@@ -162,6 +162,18 @@ impl State {
         })
     }
 
+    /// Le domaine choisi à l'installation, nécessaire pour résoudre les gabarits.
+    pub async fn app_domain(&self, name: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT domain FROM apps WHERE name = ?1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some(r) => Ok(r.try_get("domain")?),
+            None => Ok(None),
+        }
+    }
+
     pub async fn set_app_status(&self, name: &str, status: &str) -> Result<()> {
         sqlx::query(
             "UPDATE apps SET status = ?2, updated_at = datetime('now') WHERE name = ?1",

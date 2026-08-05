@@ -1,0 +1,21 @@
+[package]
+name = "hlb-ingress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Génération des Caddyfile et rechargement à chaud."
+
+[dependencies]
+hlb-types.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_yaml_ng.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

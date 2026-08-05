@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use hlb_catalog::Catalog;
 use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_engine::{Executor, Reconciler};
+use hlb_ingress::{CaddyAdmin, Route};
 use hlb_resolver::{DependencyGraph, InstallParams};
 use hlb_secrets::Vault;
 use hlb_state::State;
@@ -73,6 +74,19 @@ enum Command {
         /// Corriger les écarts. Sans ce drapeau, détection seule.
         #[arg(long)]
         apply: bool,
+    },
+
+    /// Générer la configuration Caddy des apps installées (§6.1).
+    Ingress {
+        /// Recharger Caddy via son API d'administration au lieu d'afficher.
+        #[arg(long)]
+        apply: bool,
+        /// URL d'administration du Caddy frontal.
+        #[arg(long, default_value = "http://localhost:2019", env = "HLB_CADDY_FRONT")]
+        front_admin: String,
+        /// URL d'administration du Caddy arrière.
+        #[arg(long, env = "HLB_CADDY_BACK")]
+        back_admin: Option<String>,
     },
 
     /// État des services gérés par HomelabUS.
@@ -294,6 +308,57 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         "  {} {app} · {title}  [{id}]",
                         if *blocking { "🔴" } else { "🟠" }
                     );
+                }
+                Ok(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::Ingress { apply, front_admin, back_admin } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+
+                // Les routes viennent du manifest FIGÉ, pas du catalogue courant :
+                // c'est l'état déployé qui fait foi (§4.8).
+                let mut routes: Vec<Route> = Vec::new();
+                for (name, status) in state.installed_apps().await? {
+                    if status == "failed" {
+                        continue;
+                    }
+                    let m = state.app_manifest(&name).await?;
+                    let domain = state.app_domain(&name).await?;
+                    // §4.6bis — la route ne s'ouvre qu'une fois les actions
+                    // manuelles bloquantes traitées.
+                    let cleared = state.unverified_blocking(&name).await? == 0;
+                    routes.extend(hlb_ingress::routes_from_manifest(
+                        &m,
+                        domain.as_deref(),
+                        cleared,
+                    ));
+                }
+
+                let cfg = hlb_ingress::Config::default();
+                let front = hlb_ingress::render_frontend(&routes, &cfg);
+                let back = hlb_ingress::render_backend(&routes, &cfg);
+
+                if !apply {
+                    println!("# ═══ Caddy frontend ═══\n{front}");
+                    println!("# ═══ Caddy backend ═══\n{back}");
+                    println!(
+                        "\n{} route(s). Relance avec --apply pour recharger Caddy.",
+                        routes.len()
+                    );
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
+                CaddyAdmin::new(front_admin).load_caddyfile(&front).await?;
+                println!("✓ Caddy frontal rechargé ({} route(s))", routes.len());
+
+                if let Some(back_url) = back_admin {
+                    CaddyAdmin::new(back_url).load_caddyfile(&back).await?;
+                    println!("✓ Caddy arrière rechargé");
+                } else {
+                    println!("ℹ️  --back-admin non fourni : le Caddy arrière n'a pas été rechargé.");
                 }
                 Ok(ExitCode::SUCCESS)
             })

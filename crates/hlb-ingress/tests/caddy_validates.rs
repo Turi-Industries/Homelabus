@@ -1,0 +1,131 @@
+//! Vérifie que Caddy accepte réellement la configuration générée.
+//!
+//! Générer du texte qui *ressemble* à un Caddyfile ne prouve rien. Ce test le soumet
+//! au vrai binaire Caddy — c'est la seule façon d'attraper une directive mal placée,
+//! un matcher invalide ou une syntaxe qui a changé de version.
+//!
+//! ```sh
+//! export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
+//! cargo test -p hlb-ingress -- --ignored --nocapture
+//! ```
+
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::io::Write;
+use std::process::Command;
+
+use hlb_ingress::{render_backend, render_frontend, Config, Route};
+
+const CADDY_IMAGE: &str = "caddy:2-alpine";
+
+/// Soumet un Caddyfile à `caddy validate` dans un conteneur jetable.
+///
+/// La config passe par **stdin**, pas par un montage : sur macOS, le dossier temporaire
+/// de l'hôte n'est pas partagé dans la VM Docker, et le bind mount échoue.
+fn caddy_validate(caddyfile: &str, label: &str) {
+    let mut child = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "--entrypoint",
+            "sh",
+            CADDY_IMAGE,
+            "-c",
+            "cat > /tmp/Caddyfile && caddy validate --config /tmp/Caddyfile --adapter caddyfile",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("docker doit être joignable (DOCKER_HOST ?)");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(caddyfile.as_bytes())
+        .expect("envoi de la config");
+
+    let out = child.wait_with_output().expect("attente de caddy");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        out.status.success(),
+        "Caddy a refusé le Caddyfile « {label} » :\n\
+         ───── sortie de caddy ─────\n{stderr}\n\
+         ───── config générée ─────\n{caddyfile}"
+    );
+
+    println!("✓ {label} accepté par Caddy");
+}
+
+fn routes() -> Vec<Route> {
+    vec![
+        // Gitea : pas d'Anubis (casserait `git clone`), public.
+        Route {
+            host: "git.example.fr".into(),
+            service: "gitea".into(),
+            port: 3000,
+            through_anubis: false,
+            public: true,
+            sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
+        },
+        // Vikunja : derrière Anubis, avec exclusion du callback OIDC.
+        Route {
+            host: "tasks.example.fr".into(),
+            service: "vikunja".into(),
+            port: 3456,
+            through_anubis: true,
+            public: true,
+            sso_paths: vec!["/auth/openid/pocketid".into()],
+        },
+        // Vaultwarden : privé, accessible seulement depuis le VPN.
+        Route {
+            host: "vault.example.fr".into(),
+            service: "vaultwarden".into(),
+            port: 80,
+            through_anubis: false,
+            public: false,
+            sso_paths: vec!["/identity/connect/oidc-signin".into()],
+        },
+    ]
+}
+
+#[test]
+#[ignore = "nécessite Docker"]
+fn frontend_config_is_accepted_by_caddy() {
+    caddy_validate(&render_frontend(&routes(), &Config::default()), "frontend");
+}
+
+#[test]
+#[ignore = "nécessite Docker"]
+fn backend_config_is_accepted_by_caddy() {
+    caddy_validate(&render_backend(&routes(), &Config::default()), "backend");
+}
+
+#[test]
+#[ignore = "nécessite Docker"]
+fn an_empty_catalog_still_produces_valid_configs() {
+    // Cas du premier démarrage : aucune app installée.
+    let cfg = Config::default();
+    caddy_validate(&render_frontend(&[], &cfg), "frontend vide");
+    caddy_validate(&render_backend(&[], &cfg), "backend vide");
+}
+
+#[test]
+#[ignore = "nécessite Docker"]
+fn hosts_with_dashes_produce_valid_matchers() {
+    // Les noms de matcher Caddy n'acceptent ni points ni tirets.
+    let r = Route {
+        host: "mon-app.sous-domaine.example.fr".into(),
+        service: "mon-app".into(),
+        port: 8080,
+        through_anubis: true,
+        public: true,
+        sso_paths: vec!["/oidc/callback".into()],
+    };
+    caddy_validate(&render_frontend(std::slice::from_ref(&r), &Config::default()), "hôte avec tirets");
+    caddy_validate(&render_backend(&[r], &Config::default()), "backend avec tirets");
+}

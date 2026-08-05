@@ -20,11 +20,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
 | `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
 | `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 10 + 11 tests |
-| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, générateur Caddyfile, veilleur de registre | ⬜ à venir |
+| `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
+| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
+| Client PocketID, veilleur de registre, volumes | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**89 tests unitaires + 12 tests d'intégration.**
+**106 tests unitaires + 16 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -57,6 +58,10 @@ cargo build
 # Réconciliation : détection seule, puis correction
 ./target/debug/hlb reconcile
 ./target/debug/hlb reconcile --apply
+
+# Configuration Caddy générée depuis les manifests figés
+./target/debug/hlb ingress
+./target/debug/hlb ingress --apply --front-admin http://caddy-front:2019
 ```
 
 Pour le provisionnement réel des bases :

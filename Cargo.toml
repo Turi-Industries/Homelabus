@@ -5,6 +5,7 @@ members = [
     "crates/hlb-orchestrator",
     "crates/hlb-resolver",
     "crates/hlb-catalog",
+    "crates/hlb-ingress",
     "crates/hlb-platform",
     "crates/hlb-secrets",
     "crates/hlb-state",
@@ -25,6 +26,7 @@ hlb-types = { path = "crates/hlb-types" }
 hlb-orchestrator = { path = "crates/hlb-orchestrator" }
 hlb-resolver = { path = "crates/hlb-resolver" }
 hlb-catalog = { path = "crates/hlb-catalog" }
+hlb-ingress = { path = "crates/hlb-ingress" }
 hlb-platform = { path = "crates/hlb-platform" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
