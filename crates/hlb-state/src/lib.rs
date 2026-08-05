@@ -272,6 +272,64 @@ impl State {
         rows.iter().map(|r| Ok(r.try_get("seq")?)).collect()
     }
 
+    /// Stocke un secret déjà chiffré. **Ne régénère jamais un secret existant** :
+    /// un mot de passe déjà injecté dans un service ne doit pas changer sous ses pieds.
+    ///
+    /// Renvoie `true` si le secret a été créé, `false` s'il existait déjà.
+    pub async fn store_secret_if_absent(
+        &self,
+        name: &str,
+        ciphertext: &[u8],
+        purpose: &str,
+    ) -> Result<bool> {
+        let res = sqlx::query(
+            "INSERT INTO secrets (name, ciphertext, purpose) VALUES (?1, ?2, ?3)
+             ON CONFLICT(name) DO NOTHING",
+        )
+        .bind(name)
+        .bind(ciphertext)
+        .bind(purpose)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Remplace un secret existant (rotation).
+    pub async fn rotate_secret(&self, name: &str, ciphertext: &[u8]) -> Result<()> {
+        sqlx::query(
+            "UPDATE secrets SET ciphertext = ?2, rotated_at = datetime('now')
+             WHERE name = ?1",
+        )
+        .bind(name)
+        .bind(ciphertext)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn secret(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        let row = sqlx::query("SELECT ciphertext FROM secrets WHERE name = ?1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        match row {
+            Some(r) => Ok(Some(r.try_get("ciphertext")?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Inventaire des secrets : noms et usages, **jamais les valeurs** (§9).
+    pub async fn secret_names(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT name, purpose FROM secrets ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("name")?, r.try_get("purpose")?)))
+            .collect()
+    }
+
     pub async fn add_guide(
         &self,
         app: &str,
@@ -291,6 +349,36 @@ impl State {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Marque une action manuelle comme traitée.
+    ///
+    /// ⚠️ Aujourd'hui c'est une attestation de l'utilisateur. La vérification
+    /// automatique (bloc `verify:` du §4.6 : dns, http, tcp, api…) n'est pas encore
+    /// écrite — tant qu'elle ne l'est pas, le système croit l'utilisateur sur parole.
+    pub async fn verify_guide(&self, app: &str, id: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE pending_guides SET verified_at = datetime('now')
+             WHERE app = ?1 AND id = ?2 AND verified_at IS NULL",
+        )
+        .bind(app)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Les actions bloquantes encore non traitées pour une app donnée.
+    pub async fn unverified_blocking(&self, app: &str) -> Result<usize> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM pending_guides
+             WHERE app = ?1 AND blocking = 1 AND verified_at IS NULL",
+        )
+        .bind(app)
+        .fetch_one(&self.pool)
+        .await?;
+        let n: i64 = row.try_get("n")?;
+        Ok(n as usize)
     }
 
     /// La file du §4.6 : ce qui reste à faire à la main, non vérifié.
@@ -414,6 +502,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_secret_is_never_silently_regenerated() {
+        // Un mot de passe déjà injecté dans un service ne doit pas changer sous ses pieds.
+        let s = st().await;
+        assert!(s.store_secret_if_absent("db-pw", b"chiffre-1", "base").await.unwrap());
+        assert!(!s.store_secret_if_absent("db-pw", b"chiffre-2", "base").await.unwrap());
+        assert_eq!(s.secret("db-pw").await.unwrap().as_deref(), Some(&b"chiffre-1"[..]));
+    }
+
+    #[tokio::test]
+    async fn rotation_replaces_the_value() {
+        let s = st().await;
+        s.store_secret_if_absent("db-pw", b"ancien", "base").await.unwrap();
+        s.rotate_secret("db-pw", b"nouveau").await.unwrap();
+        assert_eq!(s.secret("db-pw").await.unwrap().as_deref(), Some(&b"nouveau"[..]));
+    }
+
+    #[tokio::test]
+    async fn inventory_never_exposes_values() {
+        let s = st().await;
+        s.store_secret_if_absent("db-pw", b"tres-secret", "base gitea").await.unwrap();
+        let inv = s.secret_names().await.unwrap();
+        assert_eq!(inv, vec![("db-pw".to_string(), "base gitea".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn missing_secret_is_none_not_an_error() {
+        assert!(st().await.secret("nexiste-pas").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn blocking_guides_come_first() {
         let s = st().await;
         s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
@@ -424,6 +542,21 @@ mod tests {
         assert_eq!(g.len(), 2);
         assert!(g[0].3, "les bloquantes d'abord");
         assert_eq!(g[0].1, "admin");
+    }
+
+    #[tokio::test]
+    async fn verifying_a_guide_unblocks_it() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.add_guide("gitea", "admin", "créer l'admin", true).await.unwrap();
+
+        assert_eq!(s.unverified_blocking("gitea").await.unwrap(), 1);
+        assert!(s.verify_guide("gitea", "admin").await.unwrap());
+        assert_eq!(s.unverified_blocking("gitea").await.unwrap(), 0);
+
+        // Deuxième acquittement : rien à faire, pas d'erreur.
+        assert!(!s.verify_guide("gitea", "admin").await.unwrap());
+        assert!(s.pending_guides().await.unwrap().is_empty());
     }
 
     #[tokio::test]

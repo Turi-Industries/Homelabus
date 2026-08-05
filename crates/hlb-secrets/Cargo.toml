@@ -1,0 +1,20 @@
+[package]
+name = "hlb-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Coffre de secrets chiffré avec age."
+
+[dependencies]
+age = "0.11"
+rand = "0.9"
+secrecy = "0.10"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

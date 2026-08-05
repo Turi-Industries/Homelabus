@@ -16,12 +16,27 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
 | `hlb-resolver` — résolution + graphe + plan | ✅ 17 tests |
 | `hlb-catalog` — chargement et validation | ✅ 5 tests |
-| `hlb-state` — état persistant, reprise (sqlx/SQLite) | ✅ 8 tests |
-| `hlb-engine` — exécuteur : aperçu, idempotence, reprise | ✅ 7 tests |
-| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `todo`, `ps` | ✅ utilisable |
+| `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 13 tests |
+| `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
+| `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
+| `hlb-engine` — exécuteur : aperçu, idempotence, reprise | ✅ 10 tests |
+| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
+| Client PocketID, générateur Caddyfile, veilleur de registre | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**51 tests, 0 avertissement clippy.**
+**78 tests unitaires + 12 tests d'intégration.**
+
+### Tests d'intégration PostgreSQL
+
+Ils prouvent la promesse d'isolation du §3.1 — *un Gitea compromis ne peut pas lire
+la base de Vaultwarden*. Une revendication de sécurité se prouve, elle ne se suppose pas.
+
+```sh
+docker run -d --name hlb-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine
+export HLB_TEST_PG=postgres://postgres:test@localhost:55432/postgres
+cargo test -p hlb-platform -- --ignored --test-threads=1 --nocapture
+docker rm -f hlb-test-pg
+```
 
 ## Essayer
 
@@ -36,7 +51,19 @@ cargo build
 ./target/debug/hlb install valkey
 ./target/debug/hlb install valkey --apply    # exécute réellement
 ./target/debug/hlb todo                      # actions manuelles en attente
+./target/debug/hlb ack gitea/gitea-first-admin
+./target/debug/hlb secrets                   # inventaire, jamais les valeurs
 ```
+
+Pour le provisionnement réel des bases :
+
+```sh
+export HLB_POSTGRES_ADMIN=postgres://postgres:motdepasse@hote:5432/postgres
+```
+
+🔴 La clé maîtresse (`hlb-master.key`) est créée au premier usage. **Sa perte rend
+tous les secrets et toutes les sauvegardes irrécupérables** — garde deux copies
+hors ligne.
 
 ⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. En attendant
 `hlb node add`, il faut poser le label à la main :

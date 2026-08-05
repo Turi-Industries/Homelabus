@@ -18,6 +18,8 @@ pub enum Action {
         engine: DbEngine,
         database: String,
         role: String,
+        /// Le secret qui porte le mot de passe. Il doit être généré AVANT.
+        password_secret: String,
     },
 
     /// Mot de passe généré aléatoirement, jamais saisi, jamais dans le Git.
@@ -83,9 +85,9 @@ impl Action {
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProvisionDatabase { engine, database, role } => write!(
+            Self::ProvisionDatabase { engine, database, role, password_secret } => write!(
                 f,
-                "créer la base {database} sur {} avec le rôle {role} (isolé)",
+                "créer la base {database} sur {} avec le rôle {role} (isolé, mot de passe {password_secret})",
                 engine.service_name()
             ),
             Self::GenerateSecret { name, purpose } => {

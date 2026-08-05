@@ -10,7 +10,9 @@
 //! (`Unimplemented`), **jamais** comme réussie.
 
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
+use hlb_platform::PostgresProvisioner;
 use hlb_resolver::{Action, Plan};
+use hlb_secrets::Vault;
 use hlb_state::{ActionStatus, State};
 
 #[derive(Debug, thiserror::Error)]
@@ -20,6 +22,15 @@ pub enum Error {
 
     #[error(transparent)]
     Orchestrator(#[from] hlb_orchestrator::Error),
+
+    #[error(transparent)]
+    Secrets(#[from] hlb_secrets::Error),
+
+    #[error(transparent)]
+    Platform(#[from] hlb_platform::Error),
+
+    #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
+    MissingSecret(String),
 
     #[error("{blocking} action(s) manuelle(s) bloquante(s) en attente — \
              traite-les puis relance (hlb todo)")]
@@ -46,6 +57,11 @@ impl Outcome {
 pub struct Executor<'a, O: Orchestrator> {
     orchestrator: &'a O,
     state: &'a State,
+    /// Absent tant que la clé maîtresse n'est pas chargée : sans coffre, aucun
+    /// secret ne peut être généré ni relu.
+    vault: Option<&'a Vault>,
+    /// Absent tant que PostgreSQL n'est pas déployé et joignable.
+    postgres: Option<&'a PostgresProvisioner>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -55,8 +71,20 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         Self {
             orchestrator,
             state,
+            vault: None,
+            postgres: None,
             apply: false,
         }
+    }
+
+    pub fn with_vault(mut self, vault: &'a Vault) -> Self {
+        self.vault = Some(vault);
+        self
+    }
+
+    pub fn with_postgres(mut self, pg: &'a PostgresProvisioner) -> Self {
+        self.postgres = Some(pg);
+        self
     }
 
     /// Passe en mode application réelle. L'appelant doit le vouloir explicitement.
@@ -84,7 +112,9 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             }
         }
 
-        let blocking = plan.blocking_steps().len();
+        // On interroge l'état, pas le plan : une action déjà traitée par
+        // l'utilisateur ne doit plus bloquer.
+        let blocking = self.state.unverified_blocking(app).await?;
         if blocking > 0 && self.apply {
             return Err(Error::BlockedByGuide { blocking });
         }
@@ -155,16 +185,51 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
+            Action::GenerateSecret { name, purpose } => {
+                let Some(vault) = self.vault else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                let password = hlb_secrets::generate_password(
+                    hlb_secrets::DEFAULT_PASSWORD_LEN,
+                );
+                let ct = vault.encrypt(&password)?;
+
+                // `if_absent` : un mot de passe déjà injecté dans un service ne doit
+                // jamais changer sous ses pieds à la relance d'un plan.
+                let created = self.state.store_secret_if_absent(name, &ct, purpose).await?;
+                if created {
+                    tracing::info!(secret = name, "secret généré");
+                }
+                Ok(Step::Done)
+            }
+
+            Action::ProvisionDatabase { database, role, password_secret, .. } => {
+                let (Some(vault), Some(pg)) = (self.vault, self.postgres) else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                let ct = self
+                    .state
+                    .secret(password_secret)
+                    .await?
+                    .ok_or_else(|| Error::MissingSecret(password_secret.clone()))?;
+                let password = vault.decrypt(&ct)?;
+
+                let created = pg.provision(database, role, &password).await?;
+                if created {
+                    tracing::info!(database, role, "base provisionnée");
+                }
+                Ok(Step::Done)
+            }
+
             // Les guides ne sont pas « exécutés » : ils sont posés dans la file et
             // c'est l'utilisateur qui agit.
             Action::PendingGuideStep { .. } => Ok(Step::Done),
 
-            // Le reste demande des briques qui n'existent pas encore (provisionneur
-            // Postgres, coffre de secrets, client PocketID, générateur Caddyfile,
-            // veilleur de registre). On l'enregistre honnêtement.
-            Action::ProvisionDatabase { .. }
-            | Action::GenerateSecret { .. }
-            | Action::CreateOidcClient { .. }
+            // Le reste demande des briques pas encore écrites (client PocketID,
+            // générateur Caddyfile, veilleur de registre). On l'enregistre honnêtement.
+            Action::CreateOidcClient { .. }
             | Action::CreateVolume { .. }
             | Action::ProvisionMailAccount { .. }
             | Action::ResolveDigest { .. }
@@ -419,6 +484,75 @@ spec:
     }
 
     #[tokio::test]
+    async fn secrets_need_a_vault_and_are_never_faked() {
+        // Sans coffre, la génération de secret est « non implémentée », jamais « faite ».
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_DB).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+
+        let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
+        Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+
+        let rec = s.plan_actions("demo").await.unwrap();
+        let secret = rec.iter().find(|a| a.kind == "GenerateSecret").unwrap();
+        assert_eq!(secret.status, ActionStatus::Unimplemented);
+        assert!(s.secret("demo-db-password").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn with_a_vault_the_secret_is_generated_and_encrypted() {
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::init(dir.path().join("master.key")).unwrap();
+
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_DB).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+        let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
+
+        Executor::new(&o, &s)
+            .with_vault(&vault)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
+
+        let ct = s.secret("demo-db-password").await.unwrap().expect("secret stocké");
+        let clear = vault.decrypt(&ct).expect("déchiffrable");
+        assert_eq!(clear.len(), hlb_secrets::DEFAULT_PASSWORD_LEN);
+        assert!(clear.chars().all(|c| c.is_ascii_alphanumeric()));
+
+        // Le provisionnement reste non implémenté : pas de PostgreSQL fourni.
+        let rec = s.plan_actions("demo").await.unwrap();
+        let db = rec.iter().find(|a| a.kind == "ProvisionDatabase").unwrap();
+        assert_eq!(db.status, ActionStatus::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn a_replay_does_not_change_an_existing_password() {
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::init(dir.path().join("master.key")).unwrap();
+
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_DB).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+        let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
+
+        let exec = || Executor::new(&o, &s).with_vault(&vault).apply(true);
+        exec().run("demo", &p).await.unwrap();
+        let first = s.secret("demo-db-password").await.unwrap().unwrap();
+
+        // On force un rejeu en effaçant la progression.
+        s.set_action_status("demo", 0, ActionStatus::Pending, None).await.unwrap();
+        exec().run("demo", &p).await.unwrap();
+        let second = s.secret("demo-db-password").await.unwrap().unwrap();
+
+        assert_eq!(first, second, "le mot de passe ne doit pas changer sous les pieds du service");
+    }
+
+    #[tokio::test]
     async fn blocking_guide_prevents_apply() {
         let o = Fake::default();
         let s = State::in_memory().await.unwrap();
@@ -434,5 +568,11 @@ spec:
 
         // Le guide est quand même enregistré : c'est du travail réel à faire.
         assert_eq!(s.pending_guides().await.unwrap().len(), 1);
+
+        // Une fois traité, l'installation repart.
+        s.verify_guide("demo", "demo-first-admin").await.unwrap();
+        let out = Executor::new(&o, &s).apply(true).run("demo", &p).await.expect("run");
+        assert!(out.is_success());
+        assert_eq!(*o.deployed.lock().unwrap(), vec!["demo"]);
     }
 }

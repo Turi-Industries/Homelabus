@@ -11,6 +11,7 @@ use hlb_catalog::Catalog;
 use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_engine::Executor;
 use hlb_resolver::{DependencyGraph, InstallParams};
+use hlb_secrets::Vault;
 use hlb_state::State;
 
 #[derive(Parser)]
@@ -23,6 +24,14 @@ struct Cli {
     /// Base d'état locale du controller.
     #[arg(long, global = true, default_value = "hlb.db", env = "HLB_STATE")]
     state: PathBuf,
+
+    /// Clé maîtresse age. Créée au besoin ; sa perte rend tout irrécupérable.
+    #[arg(long, global = true, default_value = "hlb-master.key", env = "HLB_MASTER_KEY")]
+    master_key: PathBuf,
+
+    /// URL d'administration PostgreSQL. Sans elle, le provisionnement est ignoré.
+    #[arg(long, global = true, env = "HLB_POSTGRES_ADMIN")]
+    postgres_admin: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -64,6 +73,15 @@ enum Command {
 
     /// Actions manuelles en attente, toutes apps confondues (§4.6).
     Todo,
+
+    /// Déclarer une action manuelle traitée. ⚠️ Attestation, pas vérification.
+    Ack {
+        /// Format : <app>/<id>, tel qu'affiché par `hlb todo`.
+        target: String,
+    },
+
+    /// Inventaire des secrets : noms et usages, jamais les valeurs.
+    Secrets,
 }
 
 #[derive(Subcommand)]
@@ -201,10 +219,26 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 state.upsert_app(app, &entry.manifest, domain.as_deref()).await?;
 
                 let orch = SwarmOrchestrator::connect()?;
-                let out = Executor::new(&orch, &state)
-                    .apply(*apply)
-                    .run(app, &plan)
-                    .await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+
+                // PostgreSQL n'est branché que s'il est joignable : sans lui, le
+                // provisionnement est marqué non implémenté, jamais simulé.
+                let pg = match &cli.postgres_admin {
+                    Some(url) => match hlb_platform::PostgresProvisioner::connect(url).await {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            eprintln!("⚠️  PostgreSQL injoignable ({e}) — provisionnement ignoré.");
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
+                let mut exec = Executor::new(&orch, &state).with_vault(&vault).apply(*apply);
+                if let Some(p) = &pg {
+                    exec = exec.with_postgres(p);
+                }
+                let out = exec.run(app, &plan).await?;
 
                 if !apply {
                     println!("Aperçu pour « {app} » — aucune modification effectuée.\n");
@@ -255,6 +289,54 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     );
                 }
                 Ok(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::Ack { target } => {
+            let (app, id) = target
+                .split_once('/')
+                .ok_or("format attendu : <app>/<id> (voir `hlb todo`)")?;
+
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                if state.verify_guide(app, id).await? {
+                    println!("✓ « {id} » de {app} marquée traitée.");
+                    println!(
+                        "\n⚠️  C'est une attestation : la vérification automatique \
+                         (DNS, HTTP, API…) n'est pas encore implémentée."
+                    );
+                    Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
+                } else {
+                    eprintln!("aucune action « {id} » en attente pour {app}.");
+                    Ok(ExitCode::FAILURE)
+                }
+            })
+        }
+
+        Command::Secrets => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+                let names = state.secret_names().await?;
+
+                println!("Clé maîtresse : {}", cli.master_key.display());
+                println!("Clé publique  : {}\n", vault.public_key());
+
+                if names.is_empty() {
+                    println!("Aucun secret stocké.");
+                } else {
+                    println!("{} secret(s) — les valeurs ne sont jamais affichées :\n", names.len());
+                    for (name, purpose) in &names {
+                        println!("  {name:<28} {purpose}");
+                    }
+                }
+                println!(
+                    "\n🔴 Sans la clé maîtresse, ces secrets et toutes les sauvegardes\n\
+                        sont irrécupérables. Garde deux copies hors ligne."
+                );
+                Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
             })
         }
 

@@ -11,6 +11,8 @@ hlb-types.workspace = true
 hlb-resolver.workspace = true
 hlb-orchestrator.workspace = true
 hlb-state.workspace = true
+hlb-secrets.workspace = true
+hlb-platform.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -18,6 +20,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 async-trait.workspace = true
 serde_yaml_ng.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

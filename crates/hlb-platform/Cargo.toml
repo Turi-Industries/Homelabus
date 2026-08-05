@@ -1,0 +1,18 @@
+[package]
+name = "hlb-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Provisionnement des services mutualisés (PostgreSQL, …)."
+
+[dependencies]
+sqlx = { workspace = true, features = ["postgres"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

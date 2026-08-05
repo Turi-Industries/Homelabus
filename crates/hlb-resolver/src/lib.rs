@@ -142,14 +142,19 @@ fn resolve_capability(
     match cap {
         Capability::Database { engine, name } => {
             let db = name.clone().unwrap_or_else(|| app.to_string());
+            let secret = format!("{app}-db-password");
+
+            // ⚠️ L'ordre compte : le mot de passe doit exister avant le rôle qui
+            // l'utilise. L'inverse produisait une base impossible à créer.
+            plan.push(Action::GenerateSecret {
+                name: secret.clone(),
+                purpose: format!("mot de passe du rôle {db}"),
+            });
             plan.push(Action::ProvisionDatabase {
                 engine: *engine,
                 database: db.clone(),
                 role: db.clone(),
-            });
-            plan.push(Action::GenerateSecret {
-                name: format!("{app}-db-password"),
-                purpose: format!("mot de passe du rôle {db}"),
+                password_secret: secret,
             });
         }
 
@@ -259,6 +264,7 @@ mod tests {
             engine: hlb_types::DbEngine::Postgres,
             database: "gitea".into(),
             role: "gitea".into(),
+            password_secret: "gitea-db-password".into(),
         }));
         // §3.1 — un rôle par app, jamais de mot de passe réutilisé.
         assert!(p
@@ -292,6 +298,19 @@ mod tests {
         let m = manifest("  requires:\n    - kind: sso\n      mode: native\n");
         let err = resolve(&m, &InstallParams::default()).unwrap_err();
         assert!(matches!(err, Error::MissingParam("domain")), "{err}");
+    }
+
+    #[test]
+    fn the_password_is_generated_before_the_role_that_uses_it() {
+        let m = manifest("  requires:\n    - kind: database\n      engine: postgres\n");
+        let p = resolve(&m, &InstallParams::default()).expect("plan");
+
+        let secret = p.actions.iter().position(|a| matches!(a, Action::GenerateSecret { .. }))
+            .expect("secret planifié");
+        let db = p.actions.iter().position(|a| matches!(a, Action::ProvisionDatabase { .. }))
+            .expect("base planifiée");
+
+        assert!(secret < db, "sans mot de passe, le rôle ne peut pas être créé");
     }
 
     #[test]
