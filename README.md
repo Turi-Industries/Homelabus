@@ -23,11 +23,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
+| `hlb-backup` — restic : rétention, instantanés, restauration | ✅ 16 + 6 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Sauvegardes (restic), client PocketID, volumes | ⬜ à venir |
+| Client PocketID, volumes, dumps SQL, PITR | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**157 tests unitaires + 22 tests d'intégration.**
+**174 tests unitaires + 28 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -48,6 +49,16 @@ teste pas contre un bouchon : chaque registre a ses particularités.
 
 ```sh
 cargo test -p hlb-registry -- --ignored --nocapture   # accès réseau requis
+```
+
+### Tests de sauvegarde et restauration
+
+§8.3 — « un backup non testé n'est pas un backup ». Ces tests détruisent
+réellement les données et vérifient qu'elles reviennent à l'identique.
+
+```sh
+export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
+cargo test -p hlb-backup -- --ignored --test-threads=1 --nocapture
 ```
 
 ## Essayer
@@ -145,10 +156,10 @@ AGPL-3.0-or-later.
 
 Ces manques sont **explicites dans le code**, jamais masqués :
 
-- **Aucun moteur de sauvegarde.** Une app dont le manifest déclare
-  `backupBefore: true` voit sa mise à jour **refusée**, avec un message clair.
-  Une migration de schéma n'est pas réversible par un rollback d'image :
-  prétendre avoir sauvegardé serait le pire des mensonges.
+- **Sauvegarde des volumes seulement.** Les dumps SQL et l'archivage WAL (PITR)
+  du §8.1 n'existent pas encore. Une app dont le manifest déclare
+  `backupBefore: true` reste donc **refusée** à la mise à jour tant que le
+  fournisseur n'est pas branché au CLI.
 - **Client PocketID et création de volume** restent `Unimplemented` dans
   l'exécuteur — enregistrés comme tels, jamais comptés comme réussis.
 - `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur

@@ -148,10 +148,11 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     Ok(out)
 }
 
-/// Ce que peut fournir un moteur de sauvegarde. Non implémenté pour l'instant :
-/// le trait existe pour que le refus du §7 soit explicite, pas contourné.
+/// Ce que doit fournir un moteur de sauvegarde pour qu'une mise à jour exigeant une
+/// sauvegarde préalable soit autorisée (§7).
 #[async_trait::async_trait]
 pub trait BackupProvider: Send + Sync {
+    /// Prend un instantané de l'app et renvoie son identifiant.
     async fn snapshot(&self, app: &str) -> std::result::Result<String, String>;
 }
 

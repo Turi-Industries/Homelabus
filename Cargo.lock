@@ -959,6 +959,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hlb-backup"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hlb-updater",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hlb-catalog"
 version = "0.1.0"
 dependencies = [

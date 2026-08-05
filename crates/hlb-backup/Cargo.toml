@@ -1,0 +1,23 @@
+[package]
+name = "hlb-backup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sauvegardes restic : rétention, instantanés, restauration vérifiée."
+
+[dependencies]
+async-trait.workspace = true
+hlb-updater.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_yaml_ng.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
