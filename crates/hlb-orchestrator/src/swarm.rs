@@ -238,6 +238,33 @@ impl Orchestrator for SwarmOrchestrator {
         Ok(())
     }
 
+    async fn scale(&self, name: &str, replicas: u64) -> Result<()> {
+        let current = self.inspect(name).await?;
+        let version = current
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| Error::Unexpected("service sans version".into()))?;
+
+        let mut spec = current
+            .spec
+            .ok_or_else(|| Error::Unexpected("service sans spec".into()))?;
+
+        // On ne touche qu'au mode : le reste de la spec est conservé intact.
+        spec.mode = Some(ServiceSpecMode {
+            replicated: Some(ServiceSpecModeReplicated {
+                replicas: Some(replicas as i64),
+            }),
+            ..Default::default()
+        });
+
+        let opts = UpdateServiceOptionsBuilder::default()
+            .version(version as i32)
+            .build();
+
+        self.docker.update_service(name, spec, opts, None).await?;
+        Ok(())
+    }
+
     async fn status(&self, name: &str) -> Result<ServiceStatus> {
         let svc = self.inspect(name).await?;
         let running = self.running_tasks(name).await?;

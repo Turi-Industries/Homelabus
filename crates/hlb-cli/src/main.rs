@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use hlb_catalog::Catalog;
 use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
-use hlb_engine::Executor;
+use hlb_engine::{Executor, Reconciler};
 use hlb_resolver::{DependencyGraph, InstallParams};
 use hlb_secrets::Vault;
 use hlb_state::State;
@@ -64,6 +64,13 @@ enum Command {
         #[arg(long)]
         mail_domain: Option<String>,
         /// Appliquer réellement le plan.
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Comparer l'état désiré à l'état réel, et corriger si demandé (§2.1).
+    Reconcile {
+        /// Corriger les écarts. Sans ce drapeau, détection seule.
         #[arg(long)]
         apply: bool,
     },
@@ -287,6 +294,47 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         "  {} {app} · {title}  [{id}]",
                         if *blocking { "🔴" } else { "🟠" }
                     );
+                }
+                Ok(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::Reconcile { apply } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let orch = SwarmOrchestrator::connect()?;
+
+                let report = Reconciler::new(&orch, &state).reconcile(*apply).await?;
+
+                if report.is_clean() {
+                    println!("✓ aucun écart : l'état réel correspond à l'état désiré.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
+                println!("{} écart(s) détecté(s) :\n", report.drifts.len());
+                for d in &report.drifts {
+                    let mark = if d.is_correctable() { "🔧" } else { "ℹ️ " };
+                    println!("  {mark} {d}");
+                }
+
+                if !apply {
+                    let n = report.correctable().count();
+                    if n > 0 {
+                        println!("\n{n} corrigeable(s). Relance avec --apply.");
+                    }
+                    return Ok(ExitCode::SUCCESS);
+                }
+
+                if !report.corrected.is_empty() {
+                    println!("\n✓ {} écart(s) corrigé(s).", report.corrected.len());
+                }
+                if !report.failed.is_empty() {
+                    eprintln!("\n✗ {} correction(s) impossible(s) :", report.failed.len());
+                    for (d, e) in &report.failed {
+                        eprintln!("  {} : {e}", d.app());
+                    }
+                    return Ok(ExitCode::FAILURE);
                 }
                 Ok(ExitCode::SUCCESS)
             })

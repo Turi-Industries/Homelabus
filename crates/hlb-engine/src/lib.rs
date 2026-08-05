@@ -9,6 +9,10 @@
 //! Et une règle d'honnêteté : une action non implémentée est enregistrée comme telle
 //! (`Unimplemented`), **jamais** comme réussie.
 
+pub mod reconcile;
+
+pub use reconcile::{Drift, Reconciler, Report};
+
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_platform::PostgresProvisioner;
 use hlb_resolver::{Action, Plan};
@@ -271,6 +275,10 @@ mod tests {
     struct Fake {
         deployed: Mutex<Vec<String>>,
         waited: Mutex<Vec<String>>,
+        updated: Mutex<Vec<(String, String)>>,
+        scaled: Mutex<Vec<(String, u64)>>,
+        /// Ce que `list()` renverra : l'état « observé » du cluster.
+        observed: Mutex<Vec<ServiceStatus>>,
         fail_deploy: bool,
     }
 
@@ -286,7 +294,15 @@ mod tests {
             self.deployed.lock().expect("mutex").push(s.name.clone());
             Ok("id".into())
         }
-        async fn update_image(&self, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
+        async fn update_image(&self, name: &str, image: &str) -> hlb_orchestrator::Result<()> {
+            self.updated
+                .lock()
+                .expect("mutex")
+                .push((name.into(), image.into()));
+            Ok(())
+        }
+        async fn scale(&self, name: &str, replicas: u64) -> hlb_orchestrator::Result<()> {
+            self.scaled.lock().expect("mutex").push((name.into(), replicas));
             Ok(())
         }
         async fn status(&self, name: &str) -> hlb_orchestrator::Result<ServiceStatus> {
@@ -300,7 +316,7 @@ mod tests {
             })
         }
         async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> {
-            Ok(vec![])
+            Ok(self.observed.lock().expect("mutex").clone())
         }
         async fn remove(&self, _: &str) -> hlb_orchestrator::Result<()> {
             Ok(())

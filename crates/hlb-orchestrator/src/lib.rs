@@ -141,6 +141,9 @@ pub trait Orchestrator: Send + Sync {
     /// tout le pipeline du §7 s'écroule.
     async fn update_image(&self, name: &str, image: &str) -> Result<()>;
 
+    /// Ajuste le nombre de réplicas d'un service existant.
+    async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
+
     async fn status(&self, name: &str) -> Result<ServiceStatus>;
 
     async fn list(&self) -> Result<Vec<ServiceStatus>>;

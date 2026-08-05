@@ -138,6 +138,11 @@ qui a tort, pas le test.
   jamais faire semblant d'avoir provisionné une base.
 - **Idempotence et reprise.** `record_plan` n'écrase pas une action `done` ; l'exécuteur
   saute ce qui est déjà fait et s'arrête au premier échec plutôt que de cascader.
+- **La réconciliation ne supprime jamais un orphelin, ne ressuscite jamais une
+  installation en échec, et ne force jamais une convergence en cours.** Un système qui
+  corrige trop est plus dangereux qu'un système qui ne corrige rien. Distinction clé :
+  la *consigne* Swarm (`desired_replicas`) vient d'une décision et se corrige ;
+  l'*avancement* (`running_replicas`) est transitoire et se laisse tranquille.
 - **Les guides bloquants arrêtent avant toute modification.** Inutile de déployer une
   app dont le DNS n'existe pas ou dont le compte admin n'est pas créé.
 - **Politique de mise à jour non négociable.** `start-first` + `failure_action:
@@ -180,7 +185,11 @@ Fait : types + validation, orchestrateur Swarm (spike `bollard` validé, dont le
 rollback automatique), résolveur + graphe + plan, catalogue, état persistant,
 exécuteur, CLI.
 
-Pas encore écrit — ces actions sont `Unimplemented` dans l'exécuteur : provisionneur
-PostgreSQL, coffre de secrets `age`, client PocketID, générateur de Caddyfile,
-veilleur de registre (résolution de digest). Voir la feuille de route en §12 de
-PLAN.md.
+Fait aussi : coffre de secrets `age`, provisionnement PostgreSQL isolé (avec preuve
+d'isolation en test d'intégration), boucle de réconciliation.
+
+Pas encore écrit — ces actions restent `Unimplemented` dans l'exécuteur : client
+PocketID, générateur de Caddyfile, création de volume, résolution de digest. Le moteur
+de vérification des guides (bloc `verify:` du §4.6) n'existe pas non plus : `hlb ack`
+est une attestation, et le CLI le dit à chaque usage. Voir la feuille de route en §12
+de PLAN.md.

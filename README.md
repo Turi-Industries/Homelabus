@@ -19,12 +19,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 13 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
 | `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
-| `hlb-engine` — exécuteur : aperçu, idempotence, reprise | ✅ 10 tests |
-| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
+| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 10 + 11 tests |
+| `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | Client PocketID, générateur Caddyfile, veilleur de registre | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**78 tests unitaires + 12 tests d'intégration.**
+**89 tests unitaires + 12 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -53,6 +53,10 @@ cargo build
 ./target/debug/hlb todo                      # actions manuelles en attente
 ./target/debug/hlb ack gitea/gitea-first-admin
 ./target/debug/hlb secrets                   # inventaire, jamais les valeurs
+
+# Réconciliation : détection seule, puis correction
+./target/debug/hlb reconcile
+./target/debug/hlb reconcile --apply
 ```
 
 Pour le provisionnement réel des bases :
