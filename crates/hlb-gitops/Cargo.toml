@@ -1,0 +1,22 @@
+[package]
+name = "hlb-gitops"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Miroir Git de l'état désiré : historique, diff et rollback."
+
+[dependencies]
+hlb-types.workspace = true
+# `vendored-libgit2` : pas de dépendance système à installer, cohérent avec le
+# principe « on ne suppose aucun binaire présent sur l'hôte » (§2ter.6).
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

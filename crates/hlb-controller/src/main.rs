@@ -50,6 +50,10 @@ struct Cli {
     #[arg(long, default_value = "hlb-master.key", env = "HLB_MASTER_KEY")]
     master_key: std::path::PathBuf,
 
+    /// Miroir Git de l'état désiré (§2.3).
+    #[arg(long, env = "HLB_GIT_MIRROR")]
+    git_mirror: Option<std::path::PathBuf>,
+
     /// Fréquence d'examen des échéances de sauvegarde.
     #[arg(long, default_value = "600", env = "HLB_BACKUP_CHECK_SECS")]
     backup_check_secs: u64,
@@ -87,6 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loops::ReconcileLoop::new(orch, state.clone()).apply(cli.reconcile_apply),
         );
         let rx = shutdown_rx.clone();
+        let mirror = cli.git_mirror.clone();
+        let st = state.clone();
         tracing::info!(
             intervalle = cli.reconcile_secs,
             correction = cli.reconcile_apply,
@@ -96,13 +102,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cli.reconcile_secs),
             rx,
             move || {
-                let rl = rl.clone();
+                let (rl, mirror, st) = (rl.clone(), mirror.clone(), st.clone());
                 async move {
                     let r = rl.tick().await;
                     if !r.is_clean() {
                         tracing::warn!(erreurs = r.errors.len(), "réconciliation incomplète");
                     } else if r.acted > 0 {
                         tracing::info!(corrigés = r.acted, "écarts corrigés");
+
+                        // §2.3 — ne produira un commit que si l'état DÉSIRÉ a bougé.
+                        // Une réconciliation qui remet la réalité en conformité ne
+                        // change rien de désiré : c'est voulu qu'elle soit silencieuse.
+                        if let Some(g) = &mirror {
+                            if let Err(e) = export(g, &st, "correction par réconciliation").await {
+                                tracing::warn!("miroir Git non mis à jour : {e}");
+                            }
+                        }
                     }
                 }
             },
@@ -125,6 +140,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
         )));
+    }
+
+    // Miroir Git initialisé au démarrage : le dépôt doit refléter l'état courant
+    // même si rien ne change ensuite. Sinon un cluster stable n'aurait aucune trace.
+    if let Some(g) = &cli.git_mirror {
+        match export(g, &state, "état au démarrage du controller").await {
+            Ok(()) => tracing::info!(miroir = %g.display(), "état archivé dans Git"),
+            Err(e) => tracing::warn!("miroir Git indisponible : {e}"),
+        }
     }
 
     if let Some(repo) = cli.backup_repo.clone() {
@@ -206,6 +230,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = t.await;
     }
     tracing::info!("arrêt propre");
+    Ok(())
+}
+
+/// Archive l'état désiré dans le miroir Git.
+async fn export(
+    chemin: &std::path::Path,
+    state: &State,
+    message: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut apps = Vec::new();
+    for (name, status) in state.installed_apps().await? {
+        apps.push((name.clone(), status, state.app_manifest(&name).await?));
+    }
+    hlb_gitops::GitMirror::open_or_init(chemin)?.export(&apps, message)?;
     Ok(())
 }
 

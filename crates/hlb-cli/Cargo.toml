@@ -25,6 +25,7 @@ hlb-updater.workspace = true
 hlb-backup.workspace = true
 hlb-identity.workspace = true
 hlb-guide.workspace = true
+hlb-gitops.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap.workspace = true
 tokio.workspace = true

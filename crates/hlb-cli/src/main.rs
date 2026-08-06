@@ -46,6 +46,10 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POCKETID_KEY")]
     pocketid_key: Option<String>,
 
+    /// Miroir Git de l'état désiré (§2.3). Absent : pas d'historique.
+    #[arg(long, global = true, env = "HLB_GIT_MIRROR")]
+    git_mirror: Option<PathBuf>,
+
     /// API d'administration du Caddy frontal. Sans elle, l'app est déployée mais
     /// pas routée — ce qui est un état légitime, pas une erreur.
     #[arg(long, global = true, env = "HLB_CADDY_ADMIN")]
@@ -135,6 +139,12 @@ enum Command {
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
+
+    /// Historique des changements de configuration (§2.3).
+    History {
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -272,6 +282,22 @@ fn fmt_age(d: std::time::Duration) -> String {
     } else {
         format!("{} j", s / 86400)
     }
+}
+
+/// Écrit l'état désiré dans le miroir Git (§2.3).
+async fn export_git(
+    chemin: &std::path::Path,
+    state: &State,
+    message: &str,
+) -> Result<hlb_gitops::ExportReport, Box<dyn std::error::Error>> {
+    let mut apps = Vec::new();
+    for (name, status) in state.installed_apps().await? {
+        // C'est le manifest FIGÉ qu'on archive, pas le catalogue courant (§4.8).
+        let m = state.app_manifest(&name).await?;
+        apps.push((name, status, m));
+    }
+    let mirror = hlb_gitops::GitMirror::open_or_init(chemin)?;
+    Ok(mirror.export(&apps, message)?)
 }
 
 fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
@@ -430,6 +456,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     eprintln!("\n✗ échec à l'action {} : {err}", seq + 1);
                     eprintln!("  relance la même commande pour reprendre à cette étape.");
                     return Ok(ExitCode::FAILURE);
+                }
+
+                // §2.3 — miroir Git : l'historique de la config, indépendant de la
+                // base d'état. Un échec ici ne doit pas faire échouer l'installation :
+                // l'app est déployée, c'est ce qui compte.
+                if let Some(chemin) = &cli.git_mirror {
+                    match export_git(chemin, &state, &format!("installation de {app}")).await {
+                        Ok(r) if r.changed() => println!("✓ config archivée dans Git"),
+                        Ok(_) => {}
+                        Err(e) => eprintln!("⚠️  miroir Git non mis à jour : {e}"),
+                    }
                 }
 
                 if out.unimplemented > 0 {
@@ -650,6 +687,29 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     Ok(ExitCode::FAILURE)
                 }
             })
+        }
+
+        Command::History { limit } => {
+            let Some(chemin) = &cli.git_mirror else {
+                eprintln!(
+                    "aucun miroir Git configuré — utilise --git-mirror ou HLB_GIT_MIRROR"
+                );
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let m = hlb_gitops::GitMirror::open_or_init(chemin)?;
+            let h = m.history(*limit)?;
+            if h.is_empty() {
+                println!("Aucun changement enregistré.");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            println!("{} changement(s), du plus récent au plus ancien :\n", h.len());
+            for (id, msg) in &h {
+                println!("  {id}  {msg}");
+            }
+            println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
+            Ok(ExitCode::SUCCESS)
         }
 
         Command::Secrets => {

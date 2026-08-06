@@ -17,6 +17,7 @@ hlb-engine.workspace = true
 hlb-orchestrator.workspace = true
 hlb-backup.workspace = true
 hlb-secrets.workspace = true
+hlb-gitops.workspace = true
 hlb-updater.workspace = true
 axum = "0.8"
 clap.workspace = true
