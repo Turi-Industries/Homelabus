@@ -32,7 +32,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**261 tests unitaires + 43 tests d'intégration.**
+**274 tests unitaires + 43 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -205,8 +205,11 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   d'intégration, mais `hlb backup verify` le dit franchement au lieu de faire
   semblant.
 - **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
-  route POST/PUT/DELETE, et un test le vérifie. Les actions restent au CLI
-  jusqu'à ce que RBAC et journal d'audit existent.
+  route POST/PUT/DELETE, et un test le vérifie.
+- **Le RBAC n'est pas encore appliqué** : les rôles et leurs permissions sont
+  définis et testés, mais l'API étant en lecture seule il n'y a rien à protéger
+  pour l'instant. Le CLI s'exécute localement — qui le lance a déjà la clé
+  maîtresse.
 - **La réconciliation ne corrige pas par défaut** : `--reconcile-apply` doit
   être demandé explicitement.
 - **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est

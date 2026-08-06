@@ -9,8 +9,10 @@
 
 pub mod capability;
 pub mod guide;
+pub mod rbac;
 pub mod manifest;
 
+pub use rbac::Role;
 pub use guide::{Automation, Guide, GuideStep, Phase, Severity, Verify};
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{

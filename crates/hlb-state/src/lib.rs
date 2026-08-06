@@ -215,6 +215,60 @@ impl State {
             .collect()
     }
 
+    /// Consigne une action dans le journal d'audit (§9).
+    ///
+    /// 🔴 Append-only : ce crate n'expose aucun moyen de supprimer ni de modifier
+    /// une entrée. Un journal réécrivable ne prouve rien.
+    pub async fn audit(
+        &self,
+        actor: &str,
+        role: hlb_types::Role,
+        action: &str,
+        target: &str,
+        outcome: &str,
+        detail: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO audit_log (actor, role, action, target, outcome, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(actor)
+        .bind(role.as_str())
+        .bind(action)
+        .bind(target)
+        .bind(outcome)
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Les dernières entrées du journal : (quand, acteur, action, cible, issue).
+    pub async fn audit_trail(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String, String, String)>> {
+        let rows = sqlx::query(
+            "SELECT at, actor, action, target, outcome FROM audit_log
+             ORDER BY at DESC, id DESC LIMIT ?1",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("at")?,
+                    r.try_get("actor")?,
+                    r.try_get("action")?,
+                    r.try_get("target")?,
+                    r.try_get("outcome")?,
+                ))
+            })
+            .collect()
+    }
+
     /// Enregistre une sauvegarde et son issue.
     pub async fn record_backup(
         &self,
@@ -692,6 +746,34 @@ mod tests {
         assert_eq!(g.len(), 2);
         assert!(g[0].3, "les bloquantes d'abord");
         assert_eq!(g[0].1, "admin");
+    }
+
+    #[tokio::test]
+    async fn audited_actions_are_retrievable_in_order() {
+        let s = st().await;
+        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
+            .await
+            .unwrap();
+        s.audit("remy", hlb_types::Role::Operator, "purge", "vikunja", "refused", Some("rôle insuffisant"))
+            .await
+            .unwrap();
+
+        let t = s.audit_trail(10).await.unwrap();
+        assert_eq!(t.len(), 2);
+        // Le plus récent d'abord : c'est ce qu'on veut voir en cas d'incident.
+        assert_eq!(t[0].2, "purge");
+        assert_eq!(t[0].4, "refused");
+    }
+
+    #[tokio::test]
+    async fn refusals_are_audited_too() {
+        // 🔴 Une tentative refusée est au moins aussi intéressante qu'une réussie :
+        // c'est le signal d'un accès mal configuré, ou d'une intrusion.
+        let s = st().await;
+        s.audit("inconnu", hlb_types::Role::Viewer, "purge", "gitea", "refused", None)
+            .await
+            .unwrap();
+        assert_eq!(s.audit_trail(10).await.unwrap()[0].4, "refused");
     }
 
     #[tokio::test]

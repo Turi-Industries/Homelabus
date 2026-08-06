@@ -77,6 +77,15 @@ pub struct GuideItem {
 }
 
 #[derive(Serialize)]
+pub struct AuditItem {
+    pub at: String,
+    pub actor: String,
+    pub action: String,
+    pub target: String,
+    pub outcome: String,
+}
+
+#[derive(Serialize)]
 pub struct SecretItem {
     pub name: String,
     pub purpose: String,
@@ -90,6 +99,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/todo", get(list_todo))
         // Noms et usages seulement — jamais les valeurs, même derrière l'API.
         .route("/api/secrets", get(list_secrets))
+        .route("/api/audit", get(list_audit))
         .with_state(state)
 }
 
@@ -157,6 +167,23 @@ async fn list_todo(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<Guid
                 id,
                 title,
                 blocking,
+            })
+            .collect(),
+    ))
+}
+
+async fn list_audit(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<AuditItem>> {
+    Ok(Json(
+        s.state
+            .audit_trail(100)
+            .await?
+            .into_iter()
+            .map(|(at, actor, action, target, outcome)| AuditItem {
+                at,
+                actor,
+                action,
+                target,
+                outcome,
             })
             .collect(),
     ))
@@ -248,6 +275,13 @@ mod tests {
         let (_, v) = get(app().await, "/api/todo").await;
         assert_eq!(v[0]["id"], "first-admin");
         assert_eq!(v[0]["blocking"], true);
+    }
+
+    #[tokio::test]
+    async fn the_audit_trail_is_exposed() {
+        let (s, v) = get(app().await, "/api/audit").await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(v.is_array());
     }
 
     #[tokio::test]

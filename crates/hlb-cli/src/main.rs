@@ -140,6 +140,12 @@ enum Command {
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
 
+    /// Journal d'audit : qui a fait quoi, quand (§9).
+    Audit {
+        #[arg(long, default_value = "30")]
+        limit: usize,
+    },
+
     /// Historique des changements de configuration (§2.3).
     History {
         #[arg(long, default_value = "20")]
@@ -300,6 +306,11 @@ async fn export_git(
     Ok(mirror.export(&apps, message)?)
 }
 
+/// Le CLI s'exécute localement : quiconque le lance a déjà accès à la machine et à
+/// la clé maîtresse. Le RBAC (§9ter) protège l'API, pas la ligne de commande — mais
+/// les actions sont journalisées de la même façon.
+const ACTEUR_ROLE: hlb_types::Role = hlb_types::Role::Admin;
+
 fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -438,7 +449,30 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 if let Some(c) = &caddy {
                     exec = exec.with_ingress(c);
                 }
-                let out = exec.run(app, &plan).await?;
+                let out = match exec.run(app, &plan).await {
+                    Ok(o) => o,
+                    Err(e) => {
+                        // Un guide bloquant n'est pas un échec : c'est un refus
+                        // délibéré du système. Les confondre rendrait le journal
+                        // inexploitable — on ne saurait plus distinguer « ça a
+                        // planté » de « on a protégé l'utilisateur ».
+                        let issue = match &e {
+                            hlb_engine::Error::BlockedByGuide { .. } => "refused",
+                            _ => "failed",
+                        };
+                        state
+                            .audit("cli", ACTEUR_ROLE, "install", app, issue, Some(&e.to_string()))
+                            .await?;
+                        return Err(e.into());
+                    }
+                };
+
+                if *apply {
+                    let issue = if out.is_success() { "ok" } else { "failed" };
+                    state
+                        .audit("cli", ACTEUR_ROLE, "install", app, issue, None)
+                        .await?;
+                }
 
                 if !apply {
                     println!("Aperçu pour « {app} » — aucune modification effectuée.\n");
@@ -686,6 +720,30 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     eprintln!("aucune action « {id} » en attente pour {app}.");
                     Ok(ExitCode::FAILURE)
                 }
+            })
+        }
+
+        Command::Audit { limit } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let t = state.audit_trail(*limit).await?;
+
+                if t.is_empty() {
+                    println!("Journal d'audit vide.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
+                println!("{:<20} {:<10} {:<12} {:<16} ISSUE", "QUAND", "ACTEUR", "ACTION", "CIBLE");
+                for (at, actor, action, target, outcome) in &t {
+                    let marque = match outcome.as_str() {
+                        "ok" => "✓",
+                        "refused" => "⛔",
+                        _ => "✗",
+                    };
+                    println!("{at:<20} {actor:<10} {action:<12} {target:<16} {marque} {outcome}");
+                }
+                Ok(ExitCode::SUCCESS)
             })
         }
 
