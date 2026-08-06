@@ -49,6 +49,9 @@ pub struct Catalog {
 pub struct Entry {
     pub manifest: Manifest,
     pub path: PathBuf,
+    /// Le `guide.yaml` voisin, s'il existe (§4.6). Une app sans guide n'en a
+    /// simplement aucun — ce n'est pas une erreur.
+    pub guide: hlb_types::Guide,
 }
 
 impl Catalog {
@@ -161,9 +164,25 @@ fn load_one(path: &Path) -> Result<Entry> {
         });
     }
 
+    // Le guide vit à côté du manifest. Absent = pas d'étape déclarée.
+    let guide_path = path.with_file_name("guide.yaml");
+    let guide = if guide_path.exists() {
+        let raw = std::fs::read_to_string(&guide_path).map_err(|source| Error::Io {
+            path: guide_path.clone(),
+            source,
+        })?;
+        serde_yaml_ng::from_str(&raw).map_err(|e| Error::Parse {
+            path: guide_path,
+            source: hlb_types::Error::Parse(e),
+        })?
+    } else {
+        hlb_types::Guide::default()
+    };
+
     Ok(Entry {
         manifest,
         path: path.to_path_buf(),
+        guide,
     })
 }
 
@@ -215,6 +234,59 @@ mod tests {
             vw.manifest.spec.update.channel,
             hlb_types::UpdateChannel::Pin
         );
+    }
+
+    #[test]
+    fn guides_are_loaded_alongside_manifests() {
+        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        let gitea = c.get("gitea").expect("gitea présent");
+        assert!(
+            !gitea.guide.steps.is_empty(),
+            "gitea devrait déclarer ses étapes manuelles"
+        );
+    }
+
+    #[test]
+    fn an_app_without_a_guide_is_fine() {
+        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        // valkey n'a rien à faire faire à la main.
+        assert!(c.get("valkey").expect("présent").guide.steps.is_empty());
+    }
+
+    #[test]
+    fn every_guide_step_has_a_unique_id() {
+        // Deux étapes de même identifiant s'écraseraient dans la file (§4.6).
+        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        for e in c.entries() {
+            let mut vus = std::collections::BTreeSet::new();
+            for s in &e.guide.steps {
+                assert!(
+                    vus.insert(&s.id),
+                    "{} : identifiant « {} » en double",
+                    e.manifest.metadata.name,
+                    s.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guide_dependencies_point_to_existing_steps() {
+        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        for e in c.entries() {
+            let ids: std::collections::BTreeSet<_> =
+                e.guide.steps.iter().map(|s| s.id.as_str()).collect();
+            for s in &e.guide.steps {
+                for dep in &s.after {
+                    assert!(
+                        ids.contains(dep.as_str()),
+                        "{} : « {} » dépend de « {dep} », qui n'existe pas",
+                        e.manifest.metadata.name,
+                        s.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

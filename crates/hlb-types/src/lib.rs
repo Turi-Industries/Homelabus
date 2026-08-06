@@ -8,8 +8,10 @@
 //! Une seule définition, trois consommateurs.
 
 pub mod capability;
+pub mod guide;
 pub mod manifest;
 
+pub use guide::{Automation, Guide, GuideStep, Phase, Severity, Verify};
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{
     ApiVersion, ExposePolicy, Healthcheck, Image, Ingress, Kind, Manifest, Metadata, Runtime,

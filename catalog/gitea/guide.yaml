@@ -1,0 +1,52 @@
+# Étapes que le déploiement seul ne couvre pas (§4.6, §4.6bis).
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: create-admin
+    title: Créer le compte administrateur
+    phase: post-install
+    severity: blocking
+    body: |
+      Le PREMIER compte inscrit devient administrateur. Tant que ce n'est pas
+      fait, l'app reste joignable depuis le VPN uniquement.
+    deeplink: "https://{{ domain }}/user/sign_up"
+    verify:
+      type: http
+      url: "https://{{ domain }}/api/v1/version"
+
+  - id: close-registration
+    title: Fermer les inscriptions
+    phase: post-install
+    severity: blocking
+    after: [create-admin]
+    body: |
+      Sans ça, n'importe qui peut se créer un compte sur ton Gitea.
+    automate:
+      - method: env
+        vars:
+          GITEA__service__DISABLE_REGISTRATION: "true"
+      - method: exec
+        command: [gitea, admin, config, set, service.DISABLE_REGISTRATION, "true"]
+    verify:
+      type: http
+      url: "https://{{ domain }}/user/sign_up"
+      expectStatus: [403, 404]
+
+  - id: git-over-ssh
+    title: Ouvrir le port SSH si tu veux cloner en SSH
+    phase: post-install
+    severity: recommended
+    body: |
+      Le clone HTTPS fonctionne sans rien faire. Pour le SSH, redirige le port
+      choisi vers le cluster.

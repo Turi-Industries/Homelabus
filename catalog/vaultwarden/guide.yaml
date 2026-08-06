@@ -1,0 +1,45 @@
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: "Fais pointer {{ domain }} vers le cluster."
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: create-admin
+    title: Crée ton compte immédiatement
+    phase: post-install
+    severity: blocking
+    body: |
+      Crée ton compte MAINTENANT : l'inscription sera fermée juste après.
+      Ne laisse pas cette fenêtre ouverte.
+    deeplink: "https://{{ domain }}/#/register"
+    verify:
+      type: http
+      url: "https://{{ domain }}/alive"
+
+  - id: close-signups
+    title: Fermer les inscriptions
+    phase: post-install
+    severity: blocking
+    after: [create-admin]
+    automate:
+      - method: env
+        vars:
+          SIGNUPS_ALLOWED: "false"
+    verify:
+      type: attest
+
+  - id: keep-local-login
+    title: 🔴 Ne jamais activer SSO_ONLY
+    phase: post-install
+    severity: required
+    body: |
+      Vaultwarden est ton accès de secours à tout le reste. Avec SSO_ONLY=true,
+      si PocketID tombe tu perds l'accès au coffre qui contient de quoi le
+      réparer. Garde toujours l'authentification par mot de passe maître.
+    verify:
+      type: attest

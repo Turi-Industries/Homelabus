@@ -65,6 +65,18 @@ impl InstallParams {
 /// L'ordre des actions n'est pas cosmétique : les dépendances (base, secrets, client
 /// OIDC) doivent exister **avant** le déploiement du service qui les consomme.
 pub fn resolve(m: &Manifest, params: &InstallParams) -> Result<Plan> {
+    resolve_with_guide(m, &hlb_types::Guide::default(), params)
+}
+
+/// Variante qui prend en compte le `guide.yaml` de l'app (§4.6).
+///
+/// Les étapes déclarées remplacent le guide générique qui était codé en dur ici :
+/// une app décrit désormais ses propres prérequis, et le résolveur ne devine plus.
+pub fn resolve_with_guide(
+    m: &Manifest,
+    guide: &hlb_types::Guide,
+    params: &InstallParams,
+) -> Result<Plan> {
     hlb_types::validate(m)?;
 
     let app = &m.metadata.name;
@@ -106,21 +118,42 @@ pub fn resolve(m: &Manifest, params: &InstallParams) -> Result<Plan> {
         timeout_secs: params.health_timeout_secs,
     });
 
-    // 5. L'exposition, en dernier.
+    // 5. Les étapes du guide, AVANT toute exposition (§4.6bis).
+    //
+    // L'ordre est le mécanisme de protection lui-même : c'est parce que ces étapes
+    // précèdent l'ingress que la fenêtre « premier inscrit = admin » reste fermée.
+    let vars: Vec<(&str, &str)> = match &params.domain {
+        Some(d) => vec![("domain", d.as_str())],
+        None => Vec::new(),
+    };
+    for s in &guide.steps {
+        plan.push(Action::PendingGuideStep {
+            id: s.id.clone(),
+            title: hlb_types::guide::render(&s.title, &vars),
+            blocking: s.is_blocking(),
+        });
+    }
+
+    // Une app en `after-guide` sans aucune étape bloquante déclarée serait exposée
+    // publiquement sans garde-fou : on en pose un par défaut plutôt que d'ouvrir.
+    let expose_apres_guide = m
+        .spec
+        .ingress
+        .iter()
+        .any(|i| i.expose == ExposePolicy::AfterGuide);
+    if expose_apres_guide && !guide.steps.iter().any(|s| s.is_blocking()) {
+        plan.push(Action::PendingGuideStep {
+            id: format!("{app}-first-admin"),
+            title: format!(
+                "Vérifier le compte administrateur de {app} et fermer les inscriptions"
+            ),
+            blocking: true,
+        });
+    }
+
+    // 6. L'exposition, en dernier.
     for ing in &m.spec.ingress {
         let host = render_host(&ing.host, params)?;
-
-        // §4.6bis — `after-guide` interdit l'exposition publique tant que le guide
-        // n'est pas validé. C'est ce qui ferme la fenêtre « premier inscrit = admin ».
-        if ing.expose == ExposePolicy::AfterGuide {
-            plan.push(Action::PendingGuideStep {
-                id: format!("{app}-first-admin"),
-                title: format!(
-                    "Créer le compte administrateur de {app}, puis fermer les inscriptions"
-                ),
-                blocking: true,
-            });
-        }
 
         plan.push(Action::ConfigureIngress {
             host,
@@ -253,6 +286,14 @@ fn render_host(tpl: &str, params: &InstallParams) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// Ingress en `after-guide`. En chaîne brute : un `\` de continuation Rust
+    /// mange la newline ET l'indentation, ce qui casse le YAML de façon déroutante.
+    const AFTER_GUIDE: &str = r#"  ingress:
+    - host: git.example.fr
+      port: 3000
+      expose: after-guide
+"#;
+
     fn manifest(extra: &str) -> Manifest {
         let y = format!(
             "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: gitea }}\n\
@@ -339,12 +380,60 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_guide_step_becomes_a_blocking_action() {
+        // §4.6 — les étapes viennent désormais du `guide.yaml` de l'app.
+        let m = manifest("  ingress:\n    - host: git.example.fr\n      port: 3000\n");
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(
+            "steps:\n  - id: dns\n    title: Créer le DNS\n    severity: blocking\n",
+        )
+        .expect("guide");
+
+        let p = resolve_with_guide(&m, &g, &InstallParams::default()).expect("plan");
+        assert_eq!(p.blocking_steps().len(), 1);
+        assert!(p
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::PendingGuideStep { id, .. } if id == "dns")));
+    }
+
+    #[test]
+    fn guide_titles_are_rendered_with_the_domain() {
+        let m = manifest("");
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(
+            "steps:\n  - id: x\n    title: \"Pointer {{ domain }} vers le cluster\"\n",
+        )
+        .expect("guide");
+
+        let p = resolve_with_guide(&m, &g, &InstallParams::with_domain("git.example.fr"))
+            .expect("plan");
+        assert!(p
+            .actions
+            .iter()
+            .any(|a| a.to_string().contains("git.example.fr")));
+    }
+
+    #[test]
+    fn after_guide_without_any_blocking_step_still_gets_a_guard() {
+        // 🔴 Sinon une app en `after-guide` sans guide déclaré serait exposée
+        // publiquement sans le moindre garde-fou.
+        let m = manifest(AFTER_GUIDE);
+        let p = resolve_with_guide(&m, &hlb_types::Guide::default(), &InstallParams::default())
+            .expect("plan");
+        assert_eq!(p.blocking_steps().len(), 1, "un garde-fou par défaut est attendu");
+    }
+
+    #[test]
     fn after_guide_blocks_before_exposing() {
         let m = manifest(
             "  ingress:\n    - host: \"{{ domain }}\"\n      port: 3000\n      \
              expose: after-guide\n",
         );
-        let p = resolve(&m, &InstallParams::with_domain("git.example.fr")).expect("plan");
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(
+            "steps:\n  - id: admin\n    title: Créer l'admin\n    severity: blocking\n",
+        )
+        .expect("guide");
+        let p = resolve_with_guide(&m, &g, &InstallParams::with_domain("git.example.fr"))
+            .expect("plan");
 
         let guide = p
             .actions

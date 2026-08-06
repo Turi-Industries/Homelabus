@@ -339,7 +339,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 ..Default::default()
             };
 
-            let plan = hlb_resolver::resolve(&entry.manifest, &params)?;
+            let plan = hlb_resolver::resolve_with_guide(&entry.manifest, &entry.guide, &params)?;
 
             println!("Plan pour « {app} »  (aucune modification effectuée)\n");
             print!("{plan}");
@@ -355,7 +355,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 mail_domain: mail_domain.clone(),
                 ..Default::default()
             };
-            let plan = hlb_resolver::resolve(&entry.manifest, &params)?;
+            let plan = hlb_resolver::resolve_with_guide(&entry.manifest, &entry.guide, &params)?;
 
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
