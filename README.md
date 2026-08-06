@@ -23,13 +23,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
-| `hlb-backup` — restic + pg_dump : rétention, restauration vérifiée | ✅ 26 + 10 tests |
+| `hlb-backup` — restic, pg_dump, ordonnancement, vérification | ✅ 40 + 13 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Archivage WAL (PITR), planification des sauvegardes | ⬜ à venir |
+| Archivage WAL (PITR), boucle de fond, controller HTTP | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**191 tests unitaires + 36 tests d'intégration.**
+**208 tests unitaires + 39 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -172,8 +172,14 @@ Ces manques sont **explicites dans le code**, jamais masqués :
 
 - **Pas d'archivage WAL.** Le PITR du §8.1 n'existe pas : on ne peut restaurer
   qu'aux instants où un dump a été pris, pas à une seconde arbitraire.
-- **Les dumps ne sont pas encore planifiés** ni automatiquement chaînés à
-  restic — les briques existent, l'ordonnancement reste à écrire.
+- **Les dumps SQL ne sont pas encore chaînés** à l'ordonnanceur : `backup run`
+  ne sauvegarde que les volumes.
+- **La vérification par restauration n'est pas câblée au CLI.** Elle existe en
+  bibliothèque (`hlb_backup::verify_by_restore`) et est couverte par les tests
+  d'intégration, mais `hlb backup verify` le dit franchement au lieu de faire
+  semblant.
+- **Aucune boucle de fond** : `backup run` et `reconcile` s'invoquent à la main
+  ou par cron externe, en attendant le controller.
 - **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est
   refusée.** De même si l'app n'a aucun volume connu : « rien à sauvegarder »
   ne vaut jamais « sauvegarde réussie ».

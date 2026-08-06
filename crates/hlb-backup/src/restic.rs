@@ -119,6 +119,11 @@ impl<R: Runner> Repository<R> {
         Ok(out)
     }
 
+    /// Accès contrôlé pour les modules voisins (vérification).
+    pub(crate) async fn exec_public(&self, args: &[&str]) -> Result<Output> {
+        self.exec(args).await
+    }
+
     /// Crée le dépôt. Idempotent : un dépôt déjà initialisé n'est pas une erreur.
     pub async fn init(&self) -> Result<()> {
         let args = vec!["init".to_string()];

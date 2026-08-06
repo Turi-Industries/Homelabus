@@ -13,6 +13,8 @@ pub mod pgrunner;
 pub mod provider;
 pub mod restic;
 pub mod retention;
+pub mod schedule;
+pub mod verify;
 pub mod runner;
 
 pub use pgdump::{PgDumper, PgTarget};
@@ -20,6 +22,8 @@ pub use pgrunner::PgContainerRunner;
 pub use provider::ResticBackupProvider;
 pub use restic::{Repository, Runner, Snapshot};
 pub use retention::RetentionPolicy;
+pub use schedule::Schedule;
+pub use verify::{verify_by_restore, Verification};
 pub use runner::{ContainerRunner, HostRunner};
 
 #[derive(Debug, thiserror::Error)]

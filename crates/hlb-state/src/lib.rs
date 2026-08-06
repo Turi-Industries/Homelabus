@@ -215,6 +215,92 @@ impl State {
             .collect()
     }
 
+    /// Enregistre une sauvegarde et son issue.
+    pub async fn record_backup(
+        &self,
+        app: &str,
+        kind: &str,
+        snapshot_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO backup_runs (app, kind, snapshot_id, status, error, finished_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+        )
+        .bind(app)
+        .bind(kind)
+        .bind(snapshot_id)
+        .bind(if error.is_some() { "failed" } else { "ok" })
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Âge de la dernière sauvegarde **réussie**, en secondes.
+    ///
+    /// 🔴 On ignore délibérément les échecs : un échec ne doit pas repousser
+    /// l'échéance, sinon une sauvegarde cassée se ferait de plus en plus rare (§8.1).
+    pub async fn seconds_since_last_success(&self, app: &str) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT CAST(strftime('%s','now') AS INTEGER)
+                    - CAST(strftime('%s', MAX(finished_at)) AS INTEGER) AS age
+             FROM backup_runs WHERE app = ?1 AND status = 'ok'",
+        )
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
+    }
+
+    /// L'instantané le plus récent d'une app, pour le vérifier.
+    pub async fn latest_snapshot(&self, app: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT snapshot_id FROM backup_runs
+             WHERE app = ?1 AND status = 'ok' AND snapshot_id IS NOT NULL
+             -- `datetime('now')` a une résolution à la seconde : deux sauvegardes
+             -- rapprochées auraient le même horodatage. L'id auto-incrémenté
+             -- départage de façon fiable, car il suit l'ordre d'insertion.
+             ORDER BY finished_at DESC, id DESC LIMIT 1",
+        )
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("snapshot_id").ok().flatten()))
+    }
+
+    pub async fn record_verification(
+        &self,
+        app: &str,
+        snapshot_id: &str,
+        detail: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO restore_verifications (app, snapshot_id, status, detail)
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(app)
+        .bind(snapshot_id)
+        .bind(if detail.is_some() { "failed" } else { "ok" })
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Âge de la dernière vérification réussie, en secondes.
+    pub async fn seconds_since_last_verification(&self, app: &str) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT CAST(strftime('%s','now') AS INTEGER)
+                    - CAST(strftime('%s', MAX(verified_at)) AS INTEGER) AS age
+             FROM restore_verifications WHERE app = ?1 AND status = 'ok'",
+        )
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
+    }
+
     /// Fige le digest résolu au déploiement (§7).
     ///
     /// Le manifest stocké est réécrit : c'est bien le digest qui fait foi ensuite,
@@ -606,6 +692,53 @@ mod tests {
         assert_eq!(g.len(), 2);
         assert!(g[0].3, "les bloquantes d'abord");
         assert_eq!(g[0].1, "admin");
+    }
+
+    #[tokio::test]
+    async fn a_failure_does_not_push_back_the_schedule() {
+        // 🔴 Sinon une sauvegarde cassée se ferait de plus en plus rare.
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+
+        assert_eq!(s.seconds_since_last_success("gitea").await.unwrap(), None);
+
+        s.record_backup("gitea", "volume", None, Some("disque plein")).await.unwrap();
+        assert_eq!(
+            s.seconds_since_last_success("gitea").await.unwrap(),
+            None,
+            "un échec ne compte pas comme une réussite"
+        );
+
+        s.record_backup("gitea", "volume", Some("abc"), None).await.unwrap();
+        assert!(s.seconds_since_last_success("gitea").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn the_latest_successful_snapshot_is_retrievable() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+
+        s.record_backup("gitea", "volume", Some("ancien"), None).await.unwrap();
+        s.record_backup("gitea", "volume", None, Some("échec")).await.unwrap();
+        s.record_backup("gitea", "volume", Some("recent"), None).await.unwrap();
+
+        assert_eq!(s.latest_snapshot("gitea").await.unwrap().as_deref(), Some("recent"));
+    }
+
+    #[tokio::test]
+    async fn verifications_track_only_successes() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+
+        s.record_verification("gitea", "abc", Some("contenu différent")).await.unwrap();
+        assert_eq!(
+            s.seconds_since_last_verification("gitea").await.unwrap(),
+            None,
+            "une vérification en échec ne prouve rien"
+        );
+
+        s.record_verification("gitea", "abc", None).await.unwrap();
+        assert!(s.seconds_since_last_verification("gitea").await.unwrap().is_some());
     }
 
     #[tokio::test]

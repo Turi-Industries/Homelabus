@@ -265,3 +265,100 @@ async fn a_wrong_password_cannot_read_the_repository() {
 fn the_workdir_is_absolute() {
     assert!(Path::new(WORKDIR).is_absolute());
 }
+
+// ── Vérification de restauration (§8.3) ──────────────────────────────────────
+
+/// Compte fichiers et octets sous un chemin du volume partagé.
+fn count_files(volume: &str, dir: &str) -> (u64, u64) {
+    let out = in_volume(
+        volume,
+        &format!("find {dir} -type f 2>/dev/null | wc -l; find {dir} -type f -exec stat -c %s {{}} + 2>/dev/null | awk '{{s+=$1}} END {{print s+0}}'"),
+    );
+    let mut l = out.lines();
+    let files = l.next().unwrap_or("0").trim().parse().unwrap_or(0);
+    let bytes = l.next().unwrap_or("0").trim().parse().unwrap_or(0);
+    (files, bytes)
+}
+
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn verification_confirms_a_healthy_backup() {
+    let vol = make_volume("hlb-test-verif-ok");
+    let repo = repo_in(&vol);
+
+    in_volume(
+        &vol,
+        &format!(
+            "mkdir -p {WORKDIR}/d/sous && echo un > {WORKDIR}/d/a.txt && \
+             echo deux > {WORKDIR}/d/sous/b.txt && head -c 2048 /dev/urandom > {WORKDIR}/d/c.bin"
+        ),
+    );
+    repo.init().await.expect("init");
+    let id = repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+
+    let v = hlb_backup::verify_by_restore(&repo, &id, &format!("{WORKDIR}/verif"), |_| async {
+        Ok(count_files(&vol, &format!("{WORKDIR}/verif")))
+    })
+    .await
+    .expect("vérification");
+
+    assert!(v.matches(), "{}", v.describe());
+    assert_eq!(v.files_restored, 3);
+    println!("✓ {}", v.describe());
+
+    drop_volume(&vol);
+}
+
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn verification_detects_an_incomplete_restore() {
+    // 🔴 LE test du §8.3. Sans lui, on ne saurait pas si la vérification vérifie
+    // quoi que ce soit — un contrôle qui ne dit jamais « non » ne sert à rien.
+    //
+    // On simule une restauration partielle en supprimant un fichier juste après.
+    let vol = make_volume("hlb-test-verif-ko");
+    let repo = repo_in(&vol);
+
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && echo un > {WORKDIR}/d/a.txt && echo deux > {WORKDIR}/d/b.txt"),
+    );
+    repo.init().await.expect("init");
+    let id = repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+
+    let cible = format!("{WORKDIR}/verif");
+    let v = hlb_backup::verify_by_restore(&repo, &id, &cible, |t| {
+        let vol = vol.clone();
+        async move {
+            // Un fichier disparaît : la restauration est incomplète.
+            in_volume(&vol, &format!("find {t} -name b.txt -delete"));
+            Ok(count_files(&vol, &t))
+        }
+    })
+    .await
+    .expect("vérification");
+
+    assert!(!v.matches(), "l'écart aurait dû être détecté");
+    assert!(v.describe().contains("ÉCART"), "{}", v.describe());
+    println!("✓ écart détecté : {}", v.describe());
+
+    drop_volume(&vol);
+}
+
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn reading_the_data_catches_more_than_metadata() {
+    // `restic check` seul ne lit que les métadonnées. --read-data-subset relit
+    // réellement des blocs, ce qui attrape la corruption silencieuse.
+    let vol = make_volume("hlb-test-readdata");
+    let repo = repo_in(&vol);
+
+    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && head -c 65536 /dev/urandom > {WORKDIR}/d/gros.bin"));
+    repo.init().await.expect("init");
+    repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+
+    repo.check_data("100%").await.expect("les blocs doivent être lisibles");
+    println!("✓ intégrité des données vérifiée par relecture");
+
+    drop_volume(&vol);
+}

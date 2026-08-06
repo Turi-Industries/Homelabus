@@ -105,6 +105,10 @@ enum Command {
     #[command(subcommand)]
     Update(UpdateCmd),
 
+    /// Sauvegardes : état, exécution et vérification (§8).
+    #[command(subcommand)]
+    Backup(BackupCmd),
+
     /// État des services gérés par HomelabUS.
     Ps,
 
@@ -119,6 +123,22 @@ enum Command {
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// Ce qui est dû, en retard, ou vérifié — sans rien exécuter.
+    Status,
+    /// Sauvegarder les apps dues (ou toutes avec --force).
+    Run {
+        #[arg(long)]
+        force: bool,
+    },
+    /// 🔴 Restaurer un instantané dans un espace jetable et comparer (§8.3).
+    Verify {
+        /// Limiter à une app.
+        app: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -226,6 +246,20 @@ async fn build_backup_provider(
             paths,
         ))
     })))
+}
+
+/// Âge lisible : « 3 h », « 2 j ».
+fn fmt_age(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s < 90 {
+        format!("{s} s")
+    } else if s < 5400 {
+        format!("{} min", s / 60)
+    } else if s < 172_800 {
+        format!("{} h", s / 3600)
+    } else {
+        format!("{} j", s / 86400)
+    }
 }
 
 fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
@@ -646,6 +680,99 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 Ok(ExitCode::FAILURE)
                             }
                         }
+                    }
+                }
+            })
+        }
+
+        Command::Backup(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+                let sched = hlb_backup::Schedule::default();
+
+                match cmd {
+                    BackupCmd::Status => {
+                        let apps = state.installed_apps().await?;
+                        if apps.is_empty() {
+                            println!("Aucune app installée.");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                        }
+                        println!("{:<14} {:<18} {:<18} ÉTAT", "APP", "DERNIÈRE SAUVEGARDE", "VÉRIFIÉE");
+                        for (app, _) in &apps {
+                            let age = state.seconds_since_last_success(app).await?
+                                .map(|s| std::time::Duration::from_secs(s as u64));
+                            let verif = state.seconds_since_last_verification(app).await?;
+
+                            let etat = if sched.is_overdue(age) {
+                                "🔴 en retard"
+                            } else if sched.is_due(age) {
+                                "🟠 due"
+                            } else {
+                                "✓ à jour"
+                            };
+                            println!(
+                                "{app:<14} {:<18} {:<18} {etat}",
+                                age.map(fmt_age).unwrap_or_else(|| "jamais".into()),
+                                verif.map(|s| fmt_age(std::time::Duration::from_secs(s as u64)))
+                                    .unwrap_or_else(|| "jamais".into()),
+                            );
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    BackupCmd::Run { force } => {
+                        let provider = build_backup_provider(
+                            cli.backup_repo.as_deref(), &state, &vault,
+                        ).await?;
+                        let Some(provider) = provider else {
+                            eprintln!("aucun dépôt configuré — utilise --backup-repo");
+                            return Ok(ExitCode::FAILURE);
+                        };
+                        use hlb_updater::BackupProvider;
+
+                        let mut faites = 0;
+                        for (app, statut) in state.installed_apps().await? {
+                            if statut == "failed" {
+                                continue;
+                            }
+                            let age = state.seconds_since_last_success(&app).await?
+                                .map(|s| std::time::Duration::from_secs(s as u64));
+                            if !force && !sched.is_due(age) {
+                                continue;
+                            }
+
+                            print!("{app}… ");
+                            match provider.snapshot(&app).await {
+                                Ok(id) => {
+                                    state.record_backup(&app, "volume", Some(&id), None).await?;
+                                    println!("✓ {}", &id[..8.min(id.len())]);
+                                    faites += 1;
+                                }
+                                Err(e) => {
+                                    // Enregistré comme échec : l'échéance n'est PAS
+                                    // repoussée, la sauvegarde reste due (§8.1).
+                                    state.record_backup(&app, "volume", None, Some(&e)).await?;
+                                    println!("✗ {e}");
+                                }
+                            }
+                        }
+                        if faites == 0 {
+                            println!("Rien à faire.");
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    BackupCmd::Verify { app } => {
+                        eprintln!(
+                            "La vérification par restauration nécessite un espace jetable \n\
+                             monté aux côtés du dépôt. Elle est disponible en bibliothèque \n\
+                             (hlb_backup::verify_by_restore) et couverte par les tests \n\
+                             d'intégration, mais son câblage CLI reste à écrire."
+                        );
+                        let _ = app;
+                        Ok(ExitCode::FAILURE)
                     }
                 }
             })
