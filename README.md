@@ -25,12 +25,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-backup` — restic, pg_dump, ordonnancement, vérification | ✅ 40 + 13 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
+| `hlb-guide` — vérification des actions manuelles | ✅ 9 tests |
 | `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**238 tests unitaires + 42 tests d'intégration.**
+**247 tests unitaires + 42 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -89,6 +90,7 @@ cargo build
 ./target/debug/hlb install valkey
 ./target/debug/hlb install valkey --apply    # exécute réellement
 ./target/debug/hlb todo                      # actions manuelles en attente
+./target/debug/hlb todo --verify             # les vérifie et retire ce qui est fait
 ./target/debug/hlb ack gitea/gitea-first-admin
 ./target/debug/hlb secrets                   # inventaire, jamais les valeurs
 
@@ -193,6 +195,8 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   qu'aux instants où un dump a été pris, pas à une seconde arbitraire.
 - **Les dumps SQL ne sont pas encore chaînés** à l'ordonnanceur : `backup run`
   ne sauvegarde que les volumes.
+- **`Verify::Exec`** (commande dans le conteneur) est rapporté comme non vérifié,
+  jamais comme réussi : il demande un accès conteneur qui appartient à l'exécuteur.
 - **La vérification par restauration n'est pas câblée au CLI.** Elle existe en
   bibliothèque (`hlb_backup::verify_by_restore`) et est couverte par les tests
   d'intégration, mais `hlb backup verify` le dit franchement au lieu de faire

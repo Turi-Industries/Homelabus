@@ -113,12 +113,19 @@ enum Command {
     Ps,
 
     /// Actions manuelles en attente, toutes apps confondues (§4.6).
-    Todo,
+    Todo {
+        /// Exécuter les vérifications déclarées et marquer ce qui est constaté fait.
+        #[arg(long)]
+        verify: bool,
+    },
 
     /// Déclarer une action manuelle traitée. ⚠️ Attestation, pas vérification.
     Ack {
         /// Format : <app>/<id>, tel qu'affiché par `hlb todo`.
         target: String,
+        /// Attester malgré une vérification qui dit le contraire.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
@@ -428,7 +435,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::Todo => {
+        Command::Todo { verify } => {
+            let catalogue = Catalog::load(&cli.catalog).ok();
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = State::open(&cli.state).await?;
@@ -440,11 +448,45 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 println!("{} action(s) manuelle(s) en attente :\n", guides.len());
+
+                let verifier = hlb_guide::Verifier::default();
+                let mut constatees = 0;
+
                 for (app, id, title, blocking) in &guides {
-                    println!(
-                        "  {} {app} · {title}  [{id}]",
-                        if *blocking { "🔴" } else { "🟠" }
-                    );
+                    let marque = if *blocking { "🔴" } else { "🟠" };
+
+                    if !verify {
+                        println!("  {marque} {app} · {title}  [{id}]");
+                        continue;
+                    }
+
+                    // La déclaration de l'étape vient du catalogue ; son état, de la
+                    // base. On a besoin des deux pour vérifier.
+                    let etape = catalogue
+                        .as_ref()
+                        .and_then(|c| c.get(app).ok())
+                        .and_then(|e| e.guide.steps.iter().find(|s| &s.id == id).cloned());
+
+                    let Some(etape) = etape else {
+                        println!("  {marque} {app} · {title}  [{id}]  (déclaration introuvable)");
+                        continue;
+                    };
+
+                    let domaine = state.app_domain(app).await?.unwrap_or_default();
+                    let vars = [("domain", domaine.as_str())];
+                    let issue = verifier.check(&etape, &vars).await;
+
+                    println!("  {marque} {app} · {title}  [{id}]");
+                    println!("       {}", issue.describe());
+
+                    if issue.is_verified() {
+                        state.verify_guide(app, id).await?;
+                        constatees += 1;
+                    }
+                }
+
+                if *verify {
+                    println!("\n{constatees} action(s) constatée(s) faite(s) et retirée(s).");
                 }
                 Ok(ExitCode::SUCCESS)
             })
@@ -542,20 +584,57 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::Ack { target } => {
+        Command::Ack { target, force } => {
             let (app, id) = target
                 .split_once('/')
                 .ok_or("format attendu : <app>/<id> (voir `hlb todo`)")?;
 
+            let catalogue = Catalog::load(&cli.catalog).ok();
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = State::open(&cli.state).await?;
+
+                // Si l'étape est vérifiable, on vérifie AVANT d'accepter l'attestation.
+                let etape = catalogue
+                    .as_ref()
+                    .and_then(|c| c.get(app).ok())
+                    .and_then(|e| e.guide.steps.iter().find(|s| s.id == id).cloned());
+
+                let mut atteste = true;
+                if let Some(etape) = etape {
+                    let domaine = state.app_domain(app).await?.unwrap_or_default();
+                    let issue = hlb_guide::Verifier::default()
+                        .check(&etape, &[("domain", domaine.as_str())])
+                        .await;
+
+                    match &issue {
+                        o if o.is_verified() => {
+                            println!("✓ constaté : {}", o.describe());
+                            atteste = false;
+                        }
+                        // 🔴 On a constaté que ce n'est PAS fait. Attester le
+                        // contraire n'a aucun sens : c'est exactement le mensonge
+                        // que le système doit refuser.
+                        o if !o.may_attest() && !force => {
+                            eprintln!("{}", o.describe());
+                            eprintln!(
+                                "\nLa vérification dit que ce n'est pas fait. \
+                                 --force pour attester quand même."
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        _ => {}
+                    }
+                }
+
                 if state.verify_guide(app, id).await? {
                     println!("✓ « {id} » de {app} marquée traitée.");
-                    println!(
-                        "\n⚠️  C'est une attestation : la vérification automatique \
-                         (DNS, HTTP, API…) n'est pas encore implémentée."
-                    );
+                    if atteste {
+                        println!(
+                            "\n⚠️  Attestation : cette étape n'est pas vérifiable \
+                             automatiquement, HomelabUS te croit sur parole."
+                        );
+                    }
                     Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
                 } else {
                     eprintln!("aucune action « {id} » en attente pour {app}.");

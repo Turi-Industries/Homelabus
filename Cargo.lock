@@ -1044,6 +1044,7 @@ dependencies = [
  "hlb-backup",
  "hlb-catalog",
  "hlb-engine",
+ "hlb-guide",
  "hlb-identity",
  "hlb-ingress",
  "hlb-orchestrator",
@@ -1097,6 +1098,16 @@ dependencies = [
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-guide"
+version = "0.1.0"
+dependencies = [
+ "hlb-types",
+ "reqwest",
  "tokio",
  "tracing",
 ]
