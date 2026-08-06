@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
+    HealthConfig, TaskSpecContainerSpecPrivileges,
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
     ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
     TaskSpecContainerSpec, TaskSpecPlacement, TaskState,
@@ -95,6 +96,37 @@ impl SwarmOrchestrator {
                             .map(|(k, v)| format!("{k}={v}"))
                             .collect(),
                     ),
+
+                    // §9 — durcissement effectivement transmis à Swarm, pas
+                    // seulement déclaré dans le manifest.
+                    read_only: Some(spec.hardening.read_only_rootfs),
+                    user: spec.hardening.user.clone(),
+                    capability_drop: if spec.hardening.cap_drop.is_empty() {
+                        None
+                    } else {
+                        Some(spec.hardening.cap_drop.clone())
+                    },
+                    capability_add: if spec.hardening.cap_add.is_empty() {
+                        None
+                    } else {
+                        Some(spec.hardening.cap_add.clone())
+                    },
+                    // `no-new-privileges` n'a pas de champ dédié : il passe par les
+                    // options de sécurité, comme en ligne de commande Docker.
+                    privileges: Some(TaskSpecContainerSpecPrivileges {
+                        no_new_privileges: Some(spec.hardening.no_new_privileges),
+                        ..Default::default()
+                    }),
+
+                    health_check: spec.healthcheck.as_ref().map(|h| HealthConfig {
+                        test: Some(h.test.clone()),
+                        // Swarm attend des nanosecondes.
+                        interval: Some((h.interval_secs * 1_000_000_000) as i64),
+                        timeout: Some((h.timeout_secs * 1_000_000_000) as i64),
+                        retries: Some(h.retries as i64),
+                        start_period: Some((h.start_period_secs * 1_000_000_000) as i64),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 }),
                 placement: Some(TaskSpecPlacement {

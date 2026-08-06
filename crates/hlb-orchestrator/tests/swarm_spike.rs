@@ -198,3 +198,101 @@ async fn q7_service_inconnu() {
     assert!(matches!(err, hlb_orchestrator::Error::NotFound(_)), "{err:?}");
     println!("✓ erreur typée : {err}");
 }
+
+// ── §9 : le durcissement doit être APPLIQUÉ, pas seulement déclaré ───────────
+
+/// Lit la spec effective d'un service, telle que Swarm la stocke.
+async fn effective_spec(name: &str) -> serde_json::Value {
+    let out = std::process::Command::new("docker")
+        .args(["service", "inspect", name, "--format", "{{json .Spec.TaskTemplate.ContainerSpec}}"])
+        .output()
+        .expect("docker inspect");
+    serde_json::from_slice(&out.stdout).expect("json")
+}
+
+#[tokio::test]
+#[ignore = "nécessite un Docker Swarm actif"]
+async fn hardening_reaches_swarm() {
+    // 🔴 Le test qui manquait : la spec de sécurité était déclarée dans les manifests,
+    // validée, et jamais transmise. Un conteneur se déployait avec les privilèges par
+    // défaut de Docker alors que le plan pose « sécurité par défaut » en invariant.
+    let o = orch();
+    let n = name("durcissement");
+    cleanup(&o, &n).await;
+
+    o.deploy(&sleeper(&n)).await.expect("deploy");
+    o.wait_healthy(&n, 120).await.expect("convergence");
+
+    let cs = effective_spec(&n).await;
+
+    assert_eq!(cs["ReadOnly"], true, "rootfs devrait être en lecture seule");
+    assert_eq!(
+        cs["CapabilityDrop"],
+        serde_json::json!(["ALL"]),
+        "toutes les capacités devraient être retirées"
+    );
+    assert_eq!(
+        cs["Privileges"]["NoNewPrivileges"], true,
+        "no-new-privileges devrait être posé"
+    );
+    println!("✓ rootfs ro, cap_drop ALL, no-new-privileges appliqués par Swarm");
+
+    cleanup(&o, &n).await;
+}
+
+#[tokio::test]
+#[ignore = "nécessite un Docker Swarm actif"]
+async fn a_relaxed_manifest_is_honoured_too() {
+    // Une app qui a besoin de plus doit pouvoir le demander — sinon le durcissement
+    // par défaut serait contourné en désactivant HomelabUS.
+    let o = orch();
+    let n = name("assoupli");
+    cleanup(&o, &n).await;
+
+    let mut relache = hlb_types::SecuritySpec::default();
+    relache.read_only_rootfs = false;
+    relache.cap_add = vec!["NET_BIND_SERVICE".to_string()];
+
+    o.deploy(&sleeper(&n).hardening(relache)).await.expect("deploy");
+    o.wait_healthy(&n, 120).await.expect("convergence");
+
+    let cs = effective_spec(&n).await;
+    // Docker omet les valeurs fausses : absent équivaut à `false`.
+    assert!(
+        cs["ReadOnly"].is_null() || cs["ReadOnly"] == false,
+        "rootfs devrait être inscriptible : {}",
+        cs["ReadOnly"]
+    );
+    assert_eq!(cs["CapabilityAdd"], serde_json::json!(["NET_BIND_SERVICE"]));
+    println!("✓ assouplissement explicite respecté");
+
+    cleanup(&o, &n).await;
+}
+
+#[tokio::test]
+#[ignore = "nécessite un Docker Swarm actif"]
+async fn healthchecks_reach_swarm() {
+    let o = orch();
+    let n = name("sonde");
+    cleanup(&o, &n).await;
+
+    let hc = hlb_types::Healthcheck {
+        test: vec!["CMD-SHELL".into(), "true".into()],
+        interval_secs: 5,
+        timeout_secs: 2,
+        retries: 3,
+        start_period_secs: 1,
+    };
+    o.deploy(&sleeper(&n).healthcheck(hc)).await.expect("deploy");
+    o.wait_healthy(&n, 120).await.expect("convergence");
+
+    let cs = effective_spec(&n).await;
+    // ⚠️ Le champ s'écrit « Healthcheck », pas « HealthCheck ».
+    assert_eq!(cs["Healthcheck"]["Test"], serde_json::json!(["CMD-SHELL", "true"]));
+    // Swarm stocke les durées en nanosecondes.
+    assert_eq!(cs["Healthcheck"]["Interval"], 5_000_000_000i64);
+    assert_eq!(cs["Healthcheck"]["Retries"], 3);
+    println!("✓ sonde transmise, intervalles convertis en nanosecondes");
+
+    cleanup(&o, &n).await;
+}

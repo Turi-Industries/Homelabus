@@ -30,7 +30,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**222 tests unitaires + 39 tests d'intégration.**
+**222 tests unitaires + 42 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 

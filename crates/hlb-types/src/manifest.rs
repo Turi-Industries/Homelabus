@@ -146,12 +146,21 @@ impl Default for SwarmSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Healthcheck {
+    /// Forme Docker : `["CMD", "pg_isready", "-U", "postgres"]`.
     pub test: Vec<String>,
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_retries")]
+    pub retries: u64,
+    /// Délai de grâce au démarrage : une base de données met du temps à s'ouvrir,
+    /// et compter ses échecs pendant ce temps ferait boucler le déploiement.
+    #[serde(default = "default_start_period")]
+    pub start_period_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -195,7 +204,7 @@ pub enum UpdateChannel {
     Latest,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecuritySpec {
     #[serde(default = "default_true")]
@@ -204,6 +213,12 @@ pub struct SecuritySpec {
     pub no_new_privileges: bool,
     #[serde(default = "cap_drop_all")]
     pub cap_drop: Vec<String>,
+    /// Capacités réajoutées explicitement. Une app qui en a besoin doit le dire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cap_add: Vec<String>,
+    /// `uid:gid`. Absent = ce que déclare l'image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// Ports publiés sur l'hôte. Vide par défaut — et interdit en `proxy-header`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub published_ports: Vec<u16>,
@@ -215,6 +230,8 @@ impl Default for SecuritySpec {
             read_only_rootfs: true,
             no_new_privileges: true,
             cap_drop: cap_drop_all(),
+            cap_add: Vec::new(),
+            user: None,
             published_ports: Vec::new(),
         }
     }
@@ -227,6 +244,15 @@ fn default_true() -> bool {
     true
 }
 fn default_interval() -> u64 {
+    30
+}
+fn default_timeout() -> u64 {
+    5
+}
+fn default_retries() -> u64 {
+    3
+}
+fn default_start_period() -> u64 {
     30
 }
 fn cap_drop_all() -> Vec<String> {

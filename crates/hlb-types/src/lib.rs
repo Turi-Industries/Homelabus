@@ -12,8 +12,8 @@ pub mod manifest;
 
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{
-    ApiVersion, ExposePolicy, Image, Ingress, Kind, Manifest, Metadata, Runtime, SecuritySpec,
-    Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
+    ApiVersion, ExposePolicy, Healthcheck, Image, Ingress, Kind, Manifest, Metadata, Runtime,
+    SecuritySpec, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]

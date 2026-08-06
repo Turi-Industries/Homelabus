@@ -10,6 +10,7 @@
 pub mod swarm;
 
 use async_trait::async_trait;
+use hlb_types::{Healthcheck, SecuritySpec};
 
 pub use swarm::SwarmOrchestrator;
 
@@ -51,6 +52,13 @@ pub struct ServiceSpec {
     pub constraints: Vec<String>,
     pub labels: Vec<(String, String)>,
     pub networks: Vec<String>,
+    /// §9 — durcissement. Vient du manifest et est **appliqué**, pas seulement
+    /// déclaré. Le type est celui de `hlb-types` : une seule définition, comme pour
+    /// tout le reste du schéma (§11).
+    pub hardening: SecuritySpec,
+    /// Sonde de santé. Sans elle, `wait_healthy` ne peut que compter des tâches
+    /// « en cours », ce qui ne dit rien de l'application elle-même.
+    pub healthcheck: Option<Healthcheck>,
 }
 
 impl ServiceSpec {
@@ -64,7 +72,19 @@ impl ServiceSpec {
             constraints: Vec::new(),
             labels: Vec::new(),
             networks: Vec::new(),
+            hardening: SecuritySpec::default(),
+            healthcheck: None,
         }
+    }
+
+    pub fn hardening(mut self, h: SecuritySpec) -> Self {
+        self.hardening = h;
+        self
+    }
+
+    pub fn healthcheck(mut self, h: Healthcheck) -> Self {
+        self.healthcheck = Some(h);
+        self
     }
 
     pub fn replicas(mut self, n: u64) -> Self {

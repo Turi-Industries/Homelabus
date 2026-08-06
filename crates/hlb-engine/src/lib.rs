@@ -199,7 +199,9 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
-            Action::DeployService { name, image, replicas, constraints } => {
+            Action::DeployService {
+                name, image, replicas, constraints, hardening, healthcheck,
+            } => {
                 // ⚠️ Le plan a été construit AVANT l'exécution, donc son champ `image`
                 // porte encore le tag. Le digest résolu à l'étape précédente vit dans
                 // l'état — c'est lui qui fait foi (§7).
@@ -208,7 +210,14 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                     _ => image.clone(),
                 };
 
-                let mut spec = ServiceSpec::new(name, &resolved).replicas(*replicas);
+                let mut spec = ServiceSpec::new(name, &resolved)
+                    .replicas(*replicas)
+                    // §9 — le durcissement déclaré au manifest est réellement appliqué.
+                    .hardening(hardening.clone());
+
+                if let Some(h) = healthcheck {
+                    spec = spec.healthcheck(h.clone());
+                }
                 for c in constraints {
                     spec = spec.constraint(c);
                 }

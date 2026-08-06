@@ -95,6 +95,9 @@ pub fn resolve(m: &Manifest, params: &InstallParams) -> Result<Plan> {
         image: m.spec.image.reference(),
         replicas: m.spec.swarm.replicas,
         constraints,
+        // §9 — les valeurs du manifest sont transmises telles quelles jusqu'à Swarm.
+        hardening: m.spec.security.clone(),
+        healthcheck: m.spec.swarm.healthcheck.clone(),
     });
 
     // 4. §4.7 — on attend la convergence avant de rendre la main.
@@ -165,6 +168,9 @@ fn resolve_capability(
                     image: format!("{}:latest", engine.service_name()),
                     replicas: 1,
                     constraints: Vec::new(),
+                    // Un cache dédié est durci comme tout le reste (§9).
+                    hardening: hlb_types::SecuritySpec::default(),
+                    healthcheck: None,
                 });
             }
             plan.push(Action::GenerateSecret {

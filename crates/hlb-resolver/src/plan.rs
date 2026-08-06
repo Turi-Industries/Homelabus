@@ -48,6 +48,10 @@ pub enum Action {
         image: String,
         replicas: u64,
         constraints: Vec<String>,
+        /// §9 — durcissement, transporté depuis le manifest jusqu'à Swarm.
+        hardening: hlb_types::SecuritySpec,
+        /// Sans sonde, `wait_healthy` ne sait que compter des tâches en cours.
+        healthcheck: Option<hlb_types::Healthcheck>,
     },
 
     /// §7 — le catalogue déclare un tag ; le digest est résolu contre le registre
@@ -108,10 +112,22 @@ impl fmt::Display for Action {
                 "créer la boîte {address}{}",
                 if *aliases { " avec aliases" } else { "" }
             ),
-            Self::DeployService { name, image, replicas, constraints } => {
+            Self::DeployService { name, image, replicas, constraints, hardening, healthcheck } => {
                 write!(f, "déployer {name} ×{replicas} depuis {image}")?;
                 if !constraints.is_empty() {
                     write!(f, " [{}]", constraints.join(", "))?;
+                }
+                // Le durcissement figure dans le plan : il doit être visible avant
+                // application, pas découvert après coup.
+                let mut d = Vec::new();
+                if hardening.read_only_rootfs { d.push("rootfs ro".to_string()); }
+                if hardening.no_new_privileges { d.push("no-new-privileges".to_string()); }
+                if !hardening.cap_drop.is_empty() {
+                    d.push(format!("cap_drop {}", hardening.cap_drop.join("+")));
+                }
+                if healthcheck.is_some() { d.push("sonde".to_string()); }
+                if !d.is_empty() {
+                    write!(f, " ({})", d.join(", "))?;
                 }
                 Ok(())
             }
