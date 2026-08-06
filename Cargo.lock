@@ -992,6 +992,7 @@ dependencies = [
  "hlb-backup",
  "hlb-catalog",
  "hlb-engine",
+ "hlb-identity",
  "hlb-ingress",
  "hlb-orchestrator",
  "hlb-platform",
@@ -1010,6 +1011,7 @@ name = "hlb-engine"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hlb-identity",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1019,6 +1021,18 @@ dependencies = [
  "hlb-types",
  "serde_yaml_ng",
  "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-identity"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

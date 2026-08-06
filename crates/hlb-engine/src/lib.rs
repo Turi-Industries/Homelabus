@@ -15,6 +15,7 @@ pub use reconcile::{Drift, Reconciler, Report};
 
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_platform::PostgresProvisioner;
+use hlb_identity::PocketId;
 use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
@@ -36,6 +37,9 @@ pub enum Error {
 
     #[error(transparent)]
     Registry(#[from] hlb_registry::Error),
+
+    #[error(transparent)]
+    Identity(#[from] hlb_identity::Error),
 
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
@@ -72,6 +76,8 @@ pub struct Executor<'a, O: Orchestrator> {
     postgres: Option<&'a PostgresProvisioner>,
     /// Absent hors ligne : sans registre, aucun digest ne peut être résolu.
     registry: Option<&'a RegistryClient>,
+    /// Absent tant que PocketID n'est pas déployé et qu'on n'a pas de clé d'API.
+    identity: Option<&'a PocketId>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -84,6 +90,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             vault: None,
             postgres: None,
             registry: None,
+            identity: None,
             apply: false,
         }
     }
@@ -100,6 +107,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_registry(mut self, r: &'a RegistryClient) -> Self {
         self.registry = Some(r);
+        self
+    }
+
+    pub fn with_identity(mut self, p: &'a PocketId) -> Self {
+        self.identity = Some(p);
         self
     }
 
@@ -281,11 +293,52 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            // Le reste demande des briques pas encore écrites (client PocketID,
-            // génération d'ingress au fil de l'installation).
-            Action::CreateOidcClient { .. }
-            | Action::ProvisionMailAccount { .. }
-            | Action::ConfigureIngress { .. } => Ok(Step::NotImplemented),
+            Action::CreateOidcClient { app: client, redirect_uris } => {
+                let (Some(pid), Some(vault)) = (self.identity, self.vault) else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                // Idempotent : un client existant est conservé, et son secret n'est
+                // JAMAIS régénéré — il est déjà injecté dans l'app qui tourne (§5.2).
+                let creds = pid.ensure(client, redirect_uris, true).await?;
+
+                let secret_name = format!("{app}-oidc-secret");
+                match creds.client_secret {
+                    Some(s) => {
+                        let ct = vault.encrypt(&s)?;
+                        self.state
+                            .store_secret_if_absent(&secret_name, &ct, "client secret OIDC")
+                            .await?;
+                    }
+                    None => {
+                        // Client déjà provisionné : le secret correspondant doit être
+                        // au coffre. S'il n'y est pas, on ne peut plus le retrouver —
+                        // PocketID ne le redonne jamais sans le régénérer.
+                        if self.state.secret(&secret_name).await?.is_none() {
+                            return Err(Error::MissingSecret(format!(
+                                "{secret_name} — le client OIDC « {client} » existe dans \
+                                 PocketID mais son secret est absent du coffre ; \
+                                 supprime le client pour le reprovisionner"
+                            )));
+                        }
+                    }
+                }
+
+                self.state
+                    .store_secret_if_absent(
+                        &format!("{app}-oidc-client-id"),
+                        &vault.encrypt(&creds.client_id)?,
+                        "identifiant du client OIDC",
+                    )
+                    .await?;
+
+                Ok(Step::Done)
+            }
+
+            // Le reste demande des briques pas encore écrites.
+            Action::ProvisionMailAccount { .. } | Action::ConfigureIngress { .. } => {
+                Ok(Step::NotImplemented)
+            }
         }
     }
 }

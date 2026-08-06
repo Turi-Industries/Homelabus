@@ -38,6 +38,14 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_BACKUP_REPO")]
     backup_repo: Option<String>,
 
+    /// URL de PocketID. Sans elle, les clients OIDC ne sont pas provisionnés.
+    #[arg(long, global = true, env = "HLB_POCKETID_URL")]
+    pocketid_url: Option<String>,
+
+    /// Clé d'API PocketID.
+    #[arg(long, global = true, env = "HLB_POCKETID_KEY")]
+    pocketid_key: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -339,6 +347,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 };
 
                 let registry = hlb_registry::RegistryClient::new();
+                let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
+                    (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(u, k)),
+                    _ => None,
+                };
 
                 let mut exec = Executor::new(&orch, &state)
                     .with_vault(&vault)
@@ -346,6 +358,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .apply(*apply);
                 if let Some(p) = &pg {
                     exec = exec.with_postgres(p);
+                }
+                if let Some(i) = &identity {
+                    exec = exec.with_identity(i);
                 }
                 let out = exec.run(app, &plan).await?;
 

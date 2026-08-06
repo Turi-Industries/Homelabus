@@ -24,11 +24,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-backup` — restic + pg_dump : rétention, restauration vérifiée | ✅ 26 + 10 tests |
+| `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Client PocketID, archivage WAL (PITR), planification | ⬜ à venir |
+| Archivage WAL (PITR), planification des sauvegardes | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**186 tests unitaires + 32 tests d'intégration.**
+**191 tests unitaires + 36 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -49,6 +50,15 @@ teste pas contre un bouchon : chaque registre a ses particularités.
 
 ```sh
 cargo test -p hlb-registry -- --ignored --nocapture   # accès réseau requis
+```
+
+### Tests PocketID
+
+PocketID ne publie pas de spécification OpenAPI : la forme de son API a été
+établie en la sondant. Ces tests sont la seule garantie que le client reste juste.
+
+```sh
+cargo test -p hlb-identity -- --ignored --test-threads=1 --nocapture
 ```
 
 ### Tests de sauvegarde et restauration
