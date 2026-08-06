@@ -11,6 +11,12 @@ use std::fmt;
 use hlb_types::{DbEngine, StorageTier};
 
 /// Une action atomique. Volontairement descriptive : l'exécution est ailleurs.
+///
+/// `DeployService` est nettement plus gros que les autres variantes. On l'assume :
+/// un plan compte quelques dizaines d'actions, jamais des millions, et mettre la
+/// variante en boîte rendrait tous les motifs de correspondance plus lourds à lire
+/// pour un gain mémoire sans objet ici.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// §3.1 — une base + un rôle par app, jamais de superuser partagé.
@@ -51,6 +57,8 @@ pub enum Action {
         /// Variables d'environnement, y compris celles issues des automatisations
         /// `method: env` des guides (§4.6bis).
         env: Vec<(String, String)>,
+        /// Volumes à monter : `(nom, chemin)`. Déduits des capacités `storage`.
+        mounts: Vec<(String, String)>,
         /// §9 — durcissement, transporté depuis le manifest jusqu'à Swarm.
         hardening: hlb_types::SecuritySpec,
         /// Sans sonde, `wait_healthy` ne sait que compter des tâches en cours.
@@ -120,7 +128,7 @@ impl fmt::Display for Action {
                 if *aliases { " avec aliases" } else { "" }
             ),
             Self::DeployService {
-                name, image, replicas, constraints, env, hardening, healthcheck,
+                name, image, replicas, constraints, env, mounts, hardening, healthcheck,
             } => {
                 write!(f, "déployer {name} ×{replicas} depuis {image}")?;
                 if !constraints.is_empty() {
@@ -136,6 +144,9 @@ impl fmt::Display for Action {
                 }
                 if healthcheck.is_some() { d.push("sonde".to_string()); }
                 if !env.is_empty() { d.push(format!("{} variables", env.len())); }
+                for (vol, path) in mounts {
+                    d.push(format!("{vol}→{path}"));
+                }
                 if !d.is_empty() {
                     write!(f, " ({})", d.join(", "))?;
                 }

@@ -46,6 +46,11 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POCKETID_KEY")]
     pocketid_key: Option<String>,
 
+    /// API d'administration du Caddy frontal. Sans elle, l'app est déployée mais
+    /// pas routée — ce qui est un état légitime, pas une erreur.
+    #[arg(long, global = true, env = "HLB_CADDY_ADMIN")]
+    caddy_admin: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -392,6 +397,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(u, k)),
                     _ => None,
                 };
+                let caddy = cli.caddy_admin.as_ref().map(CaddyAdmin::new);
 
                 let mut exec = Executor::new(&orch, &state)
                     .with_vault(&vault)
@@ -402,6 +408,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
                 if let Some(i) = &identity {
                     exec = exec.with_identity(i);
+                }
+                if let Some(c) = &caddy {
+                    exec = exec.with_ingress(c);
                 }
                 let out = exec.run(app, &plan).await?;
 

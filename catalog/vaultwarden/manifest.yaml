@@ -27,6 +27,11 @@ spec:
       # Pas d'Anubis : casserait les clients mobiles et l'extension navigateur.
       chain: [caddy-front, caddy-back]
       expose: after-guide
+  security:
+    # Ces apps écrivent dans leur rootfs au démarrage (configuration, cache) et
+    # abandonnent leurs privilèges vers un utilisateur non root.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
   swarm:
     replicas: 1
     tier: heavy

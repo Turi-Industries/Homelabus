@@ -16,6 +16,7 @@ hlb-platform.workspace = true
 hlb-registry.workspace = true
 hlb-identity.workspace = true
 hlb-guide.workspace = true
+hlb-ingress.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

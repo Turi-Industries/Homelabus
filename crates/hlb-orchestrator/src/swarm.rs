@@ -10,7 +10,7 @@ use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
-    HealthConfig, TaskSpecContainerSpecPrivileges,
+    HealthConfig, Mount, MountTypeEnum, TaskSpecContainerSpecPrivileges,
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
     ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
     TaskSpecContainerSpec, TaskSpecPlacement, TaskState,
@@ -121,6 +121,24 @@ impl SwarmOrchestrator {
                         no_new_privileges: Some(spec.hardening.no_new_privileges),
                         ..Default::default()
                     }),
+
+                    // Les volumes déclarés sont réellement attachés : sans ça, les
+                    // données vivraient dans la couche éphémère du conteneur.
+                    mounts: if spec.mounts.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            spec.mounts
+                                .iter()
+                                .map(|(vol, path)| Mount {
+                                    target: Some(path.clone()),
+                                    source: Some(vol.clone()),
+                                    typ: Some(MountTypeEnum::VOLUME),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                        )
+                    },
 
                     health_check: spec.healthcheck.as_ref().map(|h| HealthConfig {
                         test: Some(h.test.clone()),

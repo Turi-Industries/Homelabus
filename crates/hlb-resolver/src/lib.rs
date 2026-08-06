@@ -115,7 +115,24 @@ pub fn resolve_with_guide(
     env.sort();
     env.dedup_by(|a, b| a.0 == b.0);
 
-    // 4. Le service lui-même.
+    // 4. Les volumes à monter, déduits des capacités `storage`.
+    //
+    // 🔴 Le nom doit correspondre EXACTEMENT à celui créé par `CreateVolume`,
+    // sinon Swarm crée un second volume vide à la volée et les données déclarées
+    // sauvegardées ne sont pas celles que l'app utilise.
+    let mounts: Vec<(String, String)> = m
+        .spec
+        .requires
+        .iter()
+        .filter_map(|c| match c {
+            Capability::Storage { name, path, .. } => {
+                Some((format!("{app}-{name}"), path.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+
+    // 5. Le service lui-même.
     let mut constraints = Vec::new();
     if let Some(tier) = &m.spec.swarm.tier {
         // §2bis.2 — le placement découle du tier, jamais d'un nom de nœud en dur.
@@ -128,18 +145,19 @@ pub fn resolve_with_guide(
         replicas: m.spec.swarm.replicas,
         constraints,
         env,
+        mounts,
         // §9 — les valeurs du manifest sont transmises telles quelles jusqu'à Swarm.
         hardening: m.spec.security.clone(),
         healthcheck: m.spec.swarm.healthcheck.clone(),
     });
 
-    // 5. §4.7 — on attend la convergence avant de rendre la main.
+    // 6. §4.7 — on attend la convergence avant de rendre la main.
     plan.push(Action::WaitHealthy {
         name: app.clone(),
         timeout_secs: params.health_timeout_secs,
     });
 
-    // 6. Les étapes du guide, AVANT toute exposition (§4.6bis).
+    // 7. Les étapes du guide, AVANT toute exposition (§4.6bis).
     //
     // L'ordre est le mécanisme de protection lui-même : c'est parce que ces étapes
     // précèdent l'ingress que la fenêtre « premier inscrit = admin » reste fermée.
@@ -184,7 +202,7 @@ pub fn resolve_with_guide(
         });
     }
 
-    // 7. L'exposition, en dernier.
+    // 8. L'exposition, en dernier.
     for ing in &m.spec.ingress {
         let host = render_host(&ing.host, params)?;
 
@@ -243,6 +261,7 @@ fn resolve_capability(
                     replicas: 1,
                     constraints: Vec::new(),
                     env: Vec::new(),
+                    mounts: Vec::new(),
                     // Un cache dédié est durci comme tout le reste (§9).
                     hardening: hlb_types::SecuritySpec::default(),
                     healthcheck: None,

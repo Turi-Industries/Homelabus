@@ -24,6 +24,11 @@ spec:
       # Pas d'Anubis : un proof-of-work devant l'endpoint Git casserait `git clone`.
       chain: [caddy-front, caddy-back]
       expose: after-guide      # §4.6bis — premier inscrit = admin
+  security:
+    # Ces apps écrivent dans leur rootfs au démarrage (configuration, cache) et
+    # abandonnent leurs privilèges vers un utilisateur non root.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
   swarm:
     replicas: 1
     tier: heavy

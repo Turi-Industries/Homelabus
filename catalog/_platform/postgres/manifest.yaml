@@ -13,6 +13,11 @@ spec:
       path: /var/lib/postgresql/data
       tier: local
       backup: true
+  security:
+    # initdb ajuste les permissions du répertoire de données et abandonne ses
+    # privilèges vers l'utilisateur postgres.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
   swarm:
     replicas: 1
     # §2bis — épinglé sur le nœud « heavy » : les volumes locaux ne suivent pas

@@ -12,6 +12,9 @@ spec:
       path: /data
       tier: local
       backup: false      # cache : reconstructible, inutile de le sauvegarder
+  security:
+    # Valkey abandonne ses privilèges vers son propre utilisateur au démarrage.
+    capAdd: [SETGID, SETUID]
   swarm:
     replicas: 1
     tier: heavy

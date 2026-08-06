@@ -19,6 +19,12 @@ spec:
       port: 1411
       chain: [caddy-front, caddy-back]   # pas d'Anubis : casserait les callbacks OIDC
       expose: public
+  security:
+    # L'entrypoint crée un utilisateur et ajuste des permissions au démarrage :
+    # il lui faut un rootfs inscriptible et les capacités correspondantes.
+    # Déclaré explicitement plutôt que d'assouplir le défaut pour tout le monde (§9).
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
   swarm:
     replicas: 1
     tier: heavy

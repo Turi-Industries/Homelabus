@@ -298,3 +298,38 @@ async fn healthchecks_reach_swarm() {
 
     cleanup(&o, &n).await;
 }
+
+#[tokio::test]
+#[ignore = "nécessite un Docker Swarm actif"]
+async fn declared_volumes_are_actually_mounted() {
+    // 🔴 Régression sérieuse trouvée en production : les volumes étaient créés par
+    // l'exécuteur puis JAMAIS attachés au service. Les données partaient dans la
+    // couche éphémère du conteneur et disparaissaient au premier redéploiement —
+    // tout en étant déclarées « sauvegardées ».
+    let o = orch();
+    let n = name("montage");
+    let vol = format!("{n}-data");
+    cleanup(&o, &n).await;
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", &vol])
+        .output();
+
+    o.create_volume(&vol).await.expect("volume");
+    o.deploy(&sleeper(&n).mount(&vol, "/donnees"))
+        .await
+        .expect("deploy");
+    o.wait_healthy(&n, 120).await.expect("convergence");
+
+    let cs = effective_spec(&n).await;
+    let mounts = cs["Mounts"].as_array().expect("montages présents");
+    assert_eq!(mounts.len(), 1, "un montage attendu : {cs}");
+    assert_eq!(mounts[0]["Source"], vol.as_str());
+    assert_eq!(mounts[0]["Target"], "/donnees");
+    assert_eq!(mounts[0]["Type"], "volume");
+    println!("✓ volume {vol} monté sur /donnees");
+
+    cleanup(&o, &n).await;
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", &vol])
+        .output();
+}

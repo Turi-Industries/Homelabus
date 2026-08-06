@@ -16,6 +16,7 @@ pub use reconcile::{Drift, Reconciler, Report};
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_platform::PostgresProvisioner;
 use hlb_identity::PocketId;
+use hlb_ingress::CaddyAdmin;
 use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
@@ -40,6 +41,9 @@ pub enum Error {
 
     #[error(transparent)]
     Identity(#[from] hlb_identity::Error),
+
+    #[error(transparent)]
+    Ingress(#[from] hlb_ingress::Error),
 
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
@@ -78,6 +82,9 @@ pub struct Executor<'a, O: Orchestrator> {
     registry: Option<&'a RegistryClient>,
     /// Absent tant que PocketID n'est pas déployé et qu'on n'a pas de clé d'API.
     identity: Option<&'a PocketId>,
+    /// Absent si Caddy n'est pas encore joignable : l'app est déployée mais pas
+    /// encore routée, ce qui est un état légitime.
+    ingress: Option<&'a CaddyAdmin>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -91,6 +98,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             postgres: None,
             registry: None,
             identity: None,
+            ingress: None,
             apply: false,
         }
     }
@@ -112,6 +120,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_identity(mut self, p: &'a PocketId) -> Self {
         self.identity = Some(p);
+        self
+    }
+
+    pub fn with_ingress(mut self, c: &'a CaddyAdmin) -> Self {
+        self.ingress = Some(c);
         self
     }
 
@@ -197,10 +210,29 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         Ok(out)
     }
 
+    /// Les routes de toutes les apps installées.
+    ///
+    /// Recalculées depuis l'état à chaque fois : c'est le manifest figé qui fait foi
+    /// (§4.8), pas le catalogue courant.
+    async fn all_routes(&self) -> Result<Vec<hlb_ingress::Route>> {
+        let mut routes = Vec::new();
+        for (name, status) in self.state.installed_apps().await? {
+            if status == "failed" {
+                continue;
+            }
+            let m = self.state.app_manifest(&name).await?;
+            let domain = self.state.app_domain(&name).await?;
+            // §4.6bis — la route ne s'ouvre qu'une fois les actions bloquantes traitées.
+            let cleared = self.state.unverified_blocking(&name).await? == 0;
+            routes.extend(hlb_ingress::routes_from_manifest(&m, domain.as_deref(), cleared));
+        }
+        Ok(routes)
+    }
+
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService {
-                name, image, replicas, constraints, env, hardening, healthcheck,
+                name, image, replicas, constraints, env, mounts, hardening, healthcheck,
             } => {
                 // ⚠️ Le plan a été construit AVANT l'exécution, donc son champ `image`
                 // porte encore le tag. Le digest résolu à l'étape précédente vit dans
@@ -221,6 +253,9 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 }
                 for c in constraints {
                     spec = spec.constraint(c);
+                }
+                for (vol, path) in mounts {
+                    spec = spec.mount(vol, path);
                 }
                 self.orchestrator.deploy(&spec).await?;
                 Ok(Step::Done)
@@ -360,10 +395,26 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            // Le reste demande des briques pas encore écrites.
-            Action::ProvisionMailAccount { .. } | Action::ConfigureIngress { .. } => {
-                Ok(Step::NotImplemented)
+            Action::ConfigureIngress { .. } => {
+                let Some(caddy) = self.ingress else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                // ⚠️ On régénère la configuration COMPLÈTE, pas seulement la route de
+                // cette app. Caddy remplace toute sa config à chaque `/load` : envoyer
+                // un fragment supprimerait les routes des autres apps.
+                let routes = self.all_routes().await?;
+                let cfg = hlb_ingress::Config::default();
+                caddy
+                    .load_caddyfile(&hlb_ingress::render_frontend(&routes, &cfg))
+                    .await?;
+
+                tracing::info!(routes = routes.len(), "configuration Caddy rechargée");
+                Ok(Step::Done)
             }
+
+            // Le compte mail demande le client Stalwart, qui n'existe pas encore.
+            Action::ProvisionMailAccount { .. } => Ok(Step::NotImplemented),
         }
     }
 }

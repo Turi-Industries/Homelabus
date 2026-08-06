@@ -52,6 +52,11 @@ pub struct ServiceSpec {
     pub constraints: Vec<String>,
     pub labels: Vec<(String, String)>,
     pub networks: Vec<String>,
+    /// Volumes à monter : `(nom du volume, chemin dans le conteneur)`.
+    ///
+    /// 🔴 Sans eux, les données d'une app partent dans la couche éphémère du
+    /// conteneur et disparaissent au premier redéploiement.
+    pub mounts: Vec<(String, String)>,
     /// §9 — durcissement. Vient du manifest et est **appliqué**, pas seulement
     /// déclaré. Le type est celui de `hlb-types` : une seule définition, comme pour
     /// tout le reste du schéma (§11).
@@ -72,9 +77,16 @@ impl ServiceSpec {
             constraints: Vec::new(),
             labels: Vec::new(),
             networks: Vec::new(),
+            mounts: Vec::new(),
             hardening: SecuritySpec::default(),
             healthcheck: None,
         }
+    }
+
+    /// Ajoute un volume nommé, monté au chemin indiqué.
+    pub fn mount(mut self, volume: impl Into<String>, path: impl Into<String>) -> Self {
+        self.mounts.push((volume.into(), path.into()));
+        self
     }
 
     /// Remplace les variables d'environnement du service.

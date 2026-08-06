@@ -31,7 +31,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**254 tests unitaires + 42 tests d'intégration.**
+**254 tests unitaires + 43 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -195,6 +195,8 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   qu'aux instants où un dump a été pris, pas à une seconde arbitraire.
 - **Les dumps SQL ne sont pas encore chaînés** à l'ordonnanceur : `backup run`
   ne sauvegarde que les volumes.
+- **`ProvisionMailAccount`** reste la seule action non implémentée : elle attend
+  un client Stalwart.
 - **`Verify::Exec`** (commande dans le conteneur) est rapporté comme non vérifié,
   jamais comme réussi : il demande un accès conteneur qui appartient à l'exécuteur.
 - **La vérification par restauration n'est pas câblée au CLI.** Elle existe en

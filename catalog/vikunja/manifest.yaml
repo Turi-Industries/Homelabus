@@ -24,6 +24,11 @@ spec:
       port: 3456
       chain: [caddy-front, anubis, caddy-back]
       expose: after-guide
+  security:
+    # Ces apps écrivent dans leur rootfs au démarrage (configuration, cache) et
+    # abandonnent leurs privilèges vers un utilisateur non root.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
   swarm:
     replicas: 2          # stateless → HA réelle via le routing mesh (§2bis.3)
     tier: light
