@@ -249,9 +249,11 @@ async fn a_relaxed_manifest_is_honoured_too() {
     let n = name("assoupli");
     cleanup(&o, &n).await;
 
-    let mut relache = hlb_types::SecuritySpec::default();
-    relache.read_only_rootfs = false;
-    relache.cap_add = vec!["NET_BIND_SERVICE".to_string()];
+    let relache = hlb_types::SecuritySpec {
+        read_only_rootfs: false,
+        cap_add: vec!["NET_BIND_SERVICE".to_string()],
+        ..Default::default()
+    };
 
     o.deploy(&sleeper(&n).hardening(relache)).await.expect("deploy");
     o.wait_healthy(&n, 120).await.expect("convergence");
