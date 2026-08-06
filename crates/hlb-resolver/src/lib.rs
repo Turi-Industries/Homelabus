@@ -95,7 +95,27 @@ pub fn resolve_with_guide(
         });
     }
 
-    // 3. Le service lui-même.
+    // 3. Les automatisations `method: env` des guides.
+    //
+    // ⚠️ Subtilité : contrairement à `exec` et `api`, une variable d'environnement
+    // ne peut PAS être appliquée après coup — Swarm recrée la tâche pour la prendre
+    // en compte. L'échelle du §4.6bis n'est donc pas purement séquentielle à
+    // l'exécution : `env` est résolu ICI, au moment du plan, tandis que `exec` et
+    // `api` s'exécutent une fois le service sain.
+    let mut env: Vec<(String, String)> = Vec::new();
+    for s in &guide.steps {
+        for a in &s.automate {
+            if let hlb_types::Automation::Env { vars } = a {
+                for (k, v) in vars {
+                    env.push((k.clone(), hlb_types::guide::render(v, &domain_vars(params))));
+                }
+            }
+        }
+    }
+    env.sort();
+    env.dedup_by(|a, b| a.0 == b.0);
+
+    // 4. Le service lui-même.
     let mut constraints = Vec::new();
     if let Some(tier) = &m.spec.swarm.tier {
         // §2bis.2 — le placement découle du tier, jamais d'un nom de nœud en dur.
@@ -107,30 +127,30 @@ pub fn resolve_with_guide(
         image: m.spec.image.reference(),
         replicas: m.spec.swarm.replicas,
         constraints,
+        env,
         // §9 — les valeurs du manifest sont transmises telles quelles jusqu'à Swarm.
         hardening: m.spec.security.clone(),
         healthcheck: m.spec.swarm.healthcheck.clone(),
     });
 
-    // 4. §4.7 — on attend la convergence avant de rendre la main.
+    // 5. §4.7 — on attend la convergence avant de rendre la main.
     plan.push(Action::WaitHealthy {
         name: app.clone(),
         timeout_secs: params.health_timeout_secs,
     });
 
-    // 5. Les étapes du guide, AVANT toute exposition (§4.6bis).
+    // 6. Les étapes du guide, AVANT toute exposition (§4.6bis).
     //
     // L'ordre est le mécanisme de protection lui-même : c'est parce que ces étapes
     // précèdent l'ingress que la fenêtre « premier inscrit = admin » reste fermée.
-    let vars: Vec<(&str, &str)> = match &params.domain {
-        Some(d) => vec![("domain", d.as_str())],
-        None => Vec::new(),
-    };
+    let vars = domain_vars(params);
     for s in &guide.steps {
         plan.push(Action::PendingGuideStep {
             id: s.id.clone(),
             title: hlb_types::guide::render(&s.title, &vars),
             blocking: s.is_blocking(),
+            service: app.clone(),
+            step: Box::new(s.clone()),
         });
     }
 
@@ -148,10 +168,23 @@ pub fn resolve_with_guide(
                 "Vérifier le compte administrateur de {app} et fermer les inscriptions"
             ),
             blocking: true,
+            service: app.clone(),
+            step: Box::new(hlb_types::GuideStep {
+                id: format!("{app}-first-admin"),
+                title: "Compte administrateur".into(),
+                phase: hlb_types::Phase::PostInstall,
+                severity: hlb_types::Severity::Blocking,
+                body: String::new(),
+                after: Vec::new(),
+                automate: Vec::new(),
+                verify: hlb_types::Verify::Attest,
+                deeplink: None,
+                recheck: None,
+            }),
         });
     }
 
-    // 6. L'exposition, en dernier.
+    // 7. L'exposition, en dernier.
     for ing in &m.spec.ingress {
         let host = render_host(&ing.host, params)?;
 
@@ -165,6 +198,14 @@ pub fn resolve_with_guide(
     }
 
     Ok(plan)
+}
+
+/// Les variables disponibles pour rendre les gabarits d'un guide.
+fn domain_vars(params: &InstallParams) -> Vec<(&str, &str)> {
+    match &params.domain {
+        Some(d) => vec![("domain", d.as_str())],
+        None => Vec::new(),
+    }
 }
 
 fn resolve_capability(
@@ -201,6 +242,7 @@ fn resolve_capability(
                     image: format!("{}:latest", engine.service_name()),
                     replicas: 1,
                     constraints: Vec::new(),
+                    env: Vec::new(),
                     // Un cache dédié est durci comme tout le reste (§9).
                     hardening: hlb_types::SecuritySpec::default(),
                     healthcheck: None,

@@ -25,13 +25,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-backup` — restic, pg_dump, ordonnancement, vérification | ✅ 40 + 13 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
-| `hlb-guide` — vérification des actions manuelles | ✅ 9 tests |
+| `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**247 tests unitaires + 42 tests d'intégration.**
+**254 tests unitaires + 42 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 

@@ -48,6 +48,9 @@ pub enum Action {
         image: String,
         replicas: u64,
         constraints: Vec<String>,
+        /// Variables d'environnement, y compris celles issues des automatisations
+        /// `method: env` des guides (§4.6bis).
+        env: Vec<(String, String)>,
         /// §9 — durcissement, transporté depuis le manifest jusqu'à Swarm.
         hardening: hlb_types::SecuritySpec,
         /// Sans sonde, `wait_healthy` ne sait que compter des tâches en cours.
@@ -70,11 +73,15 @@ pub enum Action {
         public: bool,
     },
 
-    /// §4.6 — une action que l'utilisateur devra faire lui-même.
+    /// §4.6 — une action à faire, éventuellement automatisable (§4.6bis).
     PendingGuideStep {
         id: String,
         title: String,
         blocking: bool,
+        /// Le service dans lequel tenter l'automatisation.
+        service: String,
+        /// L'étape déclarée, pour que l'exécuteur sache quoi tenter.
+        step: Box<hlb_types::GuideStep>,
     },
 }
 
@@ -112,7 +119,9 @@ impl fmt::Display for Action {
                 "créer la boîte {address}{}",
                 if *aliases { " avec aliases" } else { "" }
             ),
-            Self::DeployService { name, image, replicas, constraints, hardening, healthcheck } => {
+            Self::DeployService {
+                name, image, replicas, constraints, env, hardening, healthcheck,
+            } => {
                 write!(f, "déployer {name} ×{replicas} depuis {image}")?;
                 if !constraints.is_empty() {
                     write!(f, " [{}]", constraints.join(", "))?;
@@ -126,6 +135,7 @@ impl fmt::Display for Action {
                     d.push(format!("cap_drop {}", hardening.cap_drop.join("+")));
                 }
                 if healthcheck.is_some() { d.push("sonde".to_string()); }
+                if !env.is_empty() { d.push(format!("{} variables", env.len())); }
                 if !d.is_empty() {
                     write!(f, " ({})", d.join(", "))?;
                 }
@@ -143,10 +153,11 @@ impl fmt::Display for Action {
                 if chain.is_empty() { "direct".to_string() } else { chain.join(" → ") },
                 if *public { "public" } else { "VPN uniquement" }
             ),
-            Self::PendingGuideStep { id, title, blocking } => write!(
+            Self::PendingGuideStep { id, title, blocking, step, .. } => write!(
                 f,
-                "{} action manuelle « {title} » [{id}]",
-                if *blocking { "🔴" } else { "🟠" }
+                "{} {} « {title} » [{id}]",
+                if *blocking { "🔴" } else { "🟠" },
+                if step.is_automatable() { "action" } else { "action manuelle" }
             ),
         }
     }

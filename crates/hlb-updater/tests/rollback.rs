@@ -44,6 +44,17 @@ impl Orchestrator for Fake {
     async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> {
         Ok(())
     }
+    async fn exec_in_service(
+        &self,
+        _: &str,
+        _: &[String],
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::ExecOutput> {
+        Ok(hlb_orchestrator::ExecOutput {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
     async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         Ok(hlb_orchestrator::VolumeInfo {
             name: n.into(),

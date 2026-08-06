@@ -77,6 +77,12 @@ impl ServiceSpec {
         }
     }
 
+    /// Remplace les variables d'environnement du service.
+    pub fn env(mut self, vars: Vec<(String, String)>) -> Self {
+        self.env = vars;
+        self
+    }
+
     pub fn hardening(mut self, h: SecuritySpec) -> Self {
         self.hardening = h;
         self
@@ -108,6 +114,19 @@ impl ServiceSpec {
 }
 
 /// L'état observé d'un service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecOutput {
+    pub exit_code: i64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl ExecOutput {
+    pub fn ok(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
 /// Un volume et son emplacement réel sur l'hôte.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeInfo {
@@ -173,6 +192,12 @@ pub trait Orchestrator: Send + Sync {
 
     /// Ajuste le nombre de réplicas d'un service existant.
     async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
+
+    /// Exécute une commande dans un conteneur en cours d'un service.
+    ///
+    /// Sert aux automatisations `method: exec` des guides (§4.6bis) : beaucoup
+    /// d'apps ne se configurent que par leur CLI (`gitea admin`, `occ`…).
+    async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput>;
 
     /// Crée un volume nommé, étiqueté comme géré par HomelabUS.
     ///

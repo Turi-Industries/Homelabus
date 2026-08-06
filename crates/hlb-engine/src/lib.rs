@@ -135,7 +135,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
         // Les guides sont enregistrés même en aperçu : ils décrivent du travail réel.
         for a in &plan.actions {
-            if let Action::PendingGuideStep { id, title, blocking } = a {
+            if let Action::PendingGuideStep { id, title, blocking, .. } = a {
                 self.state.add_guide(app, id, title, *blocking).await?;
             }
         }
@@ -200,7 +200,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService {
-                name, image, replicas, constraints, hardening, healthcheck,
+                name, image, replicas, constraints, env, hardening, healthcheck,
             } => {
                 // ⚠️ Le plan a été construit AVANT l'exécution, donc son champ `image`
                 // porte encore le tag. Le digest résolu à l'étape précédente vit dans
@@ -212,6 +212,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
                 let mut spec = ServiceSpec::new(name, &resolved)
                     .replicas(*replicas)
+                    .env(env.clone())
                     // §9 — le durcissement déclaré au manifest est réellement appliqué.
                     .hardening(hardening.clone());
 
@@ -268,9 +269,24 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            // Les guides ne sont pas « exécutés » : ils sont posés dans la file et
-            // c'est l'utilisateur qui agit.
-            Action::PendingGuideStep { .. } => Ok(Step::Done),
+            Action::PendingGuideStep { id, service, step, .. } => {
+                // §4.6bis — on tente d'abord de s'en occuper tout seul. Beaucoup
+                // d'étapes « dans l'application » se scriptent ; les traiter comme
+                // manuelles par défaut est l'erreur habituelle.
+                let issue = hlb_guide::try_automate(self.orchestrator, service, step, &[]).await;
+
+                if issue.handled() {
+                    tracing::info!(step = %id, "{}", issue.describe());
+                    // L'étape est faite : elle ne doit plus bloquer.
+                    self.state.verify_guide(app, id).await?;
+                } else if !matches!(issue, hlb_guide::AutomationOutcome::NothingDeclared) {
+                    // On dit POURQUOI ça reste manuel : sans ça, l'utilisateur ne
+                    // saurait pas pourquoi le système lui demande de faire ce qu'il
+                    // annonçait automatiser.
+                    tracing::warn!(step = %id, "{}", issue.describe());
+                }
+                Ok(Step::Done)
+            }
 
             Action::ResolveDigest { repo, tag } => {
                 let Some(reg) = self.registry else {
@@ -414,6 +430,17 @@ mod tests {
         async fn scale(&self, name: &str, replicas: u64) -> hlb_orchestrator::Result<()> {
             self.scaled.lock().expect("mutex").push((name.into(), replicas));
             Ok(())
+        }
+        async fn exec_in_service(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::ExecOutput> {
+            Ok(hlb_orchestrator::ExecOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
         }
         async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
             Ok(hlb_orchestrator::VolumeInfo {

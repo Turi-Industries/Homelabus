@@ -50,6 +50,17 @@ impl Orchestrator for Fake {
         self.scaled.lock().unwrap().push((n.into(), r));
         Ok(())
     }
+    async fn exec_in_service(
+        &self,
+        _: &str,
+        _: &[String],
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::ExecOutput> {
+        Ok(hlb_orchestrator::ExecOutput {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
     async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         Ok(hlb_orchestrator::VolumeInfo {
             name: n.into(),
@@ -260,6 +271,17 @@ async fn one_failure_does_not_stop_the_others() {
 
     #[async_trait]
     impl Orchestrator for HalfBroken {
+        async fn exec_in_service(
+            &self,
+            _: &str,
+            _: &[String],
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::ExecOutput> {
+            Ok(hlb_orchestrator::ExecOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
         async fn ping(&self) -> hlb_orchestrator::Result<String> {
             self.0.ping().await
         }

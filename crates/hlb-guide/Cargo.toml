@@ -8,12 +8,15 @@ description = "Vérification automatique des actions manuelles déclarées."
 
 [dependencies]
 hlb-types.workspace = true
+hlb-orchestrator.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { workspace = true, features = ["net", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+async-trait.workspace = true
+serde_yaml_ng.workspace = true
 
 [lints]
 workspace = true

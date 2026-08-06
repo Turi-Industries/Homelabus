@@ -1087,6 +1087,7 @@ name = "hlb-engine"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hlb-guide",
  "hlb-identity",
  "hlb-orchestrator",
  "hlb-platform",
@@ -1106,8 +1107,11 @@ dependencies = [
 name = "hlb-guide"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "hlb-orchestrator",
  "hlb-types",
  "reqwest",
+ "serde_yaml_ng",
  "tokio",
  "tracing",
 ]

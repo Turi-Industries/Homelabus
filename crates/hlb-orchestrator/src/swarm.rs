@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use bollard::container::LogOutput;
+use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
     HealthConfig, TaskSpecContainerSpecPrivileges,
@@ -18,7 +20,9 @@ use bollard::query_parameters::{
 };
 use bollard::Docker;
 
-use crate::{Error, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState, VolumeInfo};
+use crate::{
+    Error, ExecOutput, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState, VolumeInfo,
+};
 
 const NS: i64 = 1_000_000_000;
 
@@ -296,6 +300,79 @@ impl Orchestrator for SwarmOrchestrator {
 
         self.docker.update_service(name, spec, opts, None).await?;
         Ok(())
+    }
+
+    async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput> {
+        // Un service n'a pas de conteneur : ses tâches en ont. On cherche donc une
+        // tâche en cours et on entre dans SON conteneur.
+        let mut filtres = HashMap::new();
+        filtres.insert("service".to_string(), vec![name.to_string()]);
+        filtres.insert("desired-state".to_string(), vec!["running".to_string()]);
+
+        let opts = ListTasksOptionsBuilder::default().filters(&filtres).build();
+        let taches = self.docker.list_tasks(Some(opts)).await?;
+
+        let conteneur = taches
+            .iter()
+            .filter(|t| {
+                t.status
+                    .as_ref()
+                    .and_then(|s| s.state.as_ref())
+                    .is_some_and(|s| format!("{s:?}").to_lowercase().contains("running"))
+            })
+            .find_map(|t| {
+                t.status
+                    .as_ref()?
+                    .container_status
+                    .as_ref()?
+                    .container_id
+                    .clone()
+            })
+            .ok_or_else(|| {
+                Error::Unexpected(format!(
+                    "aucune tâche en cours pour « {name} » : impossible d'exécuter la commande"
+                ))
+            })?;
+
+        let exec = self
+            .docker
+            .create_exec(
+                &conteneur,
+                CreateExecOptions {
+                    cmd: Some(cmd.to_vec()),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+
+        if let StartExecResults::Attached { mut output, .. } =
+            self.docker.start_exec(&exec.id, None::<StartExecOptions>).await?
+        {
+            use futures::StreamExt;
+            while let Some(Ok(msg)) = output.next().await {
+                match msg {
+                    LogOutput::StdOut { message } => {
+                        stdout.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    LogOutput::StdErr { message } => {
+                        stderr.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let info = self.docker.inspect_exec(&exec.id).await?;
+        Ok(ExecOutput {
+            exit_code: info.exit_code.unwrap_or(-1),
+            stdout,
+            stderr,
+        })
     }
 
     async fn create_volume(&self, name: &str) -> Result<VolumeInfo> {

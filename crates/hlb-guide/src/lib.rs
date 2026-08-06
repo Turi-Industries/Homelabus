@@ -16,6 +16,10 @@
 //! Cette honnêteté est le point : une vérification qui prétendrait plus que ce
 //! qu'elle établit serait pire qu'une attestation assumée.
 
+pub mod automate;
+
+pub use automate::{try_automate, AutomationOutcome};
+
 use std::time::Duration;
 
 use hlb_types::{GuideStep, Verify};
