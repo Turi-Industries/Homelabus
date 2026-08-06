@@ -11,6 +11,7 @@ members = [
     "crates/hlb-updater",
     "crates/hlb-backup",
     "crates/hlb-identity",
+    "crates/hlb-controller",
     "crates/hlb-secrets",
     "crates/hlb-state",
     "crates/hlb-engine",

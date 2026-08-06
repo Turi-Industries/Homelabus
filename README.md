@@ -25,11 +25,12 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
 | `hlb-backup` — restic, pg_dump, ordonnancement, vérification | ✅ 40 + 13 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
+| `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Archivage WAL (PITR), boucle de fond, controller HTTP | ⬜ à venir |
+| Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**208 tests unitaires + 39 tests d'intégration.**
+**222 tests unitaires + 39 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -117,6 +118,24 @@ hors ligne.
 docker node update --label-add tier=heavy $(docker node ls -q)
 ```
 
+## Le daemon
+
+```sh
+./target/debug/hlb-controller \
+  --listen 127.0.0.1:8420 \
+  --reconcile-secs 60 --reconcile-apply \
+  --backup-repo hlb-depot --backup-check-secs 600 \
+  --heartbeat /mnt/nas/hlb-heartbeat
+```
+
+Le battement de cœur va **hors du cluster** (§8bis) : c'est le controller qui
+envoie les alertes, donc rien ne préviendrait s'il mourait. Trois lignes de cron
+sur le NAS suffisent :
+
+```sh
+[ $(( $(date +%s) - $(stat -c %Y /srv/hlb/heartbeat) )) -gt 900 ] && notify "HomelabUS muet"
+```
+
 ## Développement
 
 ```sh
@@ -178,8 +197,11 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   bibliothèque (`hlb_backup::verify_by_restore`) et est couverte par les tests
   d'intégration, mais `hlb backup verify` le dit franchement au lieu de faire
   semblant.
-- **Aucune boucle de fond** : `backup run` et `reconcile` s'invoquent à la main
-  ou par cron externe, en attendant le controller.
+- **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
+  route POST/PUT/DELETE, et un test le vérifie. Les actions restent au CLI
+  jusqu'à ce que RBAC et journal d'audit existent.
+- **La réconciliation ne corrige pas par défaut** : `--reconcile-apply` doit
+  être demandé explicitement.
 - **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est
   refusée.** De même si l'app n'a aucun volume connu : « rien à sauvegarder »
   ne vaut jamais « sauvegarde réussie ».

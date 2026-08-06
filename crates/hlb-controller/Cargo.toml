@@ -1,0 +1,35 @@
+[package]
+name = "hlb-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Daemon : API de lecture et boucles de fond."
+
+[[bin]]
+name = "hlb-controller"
+path = "src/main.rs"
+
+[dependencies]
+hlb-types.workspace = true
+hlb-state.workspace = true
+hlb-engine.workspace = true
+hlb-orchestrator.workspace = true
+hlb-backup.workspace = true
+hlb-secrets.workspace = true
+hlb-updater.workspace = true
+axum = "0.8"
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["signal", "fs"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_yaml_ng.workspace = true
+tempfile = "3"
+tower = "0.5"
+
+[lints]
+workspace = true

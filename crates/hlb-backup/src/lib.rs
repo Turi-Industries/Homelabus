@@ -19,7 +19,7 @@ pub mod runner;
 
 pub use pgdump::{PgDumper, PgTarget};
 pub use pgrunner::PgContainerRunner;
-pub use provider::ResticBackupProvider;
+pub use provider::{provider_for_state, ResticBackupProvider};
 pub use restic::{Repository, Runner, Snapshot};
 pub use retention::RetentionPolicy;
 pub use schedule::Schedule;

@@ -54,6 +54,40 @@ impl<R: Runner> hlb_updater::BackupProvider for ResticBackupProvider<R> {
     }
 }
 
+/// Construit un fournisseur pour toutes les apps ayant des volumes à sauvegarder.
+///
+/// Partagé entre le CLI et le controller : les deux doivent brancher restic
+/// exactement de la même façon, sinon une sauvegarde faite par l'un ne serait pas
+/// retrouvée par l'autre.
+pub async fn provider_for_state(
+    repo_location: &str,
+    password: String,
+    volumes_by_app: std::collections::BTreeMap<String, Vec<String>>,
+) -> ResticBackupProvider<crate::ContainerRunner> {
+    let location = repo_location.to_string();
+
+    ResticBackupProvider::new(move |app| {
+        let volumes = volumes_by_app.get(app)?;
+        if volumes.is_empty() {
+            return None;
+        }
+
+        let mut runner = crate::ContainerRunner::default().mount(&location, "/depot");
+        let mut paths = Vec::new();
+        for name in volumes {
+            // Le volume est monté par son nom : le point de montage de l'hôte n'est
+            // pas forcément accessible depuis là où tourne restic.
+            runner = runner.mount(name, format!("/donnees/{name}"));
+            paths.push(format!("/donnees/{name}"));
+        }
+
+        Some((
+            Repository::new(runner, "/depot", password.clone()),
+            paths,
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,3 +150,4 @@ mod tests {
     #[allow(dead_code)]
     fn is_object_safe(_: &dyn BackupProvider) {}
 }
+
