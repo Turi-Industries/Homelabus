@@ -20,9 +20,13 @@
 //! net, en écriture comme en lecture.
 //!
 //! Autrement dit : **archiver vers une destination cassée est plus dangereux que ne
-//! pas archiver du tout**. C'est pour ça que ce module refuse de produire une
-//! configuration d'archivage sans destination explicitement validée, et que la
-//! pression disque du §9bis surveille le chemin d'archivage comme les autres.
+//! pas archiver du tout.**
+//!
+//! ⚠️ **Ce garde-fou n'est PAS encore en place.** L'agent (§9bis) ne surveille que `/`
+//! et `/var/lib/docker` par défaut ; le répertoire d'archivage n'y est pas. Tant que
+//! `HLB_AGENT_PATHS` ne le contient pas, une panne d'archivage remplit `pg_wal` sans
+//! qu'aucune alerte ne parte. `hlb backup pitr config` le dit à l'utilisateur, ce qui
+//! est un pis-aller — pas une surveillance.
 //!
 //! ## Ce que ce module fait
 //!
