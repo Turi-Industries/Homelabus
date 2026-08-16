@@ -28,12 +28,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
 | `hlb-bootstrap` — distributions, dépendances, préchecks | ✅ 53 + 4 tests |
+| `hlb-agent` — état local du nœud, seuils disque (§9bis) | ✅ 26 tests |
 | `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**336 tests unitaires + 47 tests d'intégration.**
+**362 tests unitaires + 47 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -218,6 +219,12 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   semblant.
 - **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
   route POST/PUT/DELETE, et un test le vérifie.
+- **L'agent n'est pas encore déployé automatiquement** ni interrogé par le
+  controller : le binaire existe et répond, le service Swarm `global` reste à
+  déclarer.
+- **L'API de l'agent est en HTTP clair.** Elle n'écoute que sur l'overlay,
+  chiffré par IPsec avec `--opt encrypted` (§6.3), mais le mTLS du §2 n'est pas
+  en place — c'est dit plutôt que sous-entendu.
 - **Le rattachement d'un nœud reste manuel** : `hlb cluster join-command` produit
   la commande, mais ne l'exécute pas à distance. Le mesh WireGuard et l'agent
   n'existent pas encore.

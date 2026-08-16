@@ -14,6 +14,7 @@ members = [
     "crates/hlb-guide",
     "crates/hlb-gitops",
     "crates/hlb-bootstrap",
+    "crates/hlb-agent",
     "crates/hlb-controller",
     "crates/hlb-secrets",
     "crates/hlb-state",
@@ -43,6 +44,7 @@ hlb-identity = { path = "crates/hlb-identity" }
 hlb-guide = { path = "crates/hlb-guide" }
 hlb-gitops = { path = "crates/hlb-gitops" }
 hlb-bootstrap = { path = "crates/hlb-bootstrap" }
+hlb-agent = { path = "crates/hlb-agent" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
 hlb-engine = { path = "crates/hlb-engine" }

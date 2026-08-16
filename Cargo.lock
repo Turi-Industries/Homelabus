@@ -1026,6 +1026,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hlb-agent"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hlb-backup"
 version = "0.1.0"
 dependencies = [
