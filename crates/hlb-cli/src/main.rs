@@ -67,6 +67,10 @@ struct Cli {
     #[arg(long, global = true, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
     platform_network: String,
 
+    /// Portail d'authentification pour les apps sans SSO natif (§5.0).
+    #[arg(long, global = true, default_value = "oauth2-proxy:4180", env = "HLB_FORWARD_AUTH")]
+    forward_auth_upstream: String,
+
     /// API locale de CrowdSec. Sans elle, le Caddyfile est généré sans videur.
     #[arg(long, global = true, default_value = "http://crowdsec:8080", env = "HLB_CROWDSEC_URL")]
     crowdsec_url: String,
@@ -1670,6 +1674,20 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         eprintln!("⚠️  CrowdSec non enrôlé : le trafic ne sera pas filtré.");
                         eprintln!("   hlb crowdsec enroll --apply");
                     }
+                }
+
+                // Le portail n'est posé que si des apps en ont besoin : le déclarer
+                // sans app concernée produirait un bloc mort dans la configuration.
+                if routes.iter().any(|r| r.needs_forward_auth) {
+                    cfg.forward_auth = Some(hlb_ingress::caddyfile::ForwardAuth {
+                        upstream: cli.forward_auth_upstream.clone(),
+                        ..Default::default()
+                    });
+                    println!(
+                        "Portail d'authentification : {} ({} app(s) sans SSO natif)",
+                        cli.forward_auth_upstream,
+                        routes.iter().filter(|r| r.needs_forward_auth).count()
+                    );
                 }
 
                 let front = hlb_ingress::render_frontend(&routes, &cfg);

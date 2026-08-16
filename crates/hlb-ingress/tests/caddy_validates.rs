@@ -71,6 +71,7 @@ fn routes() -> Vec<Route> {
             through_anubis: false,
             public: true,
             sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
+            needs_forward_auth: false,
         },
         // Vikunja : derrière Anubis, avec exclusion du callback OIDC.
         Route {
@@ -80,6 +81,7 @@ fn routes() -> Vec<Route> {
             through_anubis: true,
             public: true,
             sso_paths: vec!["/auth/openid/pocketid".into()],
+            needs_forward_auth: false,
         },
         // Vaultwarden : privé, accessible seulement depuis le VPN.
         Route {
@@ -89,6 +91,7 @@ fn routes() -> Vec<Route> {
             through_anubis: false,
             public: false,
             sso_paths: vec!["/identity/connect/oidc-signin".into()],
+            needs_forward_auth: false,
         },
     ]
 }
@@ -125,7 +128,51 @@ fn hosts_with_dashes_produce_valid_matchers() {
         through_anubis: true,
         public: true,
         sso_paths: vec!["/oidc/callback".into()],
+        needs_forward_auth: false,
     };
     caddy_validate(&render_frontend(std::slice::from_ref(&r), &Config::default()), "hôte avec tirets");
     caddy_validate(&render_backend(&[r], &Config::default()), "backend avec tirets");
+}
+
+/// Le forward-auth produit-il une configuration que Caddy accepte ? (§5.0)
+///
+/// 🔴 Ce test compte plus que les autres : le bloc forward-auth mélange
+/// `request_header`, `handle`, `forward_auth` et `handle_response`, dont l'ordre
+/// d'évaluation dans Caddy n'est pas celui de l'écriture. Une erreur ici donnerait un
+/// Caddy qui refuse de démarrer — ou pire, qui démarre en n'authentifiant rien.
+#[test]
+#[ignore = "nécessite Docker"]
+fn forward_auth_config_is_accepted_by_caddy() {
+    let mut r = Route::new("vieux.example.fr", "vieux-truc", 80);
+    r.public = true;
+    r.needs_forward_auth = true;
+
+    let cfg = Config {
+        forward_auth: Some(hlb_ingress::caddyfile::ForwardAuth::default()),
+        ..Config::default()
+    };
+
+    let out = render_frontend(&[r], &cfg);
+    caddy_validate(&out, "frontend avec portail");
+}
+
+/// Un mélange réaliste : une app à SSO natif et une app derrière portail.
+#[test]
+#[ignore = "nécessite Docker"]
+fn a_mixed_frontend_is_accepted_by_caddy() {
+    let mut native = Route::new("git.example.fr", "gitea", 3000);
+    native.public = true;
+    native.sso_paths = vec!["/user/oauth2/PocketID/callback".into()];
+
+    let mut portail = Route::new("vieux.example.fr", "vieux-truc", 80);
+    portail.public = true;
+    portail.needs_forward_auth = true;
+    portail.through_anubis = true;
+
+    let cfg = Config {
+        forward_auth: Some(hlb_ingress::caddyfile::ForwardAuth::default()),
+        ..Config::default()
+    };
+
+    caddy_validate(&render_frontend(&[native, portail], &cfg), "frontend mixte");
 }

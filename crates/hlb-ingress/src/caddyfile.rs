@@ -28,6 +28,9 @@ pub struct Route {
     pub public: bool,
     /// Chemins de callback OIDC de cette app, à exclure d'Anubis (§5.8).
     pub sso_paths: Vec<String>,
+    /// L'app a-t-elle besoin du portail ? Vrai pour `proxy-header` et `proxy-only`,
+    /// faux pour `native` (elle parle OIDC elle-même) et `none`.
+    pub needs_forward_auth: bool,
 }
 
 impl Route {
@@ -39,6 +42,7 @@ impl Route {
             through_anubis: false,
             public: false,
             sso_paths: Vec::new(),
+            needs_forward_auth: false,
         }
     }
 }
@@ -85,6 +89,55 @@ impl Default for CrowdSec {
     }
 }
 
+/// Portail d'authentification devant les apps sans OIDC natif (§5.0).
+///
+/// 🔴 **La faille classique du forward-auth : les en-têtes entrants.**
+///
+/// Le portail authentifie l'utilisateur puis ajoute `X-Auth-Request-User` à la requête
+/// transmise à l'app, qui lui fait confiance. Si le proxy laisse passer un en-tête du
+/// même nom **envoyé par le client**, alors :
+///
+/// ```text
+/// curl -H "X-Auth-Request-User: admin" https://app.example.fr/
+/// ```
+///
+/// …suffit à devenir administrateur. La requête est authentifiée par le portail (avec
+/// un compte quelconque, ou même sans), et l'app lit l'en-tête falsifié.
+///
+/// D'où le `request_header -X-Auth-Request-*` posé **avant** tout le reste : les
+/// en-têtes d'identité ne peuvent venir que du portail, jamais du réseau.
+#[derive(Debug, Clone)]
+pub struct ForwardAuth {
+    /// Hôte:port du portail dans l'overlay.
+    pub upstream: String,
+    /// Chemin de vérification. `/oauth2/auth` pour oauth2-proxy.
+    pub verify_path: String,
+    /// Chemin de connexion, vers lequel un 401 redirige.
+    pub sign_in_path: String,
+}
+
+impl Default for ForwardAuth {
+    fn default() -> Self {
+        Self {
+            upstream: "oauth2-proxy:4180".into(),
+            verify_path: "/oauth2/auth".into(),
+            sign_in_path: "/oauth2/sign_in".into(),
+        }
+    }
+}
+
+/// Les en-têtes que le portail pose, et que le client ne doit JAMAIS pouvoir poser.
+///
+/// ⚠️ `copy_headers` n'a d'effet que si oauth2-proxy tourne avec `--set-xauthrequest` :
+/// sans ce drapeau, les en-têtes sont simplement absents et l'app voit un utilisateur
+/// anonyme — sans la moindre erreur.
+pub const AUTH_HEADERS: &[&str] = &[
+    "X-Auth-Request-User",
+    "X-Auth-Request-Email",
+    "X-Auth-Request-Preferred-Username",
+    "X-Auth-Request-Groups",
+];
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Hôte:port du service Anubis dans l'overlay.
@@ -95,6 +148,8 @@ pub struct Config {
     pub acme_email: String,
     /// Videur CrowdSec. `None` = pas de filtrage réputationnel.
     pub crowdsec: Option<CrowdSec>,
+    /// Portail d'authentification. `None` = pas de forward-auth.
+    pub forward_auth: Option<ForwardAuth>,
 }
 
 impl Default for Config {
@@ -104,6 +159,7 @@ impl Default for Config {
             backend_upstream: "caddy-back:8080".into(),
             acme_email: "admin@example.invalid".into(),
             crowdsec: None,
+            forward_auth: None,
         }
     }
 }
@@ -153,6 +209,12 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
             let _ = writeln!(out, "\tcrowdsec");
         }
 
+        if let Some(fa) = &cfg.forward_auth {
+            if r.needs_forward_auth {
+                rendre_forward_auth(&mut out, fa);
+            }
+        }
+
         // §9 — en-têtes de sécurité posés une fois, au point d'entrée.
         let _ = writeln!(out, "\theader {{");
         let _ = writeln!(out, "\t\tStrict-Transport-Security \"max-age=31536000; includeSubDomains\"");
@@ -194,6 +256,60 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     }
 
     out
+}
+
+/// Le bloc forward-auth d'une route.
+///
+/// L'ordre des directives à l'intérieur porte deux décisions de sécurité :
+///
+/// 1. **Le nettoyage des en-têtes en PREMIER.** Sans lui, un client qui envoie
+///    `X-Auth-Request-User: admin` voit son en-tête transmis tel quel à l'app, qui lui
+///    fait confiance. C'est l'authentification contournée en une seule requête `curl`.
+/// 2. **Les chemins du portail exclus du portail.** `/oauth2/*` doit atteindre
+///    oauth2-proxy directement : le faire passer par `forward_auth` créerait une
+///    boucle — pour s'authentifier il faudrait déjà être authentifié.
+fn rendre_forward_auth(out: &mut String, fa: &ForwardAuth) {
+    let _ = writeln!(out, "\n\t# §5.0 — portail d'authentification.");
+    let _ = writeln!(
+        out,
+        "\t# 🔴 Les en-têtes d'identité ne peuvent venir QUE du portail : sans cette"
+    );
+    let _ = writeln!(
+        out,
+        "\t# ligne, « curl -H \"X-Auth-Request-User: admin\" » suffit à usurper un compte."
+    );
+    for h in AUTH_HEADERS {
+        let _ = writeln!(out, "\trequest_header -{h}");
+    }
+
+    // Le portail doit être joignable sans passer par lui-même.
+    let _ = writeln!(out, "\n\t# Le portail lui-même, sinon la connexion boucle.");
+    let _ = writeln!(out, "\thandle /oauth2/* {{");
+    let _ = writeln!(out, "\t\treverse_proxy {}", fa.upstream);
+    let _ = writeln!(out, "\t}}");
+
+    let _ = writeln!(out, "\n\tforward_auth {} {{", fa.upstream);
+    let _ = writeln!(out, "\t\turi {}", fa.verify_path);
+    // ⚠️ Sans `--set-xauthrequest` côté oauth2-proxy, ces en-têtes n'existent pas et
+    // l'app voit un utilisateur anonyme — sans erreur nulle part.
+    let _ = writeln!(out, "\t\tcopy_headers {}", AUTH_HEADERS.join(" "));
+
+    // 🔴 `status` est un matcher de RÉPONSE : il n'existe qu'à l'intérieur du bloc
+    // forward_auth. Écrit au niveau du site, Caddy refuse de démarrer sur
+    // « module not registered: http.matchers.status » — un message qui ne dit pas
+    // que c'est une question de portée.
+    //
+    // Sans cette redirection, un utilisateur non connecté reçoit un 401 brut et n'a
+    // jamais vu de page de connexion : de son point de vue, le SSO est cassé.
+    let _ = writeln!(out, "\n\t\t@non-authentifie status 401");
+    let _ = writeln!(out, "\t\thandle_response @non-authentifie {{");
+    let _ = writeln!(
+        out,
+        "\t\t\tredir * {}?rd={{scheme}}://{{host}}{{uri}}",
+        fa.sign_in_path
+    );
+    let _ = writeln!(out, "\t\t}}");
+    let _ = writeln!(out, "\t}}");
 }
 
 /// Le Caddyfile arrière : aiguillage vers les services de l'overlay.
@@ -252,6 +368,7 @@ mod tests {
             through_anubis: false,
             public: true,
             sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
+            needs_forward_auth: false,
         }
     }
 
@@ -263,6 +380,7 @@ mod tests {
             through_anubis: true,
             public: true,
             sso_paths: vec!["/auth/openid/pocketid".into()],
+            needs_forward_auth: false,
         }
     }
 
@@ -440,6 +558,117 @@ mod tests {
         assert!(out.contains("anubis:8923"));
         // Et les callbacks OIDC contournent toujours Anubis.
         assert!(out.contains("/auth/openid/pocketid*"), "{out}");
+    }
+
+    fn avec_portail() -> Config {
+        Config { forward_auth: Some(ForwardAuth::default()), ..Config::default() }
+    }
+
+    fn protegee() -> Route {
+        Route { needs_forward_auth: true, ..vikunja() }
+    }
+
+    #[test]
+    fn incoming_identity_headers_are_stripped() {
+        // 🔴 LA faille du forward-auth. Sans ce nettoyage :
+        //   curl -H "X-Auth-Request-User: admin" https://app/
+        // suffit à devenir administrateur, parce que l'app fait confiance à l'en-tête
+        // et que le proxy l'a laissé passer tel quel.
+        let out = render_frontend(&[protegee()], &avec_portail());
+
+        for h in AUTH_HEADERS {
+            assert!(
+                out.contains(&format!("request_header -{h}")),
+                "{h} non nettoyé :\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn headers_are_stripped_before_the_portal_runs() {
+        // L'ordre décide de tout : nettoyer APRÈS le forward_auth effacerait aussi
+        // les en-têtes légitimes posés par le portail.
+        let out = render_frontend(&[protegee()], &avec_portail());
+        let bloc = out
+            .split("tasks.example.fr {")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("bloc");
+
+        let i_nettoyage = bloc.find("request_header -X-Auth-Request-User").expect("nettoyage");
+        let i_portail = bloc.find("forward_auth ").expect("forward_auth");
+        assert!(i_nettoyage < i_portail, "le nettoyage doit précéder le portail :\n{bloc}");
+    }
+
+    #[test]
+    fn the_portal_itself_bypasses_the_portal() {
+        // 🔴 Sans ça, la connexion boucle : pour s'authentifier il faudrait déjà
+        // l'être. L'utilisateur voit une redirection infinie.
+        let out = render_frontend(&[protegee()], &avec_portail());
+        assert!(out.contains("handle /oauth2/* {"), "{out}");
+
+        let bloc = out.split("handle /oauth2/* {").nth(1).expect("bloc");
+        assert!(bloc.trim_start().starts_with("reverse_proxy oauth2-proxy:4180"), "{bloc}");
+    }
+
+    #[test]
+    fn an_unauthenticated_request_is_redirected_not_rejected() {
+        // Un 401 brut donnerait « le SSO ne marche pas » du point de vue de
+        // l'utilisateur, qui n'a jamais vu de page de connexion.
+        let out = render_frontend(&[protegee()], &avec_portail());
+        assert!(out.contains("@non-authentifie status 401"), "{out}");
+        // 🔴 Le matcher `status` n'existe QUE dans le bloc forward_auth : au niveau
+        // du site, Caddy refuse de démarrer. Vérifié par caddy_validates.rs.
+        let apres = out.split("forward_auth ").nth(1).expect("bloc");
+        assert!(apres.contains("@non-authentifie"), "doit être imbriqué :\n{apres}");
+        assert!(out.contains("redir * /oauth2/sign_in?rd="), "{out}");
+    }
+
+    #[test]
+    fn an_app_with_native_sso_gets_no_portal() {
+        // Vikunja parle OIDC : lui mettre un portail devant ajouterait une seconde
+        // page de connexion, et casserait son propre flux de callback.
+        let out = render_frontend(&[vikunja()], &avec_portail());
+        assert!(!out.contains("forward_auth"), "{out}");
+        assert!(!out.contains("request_header -X-Auth"), "{out}");
+    }
+
+    #[test]
+    fn without_a_portal_configured_nothing_is_emitted() {
+        // Une app qui EN A BESOIN mais sans portail configuré : on ne doit pas
+        // produire une configuration à moitié faite.
+        let out = render_frontend(&[protegee()], &Config::default());
+        assert!(!out.contains("forward_auth"), "{out}");
+    }
+
+    #[test]
+    fn the_backend_never_carries_the_portal() {
+        // Même raison que CrowdSec : le portail va au premier maillon. Le dupliquer
+        // au backend ferait une double authentification et casserait les callbacks.
+        let out = render_backend(&[protegee()], &avec_portail());
+        assert!(!out.contains("forward_auth"), "{out}");
+    }
+
+    #[test]
+    fn a_route_needing_a_portal_is_derived_from_the_manifest() {
+        // Le besoin vient du mode SSO déclaré, pas d'un drapeau à cocher à la main.
+        let y = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: vieux-truc }
+spec:
+  image: { repo: a/b, tag: "1" }
+  requires:
+    - kind: sso
+      mode: proxy-only
+  ingress:
+    - host: vieux.example.fr
+      port: 80
+      expose: public
+"#;
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(y).expect("manifest");
+        let routes = crate::routes_from_manifest(&m, None, true);
+        assert!(routes[0].needs_forward_auth, "proxy-only exige un portail");
     }
 
     #[test]

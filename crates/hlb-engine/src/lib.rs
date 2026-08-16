@@ -246,6 +246,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
     async fn ingress_config(&self) -> Result<hlb_ingress::Config> {
         let mut cfg = hlb_ingress::Config::default();
 
+        // Même règle que dans le CLI : le portail n'apparaît que s'il sert.
+        if self.all_routes().await?.iter().any(|r| r.needs_forward_auth) {
+            cfg.forward_auth = Some(hlb_ingress::caddyfile::ForwardAuth::default());
+        }
+
         let (Some(vault), Some(url)) = (self.vault, &self.crowdsec_url) else {
             return Ok(cfg);
         };

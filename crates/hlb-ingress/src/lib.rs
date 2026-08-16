@@ -59,6 +59,19 @@ pub fn routes_from_manifest(
         .flatten()
         .collect();
 
+    // 🔴 `proxy-header` et `proxy-only` n'ont AUCUNE notion d'identité propre : sans
+    // portail devant, l'app est simplement ouverte à tout le monde. `native` parle
+    // OIDC elle-même et n'en a pas besoin ; `none` est une exclusion volontaire.
+    let besoin_portail = m.spec.requires.iter().any(|c| {
+        matches!(
+            c,
+            hlb_types::Capability::Sso {
+                mode: hlb_types::SsoMode::ProxyHeader | hlb_types::SsoMode::ProxyOnly,
+                ..
+            }
+        )
+    });
+
     m.spec
         .ingress
         .iter()
@@ -82,6 +95,7 @@ pub fn routes_from_manifest(
                     ExposePolicy::Private => false,
                 },
                 sso_paths: sso_paths.clone(),
+                needs_forward_auth: besoin_portail,
             }
         })
         .collect()
