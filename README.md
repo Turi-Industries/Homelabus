@@ -19,12 +19,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 23 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
 | `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
-| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 22 tests |
+| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 23 tests |
 | `hlb-ingress` — génération Caddyfile + CrowdSec + rechargement à chaud | ✅ 22 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 21 tests |
-| `hlb-backup` — restic, pg_dump, ordonnancement, vérification, **PITR** | ✅ 62 + 14 tests |
+| `hlb-backup` — restic, pg_dump, ordonnancement, vérification, **PITR** | ✅ 71 + 15 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
+| `hlb-mail` — client Stalwart : boîtes et aliases | ✅ 14 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
 | `hlb-bootstrap` — distributions, dépendances, préchecks | ✅ 53 + 4 tests |
@@ -35,7 +36,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | UI web (SvelteKit) | ⬜ à venir |
 
-**444 tests unitaires + 49 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**469 tests unitaires + 50 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

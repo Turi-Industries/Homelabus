@@ -24,7 +24,8 @@ pub use provider::{provider_for_state, ResticBackupProvider};
 pub use restic::{Repository, Runner, Snapshot};
 pub use retention::RetentionPolicy;
 pub use schedule::Schedule;
-pub use verify::{verify_by_restore, Verification};
+pub use verify::{verify_by_restore, verify_snapshot, Verification};
+pub use pitr::{scan_archive, wal_coverage, Segment};
 pub use runner::{ContainerRunner, HostRunner};
 
 #[derive(Debug, thiserror::Error)]

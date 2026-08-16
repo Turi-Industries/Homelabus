@@ -362,3 +362,52 @@ async fn reading_the_data_catches_more_than_metadata() {
 
     drop_volume(&vol);
 }
+
+/// La vérification de bout en bout du §8.3, telle que `hlb backup verify` l'exécute.
+///
+/// 🔴 Ce test existe parce que la version précédente de `verify_snapshot` utilisait un
+/// `tempfile::tempdir()` de l'hôte. Sur macOS, ce dossier n'est **pas partagé avec la
+/// VM Docker** : le comptage y trouvait zéro fichier et déclarait un écart sur une
+/// sauvegarde parfaitement saine. Le volume Docker est ce qui corrige ça — et seul un
+/// test contre un vrai restic pouvait le montrer.
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
+    // Deux volumes distincts : `verify_snapshot` monte le dépôt seul, comme le CLI
+    // le fait avec le chemin passé à `--backup-repo`.
+    let depot = make_volume("hlb-test-verify-depot");
+    let donnees = make_volume("hlb-test-verify-data");
+
+    in_volume(
+        &donnees,
+        &format!(
+            "mkdir -p {WORKDIR}/sous && \
+             printf 'bonjour' > {WORKDIR}/a.txt && \
+             printf 'monde12345' > {WORKDIR}/sous/b.txt"
+        ),
+    );
+
+    let runner = ContainerRunner::new("restic/restic:latest")
+        .mount(&depot, "/depot")
+        .mount(&donnees, "/donnees");
+    let repo = Repository::new(runner, "/depot", "mot-de-passe-de-test");
+
+    repo.init().await.expect("init");
+    let snap = repo.backup("/donnees", &["app:demo"]).await.expect("sauvegarde");
+
+    let v = hlb_backup::verify_snapshot(&depot, "mot-de-passe-de-test", &snap).await;
+
+    drop_volume(&depot);
+    drop_volume(&donnees);
+
+    let v = v.expect("vérification exécutable");
+    assert_eq!(v.files_expected, 2, "l'instantané annonce 2 fichiers");
+    assert_eq!(v.bytes_expected, 17, "7 + 10 octets");
+    assert_eq!(
+        v.files_restored, 2,
+        "🔴 zéro ici = l'espace jetable n'est pas partagé avec Docker : {}",
+        v.describe()
+    );
+    assert_eq!(v.bytes_restored, 17);
+    assert!(v.matches(), "{}", v.describe());
+}

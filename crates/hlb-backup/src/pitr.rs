@@ -111,6 +111,82 @@ impl WalArchive {
     }
 }
 
+/// Un segment WAL archivé.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Segment {
+    /// Nom du fichier, 24 caractères hexadécimaux.
+    pub name: String,
+    /// Instant où il a été archivé (date de modification du fichier).
+    pub archived_at: i64,
+}
+
+impl Segment {
+    /// La ligne temporelle du segment — les 8 premiers chiffres.
+    ///
+    /// Elle change après chaque reprise. Deux segments de lignes différentes peuvent
+    /// couvrir la même position sans être interchangeables.
+    pub fn timeline(&self) -> Option<u32> {
+        u32::from_str_radix(self.name.get(..8)?, 16).ok()
+    }
+}
+
+/// Un nom de segment WAL valide ?
+///
+/// 🔴 Le répertoire d'archivage ne contient pas que des segments : PostgreSQL y dépose
+/// aussi des `.history` (changements de ligne temporelle), des `.backup` (marqueurs de
+/// sauvegarde de base) et parfois des `.partial`. Les compter comme des segments
+/// donnerait une couverture WAL plus large qu'elle ne l'est — soit précisément le
+/// mensonge que ce module existe pour éviter.
+fn is_segment(name: &str) -> bool {
+    name.len() == 24 && name.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Inventorie les segments réellement présents dans le répertoire d'archivage.
+///
+/// C'est ce qui permet d'annoncer une borne haute **constatée** plutôt que déduite de
+/// la dernière sauvegarde de base. Sans cet inventaire, on sous-estime la fenêtre — ce
+/// qui est le bon sens de l'erreur, mais reste une information fausse.
+pub fn scan_archive(dir: &std::path::Path) -> std::io::Result<Vec<Segment>> {
+    let mut out = Vec::new();
+
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let nom = e.file_name().to_string_lossy().to_string();
+        if !is_segment(&nom) {
+            continue;
+        }
+
+        let m = e.metadata()?;
+        if !m.is_file() {
+            continue;
+        }
+
+        let at = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        out.push(Segment { name: nom, archived_at: at });
+    }
+
+    // Par nom : l'ordre lexicographique des segments WAL EST leur ordre chronologique,
+    // par construction du format. Trier par date de fichier serait moins fiable — une
+    // copie d'archive peut réécrire les dates sans changer les données.
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Jusqu'à quand les journaux archivés permettent de rejouer.
+///
+/// ⚠️ C'est l'instant d'archivage du dernier segment, donc une **borne prudente** : le
+/// segment courant, pas encore archivé, contient déjà des transactions plus récentes.
+/// Annoncer plus loin promettrait un rejeu qu'on ne peut pas garantir.
+pub fn wal_coverage(segments: &[Segment]) -> Option<i64> {
+    segments.iter().map(|s| s.archived_at).max()
+}
+
 /// Pourquoi une restauration demandée n'est pas possible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unreachable {
@@ -520,6 +596,103 @@ mod tests {
         let m = e.to_string();
         assert!(m.contains("2026-08-16"), "{m}");
         assert!(m.contains("WAL seul"), "{m}");
+    }
+
+    /// Un nom de segment WAL réaliste : ligne temporelle, journal, segment.
+    fn seg(timeline: u32, log: u32, num: u32) -> String {
+        format!("{timeline:08X}{log:08X}{num:08X}")
+    }
+
+    #[test]
+    fn only_real_segments_are_inventoried() {
+        // 🔴 Le répertoire contient aussi des .history, .backup et .partial. Les
+        // compter donnerait une couverture WAL plus large qu'elle ne l'est.
+        let d = tempfile::tempdir().expect("répertoire");
+        for n in [
+            seg(1, 0, 1),
+            seg(1, 0, 2),
+            "00000001.history".to_string(),
+            format!("{}.backup", seg(1, 0, 1)),
+            format!("{}.partial", seg(1, 0, 3)),
+            "README".to_string(),
+        ] {
+            std::fs::write(d.path().join(n), b"x").expect("écriture");
+        }
+
+        let s = scan_archive(d.path()).expect("inventaire");
+        assert_eq!(s.len(), 2, "{:?}", s.iter().map(|x| &x.name).collect::<Vec<_>>());
+        assert!(s.iter().all(|x| is_segment(&x.name)));
+    }
+
+    #[test]
+    fn segments_are_ordered_by_name_not_by_file_date() {
+        // L'ordre lexicographique des segments EST leur ordre chronologique, par
+        // construction. Une copie d'archive peut réécrire les dates de fichier sans
+        // toucher aux données : s'y fier donnerait un ordre arbitraire.
+        let d = tempfile::tempdir().expect("répertoire");
+        for n in [seg(1, 0, 3), seg(1, 0, 1), seg(1, 0, 2)] {
+            std::fs::write(d.path().join(&n), b"x").expect("écriture");
+        }
+
+        let s = scan_archive(d.path()).expect("inventaire");
+        let noms: Vec<&str> = s.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(noms, [seg(1, 0, 1), seg(1, 0, 2), seg(1, 0, 3)]);
+    }
+
+    #[test]
+    fn a_segment_carries_its_timeline() {
+        // Après une reprise, PostgreSQL passe en ligne 2 : deux segments de lignes
+        // différentes couvrent la même position sans être interchangeables.
+        let s = Segment { name: seg(2, 0, 7), archived_at: 0 };
+        assert_eq!(s.timeline(), Some(2));
+        assert_eq!(Segment { name: "court".into(), archived_at: 0 }.timeline(), None);
+    }
+
+    #[test]
+    fn an_empty_archive_covers_nothing() {
+        // 🔴 `None`, pas `Some(0)` : un 0 serait interprété comme « couvert jusqu'au
+        // 1er janvier 1970 », et toute cible serait déclarée hors de portée avec un
+        // message absurde.
+        let d = tempfile::tempdir().expect("répertoire");
+        assert!(scan_archive(d.path()).expect("inventaire").is_empty());
+        assert_eq!(wal_coverage(&[]), None);
+    }
+
+    #[test]
+    fn a_missing_archive_directory_is_an_error() {
+        // Un répertoire d'archivage absent est une panne d'archivage, pas une archive
+        // vide. Le confondre masquerait exactement le scénario du §8.1 : pg_wal qui
+        // grossit parce que l'archivage échoue.
+        assert!(scan_archive(std::path::Path::new("/n-existe-pas")).is_err());
+    }
+
+    #[test]
+    fn coverage_is_the_latest_archived_segment() {
+        let s = vec![
+            Segment { name: seg(1, 0, 1), archived_at: J0 },
+            Segment { name: seg(1, 0, 2), archived_at: J0 + HEURE },
+        ];
+        assert_eq!(wal_coverage(&s), Some(J0 + HEURE));
+    }
+
+    #[test]
+    fn the_window_extends_to_the_real_wal_not_the_last_base() {
+        // Le point de tout cet inventaire : sans lui, la borne haute serait celle de
+        // base-3 (J0+48 h) et l'on refuserait une restauration pourtant possible.
+        let segments = vec![Segment {
+            name: seg(1, 0, 9),
+            archived_at: J0 + 70 * HEURE,
+        }];
+        let couverture = wal_coverage(&segments).expect("couverture");
+
+        let w = recoverable_window(&bases(), couverture).expect("fenêtre");
+        assert_eq!(w.latest, J0 + 70 * HEURE);
+        assert!(w.contains(J0 + 65 * HEURE), "après la dernière base, mais couvert");
+
+        // Et la cible correspondante devient atteignable.
+        let p = plan_recovery(&bases(), couverture, J0 + 65 * HEURE, &WalArchive::new("/a"))
+            .expect("plan");
+        assert_eq!(p.base.id, "base-3");
     }
 
     #[test]

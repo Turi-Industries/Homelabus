@@ -20,6 +20,7 @@ hlb-engine.workspace = true
 hlb-secrets.workspace = true
 hlb-platform.workspace = true
 hlb-ingress.workspace = true
+hlb-mail.workspace = true
 hlb-registry.workspace = true
 hlb-updater.workspace = true
 hlb-backup.workspace = true

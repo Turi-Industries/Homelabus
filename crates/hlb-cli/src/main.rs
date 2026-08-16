@@ -55,6 +55,19 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_CADDY_ADMIN")]
     caddy_admin: Option<String>,
 
+    /// URL de Stalwart. Sans elle, les boîtes mail ne sont pas provisionnées.
+    #[arg(long, global = true, env = "HLB_STALWART_URL")]
+    stalwart_url: Option<String>,
+
+    /// Compte d'administration Stalwart.
+    #[arg(long, global = true, env = "HLB_STALWART_ADMIN")]
+    stalwart_admin: Option<String>,
+
+    /// Mot de passe de ce compte. ⚠️ Préfère la variable d'environnement : un mot
+    /// de passe en ligne de commande est lisible par tout utilisateur de la machine.
+    #[arg(long, global = true, env = "HLB_STALWART_PASSWORD")]
+    stalwart_password: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -248,7 +261,10 @@ enum PitrCmd {
         dir: String,
     },
     /// La fenêtre réellement restaurable, d'après ce qui est conservé.
-    Window,
+    Window {
+        #[arg(long, default_value = "/archive/wal")]
+        dir: String,
+    },
     /// Préparer une restauration à un instant donné. N'exécute RIEN.
     Plan {
         /// Instant cible en UTC : « 2026-08-16 14:04:00 ».
@@ -313,7 +329,7 @@ async fn pitr(
             Ok(ExitCode::SUCCESS)
         }
 
-        PitrCmd::Window => {
+        PitrCmd::Window { dir } => {
             let state = State::open(state_path).await?;
             let bases = charger_bases(&state).await?;
 
@@ -327,28 +343,43 @@ async fn pitr(
                 return Ok(ExitCode::SUCCESS);
             }
 
-            // Faute d'inventaire des segments archivés, on ne peut pas affirmer
-            // jusqu'où le WAL couvre. On le dit plutôt que de le supposer.
-            let derniere = bases.iter().map(|b| b.finished_at).max().unwrap_or(0);
-            match pitr::recoverable_window(&bases, derniere) {
+            println!("{} sauvegarde(s) de base :", bases.len());
+            for b in &bases {
+                println!("  {}  {}", pitr::iso8601(b.finished_at), b.id);
+            }
+            println!();
+
+            // La borne haute est CONSTATÉE dans l'archive, pas déduite de la dernière
+            // base : sans inventaire on sous-estimerait la fenêtre, et l'on refuserait
+            // des restaurations pourtant possibles.
+            let (couverture, note) = match pitr::scan_archive(std::path::Path::new(dir)) {
+                Ok(segs) => match pitr::wal_coverage(&segs) {
+                    Some(c) => (c, format!("{} segment(s) WAL archivé(s)", segs.len())),
+                    None => (
+                        bases.iter().map(|b| b.finished_at).max().unwrap_or(0),
+                        format!("🔴 {dir} est vide — aucun journal archivé"),
+                    ),
+                },
+                Err(e) => (
+                    bases.iter().map(|b| b.finished_at).max().unwrap_or(0),
+                    format!("⚠️  archive illisible ({e}) — borne limitée à la dernière base"),
+                ),
+            };
+
+            match pitr::recoverable_window(&bases, couverture) {
                 Some(w) => {
-                    println!("{} sauvegarde(s) de base :", bases.len());
-                    for b in &bases {
-                        println!("  {}  {}", pitr::iso8601(b.finished_at), b.id);
-                    }
+                    println!("Fenêtre restaurable : {}", w.describe());
+                    println!("  {note}");
                     println!();
-                    println!("Fenêtre garantie : {}", w.describe());
-                    println!();
-                    println!("⚠️  La borne haute est celle de la DERNIÈRE base connue, pas");
-                    println!("   celle du dernier segment WAL : HomelabUS n'inventorie pas");
-                    println!("   encore l'archive. En pratique la fenêtre va plus loin — mais");
-                    println!("   annoncer une borne non vérifiée serait une fausse garantie.");
-                    println!();
-                    println!("   Purge du WAL possible avant : {}", pitr::iso8601(
-                        pitr::wal_prunable_before(&bases).unwrap_or(w.earliest)
-                    ));
+                    println!(
+                        "  Purge du WAL possible avant : {}",
+                        pitr::iso8601(pitr::wal_prunable_before(&bases).unwrap_or(w.earliest))
+                    );
                 }
-                None => println!("Aucune fenêtre restaurable."),
+                None => {
+                    println!("Aucune fenêtre restaurable.");
+                    println!("  {note}");
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -362,10 +393,17 @@ async fn pitr(
 
             let state = State::open(state_path).await?;
             let bases = charger_bases(&state).await?;
-            let derniere = bases.iter().map(|b| b.finished_at).max().unwrap_or(0);
+
+            // Même règle que pour `window` : la couverture est constatée. Une cible
+            // au-delà du dernier segment archivé doit être refusée, pas acceptée en
+            // silence — elle donnerait une base périmée sans le dire.
+            let couverture = pitr::scan_archive(std::path::Path::new(dir))
+                .ok()
+                .and_then(|s| pitr::wal_coverage(&s))
+                .unwrap_or_else(|| bases.iter().map(|b| b.finished_at).max().unwrap_or(0));
 
             let archive = pitr::WalArchive::new(dir);
-            match pitr::plan_recovery(&bases, derniere.max(cible), cible, &archive) {
+            match pitr::plan_recovery(&bases, couverture, cible, &archive) {
                 Ok(p) => {
                     println!("Restauration à {}", pitr::iso8601(cible));
                     println!("  {}", p.describe());
@@ -446,19 +484,20 @@ fn main() -> ExitCode {
 /// Renvoie `None` si aucun dépôt n'est configuré — ce qui fera refuser toute mise à
 /// jour exigeant une sauvegarde (§7). C'est voulu : mieux vaut un refus clair qu'une
 /// mise à jour silencieusement non sauvegardée.
-async fn build_backup_provider(
-    repo: Option<&str>,
+/// Le mot de passe du dépôt restic.
+///
+/// Il vit dans le coffre, comme tout le reste. Créé au premier usage et **jamais
+/// changé** : le dépôt deviendrait illisible, y compris ses instantanés déjà écrits.
+///
+/// Partagé entre la sauvegarde et la vérification : les deux doivent forcément
+/// utiliser le même, sinon la vérification échouerait à relire ce que la sauvegarde
+/// vient d'écrire — et l'on conclurait à une corruption qui n'existe pas.
+async fn restic_password(
     state: &State,
     vault: &Vault,
-) -> Result<Option<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>>, Box<dyn std::error::Error>> {
-    let Some(location) = repo else {
-        return Ok(None);
-    };
-
-    // Le mot de passe du dépôt vit dans le coffre, comme tout le reste. Il est créé
-    // au premier usage et ne change jamais : le dépôt deviendrait illisible.
+) -> Result<String, Box<dyn std::error::Error>> {
     const SECRET: &str = "restic-repo-password";
-    let password = match state.secret(SECRET).await? {
+    Ok(match state.secret(SECRET).await? {
         Some(ct) => vault.decrypt(&ct)?,
         None => {
             let p = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
@@ -468,7 +507,19 @@ async fn build_backup_provider(
                 .await?;
             p
         }
+    })
+}
+
+async fn build_backup_provider(
+    repo: Option<&str>,
+    state: &State,
+    vault: &Vault,
+) -> Result<Option<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>>, Box<dyn std::error::Error>> {
+    let Some(location) = repo else {
+        return Ok(None);
     };
+
+    let password = restic_password(state, vault).await?;
 
     // On capture les volumes maintenant : la fabrique doit rester synchrone.
     let mut par_app: std::collections::BTreeMap<String, Vec<(String, String)>> =
@@ -720,6 +771,16 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 };
                 let caddy = cli.caddy_admin.as_ref().map(CaddyAdmin::new);
 
+                // Stalwart : même règle que les autres. Sans identifiants, le
+                // provisionnement des boîtes reste « non implémenté », jamais simulé.
+                let mail = match (&cli.stalwart_url, &cli.stalwart_admin, &cli.stalwart_password) {
+                    (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
+                        u,
+                        hlb_mail::Auth::Basic { user: a.clone(), password: p.clone() },
+                    )),
+                    _ => None,
+                };
+
                 let mut exec = Executor::new(&orch, &state)
                     .with_vault(&vault)
                     .with_registry(&registry)
@@ -732,6 +793,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
                 if let Some(c) = &caddy {
                     exec = exec.with_ingress(c);
+                }
+                if let Some(m) = &mail {
+                    exec = exec.with_mail(m);
                 }
                 let out = match exec.run(app, &plan).await {
                     Ok(o) => o,
@@ -1255,14 +1319,78 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
 
                     BackupCmd::Verify { app } => {
-                        eprintln!(
-                            "La vérification par restauration nécessite un espace jetable \n\
-                             monté aux côtés du dépôt. Elle est disponible en bibliothèque \n\
-                             (hlb_backup::verify_by_restore) et couverte par les tests \n\
-                             d'intégration, mais son câblage CLI reste à écrire."
-                        );
-                        let _ = app;
-                        Ok(ExitCode::FAILURE)
+                        let Some(depot) = cli.backup_repo.as_deref() else {
+                            eprintln!("aucun dépôt configuré — utilise --backup-repo");
+                            return Ok(ExitCode::FAILURE);
+                        };
+                        let password = restic_password(&state, &vault).await?;
+
+                        // Une app nommée, ou toutes celles qui ont déjà un instantané.
+                        let cibles: Vec<String> = match app {
+                            Some(a) => vec![a.clone()],
+                            None => state
+                                .installed_apps()
+                                .await?
+                                .into_iter()
+                                .map(|(n, _)| n)
+                                .collect(),
+                        };
+
+                        let mut verifiees = 0;
+                        let mut ecarts = 0;
+
+                        for a in cibles {
+                            let Some(snap) = state.latest_snapshot(&a).await? else {
+                                // Pas d'instantané : rien à vérifier, et surtout pas
+                                // de « ✓ » qui laisserait croire le contraire.
+                                if app.is_some() {
+                                    println!("{a} : aucune sauvegarde à vérifier.");
+                                }
+                                continue;
+                            };
+
+                            print!("{a} ({})… ", &snap[..8.min(snap.len())]);
+                            use std::io::Write as _;
+                            let _ = std::io::stdout().flush();
+
+                            match hlb_backup::verify_snapshot(depot, &password, &snap).await {
+                                Ok(v) => {
+                                    println!("{}", v.describe());
+                                    // 🔴 Un écart est enregistré comme un ÉCHEC de
+                                    // vérification : `hlb backup status` doit continuer
+                                    // à signaler cette app comme non vérifiée.
+                                    let detail = (!v.matches()).then(|| v.describe());
+                                    state
+                                        .record_verification(&a, &snap, detail.as_deref())
+                                        .await?;
+                                    verifiees += 1;
+                                    if !v.matches() {
+                                        ecarts += 1;
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("✗ {e}");
+                                    state
+                                        .record_verification(&a, &snap, Some(&e.to_string()))
+                                        .await?;
+                                    ecarts += 1;
+                                }
+                            }
+                        }
+
+                        if verifiees == 0 && ecarts == 0 {
+                            println!("Aucun instantané à vérifier.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        if ecarts > 0 {
+                            eprintln!(
+                                "\n🔴 {ecarts} vérification(s) en échec — ces sauvegardes \
+                                 ne restaurent pas ce qu'elles annoncent."
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        Ok(ExitCode::SUCCESS)
                     }
 
                     BackupCmd::Pitr(sous) => pitr(sous, &cli.state).await,

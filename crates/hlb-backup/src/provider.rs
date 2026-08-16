@@ -25,6 +25,17 @@ impl<R: Runner> ResticBackupProvider<R> {
     ) -> Self {
         Self { make: Box::new(make) }
     }
+
+    /// Le dépôt et les chemins d'une app, pour les opérations qui ne sont pas des
+    /// sauvegardes — la vérification par restauration (§8.3), au premier chef.
+    ///
+    /// Exposé plutôt que dupliqué : le `Repository` construit ici doit être
+    /// **exactement** celui qui a écrit l'instantané. Un dépôt reconstruit à côté,
+    /// avec un montage ou un mot de passe qui divergent d'un caractère, échouerait
+    /// à lire ce qu'il vient pourtant d'écrire.
+    pub fn repository_for(&self, app: &str) -> Option<(Repository<R>, Vec<String>)> {
+        (self.make)(app)
+    }
 }
 
 #[async_trait::async_trait]

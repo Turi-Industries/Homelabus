@@ -186,6 +186,16 @@ qui a tort, pas le test.
 - **Un `archive_command` WAL qui échoue ne perd pas les journaux, il les garde.**
   `pg_wal` grossit jusqu'à saturer le disque. Archiver vers une destination cassée est
   plus dangereux que ne pas archiver.
+- **Le dossier temporaire de l'hôte n'est PAS partagé avec la VM Docker sur macOS.**
+  Tout espace jetable monté dans un conteneur doit être un *volume Docker*, et son
+  contenu compté depuis un conteneur. Un `tempfile::tempdir()` y apparaît vide, ce qui
+  fait conclure à une sauvegarde vide sur une sauvegarde saine.
+- **Stalwart n'a pas d'API REST pour les comptes.** Tout passe par JMAP (`POST /jmap/`,
+  capacité `urn:stalwart:jmap`, méthodes `x:Account/set` et `x:Domain/query`). Le
+  discriminant est `@type`, `emailAddress` est calculé par le serveur, et un `/set` qui
+  échoue renvoie quand même HTTP 200 — l'échec vit dans `notCreated`.
+- **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
+  unique bâti dessus seul produit des doublons entre deux appels rapprochés.
 
 ## État d'avancement
 
@@ -199,8 +209,8 @@ d'isolation en test d'intégration), boucle de réconciliation, mesh WireGuard
 `/metrics` sur le controller + CrowdSec au frontal), PITR PostgreSQL (`hlb backup
 pitr`).
 
-Pas encore écrit — ces actions restent `Unimplemented` dans l'exécuteur : client
-PocketID, générateur de Caddyfile, création de volume, résolution de digest. Le moteur
-de vérification des guides (bloc `verify:` du §4.6) n'existe pas non plus : `hlb ack`
-est une attestation, et le CLI le dit à chaque usage. Voir la feuille de route en §12
-de PLAN.md.
+Fait également : client Stalwart (`hlb-mail`) et provisionnement des boîtes,
+`hlb backup verify` (restauration réelle puis comparaison), inventaire des segments
+WAL pour la fenêtre PITR.
+
+Reste la feuille de route du §12 de PLAN.md, dont l'UI web.

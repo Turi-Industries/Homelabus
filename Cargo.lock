@@ -1088,6 +1088,7 @@ dependencies = [
  "hlb-guide",
  "hlb-identity",
  "hlb-ingress",
+ "hlb-mail",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1136,6 +1137,7 @@ dependencies = [
  "hlb-guide",
  "hlb-identity",
  "hlb-ingress",
+ "hlb-mail",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1195,6 +1197,18 @@ dependencies = [
  "reqwest",
  "serde_yaml_ng",
  "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-mail"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

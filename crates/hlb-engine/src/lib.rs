@@ -17,6 +17,7 @@ use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_platform::PostgresProvisioner;
 use hlb_identity::PocketId;
 use hlb_ingress::CaddyAdmin;
+use hlb_mail::Stalwart;
 use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
@@ -44,6 +45,9 @@ pub enum Error {
 
     #[error(transparent)]
     Ingress(#[from] hlb_ingress::Error),
+
+    #[error(transparent)]
+    Mail(#[from] hlb_mail::Error),
 
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
@@ -85,6 +89,7 @@ pub struct Executor<'a, O: Orchestrator> {
     /// Absent si Caddy n'est pas encore joignable : l'app est déployée mais pas
     /// encore routée, ce qui est un état légitime.
     ingress: Option<&'a CaddyAdmin>,
+    mail: Option<&'a Stalwart>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -99,6 +104,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             registry: None,
             identity: None,
             ingress: None,
+            mail: None,
             apply: false,
         }
     }
@@ -125,6 +131,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_ingress(mut self, c: &'a CaddyAdmin) -> Self {
         self.ingress = Some(c);
+        self
+    }
+
+    pub fn with_mail(mut self, s: &'a Stalwart) -> Self {
+        self.mail = Some(s);
         self
     }
 
@@ -413,8 +424,49 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            // Le compte mail demande le client Stalwart, qui n'existe pas encore.
-            Action::ProvisionMailAccount { .. } => Ok(Step::NotImplemented),
+            Action::ProvisionMailAccount { address, aliases } => {
+                let (Some(mail), Some(vault)) = (self.mail, self.vault) else {
+                    return Ok(Step::NotImplemented);
+                };
+
+                // Le mot de passe vit au coffre, comme les autres. `if_absent` :
+                // relancer un plan ne doit pas en fabriquer un second, qui ne
+                // correspondrait plus à celui déposé dans Stalwart.
+                let secret_name = format!("{app}-mail-password");
+                let password = match self.state.secret(&secret_name).await? {
+                    Some(ct) => vault.decrypt(&ct)?,
+                    None => {
+                        let p = hlb_secrets::generate_password(
+                            hlb_secrets::DEFAULT_PASSWORD_LEN,
+                        );
+                        self.state
+                            .store_secret_if_absent(
+                                &secret_name,
+                                &vault.encrypt(&p)?,
+                                "mot de passe IMAP/SMTP",
+                            )
+                            .await?;
+                        p
+                    }
+                };
+
+                // Les aliases déclarés au manifest sont un booléen : « cette app a
+                // le droit d'en avoir ». Elle n'en réclame aucun à l'installation —
+                // ils se créent à l'usage (§5.9).
+                let demandes: Vec<String> = Vec::new();
+                let p = mail.ensure_account(address, &password, &demandes).await?;
+
+                if p.created {
+                    tracing::info!(adresse = %p.address, "boîte mail créée");
+                } else {
+                    // 🔴 Conséquence concrète : le mot de passe du coffre est celui
+                    // d'avant, et on n'y a PAS touché. Le changer couperait l'accès
+                    // IMAP de l'app qui tourne.
+                    tracing::debug!(adresse = %p.address, "boîte déjà présente, conservée");
+                }
+                let _ = aliases;
+                Ok(Step::Done)
+            }
         }
     }
 }
@@ -717,6 +769,54 @@ spec:
             .find(|a| a.kind == "ProvisionDatabase")
             .expect("action présente");
         assert_eq!(db.status, ActionStatus::Unimplemented);
+    }
+
+    const WITH_MAIL: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: a/b, tag: "1", digest: "sha256:x" }
+  requires:
+    - kind: mail-account
+      aliases: true
+"#;
+
+    #[tokio::test]
+    async fn a_mailbox_is_never_pretended_without_a_stalwart() {
+        // 🔴 Le même principe que pour la base de données : sans client Stalwart,
+        // l'action est enregistrée « non implémentée », jamais « faite ». Rapporter
+        // une boîte créée qui n'existe pas ferait échouer l'app au premier envoi.
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::init(dir.path().join("master.key")).unwrap();
+
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_MAIL).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+
+        let params = hlb_resolver::InstallParams {
+            mail_domain: Some("example.fr".into()),
+            ..Default::default()
+        };
+        let p = hlb_resolver::resolve(&m, &params).unwrap();
+
+        Executor::new(&o, &s)
+            .with_vault(&vault)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
+
+        let rec = s.plan_actions("demo").await.unwrap();
+        let mail = rec
+            .iter()
+            .find(|a| a.kind == "ProvisionMailAccount")
+            .expect("action présente");
+        assert_eq!(mail.status, ActionStatus::Unimplemented);
+
+        // Et aucun mot de passe n'a été fabriqué : il n'aurait correspondu à rien.
+        assert!(s.secret("demo-mail-password").await.unwrap().is_none());
     }
 
     #[tokio::test]
