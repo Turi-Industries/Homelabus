@@ -173,6 +173,11 @@ enum ClusterCmd {
     },
     /// Nœuds, rôles, tiers et santé du quorum.
     Status,
+    /// 🔴 Chiffrer les secrets Swarm au repos (§9). La clé va au coffre.
+    Autolock {
+        #[arg(long)]
+        apply: bool,
+    },
     /// La commande à lancer sur une machine pour la rattacher.
     JoinCommand {
         /// `manager` ou `worker`. Par défaut : ce que le profil recommande.
@@ -229,6 +234,28 @@ enum BackupCmd {
         /// Limiter à une app.
         app: Option<String>,
     },
+    /// Archivage WAL et restauration à un instant précis (§8.1).
+    #[command(subcommand)]
+    Pitr(PitrCmd),
+}
+
+#[derive(Subcommand)]
+enum PitrCmd {
+    /// Les réglages PostgreSQL à poser pour activer l'archivage WAL.
+    Config {
+        /// Répertoire d'archivage, monté dans le conteneur PostgreSQL.
+        #[arg(long, default_value = "/archive/wal")]
+        dir: String,
+    },
+    /// La fenêtre réellement restaurable, d'après ce qui est conservé.
+    Window,
+    /// Préparer une restauration à un instant donné. N'exécute RIEN.
+    Plan {
+        /// Instant cible en UTC : « 2026-08-16 14:04:00 ».
+        target: String,
+        #[arg(long, default_value = "/archive/wal")]
+        dir: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -250,6 +277,144 @@ enum CatalogCmd {
     List,
     /// Valider tous les manifests et le graphe de dépendances.
     Validate,
+}
+
+/// Nom du secret portant la clé de déverrouillage du Swarm.
+const SECRET_AUTOLOCK: &str = "swarm-unlock-key";
+
+/// Restauration à un instant précis (§8.1).
+///
+/// Aucun sous-verbe n'exécute quoi que ce soit : le PITR se termine par une décision
+/// humaine sur une base de données de production. Le CLI prépare, affiche et vérifie
+/// la faisabilité ; il ne restaure pas à votre place.
+async fn pitr(
+    cmd: &PitrCmd,
+    state_path: &std::path::Path,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use hlb_backup::pitr;
+
+    match cmd {
+        PitrCmd::Config { dir } => {
+            let a = pitr::WalArchive::new(dir);
+            println!("{}", a.render_settings());
+            println!("# ─────────────────────────────────────────────────────────────");
+            println!("# 🔴 AVANT d'activer : {dir} doit exister, être accessible en");
+            println!("#    écriture au conteneur, et avoir de la place.");
+            println!("#");
+            println!("#    Un archive_command qui échoue ne PERD pas les journaux :");
+            println!("#    il les garde. pg_wal grossit alors sans limite jusqu'à");
+            println!("#    saturer le disque, et PostgreSQL s'arrête net.");
+            println!("#    Archiver vers une destination cassée est plus dangereux");
+            println!("#    que ne pas archiver du tout.");
+            println!("#");
+            println!("#    Puis : une sauvegarde de base est OBLIGATOIRE. Le WAL seul");
+            println!("#    ne restaure rien.");
+            println!("#      pg_basebackup -D <dest> -Ft -Xs -P");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        PitrCmd::Window => {
+            let state = State::open(state_path).await?;
+            let bases = charger_bases(&state).await?;
+
+            if bases.is_empty() {
+                println!("Aucune sauvegarde de base enregistrée.");
+                println!();
+                println!("🔴 Sans elle, les journaux WAL ne restaurent RIEN. La fenêtre");
+                println!("   restaurable est donc vide, même si l'archivage tourne.");
+                println!();
+                println!("   hlb backup pitr config    # les réglages à poser");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            // Faute d'inventaire des segments archivés, on ne peut pas affirmer
+            // jusqu'où le WAL couvre. On le dit plutôt que de le supposer.
+            let derniere = bases.iter().map(|b| b.finished_at).max().unwrap_or(0);
+            match pitr::recoverable_window(&bases, derniere) {
+                Some(w) => {
+                    println!("{} sauvegarde(s) de base :", bases.len());
+                    for b in &bases {
+                        println!("  {}  {}", pitr::iso8601(b.finished_at), b.id);
+                    }
+                    println!();
+                    println!("Fenêtre garantie : {}", w.describe());
+                    println!();
+                    println!("⚠️  La borne haute est celle de la DERNIÈRE base connue, pas");
+                    println!("   celle du dernier segment WAL : HomelabUS n'inventorie pas");
+                    println!("   encore l'archive. En pratique la fenêtre va plus loin — mais");
+                    println!("   annoncer une borne non vérifiée serait une fausse garantie.");
+                    println!();
+                    println!("   Purge du WAL possible avant : {}", pitr::iso8601(
+                        pitr::wal_prunable_before(&bases).unwrap_or(w.earliest)
+                    ));
+                }
+                None => println!("Aucune fenêtre restaurable."),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        PitrCmd::Plan { target, dir } => {
+            let Some(cible) = pitr::parse_utc(target) else {
+                eprintln!("Cible illisible : « {target} »");
+                eprintln!("Attendu, en UTC : « 2026-08-16 14:04:00 »");
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let state = State::open(state_path).await?;
+            let bases = charger_bases(&state).await?;
+            let derniere = bases.iter().map(|b| b.finished_at).max().unwrap_or(0);
+
+            let archive = pitr::WalArchive::new(dir);
+            match pitr::plan_recovery(&bases, derniere.max(cible), cible, &archive) {
+                Ok(p) => {
+                    println!("Restauration à {}", pitr::iso8601(cible));
+                    println!("  {}", p.describe());
+                    println!();
+                    println!("Marche à suivre :");
+                    println!("  1. Arrêter PostgreSQL.");
+                    println!("  2. Déplacer le répertoire de données actuel — NE PAS le");
+                    println!("     supprimer : c'est le seul filet si la reprise échoue.");
+                    println!("  3. Restaurer la base {} à sa place.", p.base.id);
+                    println!("  4. Écrire ceci dans postgresql.auto.conf :");
+                    println!();
+                    for l in p.config.lines() {
+                        println!("     {l}");
+                    }
+                    println!();
+                    println!("  5. Créer un fichier VIDE `recovery.signal` dans le");
+                    println!("     répertoire de données. Sans lui, PostgreSQL démarre");
+                    println!("     normalement et ignore tout ce qui précède.");
+                    println!("  6. Démarrer et surveiller les journaux du serveur.");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+    }
+}
+
+/// Les sauvegardes de base de toutes les apps confondues.
+///
+/// Le PITR porte sur l'instance PostgreSQL, pas sur une app : toutes les bases
+/// applicatives partagent le même WAL (§4.3).
+async fn charger_bases(
+    state: &State,
+) -> Result<Vec<hlb_backup::pitr::BaseBackup>, Box<dyn std::error::Error>> {
+    let mut out = Vec::new();
+    for (app, _) in state.installed_apps().await? {
+        for (id, at) in state.base_backups(&app).await? {
+            out.push(hlb_backup::pitr::BaseBackup { id, finished_at: at });
+        }
+    }
+    for (id, at) in state.base_backups("postgres").await? {
+        out.push(hlb_backup::pitr::BaseBackup { id, finished_at: at });
+    }
+    out.sort_by_key(|b| b.finished_at);
+    out.dedup_by(|a, b| a.id == b.id);
+    Ok(out)
 }
 
 fn main() -> ExitCode {
@@ -1099,6 +1264,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         let _ = app;
                         Ok(ExitCode::FAILURE)
                     }
+
+                    BackupCmd::Pitr(sous) => pitr(sous, &cli.state).await,
                 }
             })
         }
@@ -1129,6 +1296,65 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         state
                             .audit("cli", ACTEUR_ROLE, "cluster-init", "swarm", "ok", None)
                             .await?;
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    ClusterCmd::Autolock { apply } => {
+                        let state = State::open(&cli.state).await?;
+
+                        if orch.autolock_enabled().await? {
+                            println!("✓ L'autolock est déjà actif.");
+                            if state.secret(SECRET_AUTOLOCK).await?.is_none() {
+                                // 🔴 Le pire état possible : chiffré, mais la clé
+                                // n'est nulle part. Au prochain redémarrage complet,
+                                // le cluster reste verrouillé et ses secrets sont
+                                // définitivement illisibles.
+                                println!();
+                                println!("🔴 Mais la clé de déverrouillage n'est PAS au coffre.");
+                                println!("   Récupère-la maintenant et garde-la hors ligne :");
+                                println!("     docker swarm unlock-key");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        if !apply {
+                            println!("Activerait le chiffrement au repos des secrets Swarm.");
+                            println!();
+                            println!("  Ce que ça change : après un redémarrage, chaque manager");
+                            println!("  exige la clé de déverrouillage avant de repartir. Un");
+                            println!("  cluster qui redémarre seul la nuit ne repart plus seul.");
+                            println!();
+                            println!("  🔴 La clé sera stockée au coffre ET affichée une fois.");
+                            println!("  Note-la hors ligne : si le coffre disparaît avec la");
+                            println!("  machine, elle est la seule façon de récupérer le cluster.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let cle = orch.enable_autolock().await?;
+                        let vault = Vault::open_or_init(&cli.master_key)?;
+                        let ct = vault.encrypt(&cle)?;
+                        state
+                            .store_secret_if_absent(
+                                SECRET_AUTOLOCK,
+                                &ct,
+                                "déverrouillage du Swarm après redémarrage",
+                            )
+                            .await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "cluster-autolock", "swarm", "ok", None)
+                            .await?;
+
+                        println!("✓ Autolock actif. Clé enregistrée au coffre.");
+                        println!();
+                        println!("🔴 NOTE CETTE CLÉ HORS LIGNE — elle ne sera plus réaffichée :");
+                        println!();
+                        println!("    {cle}");
+                        println!();
+                        println!("Sans elle, un manager redémarré reste verrouillé et les");
+                        println!("secrets du cluster sont irrécupérables.");
                         Ok(ExitCode::SUCCESS)
                     }
 

@@ -307,6 +307,34 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Les sauvegardes de base PostgreSQL réussies, les plus anciennes d'abord (§8.1).
+    ///
+    /// Ce sont les points de départ possibles d'un rejeu WAL. Les échecs sont exclus :
+    /// une base de départ incomplète ne restaure rien, et la faire figurer dans la
+    /// fenêtre restaurable annoncerait une garantie qu'on n'a pas.
+    pub async fn base_backups(&self, app: &str) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(
+            "SELECT snapshot_id, CAST(strftime('%s', finished_at) AS INTEGER) AS at
+             FROM backup_runs
+             WHERE app = ?1 AND kind = 'pg-basebackup'
+               AND status = 'ok' AND snapshot_id IS NOT NULL
+             ORDER BY finished_at ASC, id ASC",
+        )
+        .bind(app)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some((
+                    r.try_get::<String, _>("snapshot_id").ok()?,
+                    r.try_get::<i64, _>("at").ok()?,
+                ))
+            })
+            .collect())
+    }
+
     /// L'instantané le plus récent d'une app, pour le vérifier.
     pub async fn latest_snapshot(&self, app: &str) -> Result<Option<String>> {
         let row = sqlx::query(
@@ -622,6 +650,44 @@ mod tests {
 
     async fn st() -> State {
         State::in_memory().await.expect("base en mémoire")
+    }
+
+    #[tokio::test]
+    async fn base_backups_exclude_failures_and_other_kinds() {
+        // 🔴 Une sauvegarde de base ratée ne restaure rien. La compter élargirait la
+        // fenêtre PITR annoncée d'une garantie qu'on n'a pas.
+        let s = st().await;
+        s.record_backup("postgres", "pg-basebackup", Some("base-1"), None)
+            .await
+            .expect("réussite");
+        s.record_backup("postgres", "pg-basebackup", None, Some("disque plein"))
+            .await
+            .expect("échec");
+        // Un instantané de volume n'est pas un point de départ de rejeu WAL.
+        s.record_backup("postgres", "volume", Some("vol-9"), None)
+            .await
+            .expect("volume");
+
+        let b = s.base_backups("postgres").await.expect("lecture");
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].0, "base-1");
+        assert!(b[0].1 > 0, "horodatage exploitable");
+    }
+
+    #[tokio::test]
+    async fn base_backups_come_oldest_first() {
+        // L'ordre importe : la borne de purge du WAL est la PLUS ANCIENNE base.
+        let s = st().await;
+        for id in ["b1", "b2", "b3"] {
+            s.record_backup("postgres", "pg-basebackup", Some(id), None)
+                .await
+                .expect("base");
+        }
+        let b = s.base_backups("postgres").await.expect("lecture");
+        assert_eq!(
+            b.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(),
+            ["b1", "b2", "b3"]
+        );
     }
 
     #[tokio::test]

@@ -1111,6 +1111,7 @@ dependencies = [
  "hlb-backup",
  "hlb-engine",
  "hlb-gitops",
+ "hlb-notify",
  "hlb-orchestrator",
  "hlb-secrets",
  "hlb-state",
@@ -1194,6 +1195,28 @@ dependencies = [
  "reqwest",
  "serde_yaml_ng",
  "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-mesh"
+version = "0.1.0"
+dependencies = [
+ "rand 0.9.5",
+ "serde",
+ "thiserror 2.0.19",
+ "tracing",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "hlb-notify"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

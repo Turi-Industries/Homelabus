@@ -50,6 +50,12 @@ impl Orchestrator for Fake {
         self.scaled.lock().unwrap().push((n.into(), r));
         Ok(())
     }
+    async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
+        Ok("SWMKEY-fake".into())
+    }
+    async fn autolock_enabled(&self) -> hlb_orchestrator::Result<bool> {
+        Ok(false)
+    }
     async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
         Ok("swarm-fake".into())
     }
@@ -287,7 +293,13 @@ async fn one_failure_does_not_stop_the_others() {
 
     #[async_trait]
     impl Orchestrator for HalfBroken {
-        async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
+        async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
+        Ok("SWMKEY-fake".into())
+    }
+    async fn autolock_enabled(&self) -> hlb_orchestrator::Result<bool> {
+        Ok(false)
+    }
+    async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
         Ok("swarm-fake".into())
     }
     async fn join_tokens(&self) -> hlb_orchestrator::Result<hlb_orchestrator::JoinTokens> {

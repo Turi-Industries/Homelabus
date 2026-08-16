@@ -27,6 +27,13 @@ struct Cli {
     #[arg(long, default_value = "hlb.db", env = "HLB_STATE")]
     state: std::path::PathBuf,
 
+    /// Serveur ntfy pour les alertes (§8bis). Sans lui, elles restent aux journaux.
+    #[arg(long, env = "HLB_NTFY_URL")]
+    ntfy_url: Option<String>,
+
+    #[arg(long, default_value = "homelab", env = "HLB_NTFY_TOPIC")]
+    ntfy_topic: String,
+
     /// Intervalle de réconciliation.
     #[arg(long, default_value = "60", env = "HLB_RECONCILE_SECS")]
     reconcile_secs: u64,
@@ -96,6 +103,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut taches = Vec::new();
+
+    // Partagé entre la boucle d'interrogation (qui écrit) et `/metrics` (qui lit).
+    let dernier_sondage: api::LastPoll = Default::default();
+
+    // Sans ntfy configuré, les alertes partent aux journaux plutôt que nulle part.
+    let notif = cli.ntfy_url.as_ref().map(|u| {
+        tracing::info!(serveur = %u, sujet = %cli.ntfy_topic, "alertes ntfy actives");
+        Arc::new(hlb_notify::NtfyClient::new(u, &cli.ntfy_topic))
+    });
+    if notif.is_none() {
+        tracing::warn!("aucun ntfy configuré : les alertes resteront dans les journaux");
+    }
 
     if let Some(orch) = orchestrator {
         let rl = Arc::new(
@@ -172,13 +191,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let provider = Arc::new(provider);
                 let st = state.clone();
                 let rx = shutdown_rx.clone();
+                let notif_bck = notif.clone();
                 tracing::info!(dépôt = %repo, "boucle de sauvegarde");
 
                 taches.push(tokio::spawn(loops::every(
                     Duration::from_secs(cli.backup_check_secs),
                     rx,
                     move || {
-                        let (bl, provider, st) = (bl.clone(), provider.clone(), st.clone());
+                        let (bl, provider, st, notif) =
+                            (bl.clone(), provider.clone(), st.clone(), notif_bck.clone());
                         async move {
                             use hlb_updater::BackupProvider;
                             let dues = match bl.due_apps().await {
@@ -203,6 +224,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .record_backup(&app, "volume", None, Some(&e))
                                             .await;
                                         tracing::error!(app, "sauvegarde échouée : {e}");
+                                        // 🟠 Important, pas critique : un échec isolé
+                                        // sera peut-être rattrapé au tour suivant. Ce
+                                        // qui est critique, c'est la DÉRIVE — traitée
+                                        // juste en dessous.
+                                        hlb_notify::ntfy::notify_or_log(
+                                            notif.as_deref(),
+                                            &hlb_notify::Notification::important(
+                                                &format!("backup:{app}"),
+                                                &format!("Sauvegarde de {app} échouée"),
+                                                &e,
+                                            ),
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -210,6 +244,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Ok(tard) = bl.overdue_apps().await {
                                 for app in tard {
                                     tracing::error!(app, "🔴 aucune sauvegarde réussie depuis trop longtemps");
+                                    // 🔴 Critique : une app qu'on croit sauvegardée et
+                                    // qui ne l'est plus est le pire état possible. Ça
+                                    // traverse les heures calmes.
+                                    hlb_notify::ntfy::notify_or_log(
+                                        notif.as_deref(),
+                                        &hlb_notify::Notification::critical(
+                                            &format!("overdue:{app}"),
+                                            &format!("{app} n'est plus sauvegardée"),
+                                            "Aucune sauvegarde réussie depuis trop longtemps.",
+                                        ),
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -229,13 +275,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         let service = cli.agent_service.clone();
         let rx = shutdown_rx.clone();
+        let derniers = dernier_sondage.clone();
+        let notif_ag = notif.clone();
         tracing::info!(service = %service, "boucle d'interrogation des agents");
 
         taches.push(tokio::spawn(loops::every(
             Duration::from_secs(cli.agent_poll_secs),
             rx,
             move || {
-                let (poller, service) = (poller.clone(), service.clone());
+                let (poller, service, derniers, notif) =
+                    (poller.clone(), service.clone(), derniers.clone(), notif_ag.clone());
                 async move {
                     // `tasks.<service>` résout vers toutes les tâches ; une VIP
                     // classique n'en donnerait qu'une au hasard.
@@ -252,6 +301,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let statuts = poller.poll_all(&adresses).await;
+                    // Publié pour `/metrics` avant toute analyse : même un tour où
+                    // tout va mal doit être visible dans la supervision.
+                    *derniers.write().await = statuts.clone();
+
                     let sante = agents::ClusterHealth::from_statuses(
                         &statuts,
                         &hlb_agent::Thresholds::default(),
@@ -276,6 +329,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             saturés = ?sante.saturated,
                             "🔴 cluster à surveiller"
                         );
+                        // Un disque plein arrête les bases de données ; un nœud muet
+                        // peut vouloir dire que ses données ne sont plus sauvegardées.
+                        // Les deux méritent de réveiller quelqu'un.
+                        hlb_notify::ntfy::notify_or_log(
+                            notif.as_deref(),
+                            &hlb_notify::Notification::critical(
+                                "cluster",
+                                "Cluster à surveiller",
+                                &format!(
+                                    "{} nœud(s) injoignable(s), saturés : {}",
+                                    sante.unreachable,
+                                    if sante.saturated.is_empty() {
+                                        "aucun".to_string()
+                                    } else {
+                                        sante.saturated.join(", ")
+                                    }
+                                ),
+                            ),
+                        )
+                        .await;
                     }
                 }
             },
@@ -286,6 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state,
         started_at: std::time::Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
+        last_poll: dernier_sondage,
     }));
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;

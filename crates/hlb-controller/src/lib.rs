@@ -7,5 +7,6 @@
 pub mod agents;
 pub mod api;
 pub mod loops;
+pub mod metrics;
 
 pub use agents::{AgentPoller, AgentStatus, ClusterHealth};

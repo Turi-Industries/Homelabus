@@ -178,6 +178,14 @@ qui a tort, pas le test.
   voit une base différente.
 - **Compter les tâches Swarm** : filtrer sur `desired-state` **et** l'état réel. Swarm
   conserve l'historique des tâches mortes, qu'on compterait sinon comme vivantes.
+- **Une métrique absente vaut mieux qu'un zéro.** `hlb_backup_age_seconds` n'est pas
+  émise quand aucune sauvegarde n'a réussi : un `0` signifierait « sauvegardée à
+  l'instant », et l'alerte ne partirait jamais pour les apps les plus à risque.
+- **CrowdSec ne va que sur le Caddy frontal.** Le backend ne voit que l'IP du frontal :
+  y poser le videur ferait bannir son propre frontal au premier attaquant.
+- **Un `archive_command` WAL qui échoue ne perd pas les journaux, il les garde.**
+  `pg_wal` grossit jusqu'à saturer le disque. Archiver vers une destination cassée est
+  plus dangereux que ne pas archiver.
 
 ## État d'avancement
 
@@ -186,7 +194,10 @@ rollback automatique), résolveur + graphe + plan, catalogue, état persistant,
 exécuteur, CLI.
 
 Fait aussi : coffre de secrets `age`, provisionnement PostgreSQL isolé (avec preuve
-d'isolation en test d'intégration), boucle de réconciliation.
+d'isolation en test d'intégration), boucle de réconciliation, mesh WireGuard
+(`hlb-mesh`), autolock Swarm (`hlb cluster autolock`), observabilité (`hlb-notify` +
+`/metrics` sur le controller + CrowdSec au frontal), PITR PostgreSQL (`hlb backup
+pitr`).
 
 Pas encore écrit — ces actions restent `Unimplemented` dans l'exécuteur : client
 PocketID, générateur de Caddyfile, création de volume, résolution de digest. Le moteur

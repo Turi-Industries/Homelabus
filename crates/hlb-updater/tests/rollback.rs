@@ -44,6 +44,12 @@ impl Orchestrator for Fake {
     async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> {
         Ok(())
     }
+    async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
+        Ok("SWMKEY-fake".into())
+    }
+    async fn autolock_enabled(&self) -> hlb_orchestrator::Result<bool> {
+        Ok(false)
+    }
     async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
         Ok("swarm-fake".into())
     }

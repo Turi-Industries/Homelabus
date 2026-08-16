@@ -236,6 +236,17 @@ pub trait Orchestrator: Send + Sync {
     /// n'est pas réinitialisé — ce serait détruire le cluster existant.
     async fn cluster_init(&self, advertise_addr: Option<&str>) -> Result<String>;
 
+    /// Active le verrouillage automatique du Swarm (§9) et renvoie la clé.
+    ///
+    /// 🔴 Sans autolock, les clés Raft du cluster sont **en clair sur le disque** de
+    /// chaque manager. Quiconque récupère un disque récupère de quoi prendre le
+    /// contrôle du cluster. Avec autolock, un manager redémarré reste verrouillé
+    /// jusqu'à ce qu'on lui fournisse la clé.
+    async fn enable_autolock(&self) -> Result<String>;
+
+    /// L'autolock est-il actif ?
+    async fn autolock_enabled(&self) -> Result<bool>;
+
     /// Les jetons de rattachement, et l'adresse à laquelle se connecter.
     async fn join_tokens(&self) -> Result<cluster::JoinTokens>;
 

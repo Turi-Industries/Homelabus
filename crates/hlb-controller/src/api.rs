@@ -21,10 +21,21 @@ use serde::Serialize;
 
 use hlb_state::State;
 
+use crate::agents::AgentStatus;
+use crate::metrics::{self, AppMetrics};
+
+/// Dernier tour d'interrogation des agents, partagé entre la boucle et l'API.
+///
+/// La boucle écrit, l'API lit. Un `RwLock` plutôt qu'un `Mutex` parce que plusieurs
+/// requêtes `/metrics` concurrentes ne doivent pas se sérialiser derrière un tour de
+/// sondage.
+pub type LastPoll = Arc<tokio::sync::RwLock<std::collections::BTreeMap<String, AgentStatus>>>;
+
 pub struct AppState {
     pub state: Arc<State>,
     pub started_at: std::time::Instant,
     pub version: &'static str,
+    pub last_poll: LastPoll,
 }
 
 /// Erreur d'API, rendue en JSON plutôt qu'en page HTML.
@@ -100,6 +111,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Noms et usages seulement — jamais les valeurs, même derrière l'API.
         .route("/api/secrets", get(list_secrets))
         .route("/api/audit", get(list_audit))
+        .route("/metrics", get(prometheus))
         .with_state(state)
 }
 
@@ -189,6 +201,46 @@ async fn list_audit(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<Aud
     ))
 }
 
+/// Exposition Prometheus (§8bis).
+///
+/// Texte brut, pas JSON : c'est le format d'exposition attendu par les collecteurs.
+async fn prometheus(AxumState(s): AxumState<Arc<AppState>>) -> Response {
+    let mut apps = Vec::new();
+
+    let installees = match s.state.installed_apps().await {
+        Ok(a) => a,
+        Err(e) => return ApiError::from(e).into_response(),
+    };
+
+    for (name, status) in installees {
+        // 🔴 Une app dont on n'arrive pas à lire l'état ne doit pas faire échouer
+        // TOUT le lot : le collecteur perdrait aussi les métriques des autres, et
+        // la panne d'une seule app rendrait la supervision aveugle.
+        let (b, v, g) = (
+            s.state.seconds_since_last_success(&name).await.ok().flatten(),
+            s.state.seconds_since_last_verification(&name).await.ok().flatten(),
+            s.state.unverified_blocking(&name).await.unwrap_or(0),
+        );
+        apps.push(AppMetrics {
+            name,
+            status,
+            last_backup_secs: b,
+            last_verification_secs: v,
+            blocking_guides: g as i64,
+        });
+    }
+
+    let noeuds = s.last_poll.read().await;
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        metrics::render(&apps, &noeuds),
+    )
+        .into_response()
+}
+
 async fn list_secrets(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<SecretItem>> {
     Ok(Json(
         s.state
@@ -229,6 +281,7 @@ mod tests {
             state: Arc::new(st),
             started_at: std::time::Instant::now(),
             version: "test",
+            last_poll: Default::default(),
         }))
     }
 
@@ -292,6 +345,44 @@ mod tests {
         let brut = serde_json::to_string(&v).expect("sérialisable");
         assert!(!brut.contains("value"), "{brut}");
         assert!(!brut.contains("secret_value"), "{brut}");
+    }
+
+    async fn texte(r: Router, uri: &str) -> (StatusCode, String, String) {
+        let resp = r
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("requête"))
+            .await
+            .expect("réponse");
+        let status = resp.status();
+        let ct = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("corps");
+        (status, ct, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn metrics_are_served_as_prometheus_text() {
+        let (s, ct, body) = texte(app().await, "/metrics").await;
+        assert_eq!(s, StatusCode::OK);
+        // Un `application/json` ferait rejeter tout le lot par le collecteur.
+        assert!(ct.starts_with("text/plain"), "{ct}");
+        assert!(body.contains("hlb_app_up{app=\"gitea\",status=\"running\"} 1"), "{body}");
+        assert!(body.contains("hlb_blocking_guides{app=\"gitea\"} 1"), "{body}");
+        // Jamais sauvegardée : aucun échantillon d'âge (cf. metrics::render).
+        assert!(!body.contains("hlb_backup_age_seconds{app="), "{body}");
+    }
+
+    #[tokio::test]
+    async fn metrics_never_leak_secret_values() {
+        // Le point d'exposition est le plus susceptible d'être scrapé par un tiers.
+        let (_, _, body) = texte(app().await, "/metrics").await;
+        assert!(!body.contains("PrivateKey"), "{body}");
+        assert!(!body.to_lowercase().contains("password"), "{body}");
     }
 
     #[tokio::test]

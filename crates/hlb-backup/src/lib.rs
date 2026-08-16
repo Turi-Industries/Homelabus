@@ -9,6 +9,7 @@
 //!    restauration fait partie du module, pas d'un raffinement ultérieur.
 
 pub mod pgdump;
+pub mod pitr;
 pub mod pgrunner;
 pub mod provider;
 pub mod restic;
@@ -28,6 +29,9 @@ pub use runner::{ContainerRunner, HostRunner};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("restauration à {target} impossible : {reason}")]
+    Pitr { target: String, reason: String },
+
     #[error("restic indisponible : {0}")]
     ResticMissing(String),
 

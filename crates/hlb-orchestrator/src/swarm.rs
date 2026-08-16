@@ -355,6 +355,50 @@ impl Orchestrator for SwarmOrchestrator {
         Ok(id)
     }
 
+    async fn enable_autolock(&self) -> Result<String> {
+        // ⚠️ `bollard` 0.19 n'expose ni `update_swarm` ni `get_swarm_unlock_key`.
+        // On passe donc par le CLI Docker pour cette opération précise — c'est la
+        // seule du crate dans ce cas, et c'est dit plutôt que masqué.
+        let out = tokio::process::Command::new("docker")
+            .args(["swarm", "update", "--autolock=true"])
+            .output()
+            .await
+            .map_err(|e| Error::Unexpected(format!("docker introuvable : {e}")))?;
+
+        if !out.status.success() {
+            return Err(Error::Unexpected(format!(
+                "activation de l'autolock : {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+
+        // La clé n'est disponible qu'APRÈS activation : la demander avant renverrait
+        // une chaîne vide, qu'on aurait rangée au coffre en croyant l'affaire faite.
+        let out = tokio::process::Command::new("docker")
+            .args(["swarm", "unlock-key", "-q"])
+            .output()
+            .await
+            .map_err(|e| Error::Unexpected(format!("docker introuvable : {e}")))?;
+
+        let cle = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if cle.is_empty() {
+            return Err(Error::Unexpected(
+                "Swarm n'a pas renvoyé de clé de déverrouillage".into(),
+            ));
+        }
+
+        tracing::info!("autolock activé");
+        Ok(cle)
+    }
+
+    async fn autolock_enabled(&self) -> Result<bool> {
+        let s = self.docker.inspect_swarm().await?;
+        Ok(s.spec
+            .and_then(|sp| sp.encryption_config)
+            .and_then(|e| e.auto_lock_managers)
+            .unwrap_or(false))
+    }
+
     async fn join_tokens(&self) -> Result<cluster::JoinTokens> {
         let s = self.docker.inspect_swarm().await?;
 

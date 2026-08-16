@@ -12,29 +12,30 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Composant | État |
 |---|---|
 | Spike `bollard`/Swarm (risque n°1) | ✅ **validé** — voir ci-dessous |
-| `hlb-types` — manifests, capacités, validation | ✅ 14 tests |
+| `hlb-types` — manifests, capacités, validation | ✅ 33 tests |
 | `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
-| `hlb-resolver` — résolution + graphe + plan | ✅ 17 tests |
-| `hlb-catalog` — chargement et validation | ✅ 5 tests |
-| `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 13 tests |
+| `hlb-resolver` — résolution + graphe + plan | ✅ 21 tests |
+| `hlb-catalog` — chargement et validation | ✅ 9 tests |
+| `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 23 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
 | `hlb-platform` — provisionnement PostgreSQL isolé | ✅ 7 + 5 tests |
-| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 10 + 11 tests |
-| `hlb-ingress` — génération Caddyfile + rechargement à chaud | ✅ 17 + 4 tests |
+| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 22 tests |
+| `hlb-ingress` — génération Caddyfile + CrowdSec + rechargement à chaud | ✅ 22 + 4 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
-| `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 14 + 8 tests |
-| `hlb-backup` — restic, pg_dump, ordonnancement, vérification | ✅ 40 + 13 tests |
+| `hlb-updater` — veille, fenêtres, bascule et rollback | ✅ 21 tests |
+| `hlb-backup` — restic, pg_dump, ordonnancement, vérification, **PITR** | ✅ 62 + 14 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
 | `hlb-bootstrap` — distributions, dépendances, préchecks | ✅ 53 + 4 tests |
 | `hlb-agent` — état local du nœud, seuils disque (§9bis) | ✅ 26 tests |
-| `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
+| `hlb-controller` — daemon : API de lecture, `/metrics`, boucles de fond | ✅ 33 + 2 tests |
+| `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 20 tests |
+| `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
-| Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
-| Controller HTTP (axum), agent, UI | ⬜ à venir |
+| UI web (SvelteKit) | ⬜ à venir |
 
-**370 tests unitaires + 49 tests d'intégration.**
+**444 tests unitaires + 49 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 
