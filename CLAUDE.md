@@ -205,6 +205,22 @@ qui a tort, pas le test.
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
   unique bâti dessus seul produit des doublons entre deux appels rapprochés.
+- **Un fichier SQLite ne se copie pas à chaud.** En mode WAL c'est trois fichiers que
+  restic copie l'un après l'autre ; entre-temps l'app écrit. `VACUUM INTO` produit un
+  instantané cohérent, et la panne ne se voit qu'à la restauration.
+- **`sshd` ignore SILENCIEUSEMENT `authorized_keys`** s'il est lisible par le groupe,
+  ou si `~/.ssh` l'est. La clé paraît installée et rien ne marche.
+- **Un utilisateur MariaDB est `'nom'@'hôte'`.** Sans partie hôte explicite, l'app est
+  refusée depuis un autre conteneur avec un message parlant de mot de passe incorrect.
+  Et `_`/`%` sont des JOKERS dans un `GRANT`.
+- **`*.example.fr` ne couvre pas `example.fr`.** Les deux noms doivent être demandés.
+- **Le matcher `status` de Caddy n'existe que dans un bloc `forward_auth`.** Au niveau
+  du site, Caddy refuse de démarrer sur « module not registered ».
+- **Un outil de scan absent n'est pas un feu vert.** `NotChecked` est distinct de
+  `Clean` : traiter « trivy absent » comme « rien trouvé » désactive le contrôle en
+  donnant l'impression de l'avoir fait.
+- **Le forward-auth doit effacer les en-têtes d'identité entrants.** Sinon
+  `curl -H "X-Auth-Request-User: admin"` suffit à usurper un compte.
 
 ## État d'avancement
 
@@ -223,4 +239,10 @@ Fait également : client Stalwart (`hlb-mail`) et provisionnement des boîtes,
 segments WAL, `hlb backup pitr base` (pg_basebackup), `hlb crowdsec enroll`,
 `hlb mesh add/show/list`, `/metrics` protégé par jeton.
 
-Reste la feuille de route du §12 de PLAN.md, dont l'UI web.
+Fait aussi : `hlb node add` (SSH, clé dédiée révocable, dépendances, join, tier),
+`hlb access grant/revoke/list`, dumps SQL dans l'ordonnanceur, mTLS agent ↔ controller
+(`hlb pki`), scan Trivy + cosign avant mise à jour, MariaDB, forward-auth pour les apps
+sans SSO natif, ACME DNS-01 wildcard, instantanés SQLite + Litestream, `hlb dr promote`.
+
+Reste la feuille de route du §12 de PLAN.md, essentiellement **l'UI web** (et son
+préalable, l'OpenAPI `utoipa` qui génère les types TypeScript).
