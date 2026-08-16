@@ -1059,6 +1059,7 @@ name = "hlb-bootstrap"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -1099,6 +1100,7 @@ dependencies = [
  "hlb-types",
  "hlb-updater",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
 ]

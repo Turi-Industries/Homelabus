@@ -162,6 +162,10 @@ enum Command {
         force: bool,
     },
 
+    /// Accès SSH gérés : pose, révocation, inventaire (§2ter phase 0bis).
+    #[command(subcommand)]
+    Access(AccessCmd),
+
     /// Mesh WireGuard entre nœuds (§2ter, §6.3).
     #[command(subcommand)]
     Mesh(MeshCmd),
@@ -231,6 +235,26 @@ enum NodeCmd {
         /// Forcer une valeur au lieu de la déduire.
         #[arg(long)]
         set: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Rattacher une machine au cluster, de bout en bout (§2ter).
+    Add {
+        /// Hôte SSH de la machine à rattacher.
+        host: String,
+        #[arg(long, default_value = "root")]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// Clé SSH pour le PREMIER contact. Ensuite HomelabUS utilise la sienne.
+        #[arg(long)]
+        identity: Option<String>,
+        /// `manager` ou `worker`. Par défaut : ce que le profil recommande.
+        #[arg(long)]
+        role: Option<String>,
+        /// Adresse annoncée par ce nœud aux autres. 🔴 Requise en multi-interfaces.
+        #[arg(long)]
+        advertise_addr: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -308,6 +332,45 @@ enum UpdateCmd {
         /// Passer outre la fenêtre de maintenance.
         #[arg(long)]
         force_window: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AccessCmd {
+    /// Poser la clé de HomelabUS sur une machine.
+    Grant {
+        host: String,
+        #[arg(long, default_value = "root")]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// Clé du premier contact.
+        #[arg(long)]
+        identity: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// 🔴 Retirer la clé de HomelabUS d'une machine. Les accès humains sont préservés.
+    Revoke {
+        host: String,
+        #[arg(long, default_value = "root")]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        identity: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Ce que HomelabUS voit dans l'authorized_keys d'une machine.
+    List {
+        host: String,
+        #[arg(long, default_value = "root")]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        identity: Option<String>,
     },
 }
 
@@ -747,6 +810,324 @@ async fn export_git(
 const ACTEUR_ROLE: hlb_types::Role = hlb_types::Role::Admin;
 
 /// Local ou distant, selon qu'un hôte est donné.
+/// Nom du secret portant la clé privée de HomelabUS.
+const SECRET_SSH: &str = "homelabus-ssh-key";
+
+/// La clé SSH du cluster, créée au premier usage.
+///
+/// 🔴 Elle ne change JAMAIS d'elle-même. La régénérer couperait l'accès à toutes les
+/// machines déjà rattachées, qui portent l'ancienne clé publique dans leur
+/// `authorized_keys` — et il faudrait repasser sur chacune à la main.
+async fn cluster_ssh_key(
+    state: &State,
+    vault: &Vault,
+) -> Result<hlb_bootstrap::access::KeyPair, Box<dyn std::error::Error>> {
+    if let Some(ct) = state.secret(SECRET_SSH).await? {
+        let json = vault.decrypt(&ct)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        return Ok(hlb_bootstrap::access::KeyPair {
+            private: v["private"].as_str().unwrap_or_default().to_string(),
+            public: v["public"].as_str().unwrap_or_default().to_string(),
+        });
+    }
+
+    let kp = hlb_bootstrap::access::generate_keypair("homelabus@cluster").await?;
+    let json = serde_json::json!({ "private": kp.private, "public": kp.public });
+    state
+        .store_secret_if_absent(
+            SECRET_SSH,
+            &vault.encrypt(&json.to_string())?,
+            "clé SSH de HomelabUS pour piloter les nœuds",
+        )
+        .await?;
+    eprintln!("✓ clé SSH du cluster générée (au coffre, jamais réaffichée)");
+    Ok(kp)
+}
+
+/// Écrit la clé privée dans un fichier temporaire, le temps d'une connexion.
+///
+/// ⚠️ `ssh` REFUSE une clé privée lisible par d'autres que son propriétaire, avec un
+/// message qui ne dit pas toujours clairement que c'est la cause. D'où le 0600 posé
+/// explicitement plutôt que laissé au umask.
+fn ecrire_cle_temporaire(
+    dir: &std::path::Path,
+    privee: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let chemin = dir.join("id_hlb");
+    std::fs::write(&chemin, privee)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&chemin, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(chemin)
+}
+
+/// Rattache une machine au cluster, de bout en bout.
+///
+/// L'ordre des étapes n'est pas cosmétique :
+///
+/// 1. **Préchecks d'abord**, en lecture seule. Poser une clé sur une machine qui ne
+///    pourra jamais accueillir de nœud laisse une trace à nettoyer pour rien.
+/// 2. **Clé ensuite** : à partir de là, HomelabUS a son propre accès et ne dépend
+///    plus de la clé personnelle qui a servi au premier contact.
+/// 3. **Dépendances**, puis **join**, puis **tier**.
+///
+/// 🔴 Le tier en DERNIER, et jamais avant que le nœud soit dans le cluster : une
+/// étiquette posée sur un nœud absent n'a nulle part où aller, et un nœud sans tier
+/// ne reçoit aucun service (les contraintes de placement ne matchent rien) — ce qui
+/// se manifeste par des `wait_healthy` qui expirent sans explication.
+#[allow(clippy::too_many_arguments)]
+async fn node_add(
+    cli: &Cli,
+    host: &str,
+    user: Option<&str>,
+    port: Option<u16>,
+    identity: Option<&str>,
+    role: Option<&str>,
+    advertise_addr: Option<&str>,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use hlb_bootstrap::access;
+
+    let state = State::open(&cli.state).await?;
+    let vault = Vault::open_or_init(&cli.master_key)?;
+
+    // ── 1. Préchecks, en lecture seule ────────────────────────────────────────
+    let premier = build_runner(Some(host), user, port, identity);
+    println!("Machine : {}\n", premier.label());
+
+    let obs = hlb_bootstrap::observe(premier.as_ref()).await?;
+    let rapport = hlb_bootstrap::preflight::run(&obs);
+    for c in &rapport.checks {
+        println!("  {}", c.describe());
+    }
+    println!();
+
+    if !rapport.can_proceed() {
+        eprintln!(
+            "🔴 {} point(s) bloquant(s) — rien n'a été posé sur cette machine.",
+            rapport.blocking().len()
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+
+    // Le rôle recommandé dépend de la taille actuelle du cluster.
+    let orch = SwarmOrchestrator::connect().ok();
+    let nodes = match &orch {
+        Some(o) => o.nodes().await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let profil = hlb_orchestrator::ClusterProfile::for_node_count(nodes.len() + 1);
+    let managers = nodes
+        .iter()
+        .filter(|n| n.role == hlb_orchestrator::NodeRole::Manager)
+        .count();
+    let role_final = role
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| {
+            // 🔴 Deux managers sont PIRES qu'un seul : le quorum d'un cluster à deux
+            // managers est de 2, donc la panne de l'un bloque tout le cluster, alors
+            // qu'avec un seul manager la panne n'en bloque qu'un (§10.3).
+            if managers == 0 || managers + 1 >= 3 { "manager" } else { "worker" }.to_string()
+        });
+
+    let tier_final = obs
+        .total_memory_mb
+        .map(hlb_orchestrator::cluster::tier_for_memory)
+        .map(|t| t.to_string());
+
+    if !apply {
+        println!("Rattacherait cette machine au cluster :");
+        println!("  rôle    : {role_final}{}", if role.is_some() { " (imposé)" } else { " (déduit)" });
+        match &tier_final {
+            Some(t) => println!("  tier    : {t} (déduit de {} Mo)", obs.total_memory_mb.unwrap_or(0)),
+            None => println!("  tier    : ⚠️  indéterminable — à poser à la main"),
+        }
+        println!("  profil  : {} à {} nœud(s)", profil.as_str(), nodes.len() + 1);
+        if advertise_addr.is_none() {
+            println!();
+            println!("  ⚠️  Sans --advertise-addr, Docker choisira une interface. Sur");
+            println!("     une machine multi-interfaces, les autres nœuds tenteraient");
+            println!("     de joindre une IP injoignable.");
+        }
+        println!();
+        println!("  Étapes : préchecks ✓, clé SSH, dépendances, join, tier.");
+        println!("  Relance avec --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // ── 2. La clé de HomelabUS ────────────────────────────────────────────────
+    let kp = cluster_ssh_key(&state, &vault).await?;
+    let cle = access::ManagedKey::new(&kp.public, "hlb");
+
+    // Un runner concret : le trait objet ne satisfait pas les bornes `Sized`.
+    let ssh_premier = ssh_runner(host, user, port, identity);
+    let avant = access::read_authorized_keys(&ssh_premier, "~").await?;
+    let (apres, ch) = access::grant(&avant, &cle);
+
+    if ch.is_noop() {
+        println!("✓ clé SSH déjà en place ({} autre(s) clé(s) conservée(s))", ch.kept);
+    } else {
+        access::write_authorized_keys(&ssh_premier, "~", &apres, &avant).await?;
+        println!(
+            "✓ clé SSH posée ({} ajoutée, {} remplacée(s), {} conservée(s))",
+            ch.added, ch.removed, ch.kept
+        );
+        state
+            .audit("cli", ACTEUR_ROLE, "access-grant", host, "ok", None)
+            .await?;
+    }
+
+    // À partir d'ici, on passe par NOTRE clé : c'est ce qui prouve qu'elle marche,
+    // maintenant, plutôt que de le découvrir au prochain redémarrage.
+    let tmp = tempfile::tempdir()?;
+    let chemin_cle = ecrire_cle_temporaire(tmp.path(), &kp.private)?;
+    let notre = build_runner(
+        Some(host),
+        user,
+        port,
+        chemin_cle.to_str(),
+    );
+
+    match notre.run(&["true".to_string()]).await {
+        Ok(o) if o.ok() => println!("✓ accès par la clé de HomelabUS vérifié"),
+        _ => {
+            eprintln!("🔴 La clé a été posée mais ne permet PAS de se connecter.");
+            eprintln!("   Cause la plus fréquente : sshd ignore authorized_keys quand");
+            eprintln!("   ~/.ssh ou le fichier sont lisibles par le groupe — sans le dire.");
+            eprintln!("   Vérifie : ls -ld ~/.ssh ~/.ssh/authorized_keys");
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+
+    // ── 3. Dépendances ────────────────────────────────────────────────────────
+    let Some(distro) = rapport.distro else {
+        eprintln!("🔴 distribution non identifiée : impossible d'installer les dépendances.");
+        return Ok(ExitCode::FAILURE);
+    };
+
+    let observees = observe_dependencies(notre.as_ref()).await?;
+    let refs: Vec<(&str, Option<String>)> =
+        observees.iter().map(|(n, v)| (*n, v.clone())).collect();
+    let plan = hlb_bootstrap::plan_dependencies(&distro, &refs);
+
+    if plan.is_satisfied() {
+        println!("✓ dépendances déjà présentes");
+    } else {
+        let paquets = plan.to_install();
+        println!("Installation de {} paquet(s)…", paquets.len());
+
+        let pm = distro.package_manager();
+        if let Some(refresh) = pm.refresh_command() {
+            let o = notre.run(&refresh).await?;
+            if !o.ok() {
+                eprintln!("⚠️  index non rafraîchi : {}", o.stderr.trim());
+            }
+        }
+        let o = notre.run(&pm.install_command(&paquets)).await?;
+        if !o.ok() {
+            eprintln!("🔴 installation échouée : {}", o.stderr.trim());
+            return Ok(ExitCode::FAILURE);
+        }
+        println!("✓ dépendances installées");
+    }
+
+    // ── 4. Rattachement au Swarm ──────────────────────────────────────────────
+    let Some(orch) = orch else {
+        eprintln!("🔴 Swarm injoignable localement : impossible d'obtenir un jeton.");
+        eprintln!("   La machine est prête, il ne manque que le join.");
+        return Ok(ExitCode::FAILURE);
+    };
+
+    let tokens = orch.join_tokens().await?;
+    let role_enum = if role_final == "manager" {
+        hlb_orchestrator::NodeRole::Manager
+    } else {
+        hlb_orchestrator::NodeRole::Worker
+    };
+
+    let mut cmd = vec![
+        "docker".to_string(), "swarm".into(), "join".into(),
+        "--token".into(), tokens.for_role(role_enum).to_string(),
+        tokens.advertise_addr.clone(),
+    ];
+    if let Some(a) = advertise_addr {
+        cmd.push("--advertise-addr".into());
+        cmd.push(a.to_string());
+    }
+
+    let o = notre.run(&cmd).await?;
+    if !o.ok() && !o.stderr.contains("already part of a swarm") {
+        eprintln!("🔴 join refusé : {}", o.stderr.trim());
+        return Ok(ExitCode::FAILURE);
+    }
+    println!("✓ rattaché au Swarm en {role_final}");
+
+    // ── 5. Le tier, une fois le nœud visible ──────────────────────────────────
+    match tier_final {
+        Some(t) => {
+            // Le nœud vient d'apparaître : on le retrouve par son nom d'hôte.
+            let nom = notre
+                .run(&["hostname".to_string()])
+                .await
+                .ok()
+                .and_then(|o| o.first_line())
+                .unwrap_or_default();
+
+            let apres_join = orch.nodes().await?;
+            match apres_join.iter().find(|n| n.hostname == nom) {
+                Some(n) => {
+                    orch.label_node(&n.id, "tier", &t).await?;
+                    println!("✓ tier={t} posé");
+                }
+                None => {
+                    // Swarm met parfois un instant à publier le nouveau nœud.
+                    println!("⚠️  nœud pas encore visible : pose le tier dans un instant");
+                    println!("     hlb node tier {nom} --apply");
+                }
+            }
+        }
+        None => {
+            // 🔴 Sans tier, ce nœud ne recevra AUCUN service : les contraintes de
+            // placement ne matchent rien, et les déploiements expirent en silence.
+            println!("🔴 Tier indéterminable — ce nœud ne recevra aucun service tant");
+            println!("   qu'il n'en a pas un :");
+            println!("     hlb node tier <nom> --set heavy --apply");
+        }
+    }
+
+    state
+        .audit("cli", ACTEUR_ROLE, "node-add", host, "ok", Some(&role_final))
+        .await?;
+
+    println!();
+    println!("✓ {host} fait partie du cluster.");
+    println!("  hlb cluster status");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Un `SshRunner` concret, pour les opérations qui exigent `Sized`.
+fn ssh_runner(
+    host: &str,
+    user: Option<&str>,
+    port: Option<u16>,
+    identity: Option<&str>,
+) -> hlb_bootstrap::SshRunner {
+    let mut r = hlb_bootstrap::SshRunner::new(host);
+    if let Some(u) = user {
+        r = r.user(u);
+    }
+    if let Some(p) = port {
+        r = r.port(p);
+    }
+    if let Some(i) = identity {
+        r = r.identity(i);
+    }
+    r
+}
+
 fn build_runner(
     host: Option<&str>,
     user: Option<&str>,
@@ -1298,6 +1679,97 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Access(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_bootstrap::access;
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+
+                let (host, user, port, identity) = match cmd {
+                    AccessCmd::Grant { host, user, port, identity, .. }
+                    | AccessCmd::Revoke { host, user, port, identity, .. }
+                    | AccessCmd::List { host, user, port, identity } => {
+                        (host, user.as_deref(), *port, identity.as_deref())
+                    }
+                };
+
+                let ssh = ssh_runner(host, user, port, identity);
+                let avant = access::read_authorized_keys(&ssh, "~").await?;
+
+                match cmd {
+                    AccessCmd::List { .. } => {
+                        let gerees = access::list_managed(&avant);
+                        let total = avant.lines().filter(|l| {
+                            let l = l.trim();
+                            !l.is_empty() && !l.starts_with('#')
+                        }).count();
+
+                        println!("{host} — {total} clé(s) dans authorized_keys");
+                        if gerees.is_empty() {
+                            println!("  aucune gérée par HomelabUS");
+                        } else {
+                            for c in &gerees {
+                                println!("  gérée par HomelabUS (cluster « {c} »)");
+                            }
+                        }
+                        println!("  {} clé(s) humaine(s), auxquelles on ne touche jamais",
+                                 total - gerees.len());
+                        Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
+                    }
+
+                    AccessCmd::Grant { apply, .. } => {
+                        let kp = cluster_ssh_key(&state, &vault).await?;
+                        let cle = access::ManagedKey::new(&kp.public, "hlb");
+                        let (apres, ch) = access::grant(&avant, &cle);
+
+                        if ch.is_noop() {
+                            println!("✓ déjà en place — rien à faire.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        if !*apply {
+                            println!("Poserait la clé de HomelabUS sur {host}.");
+                            println!("  {} ajoutée, {} remplacée(s)", ch.added, ch.removed);
+                            println!("  {} clé(s) existante(s) PRÉSERVÉE(s)", ch.kept);
+                            println!("\n  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        access::write_authorized_keys(&ssh, "~", &apres, &avant).await?;
+                        state.audit("cli", ACTEUR_ROLE, "access-grant", host, "ok", None).await?;
+                        println!("✓ clé posée ({} conservée(s))", ch.kept);
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    AccessCmd::Revoke { apply, .. } => {
+                        let kp = cluster_ssh_key(&state, &vault).await?;
+                        let cle = access::ManagedKey::new(&kp.public, "hlb");
+                        let (apres, ch) = access::revoke(&avant, &cle);
+
+                        if ch.is_noop() {
+                            println!("✓ aucune clé HomelabUS sur {host} — rien à retirer.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        if !*apply {
+                            println!("Retirerait la clé de HomelabUS de {host}.");
+                            println!("  {} clé(s) humaine(s) PRÉSERVÉE(s)", ch.kept);
+                            println!();
+                            println!("  🔴 Après ça, HomelabUS ne pourra plus piloter cette");
+                            println!("     machine : ni mise à jour, ni sauvegarde, ni");
+                            println!("     réconciliation. Le nœud continuera de tourner.");
+                            println!("\n  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        access::write_authorized_keys(&ssh, "~", &apres, &avant).await?;
+                        state.audit("cli", ACTEUR_ROLE, "access-revoke", host, "ok", None).await?;
+                        println!("✓ clé retirée ({} clé(s) humaine(s) intacte(s))", ch.kept);
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Mesh(cmd) => {
@@ -2079,6 +2551,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok(ExitCode::SUCCESS);
                 }
 
+                if let NodeCmd::Add {
+                    host, user, port, identity, role, advertise_addr, apply,
+                } = cmd
+                {
+                    return node_add(
+                        &cli, host, user.as_deref(), *port, identity.as_deref(),
+                        role.as_deref(), advertise_addr.as_deref(), *apply,
+                    )
+                    .await;
+                }
+
                 let (runner, apply) = match cmd {
                     NodeCmd::Check { host, user, port, identity } => {
                         (build_runner(host.as_deref(), user.as_deref(), *port, identity.as_deref()), false)
@@ -2086,8 +2569,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     NodeCmd::Deps { host, user, apply } => {
                         (build_runner(host.as_deref(), user.as_deref(), None, None), *apply)
                     }
-                    // Traité au-dessus : il ne s'exécute pas sur une machine.
-                    NodeCmd::Tier { .. } => unreachable!(),
+                    // Traités au-dessus.
+                    NodeCmd::Tier { .. } | NodeCmd::Add { .. } => unreachable!(),
                 };
 
                 println!("Machine : {}\n", runner.label());

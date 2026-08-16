@@ -24,6 +24,11 @@ pub enum Error {
 
     #[error("ssh vers {host} : {detail}")]
     Ssh { host: String, detail: String },
+
+    /// 🔴 Refus délibéré d'une opération dangereuse. Ce n'est pas une panne : c'est
+    /// le système qui protège l'utilisateur de lui-même.
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

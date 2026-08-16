@@ -17,12 +17,14 @@
 //! qui exécute. On peut donc tester le raisonnement complet — « Debian ancienne avec
 //! un Docker trop vieux et une horloge désynchronisée » — sans provisionner de VM.
 
+pub mod access;
 pub mod deps;
 pub mod observe;
 pub mod distro;
 pub mod preflight;
 pub mod runner;
 
+pub use access::{grant, revoke, ManagedKey};
 pub use deps::{plan as plan_dependencies, DependencyPlan, Presence};
 pub use observe::observe;
 pub use distro::{Distro, Family, PackageManager};
