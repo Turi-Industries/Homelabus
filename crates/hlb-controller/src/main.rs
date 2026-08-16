@@ -8,8 +8,7 @@
 //! L'arrêter fait perdre le pilotage, pas le service — ce qui rend ses mises à jour et
 //! ses redémarrages beaucoup moins délicats.
 
-mod api;
-mod loops;
+use hlb_controller::{agents, api, loops};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +52,18 @@ struct Cli {
     /// Miroir Git de l'état désiré (§2.3).
     #[arg(long, env = "HLB_GIT_MIRROR")]
     git_mirror: Option<std::path::PathBuf>,
+
+    /// Nom du service Swarm des agents. Le DNS `tasks.<nom>` résout vers TOUTES
+    /// les tâches, ce qui permet d'interroger chaque nœud individuellement.
+    #[arg(long, default_value = "hlb-agent", env = "HLB_AGENT_SERVICE")]
+    agent_service: String,
+
+    #[arg(long, default_value = "8421", env = "HLB_AGENT_PORT")]
+    agent_port: u16,
+
+    /// Fréquence d'interrogation des agents.
+    #[arg(long, default_value = "60", env = "HLB_AGENT_POLL_SECS")]
+    agent_poll_secs: u64,
 
     /// Fréquence d'examen des échéances de sauvegarde.
     #[arg(long, default_value = "600", env = "HLB_BACKUP_CHECK_SECS")]
@@ -209,6 +220,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Interrogation des agents (§9bis) : c'est ce qui donne la vue par nœud de
+    // l'espace disque, que le controller ne peut pas obtenir autrement.
+    {
+        let poller = Arc::new(agents::AgentPoller::new(
+            cli.agent_port,
+            Duration::from_secs(10),
+        ));
+        let service = cli.agent_service.clone();
+        let rx = shutdown_rx.clone();
+        tracing::info!(service = %service, "boucle d'interrogation des agents");
+
+        taches.push(tokio::spawn(loops::every(
+            Duration::from_secs(cli.agent_poll_secs),
+            rx,
+            move || {
+                let (poller, service) = (poller.clone(), service.clone());
+                async move {
+                    // `tasks.<service>` résout vers toutes les tâches ; une VIP
+                    // classique n'en donnerait qu'une au hasard.
+                    let adresses = match resolve_tasks(&service).await {
+                        Ok(a) if !a.is_empty() => a,
+                        Ok(_) => {
+                            tracing::debug!("aucun agent déployé");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::debug!("agents non résolus : {e}");
+                            return;
+                        }
+                    };
+
+                    let statuts = poller.poll_all(&adresses).await;
+                    let sante = agents::ClusterHealth::from_statuses(
+                        &statuts,
+                        &hlb_agent::Thresholds::default(),
+                    );
+
+                    for (addr, s) in &statuts {
+                        if let agents::AgentStatus::Reporting(r) = s {
+                            for (d, p) in r.problems(&hlb_agent::Thresholds::default()) {
+                                tracing::warn!(
+                                    nœud = %r.hostname, chemin = %d.path,
+                                    "{:.0} % occupé — {}", d.used_percent(), p.describe()
+                                );
+                            }
+                        } else {
+                            tracing::warn!(adresse = %addr, "agent injoignable");
+                        }
+                    }
+
+                    if sante.needs_attention() {
+                        tracing::error!(
+                            injoignables = sante.unreachable,
+                            saturés = ?sante.saturated,
+                            "🔴 cluster à surveiller"
+                        );
+                    }
+                }
+            },
+        )));
+    }
+
     let app = api::router(Arc::new(api::AppState {
         state,
         started_at: std::time::Instant::now(),
@@ -282,6 +355,17 @@ async fn build_provider(
     }
 
     Ok(hlb_backup::provider_for_state(repo, password, par_app).await)
+}
+
+/// Résout `tasks.<service>` vers les adresses de toutes les tâches.
+///
+/// C'est le mécanisme DNS de Swarm pour atteindre chaque exemplaire d'un service
+/// plutôt que la VIP. Hors d'un overlay Swarm, la résolution échoue simplement —
+/// ce n'est pas une erreur, juste l'absence d'agents.
+async fn resolve_tasks(service: &str) -> Result<Vec<String>, std::io::Error> {
+    let nom = format!("tasks.{service}:0");
+    let addrs = tokio::net::lookup_host(nom).await?;
+    Ok(addrs.map(|a| a.ip().to_string()).collect())
 }
 
 /// Ctrl-C ou SIGTERM (ce que Docker envoie).

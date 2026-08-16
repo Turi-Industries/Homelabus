@@ -1106,6 +1106,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "futures",
+ "hlb-agent",
  "hlb-backup",
  "hlb-engine",
  "hlb-gitops",
@@ -1114,6 +1116,7 @@ dependencies = [
  "hlb-state",
  "hlb-types",
  "hlb-updater",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -160,11 +160,20 @@ impl SwarmOrchestrator {
                 }),
                 ..Default::default()
             }),
-            mode: Some(ServiceSpecMode {
-                replicated: Some(ServiceSpecModeReplicated {
-                    replicas: Some(spec.replicas as i64),
-                }),
-                ..Default::default()
+            mode: Some(match spec.mode {
+                crate::ServiceMode::Global => ServiceSpecMode {
+                    // `replicas` n'a pas de sens ici : Swarm en place exactement un
+                    // par nœud, et en ajoute un automatiquement à chaque nouveau nœud.
+                    // Le mode global se signale par un objet vide dans l'API Docker.
+                    global: Some(HashMap::new()),
+                    ..Default::default()
+                },
+                crate::ServiceMode::Replicated => ServiceSpecMode {
+                    replicated: Some(ServiceSpecModeReplicated {
+                        replicas: Some(spec.replicas as i64),
+                    }),
+                    ..Default::default()
+                },
             }),
             update_config: Some(Self::update_config()),
             rollback_config: Some(Self::rollback_config()),

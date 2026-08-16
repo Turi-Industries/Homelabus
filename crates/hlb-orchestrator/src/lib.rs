@@ -55,6 +55,8 @@ pub struct ServiceSpec {
     pub constraints: Vec<String>,
     pub labels: Vec<(String, String)>,
     pub networks: Vec<String>,
+    /// Comment répliquer le service.
+    pub mode: ServiceMode,
     /// Volumes à monter : `(nom du volume, chemin dans le conteneur)`.
     ///
     /// 🔴 Sans eux, les données d'une app partent dans la couche éphémère du
@@ -80,10 +82,20 @@ impl ServiceSpec {
             constraints: Vec::new(),
             labels: Vec::new(),
             networks: Vec::new(),
+            mode: ServiceMode::Replicated,
             mounts: Vec::new(),
             hardening: SecuritySpec::default(),
             healthcheck: None,
         }
+    }
+
+    /// Un exemplaire par nœud, y compris les nœuds ajoutés plus tard.
+    ///
+    /// C'est ce qui distingue l'agent d'un démon qu'il faudrait installer à la main
+    /// partout : ajouter une machine au cluster suffit à l'y faire apparaître.
+    pub fn global(mut self) -> Self {
+        self.mode = ServiceMode::Global;
+        self
     }
 
     /// Ajoute un volume nommé, monté au chemin indiqué.
@@ -129,6 +141,16 @@ impl ServiceSpec {
 }
 
 /// L'état observé d'un service.
+/// Comment Swarm répartit les exemplaires d'un service.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServiceMode {
+    /// Un nombre fixe d'exemplaires, placés où Swarm veut.
+    #[default]
+    Replicated,
+    /// Exactement un par nœud éligible. `replicas` est alors ignoré.
+    Global,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecOutput {
     pub exit_code: i64,

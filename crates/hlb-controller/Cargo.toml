@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 description = "Daemon : API de lecture et boucles de fond."
 
+[lib]
+name = "hlb_controller"
+path = "src/lib.rs"
+
 [[bin]]
 name = "hlb-controller"
 path = "src/main.rs"
@@ -18,6 +22,9 @@ hlb-orchestrator.workspace = true
 hlb-backup.workspace = true
 hlb-secrets.workspace = true
 hlb-gitops.workspace = true
+hlb-agent.workspace = true
+futures.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 hlb-updater.workspace = true
 axum = "0.8"
 clap.workspace = true

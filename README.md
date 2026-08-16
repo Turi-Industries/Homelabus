@@ -34,7 +34,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**362 tests unitaires + 47 tests d'intégration.**
+**370 tests unitaires + 49 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -139,6 +139,7 @@ docker node update --label-add tier=heavy $(docker node ls -q)
 ```sh
 ./target/debug/hlb-controller \
   --listen 127.0.0.1:8420 \
+  --agent-service hlb-agent --agent-poll-secs 60 \
   --reconcile-secs 60 --reconcile-apply \
   --backup-repo hlb-depot --backup-check-secs 600 \
   --heartbeat /mnt/nas/hlb-heartbeat
@@ -219,9 +220,10 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   semblant.
 - **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
   route POST/PUT/DELETE, et un test le vérifie.
-- **L'agent n'est pas encore déployé automatiquement** ni interrogé par le
-  controller : le binaire existe et répond, le service Swarm `global` reste à
-  déclarer.
+- **L'agent n'est pas encore déployé automatiquement.** Le controller sait
+  l'interroger (`tasks.hlb-agent` → un rapport par nœud), et le mode `global` est
+  supporté par l'orchestrateur, mais la création du service reste à écrire — elle
+  suppose une image de l'agent, qu'il faut construire.
 - **L'API de l'agent est en HTTP clair.** Elle n'écoute que sur l'overlay,
   chiffré par IPsec avec `--opt encrypted` (§6.3), mais le mTLS du §2 n'est pas
   en place — c'est dit plutôt que sous-entendu.
