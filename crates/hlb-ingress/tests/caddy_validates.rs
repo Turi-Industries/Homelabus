@@ -176,3 +176,40 @@ fn a_mixed_frontend_is_accepted_by_caddy() {
 
     caddy_validate(&render_frontend(&[native, portail], &cfg), "frontend mixte");
 }
+
+/// Le bloc ACME wildcard est-il syntaxiquement valide ? (§6.4)
+///
+/// ⚠️ `caddy validate` ne peut PAS vérifier la directive `dns` : elle vient d'un
+/// module absent de l'image standard. On valide donc la structure sans elle — c'est
+/// une vérification partielle, et c'est dit plutôt que sous-entendu.
+#[test]
+#[ignore = "nécessite Docker"]
+fn the_wildcard_site_block_is_structurally_valid() {
+    use hlb_ingress::caddyfile::Acme;
+
+    // Sans jeton ni fournisseur, `tls` seul est accepté par un Caddy standard : ça
+    // valide la structure du bloc (noms, imbrication, respond) sans exiger le module.
+    let a = Acme {
+        provider: "internal".into(),
+        api_token: String::new(),
+        base_domain: "example.fr".into(),
+        staging: false,
+    };
+
+    // On REMPLACE la ligne `dns` par une sous-directive standard plutôt que de la
+    // retirer : un bloc `tls { }` vide est refusé par Caddy, et le test échouerait
+    // sur son propre montage au lieu de vérifier le générateur.
+    let out = render_frontend(&[], &Config { acme: Some(a), ..Config::default() })
+        .lines()
+        .map(|l| {
+            if l.trim_start().starts_with("dns ") {
+                "\t\tprotocols tls1.2 tls1.3"
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    caddy_validate(&out, "bloc wildcard");
+}

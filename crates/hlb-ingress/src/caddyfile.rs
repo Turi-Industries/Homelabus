@@ -138,6 +138,56 @@ pub const AUTH_HEADERS: &[&str] = &[
     "X-Auth-Request-Groups",
 ];
 
+/// Obtention des certificats par DNS-01 (§6.4).
+///
+/// ## Pourquoi DNS-01 plutôt que HTTP-01
+///
+/// HTTP-01 exige que chaque nom soit déjà joignable en HTTP depuis Internet, donc un
+/// enregistrement DNS **par app**, créé avant l'installation. DNS-01 permet un
+/// **certificat wildcard** : un seul `*.example.fr` créé une fois, et toute nouvelle
+/// app est immédiatement servie en TLS sans la moindre action DNS.
+///
+/// Bénéfice de sécurité en prime : les sous-domaines n'apparaissent pas dans les
+/// journaux de Certificate Transparency, qui sont publics et indexés. Sans wildcard,
+/// installer `comptabilite.example.fr` l'annonce au monde entier.
+///
+/// ## 🔴 Le piège des quotas Let's Encrypt
+///
+/// Une boucle de réconciliation qui redemande un certificat en continu fait bannir le
+/// domaine **pour une semaine** — et tous les services passent en TLS invalide d'un
+/// coup. C'est pour ça que `staging` existe, et qu'il faut s'en servir au premier
+/// essai. Les certificats de staging ne sont pas reconnus par les navigateurs : c'est
+/// le but, on vérifie la mécanique sans consommer de quota.
+#[derive(Debug, Clone)]
+pub struct Acme {
+    /// Le module DNS de Caddy : `cloudflare`, `ovh`, `desec`, `gandi`…
+    pub provider: String,
+    /// Jeton d'API du fournisseur. Vient du coffre, jamais d'un manifest.
+    pub api_token: String,
+    /// Domaine de base, sans le `*.`.
+    pub base_domain: String,
+    /// 🔴 Utiliser l'environnement de test de Let's Encrypt.
+    pub staging: bool,
+}
+
+impl Acme {
+    /// Les noms couverts par le certificat.
+    ///
+    /// 🔴 **`*.example.fr` ne couvre PAS `example.fr`.** C'est la règle des jokers
+    /// TLS, et l'erreur est classique : le wildcard est obtenu, tous les sous-domaines
+    /// fonctionnent, et le domaine nu affiche une erreur de certificat que personne ne
+    /// comprend. Les deux noms sont donc toujours demandés ensemble.
+    pub fn subjects(&self) -> Vec<String> {
+        vec![format!("*.{}", self.base_domain), self.base_domain.clone()]
+    }
+
+    /// L'URL de l'autorité, ou `None` pour le défaut (production).
+    pub fn ca_url(&self) -> Option<&'static str> {
+        self.staging
+            .then_some("https://acme-staging-v02.api.letsencrypt.org/directory")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Hôte:port du service Anubis dans l'overlay.
@@ -150,6 +200,9 @@ pub struct Config {
     pub crowdsec: Option<CrowdSec>,
     /// Portail d'authentification. `None` = pas de forward-auth.
     pub forward_auth: Option<ForwardAuth>,
+    /// Certificats par DNS-01. `None` = Caddy se débrouille en HTTP-01, ce qui
+    /// impose un enregistrement DNS par app.
+    pub acme: Option<Acme>,
 }
 
 impl Default for Config {
@@ -160,6 +213,7 @@ impl Default for Config {
             acme_email: "admin@example.invalid".into(),
             crowdsec: None,
             forward_auth: None,
+            acme: None,
         }
     }
 }
@@ -190,6 +244,10 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     }
 
     let _ = writeln!(out, "}}\n");
+
+    if let Some(a) = &cfg.acme {
+        rendre_acme(&mut out, a);
+    }
 
     if cfg.crowdsec.is_some() {
         let _ = writeln!(
@@ -256,6 +314,42 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     }
 
     out
+}
+
+/// Le bloc qui obtient le certificat wildcard.
+///
+/// Il est déclaré **une fois**, pour tous les noms : chaque site le réutilise ensuite
+/// automatiquement. Un `tls` par site redemanderait un certificat par sous-domaine,
+/// ce qui épuise le quota Let's Encrypt en quelques apps et fait bannir le domaine.
+fn rendre_acme(out: &mut String, a: &Acme) {
+    if a.staging {
+        let _ = writeln!(
+            out,
+            "# 🔴 ENVIRONNEMENT DE TEST Let's Encrypt : ces certificats ne sont PAS\n\
+             # reconnus par les navigateurs. C'est voulu — on vérifie la mécanique\n\
+             # sans consommer de quota. Retire --acme-staging quand ça marche.\n"
+        );
+    }
+
+    let _ = writeln!(
+        out,
+        "# ⚠️ Exige une image Caddy construite avec le module DNS « {} » :\n\
+         #   xcaddy build --with github.com/caddy-dns/{}\n\
+         # Une image Caddy standard refuse de démarrer sur « dns {} ».\n",
+        a.provider, a.provider, a.provider
+    );
+
+    // 🔴 Les DEUX noms : `*.example.fr` ne couvre pas `example.fr`.
+    let _ = writeln!(out, "{} {{", a.subjects().join(", "));
+    let _ = writeln!(out, "\ttls {{");
+    let _ = writeln!(out, "\t\tdns {} {}", a.provider, a.api_token);
+    if let Some(url) = a.ca_url() {
+        let _ = writeln!(out, "\t\tca {url}");
+    }
+    let _ = writeln!(out, "\t}}");
+    // Ce bloc n'existe que pour obtenir le certificat : il ne sert rien.
+    let _ = writeln!(out, "\trespond \"HomelabUS\" 200");
+    let _ = writeln!(out, "}}\n");
 }
 
 /// Le bloc forward-auth d'une route.
@@ -669,6 +763,76 @@ spec:
         let m: hlb_types::Manifest = serde_yaml_ng::from_str(y).expect("manifest");
         let routes = crate::routes_from_manifest(&m, None, true);
         assert!(routes[0].needs_forward_auth, "proxy-only exige un portail");
+    }
+
+    fn avec_acme(staging: bool) -> Config {
+        Config {
+            acme: Some(Acme {
+                provider: "cloudflare".into(),
+                api_token: "JETON-DE-TEST".into(),
+                base_domain: "example.fr".into(),
+                staging,
+            }),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn the_wildcard_also_covers_the_bare_domain() {
+        // 🔴 `*.example.fr` ne couvre PAS `example.fr` — règle des jokers TLS. Sans
+        // les deux, le wildcard marche pour tous les sous-domaines et le domaine nu
+        // affiche une erreur de certificat que personne ne comprend.
+        let a = Acme {
+            provider: "cloudflare".into(),
+            api_token: "x".into(),
+            base_domain: "example.fr".into(),
+            staging: false,
+        };
+        assert_eq!(a.subjects(), vec!["*.example.fr", "example.fr"]);
+
+        let out = render_frontend(&[], &avec_acme(false));
+        assert!(out.contains("*.example.fr, example.fr {"), "{out}");
+    }
+
+    #[test]
+    fn the_certificate_is_requested_once_not_per_site() {
+        // 🔴 Un bloc `tls` par site redemanderait un certificat par sous-domaine :
+        // le quota Let's Encrypt saute en quelques apps, et le domaine est banni
+        // une semaine — tous les services en TLS invalide d'un coup.
+        let out = render_frontend(&[gitea(), vikunja()], &avec_acme(false));
+        // La directive elle-même, pas sa mention en commentaire.
+        let directives = out.lines().filter(|l| l.trim_start().starts_with("dns ")).count();
+        assert_eq!(directives, 1, "{out}");
+    }
+
+    #[test]
+    fn staging_says_loudly_that_certificates_are_untrusted() {
+        let out = render_frontend(&[], &avec_acme(true));
+        assert!(out.contains("acme-staging-v02"), "{out}");
+        assert!(out.contains("ne sont PAS"), "l'avertissement doit être visible :\n{out}");
+    }
+
+    #[test]
+    fn production_uses_no_explicit_ca() {
+        // Laisser Caddy sur son défaut évite de figer une URL qui peut changer.
+        let out = render_frontend(&[], &avec_acme(false));
+        assert!(!out.contains("acme-staging"), "{out}");
+        assert!(!out.contains("\t\tca "), "{out}");
+    }
+
+    #[test]
+    fn the_required_caddy_module_is_announced() {
+        // Le message d'erreur de Caddy sur une directive inconnue n'aide pas.
+        let out = render_frontend(&[], &avec_acme(false));
+        assert!(out.contains("caddy-dns/cloudflare"), "{out}");
+        assert!(out.contains("xcaddy build"), "{out}");
+    }
+
+    #[test]
+    fn without_acme_nothing_is_emitted() {
+        let out = render_frontend(&[gitea()], &Config::default());
+        assert!(!out.contains("tls {"), "{out}");
+        assert!(!out.contains("dns "), "{out}");
     }
 
     #[test]

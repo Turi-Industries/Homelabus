@@ -67,6 +67,19 @@ struct Cli {
     #[arg(long, global = true, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
     platform_network: String,
 
+    /// Domaine de base pour le certificat wildcard (§6.4), ex. example.fr
+    #[arg(long, global = true, env = "HLB_BASE_DOMAIN")]
+    base_domain: Option<String>,
+
+    /// Module DNS de Caddy : cloudflare, ovh, desec, gandi…
+    #[arg(long, global = true, env = "HLB_DNS_PROVIDER")]
+    dns_provider: Option<String>,
+
+    /// 🔴 Environnement de TEST de Let's Encrypt. À utiliser au premier essai :
+    /// les quotas de production font bannir le domaine une semaine entière.
+    #[arg(long, global = true, env = "HLB_ACME_STAGING")]
+    acme_staging: bool,
+
     /// Portail d'authentification pour les apps sans SSO natif (§5.0).
     #[arg(long, global = true, default_value = "oauth2-proxy:4180", env = "HLB_FORWARD_AUTH")]
     forward_auth_upstream: String,
@@ -196,6 +209,21 @@ enum Command {
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
+
+    /// Déposer un secret au coffre. La valeur est lue sur l'ENTRÉE STANDARD.
+    ///
+    /// 🔴 Jamais en argument : une ligne de commande est visible dans `ps` par tout
+    /// utilisateur de la machine, et atterrit dans l'historique du shell.
+    SecretSet {
+        /// Nom du secret, ex. dns-provider-token
+        name: String,
+        /// À quoi il sert. Affiché par `hlb secrets`.
+        #[arg(long, default_value = "déposé à la main")]
+        purpose: String,
+        /// Remplacer une valeur existante. 🔴 Sans ce drapeau, on ne l'écrase pas.
+        #[arg(long)]
+        rotate: bool,
+    },
 
     /// Journal d'audit : qui a fait quoi, quand (§9).
     Audit {
@@ -1690,6 +1718,42 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     );
                 }
 
+                // §6.4 — le wildcard : un certificat pour tout le domaine, obtenu
+                // une fois. Sans lui, Caddy tente du HTTP-01 par nom, ce qui exige
+                // un enregistrement DNS par app AVANT l'installation.
+                match (&cli.base_domain, &cli.dns_provider) {
+                    (Some(d), Some(p)) => {
+                        const SECRET_DNS: &str = "dns-provider-token";
+                        match state.secret(SECRET_DNS).await? {
+                            Some(ct) => {
+                                let vault = Vault::open_or_init(&cli.master_key)?;
+                                cfg.acme = Some(hlb_ingress::caddyfile::Acme {
+                                    provider: p.clone(),
+                                    api_token: vault.decrypt(&ct)?,
+                                    base_domain: d.clone(),
+                                    staging: cli.acme_staging,
+                                });
+                                if cli.acme_staging {
+                                    println!("🔴 ACME en mode TEST : certificats NON reconnus.");
+                                } else {
+                                    println!("Certificat wildcard : *.{d} via {p}");
+                                }
+                            }
+                            None => {
+                                eprintln!("🔴 Jeton DNS absent du coffre — pas de wildcard.");
+                                eprintln!("   Dépose-le : hlb secret-set {SECRET_DNS}");
+                                eprintln!("   Sans lui, Caddy tentera du HTTP-01 par nom,");
+                                eprintln!("   ce qui exige un enregistrement DNS par app.");
+                            }
+                        }
+                    }
+                    (None, None) => {}
+                    _ => {
+                        eprintln!("⚠️  --base-domain et --dns-provider vont ensemble.");
+                        eprintln!("   Un seul des deux ne produit aucun wildcard.");
+                    }
+                }
+
                 let front = hlb_ingress::render_frontend(&routes, &cfg);
                 let back = hlb_ingress::render_backend(&routes, &cfg);
 
@@ -2350,6 +2414,49 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
                 }
+            })
+        }
+
+        Command::SecretSet { name, purpose, rotate } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+
+                let existe = state.secret(name).await?.is_some();
+                if existe && !rotate {
+                    eprintln!("Le secret « {name} » existe déjà.");
+                    eprintln!();
+                    eprintln!("🔴 L'écraser peut casser ce qui l'utilise : un mot de passe");
+                    eprintln!("   changé au coffre ne l'est pas dans le service qui tourne.");
+                    eprintln!("   Si c'est voulu : --rotate");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                }
+
+                println!("Valeur de « {name} » (entrée standard, Ctrl-D pour finir) :");
+                let mut valeur = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut valeur)?;
+                let valeur = valeur.trim();
+
+                if valeur.is_empty() {
+                    eprintln!("Valeur vide — rien n'a été enregistré.");
+                    return Ok(ExitCode::FAILURE);
+                }
+
+                let ct = vault.encrypt(valeur)?;
+                if existe {
+                    state.rotate_secret(name, &ct).await?;
+                    println!("✓ « {name} » remplacé.");
+                } else {
+                    state.store_secret_if_absent(name, &ct, purpose).await?;
+                    println!("✓ « {name} » enregistré.");
+                }
+
+                // Le nom et l'usage à l'audit, jamais la valeur.
+                state
+                    .audit("cli", ACTEUR_ROLE, "secret-set", name, "ok", Some(purpose))
+                    .await?;
+                Ok(ExitCode::SUCCESS)
             })
         }
 
