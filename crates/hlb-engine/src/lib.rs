@@ -14,7 +14,7 @@ pub mod reconcile;
 pub use reconcile::{Drift, Reconciler, Report};
 
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
-use hlb_platform::PostgresProvisioner;
+use hlb_platform::{MariadbProvisioner, PostgresProvisioner};
 use hlb_identity::PocketId;
 use hlb_ingress::CaddyAdmin;
 use hlb_mail::Stalwart;
@@ -82,6 +82,9 @@ pub struct Executor<'a, O: Orchestrator> {
     vault: Option<&'a Vault>,
     /// Absent tant que PostgreSQL n'est pas déployé et joignable.
     postgres: Option<&'a PostgresProvisioner>,
+    /// Idem pour MariaDB. Les deux peuvent coexister : des apps différentes ont des
+    /// exigences différentes, et le résolveur choisit par manifest.
+    mariadb: Option<&'a MariadbProvisioner>,
     /// Absent hors ligne : sans registre, aucun digest ne peut être résolu.
     registry: Option<&'a RegistryClient>,
     /// Absent tant que PocketID n'est pas déployé et qu'on n'a pas de clé d'API.
@@ -103,6 +106,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             state,
             vault: None,
             postgres: None,
+            mariadb: None,
             registry: None,
             identity: None,
             ingress: None,
@@ -119,6 +123,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_postgres(mut self, pg: &'a PostgresProvisioner) -> Self {
         self.postgres = Some(pg);
+        self
+    }
+
+    pub fn with_mariadb(mut self, my: &'a MariadbProvisioner) -> Self {
+        self.mariadb = Some(my);
         self
     }
 
@@ -340,8 +349,8 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::ProvisionDatabase { database, role, password_secret, .. } => {
-                let (Some(vault), Some(pg)) = (self.vault, self.postgres) else {
+            Action::ProvisionDatabase { engine, database, role, password_secret } => {
+                let Some(vault) = self.vault else {
                     return Ok(Step::NotImplemented);
                 };
 
@@ -352,9 +361,27 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                     .ok_or_else(|| Error::MissingSecret(password_secret.clone()))?;
                 let password = vault.decrypt(&ct)?;
 
-                let created = pg.provision(database, role, &password).await?;
+                // 🔴 Le `match` est exhaustif : ajouter un moteur à `DbEngine` fait
+                // échouer la compilation ici, ce qui force à décider comment le
+                // provisionner plutôt que de le laisser tomber dans un cas par défaut
+                // qui prétendrait avoir réussi.
+                let created = match engine {
+                    hlb_types::DbEngine::Postgres => {
+                        let Some(pg) = self.postgres else {
+                            return Ok(Step::NotImplemented);
+                        };
+                        pg.provision(database, role, &password).await?
+                    }
+                    hlb_types::DbEngine::Mariadb => {
+                        let Some(my) = self.mariadb else {
+                            return Ok(Step::NotImplemented);
+                        };
+                        my.provision(database, role, &password).await?
+                    }
+                };
+
                 if created {
-                    tracing::info!(database, role, "base provisionnée");
+                    tracing::info!(database, role, moteur = ?engine, "base provisionnée");
                 }
                 Ok(Step::Done)
             }

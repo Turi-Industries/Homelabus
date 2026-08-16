@@ -1,0 +1,36 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: mariadb
+  displayName: MariaDB
+  category: platform
+  homepage: https://mariadb.org
+spec:
+  # `11.8` et non `lts` : un tag « lts » change de version MAJEURE le jour où la
+  # prochaine LTS sort. Une migration majeure de base de données ne doit jamais
+  # arriver par surprise pendant une fenêtre de maintenance nocturne.
+  image: { repo: mariadb, tag: "11.8" }
+  requires:
+    # §10.2 — jamais sur NFS, même raison que PostgreSQL : le verrouillage de
+    # fichiers n'y est pas fiable, et InnoDB en dépend.
+    - kind: storage
+      name: data
+      path: /var/lib/mysql
+      tier: local
+      backup: true
+  security:
+    # Le point d'entrée ajuste les permissions du répertoire de données puis
+    # abandonne ses privilèges vers l'utilisateur mysql.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    replicas: 1
+    # §2bis — épinglé sur le nœud « heavy » : les volumes locaux ne suivent pas
+    # les conteneurs replanifiés par Swarm.
+    tier: heavy
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+  update:
+    # Mineur seulement : une majeure impose une migration du schéma interne qui
+    # n'est pas réversible par un rollback d'image.
+    channel: minor

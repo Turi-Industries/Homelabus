@@ -4,8 +4,10 @@
 //! rôle isolés par app. C'est ce que demandait le cahier des charges : « une seule db
 //! par système de db pour toutes les applis ».
 
+pub mod mariadb;
 pub mod postgres;
 
+pub use mariadb::MariadbProvisioner;
 pub use postgres::{connection_url, PostgresProvisioner};
 
 #[derive(Debug, thiserror::Error)]

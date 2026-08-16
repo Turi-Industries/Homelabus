@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POSTGRES_ADMIN")]
     postgres_admin: Option<String>,
 
+    /// URL d'administration MariaDB, même principe.
+    #[arg(long, global = true, env = "HLB_MARIADB_ADMIN")]
+    mariadb_admin: Option<String>,
+
     /// Dépôt restic. Sans lui, toute mise à jour exigeant une sauvegarde est refusée.
     #[arg(long, global = true, env = "HLB_BACKUP_REPO")]
     backup_repo: Option<String>,
@@ -1448,6 +1452,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     None => None,
                 };
 
+                let mariadb = match &cli.mariadb_admin {
+                    Some(url) => match hlb_platform::MariadbProvisioner::connect(url).await {
+                        Ok(m) => Some(m),
+                        Err(e) => {
+                            eprintln!("⚠️  MariaDB injoignable ({e}) — provisionnement ignoré.");
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
                 let registry = hlb_registry::RegistryClient::new();
                 let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
                     (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(u, k)),
@@ -1471,6 +1486,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .apply(*apply);
                 if let Some(p) = &pg {
                     exec = exec.with_postgres(p);
+                }
+                if let Some(m) = &mariadb {
+                    exec = exec.with_mariadb(m);
                 }
                 if let Some(i) = &identity {
                     exec = exec.with_identity(i);

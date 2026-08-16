@@ -7,7 +7,7 @@ license.workspace = true
 description = "Provisionnement des services mutualisés (PostgreSQL, …)."
 
 [dependencies]
-sqlx = { workspace = true, features = ["postgres"] }
+sqlx = { workspace = true, features = ["postgres", "mysql"] }
 thiserror.workspace = true
 tracing.workspace = true
 
