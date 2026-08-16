@@ -15,10 +15,19 @@ axum = "0.8"
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# 🔴 `ring` explicitement, PAS le fournisseur par défaut : rustls 0.23 tire sinon
+# `aws-lc-sys`, une bibliothèque C de plusieurs dizaines de Mo qui exige cmake pour
+# se construire. `ring` est déjà dans l'arbre via reqwest.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+tempfile = "3"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["signal", "fs", "process"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "net"] }
 
 [lints]
 workspace = true

@@ -22,6 +22,7 @@ hlb-platform.workspace = true
 hlb-ingress.workspace = true
 hlb-mail.workspace = true
 hlb-mesh.workspace = true
+hlb-agent.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 hlb-registry.workspace = true

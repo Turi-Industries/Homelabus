@@ -170,6 +170,10 @@ enum Command {
         force: bool,
     },
 
+    /// Certificats mTLS agent ↔ controller (§2).
+    #[command(subcommand)]
+    Pki(PkiCmd),
+
     /// Accès SSH gérés : pose, révocation, inventaire (§2ter phase 0bis).
     #[command(subcommand)]
     Access(AccessCmd),
@@ -341,6 +345,33 @@ enum UpdateCmd {
 }
 
 #[derive(Subcommand)]
+enum PkiCmd {
+    /// Créer l'autorité du cluster. Une seule fois, pour dix ans.
+    Init {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Émettre le certificat d'un agent. À refaire tous les 90 jours.
+    Agent {
+        /// Nom d'hôte du nœud.
+        node: String,
+        /// Répertoire de sortie.
+        #[arg(long, default_value = ".")]
+        out: std::path::PathBuf,
+        /// Nom du service Swarm des agents.
+        #[arg(long, default_value = "hlb-agent")]
+        service: String,
+    },
+    /// Émettre le certificat client du controller.
+    Controller {
+        #[arg(long, default_value = ".")]
+        out: std::path::PathBuf,
+    },
+    /// Ce que l'autorité a émis, et ce qui expire bientôt.
+    Status,
+}
+
+#[derive(Subcommand)]
 enum AccessCmd {
     /// Poser la clé de HomelabUS sur une machine.
     Grant {
@@ -428,6 +459,22 @@ fn maintenant() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Écrit un PEM avec des droits restrictifs.
+///
+/// 🔴 Une clé privée en 644 est lisible par tout utilisateur de la machine. Les
+/// outils TLS ne s'en plaignent pas — contrairement à `ssh`, qui refuse — donc rien
+/// ne signalerait le problème.
+fn ecrire_pem(chemin: &std::path::Path, contenu: &str) -> std::io::Result<()> {
+    std::fs::write(chemin, contenu)?;
+
+    #[cfg(unix)]
+    if chemin.extension().is_some_and(|e| e == "key" || e == "pem") {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(chemin, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Nom du secret portant la clé de déverrouillage du Swarm.
@@ -1764,6 +1811,148 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Pki(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_agent::pki::{self, Purpose};
+                const SECRET_CA: &str = "cluster-ca";
+
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+
+                let charger_ca = || async {
+                    match state.secret(SECRET_CA).await? {
+                        Some(ct) => {
+                            let j: serde_json::Value =
+                                serde_json::from_str(&vault.decrypt(&ct)?)?;
+                            Ok::<_, Box<dyn std::error::Error>>(Some(pki::CertPair {
+                                cert_pem: j["cert"].as_str().unwrap_or_default().to_string(),
+                                key_pem: j["key"].as_str().unwrap_or_default().to_string(),
+                            }))
+                        }
+                        None => Ok(None),
+                    }
+                };
+
+                match cmd {
+                    PkiCmd::Status => {
+                        match charger_ca().await? {
+                            Some(_) => {
+                                println!("✓ Autorité du cluster présente au coffre.");
+                                println!("  validité : {} jours", pki::CA_DAYS);
+                                println!("  feuilles : {} jours", pki::LEAF_DAYS);
+                                println!();
+                                println!("⚠️  Il n'y a PAS de révocation (ni CRL, ni OCSP).");
+                                println!("   Un certificat compromis reste valide jusqu'à son");
+                                println!("   expiration : c'est pour ça qu'ils sont courts.");
+                                println!("   Retirer un nœud se fait par `hlb access revoke`");
+                                println!("   et en le sortant du Swarm.");
+                            }
+                            None => {
+                                println!("Aucune autorité — les agents tournent donc en clair.");
+                                println!("  hlb pki init --apply");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        }
+                        Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
+                    }
+
+                    PkiCmd::Init { apply } => {
+                        if charger_ca().await?.is_some() {
+                            println!("✓ L'autorité existe déjà.");
+                            println!();
+                            println!("  🔴 En créer une seconde invaliderait TOUS les");
+                            println!("     certificats du parc d'un coup : les agents");
+                            println!("     refuseraient le controller, et réciproquement.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        if !apply {
+                            println!("Créerait l'autorité de certification du cluster.");
+                            println!("  validité : {} jours (longue délibérément)", pki::CA_DAYS);
+                            println!();
+                            println!("  La remplacer impose de redéployer tous les certificats");
+                            println!("  du parc le même jour — d'où une durée qui ne surprend");
+                            println!("  personne un matin.");
+                            println!();
+                            println!("  🔴 Sa clé privée va au coffre. La perdre oblige à");
+                            println!("     tout réémettre, nœud par nœud.");
+                            println!("\n  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let ca = pki::generate_ca("HomelabUS Cluster CA").await?;
+                        let j = serde_json::json!({
+                            "cert": ca.cert_pem, "key": ca.key_pem
+                        });
+                        state
+                            .store_secret_if_absent(
+                                SECRET_CA,
+                                &vault.encrypt(&j.to_string())?,
+                                "autorité de certification du cluster (mTLS)",
+                            )
+                            .await?;
+                        state.audit("cli", ACTEUR_ROLE, "pki-init", "cluster-ca", "ok", None).await?;
+
+                        println!("✓ Autorité créée, clé au coffre.");
+                        println!();
+                        println!("Ensuite, pour chaque nœud :");
+                        println!("  hlb pki agent <nœud> --out /etc/hlb");
+                        println!("  hlb pki controller --out /etc/hlb");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    PkiCmd::Agent { node, out, service } => {
+                        let Some(ca) = charger_ca().await? else {
+                            eprintln!("Aucune autorité : hlb pki init --apply");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        let noms = pki::agent_names(node, service);
+                        let c = pki::issue(&ca, node, &noms, Purpose::Server).await?;
+
+                        std::fs::create_dir_all(out)?;
+                        ecrire_pem(&out.join(format!("{node}.crt")), &c.cert_pem)?;
+                        ecrire_pem(&out.join(format!("{node}.key")), &c.key_pem)?;
+                        ecrire_pem(&out.join("ca.crt"), &ca.cert_pem)?;
+
+                        println!("✓ certificat émis pour {node} ({} jours)", pki::LEAF_DAYS);
+                        println!("  noms : {}", noms.join(", "));
+                        println!();
+                        println!("  Sur le nœud :");
+                        println!("    hlb-agent --cert {node}.crt --key {node}.key --ca ca.crt");
+                        println!();
+                        println!("  ⚠️  La clé privée est en 600. Elle ne doit pas voyager");
+                        println!("     par un canal en clair.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    PkiCmd::Controller { out } => {
+                        let Some(ca) = charger_ca().await? else {
+                            eprintln!("Aucune autorité : hlb pki init --apply");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        let c = pki::issue(&ca, "controller", &["controller".into()], Purpose::Client)
+                            .await?;
+
+                        std::fs::create_dir_all(out)?;
+                        // reqwest attend certificat ET clé dans le même PEM.
+                        ecrire_pem(
+                            &out.join("controller.pem"),
+                            &format!("{}{}", c.cert_pem, c.key_pem),
+                        )?;
+                        ecrire_pem(&out.join("ca.crt"), &ca.cert_pem)?;
+
+                        println!("✓ certificat client émis ({} jours)", pki::LEAF_DAYS);
+                        println!();
+                        println!("  hlb-controller --controller-cert controller.pem \\");
+                        println!("                 --controller-ca ca.crt");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Access(cmd) => {

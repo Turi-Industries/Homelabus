@@ -19,7 +19,16 @@
 //! agirait selon sa vue partielle.
 
 pub mod disk;
+pub mod pki;
+pub mod tls;
 pub mod report;
 
 pub use disk::{DiskPressure, DiskUsage, Projection, Thresholds};
+pub use pki::{CertPair, Purpose};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("PKI : {0}")]
+    Pki(String),
+}
 pub use report::NodeReport;

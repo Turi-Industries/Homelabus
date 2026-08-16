@@ -80,6 +80,14 @@ struct Cli {
     #[arg(long, default_value = "8421", env = "HLB_AGENT_PORT")]
     agent_port: u16,
 
+    /// Certificat CLIENT du controller (PEM : certificat + clé). Active le mTLS.
+    #[arg(long, env = "HLB_CONTROLLER_CERT")]
+    controller_cert: Option<std::path::PathBuf>,
+
+    /// CA du cluster : c'est elle, et elle seule, qui valide les agents.
+    #[arg(long, env = "HLB_CONTROLLER_CA")]
+    controller_ca: Option<std::path::PathBuf>,
+
     /// Fréquence d'interrogation des agents.
     #[arg(long, default_value = "60", env = "HLB_AGENT_POLL_SECS")]
     agent_poll_secs: u64,
@@ -330,10 +338,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Interrogation des agents (§9bis) : c'est ce qui donne la vue par nœud de
     // l'espace disque, que le controller ne peut pas obtenir autrement.
     {
-        let poller = Arc::new(agents::AgentPoller::new(
-            cli.agent_port,
-            Duration::from_secs(10),
-        ));
+        // 🔴 mTLS dès que les deux fichiers sont là. En clair, n'importe quel
+        // conteneur de l'overlay peut cartographier les disques du parc.
+        let poller = match (&cli.controller_cert, &cli.controller_ca) {
+            (Some(c), Some(a)) => {
+                let cert = tokio::fs::read_to_string(c).await?;
+                let ca = tokio::fs::read_to_string(a).await?;
+                match agents::AgentPoller::with_mtls(
+                    cli.agent_port,
+                    Duration::from_secs(10),
+                    &cert,
+                    &ca,
+                ) {
+                    Ok(p) => {
+                        tracing::info!("interrogation des agents en mTLS");
+                        Arc::new(p)
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            (None, None) => {
+                tracing::error!(
+                    "🔴 agents interrogés en HTTP CLAIR — fournis --controller-cert \
+                     et --controller-ca"
+                );
+                Arc::new(agents::AgentPoller::new(cli.agent_port, Duration::from_secs(10)))
+            }
+            // Un seul des deux : refuser plutôt que de retomber en clair alors que
+            // l'opérateur croit avoir activé le mTLS.
+            _ => {
+                return Err(
+                    "configuration mTLS incomplète : --controller-cert ET --controller-ca \
+                     sont requis ensemble"
+                        .into(),
+                )
+            }
+        };
         let service = cli.agent_service.clone();
         let rx = shutdown_rx.clone();
         let derniers = dernier_sondage.clone();

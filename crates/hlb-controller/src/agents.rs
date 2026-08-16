@@ -66,6 +66,10 @@ fn marque(p: DiskPressure) -> &'static str {
 pub struct AgentPoller {
     http: reqwest::Client,
     port: u16,
+    /// `https` quand le mTLS est configuré. Le schéma DOIT suivre : interroger un
+    /// agent mTLS en `http://` échoue sur une erreur de protocole qui ne dit pas que
+    /// c'est le schéma le problème.
+    scheme: &'static str,
 }
 
 impl AgentPoller {
@@ -76,17 +80,57 @@ impl AgentPoller {
                 .build()
                 .unwrap_or_default(),
             port,
+            scheme: "http",
         }
+    }
+
+    /// Interroge les agents en mTLS (§2).
+    ///
+    /// 🔴 `identity` est le certificat du controller : sans lui, les agents refusent
+    /// la connexion. `ca_pem` sert à vérifier les agents — on ne fait PAS confiance
+    /// aux autorités du système, seulement à la nôtre. Un agent dont le certificat
+    /// serait signé par une CA publique doit être refusé comme n'importe quel autre
+    /// imposteur.
+    pub fn with_mtls(
+        port: u16,
+        timeout: Duration,
+        client_pem: &str,
+        ca_pem: &str,
+    ) -> Result<Self, String> {
+        let identity = reqwest::Identity::from_pem(client_pem.as_bytes())
+            .map_err(|e| format!("certificat du controller illisible : {e}"))?;
+        let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes())
+            .map_err(|e| format!("CA illisible : {e}"))?;
+
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .identity(identity)
+            .add_root_certificate(ca)
+            // Notre CA UNIQUEMENT : les autorités publiques n'ont rien à faire ici.
+            .tls_built_in_root_certs(false)
+            .build()
+            .map_err(|e| format!("client mTLS : {e}"))?;
+
+        Ok(Self { http, port, scheme: "https" })
+    }
+
+    pub fn is_secure(&self) -> bool {
+        self.scheme == "https"
     }
 
     /// Interroge un agent à une adresse donnée.
     pub async fn poll(&self, addr: &str) -> AgentStatus {
-        let url = format!("http://{addr}:{}/api/report", self.port);
+        let url = format!("{}://{addr}:{}/api/report", self.scheme, self.port);
 
         match self.http.get(&url).send().await {
             Err(e) => AgentStatus::Unreachable {
                 detail: if e.is_timeout() {
                     "délai dépassé".into()
+                } else if e.is_connect() && self.scheme == "https" {
+                    // Distinguer les deux : « connexion refusée » enverrait chercher
+                    // un agent arrêté, alors que le certificat est la cause la plus
+                    // fréquente une fois le mTLS activé.
+                    format!("connexion TLS refusée (certificat ?) : {e}")
                 } else {
                     "connexion refusée".into()
                 },
@@ -173,6 +217,26 @@ mod tests {
             memory_available_mb: Some(4096),
             agent_version: "0.1.0".into(),
         }
+    }
+
+    #[test]
+    fn a_plain_poller_is_not_secure() {
+        // 🔴 Il doit être visible qu'on tourne en clair : c'est ce qui permet au
+        // controller de le dire à chaque démarrage plutôt que de le taire.
+        assert!(!AgentPoller::new(8421, Duration::from_secs(1)).is_secure());
+    }
+
+    #[test]
+    fn an_unparsable_certificate_is_refused_up_front() {
+        // Mieux vaut refuser de démarrer que produire un poller qui échouera sur
+        // chaque agent avec une erreur de handshake incompréhensible.
+        let r = AgentPoller::with_mtls(
+            8421,
+            Duration::from_secs(1),
+            "pas du PEM",
+            "pas du PEM non plus",
+        );
+        assert!(r.is_err());
     }
 
     #[test]

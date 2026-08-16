@@ -13,10 +13,13 @@
 //!
 //! ## Sur le chiffrement
 //!
-//! ⚠️ L'API de l'agent est en HTTP clair. Elle n'écoute que sur le réseau overlay,
-//! lui-même chiffré par IPsec quand il est créé avec `--opt encrypted` (§6.3). Le
-//! mTLS entre agent et controller prévu au §2 **n'est pas encore en place** — c'est
-//! dit ici plutôt que sous-entendu.
+//! 🔴 **mTLS par défaut** (§2) : l'agent n'accepte que des clients porteurs d'un
+//! certificat signé par la CA du cluster. Sans ça, tout conteneur de l'overlay —
+//! y compris une app compromise — pourrait cartographier les disques du parc.
+//!
+//! Le mode clair reste possible via `--insecure-plaintext`, mais il l'annonce
+//! bruyamment à chaque démarrage : un déploiement qui l'utilise par accident ne doit
+//! pas pouvoir passer inaperçu.
 
 use std::sync::Arc;
 
@@ -33,6 +36,22 @@ use hlb_agent::NodeReport;
 struct Cli {
     #[arg(long, default_value = "0.0.0.0:8421", env = "HLB_AGENT_LISTEN")]
     listen: String,
+
+    /// Certificat de l'agent, signé par la CA du cluster.
+    #[arg(long, env = "HLB_AGENT_CERT")]
+    cert: Option<std::path::PathBuf>,
+
+    /// Clé privée correspondante.
+    #[arg(long, env = "HLB_AGENT_KEY")]
+    key: Option<std::path::PathBuf>,
+
+    /// CA du cluster : c'est elle qui décide quels CLIENTS sont acceptés.
+    #[arg(long, env = "HLB_AGENT_CA")]
+    ca: Option<std::path::PathBuf>,
+
+    /// 🔴 Servir en HTTP clair. À n'utiliser que pour un diagnostic local.
+    #[arg(long, env = "HLB_AGENT_INSECURE")]
+    insecure_plaintext: bool,
 
     /// Chemins à surveiller.
     ///
@@ -89,16 +108,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
-    tracing::info!(hôte = %hostname, adresse = %cli.listen, "agent en écoute");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("arrêt de l'agent");
-        })
-        .await?;
+    let arret = || async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("arrêt de l'agent");
+    };
+
+    match charger_tls(&cli).await? {
+        Some(config) => {
+            tracing::info!(hôte = %hostname, adresse = %cli.listen, "agent en écoute (mTLS)");
+            let tls = hlb_agent::tls::TlsListener::new(listener, config);
+            axum::serve(tls, app)
+                .with_graceful_shutdown(arret())
+                .await?;
+        }
+        None => {
+            // 🔴 Répété à chaque démarrage, et en `error` : un déploiement qui tourne
+            // en clair par accident ne doit pas pouvoir passer inaperçu.
+            tracing::error!(
+                "🔴 API en HTTP CLAIR — tout conteneur de l'overlay peut interroger \
+                 cet agent. Fournis --cert/--key/--ca."
+            );
+            tracing::info!(hôte = %hostname, adresse = %cli.listen, "agent en écoute (clair)");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(arret())
+                .await?;
+        }
+    }
 
     Ok(())
+}
+
+/// Charge la configuration TLS, ou explique précisément ce qui manque.
+///
+/// ⚠️ On refuse de démarrer sur une configuration TLS **partielle**. Deux fichiers
+/// sur trois donneraient un agent qui démarre en clair alors que l'opérateur croit
+/// l'avoir sécurisé — l'échec silencieux le plus coûteux du lot.
+async fn charger_tls(
+    cli: &Cli,
+) -> Result<Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>, Box<dyn std::error::Error>>
+{
+    let fournis = [&cli.cert, &cli.key, &cli.ca].iter().filter(|o| o.is_some()).count();
+
+    if cli.insecure_plaintext {
+        if fournis > 0 {
+            tracing::warn!("--insecure-plaintext l'emporte : les certificats fournis sont ignorés");
+        }
+        return Ok(None);
+    }
+
+    match (&cli.cert, &cli.key, &cli.ca) {
+        (Some(c), Some(k), Some(a)) => {
+            let paire = hlb_agent::CertPair {
+                cert_pem: tokio::fs::read_to_string(c).await?,
+                key_pem: tokio::fs::read_to_string(k).await?,
+            };
+            let ca = tokio::fs::read_to_string(a).await?;
+            Ok(Some(hlb_agent::tls::server_config(&paire, &ca)?))
+        }
+        _ if fournis > 0 => Err(format!(
+            "configuration TLS incomplète : {fournis}/3 fichiers fournis. \
+             Il faut --cert, --key ET --ca — sinon l'agent démarrerait en clair \
+             alors que tu le crois protégé."
+        )
+        .into()),
+        _ => Ok(None),
+    }
 }
 
 async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
