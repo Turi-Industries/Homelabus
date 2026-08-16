@@ -482,6 +482,22 @@ mod tests {
             self.scaled.lock().expect("mutex").push((name.into(), replicas));
             Ok(())
         }
+        async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
+            Ok("swarm-fake".into())
+        }
+        async fn join_tokens(&self) -> hlb_orchestrator::Result<hlb_orchestrator::JoinTokens> {
+            Ok(hlb_orchestrator::JoinTokens {
+                manager: "SWMTKN-mgr".into(),
+                worker: "SWMTKN-wrk".into(),
+                advertise_addr: "127.0.0.1:2377".into(),
+            })
+        }
+        async fn nodes(&self) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::NodeInfo>> {
+            Ok(Vec::new())
+        }
+        async fn label_node(&self, _: &str, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
+            Ok(())
+        }
         async fn exec_in_service(
             &self,
             _: &str,

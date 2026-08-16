@@ -118,6 +118,10 @@ enum Command {
     #[command(subcommand)]
     Backup(BackupCmd),
 
+    /// Cluster : initialisation, état et quorum (§2ter, §10.3).
+    #[command(subcommand)]
+    Cluster(ClusterCmd),
+
     /// Nœuds : préchecks et dépendances (§2ter).
     #[command(subcommand)]
     Node(NodeCmd),
@@ -158,6 +162,26 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum ClusterCmd {
+    /// Initialiser un Swarm sur cette machine. Idempotent.
+    Init {
+        /// Adresse annoncée aux autres nœuds. 🔴 Indispensable en multi-interfaces.
+        #[arg(long)]
+        advertise_addr: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Nœuds, rôles, tiers et santé du quorum.
+    Status,
+    /// La commande à lancer sur une machine pour la rattacher.
+    JoinCommand {
+        /// `manager` ou `worker`. Par défaut : ce que le profil recommande.
+        #[arg(long)]
+        role: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum NodeCmd {
     /// Vérifier qu'une machine peut accueillir un nœud. Ne modifie RIEN.
     Check {
@@ -169,6 +193,16 @@ enum NodeCmd {
         port: Option<u16>,
         #[arg(long)]
         identity: Option<String>,
+    },
+    /// Poser le tier d'un nœud, déduit de sa mémoire (§2bis.2).
+    Tier {
+        /// Nom du nœud, tel qu'affiché par `hlb cluster status`.
+        node: String,
+        /// Forcer une valeur au lieu de la déduire.
+        #[arg(long)]
+        set: Option<String>,
+        #[arg(long)]
+        apply: bool,
     },
     /// Ce qui manque, et ce qui sera installé. Aperçu par défaut.
     Deps {
@@ -1069,9 +1103,189 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
+        Command::Cluster(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let orch = SwarmOrchestrator::connect()?;
+
+                match cmd {
+                    ClusterCmd::Init { advertise_addr, apply } => {
+                        if !apply {
+                            println!("Initialiserait un Swarm sur cette machine.");
+                            match advertise_addr {
+                                Some(a) => println!("  adresse annoncée : {a}"),
+                                None => println!(
+                                    "  ⚠️  aucune adresse annoncée : Docker en choisira une.\n                                          Sur une machine multi-interfaces, les autres nœuds\n                                          tenteraient de joindre une IP injoignable. Utilise\n                                          --advertise-addr."
+                                ),
+                            }
+                            println!("\n  Relance avec --apply.");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                        }
+
+                        let id = orch.cluster_init(advertise_addr.as_deref()).await?;
+                        println!("✓ Swarm actif ({})", &id[..12.min(id.len())]);
+
+                        let state = State::open(&cli.state).await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "cluster-init", "swarm", "ok", None)
+                            .await?;
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    ClusterCmd::Status => {
+                        let nodes = orch.nodes().await?;
+                        if nodes.is_empty() {
+                            println!("Aucun nœud — le Swarm n'est pas initialisé.");
+                            println!("  hlb cluster init --apply");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let profil = hlb_orchestrator::ClusterProfile::for_node_count(nodes.len());
+                        let managers = nodes
+                            .iter()
+                            .filter(|n| n.role == hlb_orchestrator::NodeRole::Manager)
+                            .count();
+                        let quorum = hlb_orchestrator::QuorumHealth::assess(managers);
+
+                        println!("Profil : {} ({} nœud(s))\n", profil.as_str(), nodes.len());
+                        println!("{:<20} {:<9} {:<8} {:<8} MÉMOIRE", "NŒUD", "RÔLE", "ÉTAT", "TIER");
+                        for n in &nodes {
+                            println!(
+                                "{:<20} {:<9} {:<8} {:<8} {}",
+                                format!("{}{}", n.hostname, if n.is_leader { " ★" } else { "" }),
+                                n.role.as_str(),
+                                if n.is_ready() { "prêt" } else { &n.status },
+                                n.tier.as_deref().unwrap_or("—"),
+                                n.memory_mb.map(|m| format!("{m} Mo")).unwrap_or_else(|| "?".into()),
+                            );
+                        }
+
+                        println!("\nQuorum : {}", quorum.describe());
+
+                        // 🔴 Un tier qui ment est pire que pas de tier : une base
+                        // de données planifiée sur un nœud « heavy » à 4 Go
+                        // fonctionne jusqu'au jour où elle tue la machine par OOM.
+                        for n in &nodes {
+                            let (Some(declare), Some(mem)) = (&n.tier, n.memory_mb) else {
+                                continue;
+                            };
+                            let deduit = hlb_orchestrator::cluster::tier_for_memory(mem);
+                            if declare != deduit {
+                                println!(
+                                    "\n🔴 {} est étiqueté « {declare} » mais n'a que {mem} Mo \
+                                     — sa mémoire en fait un « {deduit} ».",
+                                    n.hostname
+                                );
+                                println!(
+                                    "   Une base planifiée dessus tiendra jusqu'au jour de l'OOM."
+                                );
+                                println!("   hlb node tier {} --apply", n.hostname);
+                            }
+                        }
+
+                        // Un nœud sans tier ne recevra jamais de service contraint.
+                        let sans_tier: Vec<&str> = nodes
+                            .iter()
+                            .filter(|n| n.tier.is_none())
+                            .map(|n| n.hostname.as_str())
+                            .collect();
+                        if !sans_tier.is_empty() {
+                            println!(
+                                "\n⚠️  sans tier : {} — aucun service contraint ne s'y planifiera.",
+                                sans_tier.join(", ")
+                            );
+                            println!("   hlb node tier <nœud>  pour le déduire de sa mémoire.");
+                        }
+
+                        Ok(if quorum.needs_attention() {
+                            ExitCode::FAILURE
+                        } else {
+                            ExitCode::SUCCESS
+                        })
+                    }
+
+                    ClusterCmd::JoinCommand { role } => {
+                        let nodes = orch.nodes().await?;
+                        let profil = hlb_orchestrator::ClusterProfile::for_node_count(nodes.len() + 1);
+                        let managers = nodes
+                            .iter()
+                            .filter(|n| n.role == hlb_orchestrator::NodeRole::Manager)
+                            .count();
+
+                        // Par défaut, on propose le rôle qui garde le quorum sain.
+                        let choisi = match role.as_deref() {
+                            Some("manager") => hlb_orchestrator::NodeRole::Manager,
+                            Some("worker") => hlb_orchestrator::NodeRole::Worker,
+                            _ if managers < profil.recommended_managers() => {
+                                hlb_orchestrator::NodeRole::Manager
+                            }
+                            _ => hlb_orchestrator::NodeRole::Worker,
+                        };
+
+                        // 🔴 Passer de 1 à 2 managers dégrade la tolérance de panne.
+                        if choisi == hlb_orchestrator::NodeRole::Manager {
+                            let apres = hlb_orchestrator::QuorumHealth::assess(managers + 1);
+                            if apres.needs_attention() {
+                                eprintln!("🔴 {}\n", apres.describe());
+                                eprintln!("   Ajoute ce nœud en worker, ou prévois-en un troisième.");
+                            }
+                        }
+
+                        let t = orch.join_tokens().await?;
+                        println!("Sur la machine à rattacher, en {} :\n", choisi.as_str());
+                        println!("  docker swarm join --token {} {}", t.for_role(choisi), t.advertise_addr);
+                        println!("\n⚠️  Vérifie d'abord la machine :  hlb node check <hôte>");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
+        }
+
         Command::Node(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
+                // Le tier se règle contre le cluster, pas contre une machine.
+                if let NodeCmd::Tier { node, set, apply } = cmd {
+                    let orch = SwarmOrchestrator::connect()?;
+                    let nodes = orch.nodes().await?;
+                    let n = nodes
+                        .iter()
+                        .find(|n| &n.hostname == node || &n.id == node)
+                        .ok_or_else(|| format!("nœud « {node} » introuvable"))?;
+
+                    let valeur = match set {
+                        Some(v) => v.clone(),
+                        None => {
+                            let mem = n.memory_mb.ok_or(
+                                "mémoire du nœud inconnue : précise --set heavy|light",
+                            )?;
+                            hlb_orchestrator::cluster::tier_for_memory(mem).to_string()
+                        }
+                    };
+
+                    if !apply {
+                        println!(
+                            "Poserait tier={valeur} sur {} ({}).",
+                            n.hostname,
+                            n.memory_mb.map(|m| format!("{m} Mo")).unwrap_or_else(|| "?".into())
+                        );
+                        if n.tier.as_deref() == Some(valeur.as_str()) {
+                            println!("  (déjà cette valeur — rien ne changerait)");
+                        }
+                        println!("\n  Relance avec --apply.");
+                        return Ok(ExitCode::SUCCESS);
+                    }
+
+                    orch.label_node(&n.id, "tier", &valeur).await?;
+                    println!("✓ {} → tier={valeur}", n.hostname);
+
+                    let state = State::open(&cli.state).await?;
+                    state
+                        .audit("cli", ACTEUR_ROLE, "node-tier", &n.hostname, "ok", Some(&valeur))
+                        .await?;
+                    return Ok(ExitCode::SUCCESS);
+                }
+
                 let (runner, apply) = match cmd {
                     NodeCmd::Check { host, user, port, identity } => {
                         (build_runner(host.as_deref(), user.as_deref(), *port, identity.as_deref()), false)
@@ -1079,6 +1293,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     NodeCmd::Deps { host, user, apply } => {
                         (build_runner(host.as_deref(), user.as_deref(), None, None), *apply)
                     }
+                    // Traité au-dessus : il ne s'exécute pas sur une machine.
+                    NodeCmd::Tier { .. } => unreachable!(),
                 };
 
                 println!("Machine : {}\n", runner.label());

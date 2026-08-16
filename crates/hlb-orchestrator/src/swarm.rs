@@ -7,19 +7,22 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use bollard::container::LogOutput;
+
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
-    HealthConfig, Mount, MountTypeEnum, TaskSpecContainerSpecPrivileges,
+    HealthConfig, Mount, MountTypeEnum, SwarmInitRequest, TaskSpecContainerSpecPrivileges,
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
     ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
     TaskSpecContainerSpec, TaskSpecPlacement, TaskState,
 };
 use bollard::query_parameters::{
-    ListServicesOptionsBuilder, ListTasksOptionsBuilder, UpdateServiceOptionsBuilder,
+    ListNodesOptions, ListServicesOptionsBuilder, ListTasksOptionsBuilder,
+    UpdateNodeOptionsBuilder, UpdateServiceOptionsBuilder,
 };
 use bollard::Docker;
 
+use crate::cluster;
 use crate::{
     Error, ExecOutput, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState, VolumeInfo,
 };
@@ -317,6 +320,114 @@ impl Orchestrator for SwarmOrchestrator {
             .build();
 
         self.docker.update_service(name, spec, opts, None).await?;
+        Ok(())
+    }
+
+    async fn cluster_init(&self, advertise_addr: Option<&str>) -> Result<String> {
+        // Idempotent : réinitialiser un Swarm actif détruirait le cluster existant.
+        if let Ok(s) = self.docker.inspect_swarm().await {
+            if let Some(id) = s.id {
+                tracing::debug!("Swarm déjà actif, conservé");
+                return Ok(id);
+            }
+        }
+
+        let opts = SwarmInitRequest {
+            listen_addr: Some("0.0.0.0:2377".to_string()),
+            // 🔴 Sans adresse annoncée explicite, Docker en choisit une — souvent la
+            // mauvaise sur une machine multi-interfaces, et les nœuds tentent alors
+            // de joindre une IP injoignable.
+            advertise_addr: Some(advertise_addr.unwrap_or("127.0.0.1").to_string()),
+            ..Default::default()
+        };
+
+        let id = self.docker.init_swarm(opts).await?;
+        tracing::info!(%id, "Swarm initialisé");
+        Ok(id)
+    }
+
+    async fn join_tokens(&self) -> Result<cluster::JoinTokens> {
+        let s = self.docker.inspect_swarm().await?;
+
+        let tokens = s
+            .join_tokens
+            .ok_or_else(|| Error::Unexpected("Swarm sans jetons de rattachement".into()))?;
+
+        // L'adresse annoncée vit dans l'info système, pas dans l'inspection du Swarm.
+        let info = self.docker.info().await?;
+        let addr = info
+            .swarm
+            .and_then(|s| s.node_addr)
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        Ok(cluster::JoinTokens {
+            manager: tokens.manager.unwrap_or_default(),
+            worker: tokens.worker.unwrap_or_default(),
+            advertise_addr: format!("{addr}:2377"),
+        })
+    }
+
+    async fn nodes(&self) -> Result<Vec<cluster::NodeInfo>> {
+        let nodes = self
+            .docker
+            .list_nodes(None::<ListNodesOptions>)
+            .await?;
+
+        Ok(nodes
+            .into_iter()
+            .map(|n| {
+                let spec = n.spec.unwrap_or_default();
+                let desc = n.description.unwrap_or_default();
+                let status = n.status.unwrap_or_default();
+
+                let role = match spec.role.map(|r| format!("{r:?}").to_lowercase()) {
+                    Some(r) if r.contains("manager") => cluster::NodeRole::Manager,
+                    _ => cluster::NodeRole::Worker,
+                };
+
+                cluster::NodeInfo {
+                    id: n.id.unwrap_or_default(),
+                    hostname: desc.hostname.unwrap_or_default(),
+                    role,
+                    status: status
+                        .state
+                        .map(|s| format!("{s:?}").to_lowercase())
+                        .unwrap_or_else(|| "inconnu".into()),
+                    availability: spec
+                        .availability
+                        .map(|a| format!("{a:?}").to_lowercase())
+                        .unwrap_or_else(|| "inconnue".into()),
+                    tier: spec.labels.as_ref().and_then(|l| l.get("tier").cloned()),
+                    is_leader: n
+                        .manager_status
+                        .and_then(|m| m.leader)
+                        .unwrap_or(false),
+                    memory_mb: desc
+                        .resources
+                        .and_then(|r| r.memory_bytes)
+                        .map(|b| (b / 1_048_576) as u64),
+                }
+            })
+            .collect())
+    }
+
+    async fn label_node(&self, node: &str, key: &str, value: &str) -> Result<()> {
+        let n = self.docker.inspect_node(node).await?;
+        let version = n
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| Error::Unexpected("nœud sans version".into()))?;
+
+        let mut spec = n.spec.unwrap_or_default();
+        let mut labels = spec.labels.unwrap_or_default();
+        labels.insert(key.to_string(), value.to_string());
+        spec.labels = Some(labels);
+
+        let opts = UpdateNodeOptionsBuilder::default().version(version as i64).build();
+        self.docker.update_node(node, spec, opts).await?;
+
+        tracing::info!(node, key, value, "étiquette posée");
         Ok(())
     }
 

@@ -7,10 +7,13 @@
 //! Coût aujourd'hui : quelques centaines de lignes. Bénéfice : on peut remplacer
 //! l'implémentation Swarm sans toucher au résolveur, au catalogue ni à l'API.
 
+pub mod cluster;
 pub mod swarm;
 
 use async_trait::async_trait;
 use hlb_types::{Healthcheck, SecuritySpec};
+
+pub use cluster::{ClusterProfile, JoinTokens, NodeInfo, NodeRole, QuorumHealth};
 
 pub use swarm::SwarmOrchestrator;
 
@@ -204,6 +207,22 @@ pub trait Orchestrator: Send + Sync {
 
     /// Ajuste le nombre de réplicas d'un service existant.
     async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
+
+    // ── Vie du cluster (§2ter, §10.3) ───────────────────────────────────────
+
+    /// Initialise un Swarm sur cette machine. Idempotent : un Swarm déjà actif
+    /// n'est pas réinitialisé — ce serait détruire le cluster existant.
+    async fn cluster_init(&self, advertise_addr: Option<&str>) -> Result<String>;
+
+    /// Les jetons de rattachement, et l'adresse à laquelle se connecter.
+    async fn join_tokens(&self) -> Result<cluster::JoinTokens>;
+
+    /// Les nœuds du cluster, avec leur rôle et leur tier.
+    async fn nodes(&self) -> Result<Vec<cluster::NodeInfo>>;
+
+    /// Pose une étiquette sur un nœud — c'est ainsi que le tier devient une
+    /// contrainte de placement effective (§2bis.2).
+    async fn label_node(&self, node: &str, key: &str, value: &str) -> Result<()>;
 
     /// Exécute une commande dans un conteneur en cours d'un service.
     ///

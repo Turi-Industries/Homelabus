@@ -33,7 +33,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**327 tests unitaires + 47 tests d'intégration.**
+**336 tests unitaires + 47 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -218,6 +218,9 @@ Ces manques sont **explicites dans le code**, jamais masqués :
   semblant.
 - **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
   route POST/PUT/DELETE, et un test le vérifie.
+- **Le rattachement d'un nœud reste manuel** : `hlb cluster join-command` produit
+  la commande, mais ne l'exécute pas à distance. Le mesh WireGuard et l'agent
+  n'existent pas encore.
 - **Le RBAC n'est pas encore appliqué** : les rôles et leurs permissions sont
   définis et testés, mais l'API étant en lecture seule il n'y a rien à protéger
   pour l'instant. Le CLI s'exécute localement — qui le lance a déjà la clé
