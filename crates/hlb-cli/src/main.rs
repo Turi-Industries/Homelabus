@@ -191,6 +191,10 @@ enum Command {
         force: bool,
     },
 
+    /// 🔴 Reprise après sinistre : basculer PostgreSQL sur un autre nœud (§2bis.5).
+    #[command(subcommand)]
+    Dr(DrCmd),
+
     /// Certificats mTLS agent ↔ controller (§2).
     #[command(subcommand)]
     Pki(PkiCmd),
@@ -392,6 +396,28 @@ enum UpdateCmd {
         #[arg(long, env = "HLB_COSIGN_ISSUER")]
         issuer: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum DrCmd {
+    /// Promouvoir PostgreSQL sur un nœud de secours. Aperçu par défaut.
+    Promote {
+        /// Nœud d'accueil, tel qu'affiché par `hlb cluster status`.
+        node: String,
+        /// Répertoire des sauvegardes de base.
+        #[arg(long, default_value = "/archive/base")]
+        base_dir: String,
+        /// Répertoire d'archivage WAL.
+        #[arg(long, default_value = "/archive/wal")]
+        wal_dir: String,
+        /// 🔴 Passer outre le contrôle « l'ancien primaire répond encore ».
+        #[arg(long)]
+        force_split_brain: bool,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Suis-je prêt à basculer ? Ne modifie rien.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -1980,6 +2006,175 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Dr(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_backup::dr;
+
+                let state = State::open(&cli.state).await?;
+                let orch = SwarmOrchestrator::connect().ok();
+
+                match cmd {
+                    DrCmd::Status => {
+                        let bases = charger_bases(&state).await?;
+                        let nodes = match &orch {
+                            Some(o) => o.nodes().await.unwrap_or_default(),
+                            None => Vec::new(),
+                        };
+
+                        println!("Capacité de reprise :");
+                        println!(
+                            "  sauvegardes de base : {}",
+                            if bases.is_empty() {
+                                "🔴 AUCUNE — rien ne pourrait être restauré".to_string()
+                            } else {
+                                format!("{} (la plus récente : {})",
+                                    bases.len(),
+                                    hlb_backup::pitr::iso8601(
+                                        bases.iter().map(|b| b.finished_at).max().unwrap_or(0)))
+                            }
+                        );
+
+                        let accueil: Vec<_> = nodes
+                            .iter()
+                            .filter(|n| n.memory_mb.is_some_and(|m| m >= dr::MIN_MEMORY_MB))
+                            .collect();
+                        println!("  nœuds d'accueil     : {}", accueil.len());
+                        for n in &accueil {
+                            let m = n.memory_mb.unwrap_or(0);
+                            println!(
+                                "    {:<16} {m} Mo → profil {}",
+                                n.hostname,
+                                dr::Profile::for_memory(m).describe()
+                            );
+                        }
+
+                        if bases.is_empty() || accueil.is_empty() {
+                            println!();
+                            println!("🔴 La bascule ne fonctionnerait PAS aujourd'hui.");
+                            if bases.is_empty() {
+                                println!("   hlb backup pitr base --apply");
+                            }
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                        }
+
+                        println!();
+                        println!("⚠️  Une procédure de reprise jamais testée ne marche pas le");
+                        println!("   jour où on en a besoin (§8.3). Exerce-la sur un nœud de");
+                        println!("   test au moins une fois.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    DrCmd::Promote { node, base_dir, wal_dir, force_split_brain, apply } => {
+                        let Some(orch) = orch else {
+                            eprintln!("🔴 Swarm injoignable : impossible de constater l'état réel.");
+                            eprintln!("   On ne bascule pas à l'aveugle.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        let nodes = orch.nodes().await?;
+                        let Some(cible) = nodes.iter().find(|n| &n.hostname == node) else {
+                            eprintln!("Nœud « {node} » introuvable dans le cluster.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        // 🔴 L'état de l'ancien primaire est CONSTATÉ, jamais supposé.
+                        // Un nœud « heavy » encore prêt veut dire que PostgreSQL peut
+                        // encore y tourner, donc qu'une promotion créerait un
+                        // split-brain.
+                        let primaire = nodes
+                            .iter()
+                            .find(|n| n.tier.as_deref() == Some("heavy") && n.hostname != *node);
+                        let primaire_vivant =
+                            !force_split_brain && primaire.is_some_and(|n| n.is_ready());
+
+                        let bases = charger_bases(&state).await?;
+                        let couverture = hlb_backup::scan_archive(std::path::Path::new(wal_dir))
+                            .ok()
+                            .and_then(|s| hlb_backup::wal_coverage(&s));
+
+                        // Une app est « lourde » si son manifest demande plusieurs
+                        // réplicas : c'est le signal le plus fiable dont on dispose.
+                        let mut apps = Vec::new();
+                        for (nom, statut) in state.installed_apps().await? {
+                            if statut == "failed" {
+                                continue;
+                            }
+                            let lourde = state
+                                .app_manifest(&nom)
+                                .await
+                                .map(|m| m.spec.swarm.replicas > 1)
+                                .unwrap_or(false);
+                            apps.push((nom, lourde));
+                        }
+
+                        let candidat = dr::Candidate {
+                            node: node.clone(),
+                            memory_mb: cible.memory_mb.unwrap_or(0),
+                            reachable: cible.is_ready(),
+                        };
+
+                        let plan = match dr::plan_promotion(
+                            &candidat,
+                            primaire.map(|n| n.hostname.as_str()),
+                            primaire_vivant,
+                            &bases,
+                            couverture,
+                            &apps,
+                        ) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("{}", e.describe());
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        };
+
+                        println!("{}", plan.describe());
+                        for t in plan.profile.tradeoffs() {
+                            println!("  ⚠️  {t}");
+                        }
+
+                        if !apply {
+                            println!();
+                            println!("Réglages à poser sur {node} :");
+                            for l in hlb_backup::dr::render_settings(plan.profile)?.lines() {
+                                println!("    {l}");
+                            }
+                            println!();
+                            println!("Marche à suivre après --apply :");
+                            println!("  1. Restaurer {} depuis {base_dir}", plan.base_backup);
+                            println!("  2. Poser les réglages ci-dessus");
+                            println!("  3. Rejouer le WAL depuis {wal_dir} :");
+                            println!("       hlb backup pitr plan \"{}\"",
+                                     hlb_backup::pitr::iso8601(plan.recover_to));
+                            println!("  4. Déplacer le tier : hlb node tier {node} --set heavy --apply");
+                            println!();
+                            println!("  🔴 Cette commande ne restaure RIEN toute seule. Une");
+                            println!("     bascule automatique sur détection de panne est le");
+                            println!("     meilleur moyen de perdre des données.");
+                            println!();
+                            println!("  Relance avec --apply pour poser le tier et journaliser.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        // `--apply` ne fait QUE ce qui est réversible : déplacer
+                        // l'étiquette de placement. La restauration reste manuelle.
+                        orch.label_node(&cible.id, "tier", "heavy").await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "dr-promote", node, "ok",
+                                   Some(&plan.describe()))
+                            .await?;
+
+                        println!("✓ tier=heavy posé sur {node} — Swarm peut y planifier PostgreSQL.");
+                        println!();
+                        println!("🔴 Les DONNÉES ne sont pas restaurées. Fais les étapes 1 à 3");
+                        println!("   ci-dessus, sinon PostgreSQL démarrera sur une base VIDE.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Pki(cmd) => {
