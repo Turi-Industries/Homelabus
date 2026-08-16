@@ -410,4 +410,10 @@ async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
     );
     assert_eq!(v.bytes_restored, 17);
     assert!(v.matches(), "{}", v.describe());
+
+    // La relecture d'un échantillon de blocs doit avoir eu lieu : sans elle, une
+    // corruption à taille identique passerait pour « conforme ».
+    let d = v.data_checked.as_ref().expect("relecture de blocs effectuée");
+    assert!(d.ok, "blocs illisibles : {:?}", d.detail);
+    assert_eq!(d.subset, "5%");
 }

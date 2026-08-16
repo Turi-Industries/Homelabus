@@ -1089,6 +1089,7 @@ dependencies = [
  "hlb-identity",
  "hlb-ingress",
  "hlb-mail",
+ "hlb-mesh",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1097,6 +1098,7 @@ dependencies = [
  "hlb-state",
  "hlb-types",
  "hlb-updater",
+ "serde_json",
  "tokio",
  "tracing-subscriber",
 ]
@@ -1220,6 +1222,7 @@ version = "0.1.0"
 dependencies = [
  "rand 0.9.5",
  "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tracing",
  "x25519-dalek",

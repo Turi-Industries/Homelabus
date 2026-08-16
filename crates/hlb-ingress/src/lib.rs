@@ -5,17 +5,22 @@
 
 pub mod admin;
 pub mod caddyfile;
+pub mod crowdsec;
 
 #[cfg(test)]
 mod tests;
 
 pub use admin::CaddyAdmin;
-pub use caddyfile::{render_backend, render_frontend, Config, Route};
+pub use caddyfile::{render_backend, render_frontend, Config, CrowdSec, Route};
+pub use crowdsec::Cscli;
 
 use hlb_types::{ExposePolicy, Manifest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("CrowdSec : {0}")]
+    CrowdSec(String),
+
     #[error("Caddy injoignable sur {url} : {source}")]
     Unreachable {
         url: String,

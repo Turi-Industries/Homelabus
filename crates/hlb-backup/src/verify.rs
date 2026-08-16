@@ -14,6 +14,19 @@
 //! Seule la dernière ligne répond à la question qu'on se pose vraiment. C'est donc
 //! celle-ci qu'on implémente : restaurer dans un espace jetable, puis comparer le
 //! contenu obtenu à ce que l'instantané prétend contenir.
+//!
+//! ## 🔴 Ce que la comparaison de tailles ne voit PAS
+//!
+//! Compter les fichiers et les octets attrape un fichier manquant ou tronqué. Ça
+//! **ne voit pas** un bit retourné sur le disque : le fichier fait toujours la même
+//! taille, le décompte tombe juste, et la vérification annonce « conforme » sur une
+//! sauvegarde corrompue.
+//!
+//! C'est exactement la panne qu'on redoute — silencieuse, progressive, et invisible
+//! jusqu'au jour de la restauration. D'où la relecture d'un **échantillon de blocs**
+//! (`restic check --read-data-subset`) en plus de la comparaison. On n'en relit pas la
+//! totalité à chaque fois : sur un dépôt de plusieurs centaines de gigaoctets, ça
+//! prendrait des heures et personne ne lancerait plus jamais la vérification.
 
 use crate::restic::{Repository, Runner};
 use crate::Result;
@@ -29,18 +42,57 @@ pub struct Verification {
     /// Ce que l'instantané annonçait.
     pub files_expected: u64,
     pub bytes_expected: u64,
+    /// Relecture d'un échantillon de blocs. `None` = non effectuée.
+    ///
+    /// Séparé du reste parce que ça répond à une autre question : la comparaison dit
+    /// « tout est revenu », celle-ci dit « ce qui est revenu n'est pas pourri ».
+    pub data_checked: Option<DataCheck>,
+}
+
+/// Résultat de la relecture d'un échantillon de blocs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataCheck {
+    /// Proportion relue, telle que passée à restic (« 5% », « 1/10 »…).
+    pub subset: String,
+    pub ok: bool,
+    pub detail: Option<String>,
 }
 
 impl Verification {
     /// La restauration correspond-elle à ce que l'instantané annonçait ?
+    ///
+    /// 🔴 Une relecture de blocs en échec fait échouer la vérification entière, même
+    /// si les décomptes tombent juste. Des fichiers tous présents et tous de la bonne
+    /// taille, mais corrompus, ne constituent pas une sauvegarde.
     pub fn matches(&self) -> bool {
-        self.files_restored == self.files_expected && self.bytes_restored == self.bytes_expected
+        self.files_restored == self.files_expected
+            && self.bytes_restored == self.bytes_expected
+            && self.data_checked.as_ref().is_none_or(|d| d.ok)
     }
 
     pub fn describe(&self) -> String {
+        // La corruption d'abord : c'est le diagnostic le plus grave, et le seul que
+        // les décomptes ne montreraient pas.
+        if let Some(d) = self.data_checked.as_ref().filter(|d| !d.ok) {
+            return format!(
+                "🔴 CORROMPU — {} fichiers / {} octets bien restaurés, mais la relecture \
+                 de {} a échoué : {}",
+                self.files_restored,
+                self.bytes_restored,
+                d.subset,
+                d.detail.as_deref().unwrap_or("blocs illisibles")
+            );
+        }
+
         if self.matches() {
+            let extra = match &self.data_checked {
+                Some(d) => format!(", {} de blocs relus sans erreur", d.subset),
+                // Dire quand on N'A PAS vérifié : sans ça, « conforme » laisse croire
+                // à une garantie qu'on n'a pas donnée.
+                None => ", sans relecture de blocs".to_string(),
+            };
             format!(
-                "{} fichiers / {} octets restaurés, conformes à l'instantané",
+                "{} fichiers / {} octets restaurés, conformes à l'instantané{extra}",
                 self.files_restored, self.bytes_restored
             )
         } else {
@@ -127,6 +179,7 @@ where
         bytes_restored: bytes,
         files_expected: expected.files,
         bytes_expected: expected.bytes,
+        data_checked: None,
     };
 
     if v.matches() {
@@ -137,6 +190,36 @@ where
         tracing::error!(snapshot, "{}", v.describe());
     }
     Ok(v)
+}
+
+/// La proportion de blocs relus par défaut.
+///
+/// 5 % attrape une corruption diffuse en quelques vérifications successives, sans
+/// faire durer chaque passage assez longtemps pour qu'on cesse de les lancer. Relire
+/// 100 % à chaque fois est le meilleur moyen de ne plus rien relire du tout.
+pub const DEFAULT_SUBSET: &str = "5%";
+
+/// Ajoute la relecture d'un échantillon de blocs à une vérification.
+///
+/// Séparé de `verify_by_restore` pour que l'appelant puisse choisir : sur un dépôt
+/// distant facturé au transfert, relire des blocs coûte de l'argent.
+pub async fn with_data_check<R: Runner>(
+    mut v: Verification,
+    repo: &Repository<R>,
+    subset: &str,
+) -> Verification {
+    let r = repo.check_data(subset).await;
+
+    v.data_checked = Some(DataCheck {
+        subset: subset.to_string(),
+        ok: r.is_ok(),
+        detail: r.err().map(|e| e.to_string()),
+    });
+
+    if !v.matches() {
+        tracing::error!(snapshot = %v.snapshot_id, "{}", v.describe());
+    }
+    v
 }
 
 /// L'image utilisée pour la vérification.
@@ -193,10 +276,13 @@ async fn verifier_dans(
     let repo = Repository::new(runner, "/depot", password.to_string());
 
     let vol = volume.to_string();
-    verify_by_restore(&repo, snapshot, "/verif", move |_| async move {
+    let v = verify_by_restore(&repo, snapshot, "/verif", move |_| async move {
         compter_dans_volume(&vol).await
     })
-    .await
+    .await?;
+
+    // La comparaison ne voit pas un bit retourné : le fichier garde sa taille.
+    Ok(with_data_check(v, &repo, DEFAULT_SUBSET).await)
 }
 
 /// Compte les fichiers réguliers restaurés, depuis l'intérieur d'un conteneur.
@@ -288,6 +374,18 @@ mod tests {
             bytes_restored: restored.1,
             files_expected: expected.0,
             bytes_expected: expected.1,
+            data_checked: None,
+        }
+    }
+
+    fn avec_blocs(v: Verification, ok: bool) -> Verification {
+        Verification {
+            data_checked: Some(DataCheck {
+                subset: "5%".into(),
+                ok,
+                detail: (!ok).then(|| "pack 3f2a corrompu".to_string()),
+            }),
+            ..v
         }
     }
 
@@ -322,6 +420,51 @@ mod tests {
     fn the_description_is_readable_in_both_cases() {
         assert!(verification((3, 100), (3, 100)).describe().contains("conformes"));
         assert!(verification((3, 100), (4, 100)).describe().contains("annonçait"));
+    }
+
+    #[test]
+    fn identical_sizes_do_not_prove_intact_data() {
+        // 🔴 Le trou que cette relecture comble : tous les fichiers présents, tous de
+        // la bonne taille, et pourtant pourris. Les décomptes seuls diraient
+        // « conforme » sur une sauvegarde inexploitable.
+        let v = avec_blocs(verification((12, 4096), (12, 4096)), false);
+
+        assert!(!v.matches(), "la corruption doit faire échouer la vérification");
+        assert!(v.describe().contains("CORROMPU"), "{}", v.describe());
+        assert!(v.describe().contains("3f2a"), "la cause doit être visible");
+    }
+
+    #[test]
+    fn a_clean_block_read_is_reported() {
+        let v = avec_blocs(verification((12, 4096), (12, 4096)), true);
+        assert!(v.matches());
+        assert!(v.describe().contains("5%"), "{}", v.describe());
+    }
+
+    #[test]
+    fn a_verification_without_block_reading_says_so() {
+        // Sans cette mention, « conforme » laisserait croire à une garantie qu'on n'a
+        // pas donnée.
+        let v = verification((12, 4096), (12, 4096));
+        assert!(v.matches());
+        assert!(v.describe().contains("sans relecture"), "{}", v.describe());
+    }
+
+    #[test]
+    fn a_missing_file_stays_the_headline_even_with_clean_blocks() {
+        // Les blocs présents peuvent être sains alors qu'il en manque : le diagnostic
+        // « il manque des données » reste le bon.
+        let v = avec_blocs(verification((11, 4096), (12, 4096)), true);
+        assert!(!v.matches());
+        assert!(v.describe().contains("ÉCART"), "{}", v.describe());
+    }
+
+    #[test]
+    fn the_default_subset_is_a_sample_not_everything() {
+        // Relire 100 % à chaque fois ferait durer la vérification assez longtemps
+        // pour qu'on cesse de la lancer.
+        assert_eq!(DEFAULT_SUBSET, "5%");
+        assert_ne!(DEFAULT_SUBSET, "100%");
     }
 
     #[test]

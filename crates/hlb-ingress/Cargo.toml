@@ -10,6 +10,7 @@ description = "Génération des Caddyfile et rechargement à chaud."
 hlb-types.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 
 [dev-dependencies]

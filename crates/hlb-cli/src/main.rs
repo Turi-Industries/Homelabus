@@ -55,6 +55,10 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_CADDY_ADMIN")]
     caddy_admin: Option<String>,
 
+    /// API locale de CrowdSec. Sans elle, le Caddyfile est généré sans videur.
+    #[arg(long, global = true, default_value = "http://crowdsec:8080", env = "HLB_CROWDSEC_URL")]
+    crowdsec_url: String,
+
     /// URL de Stalwart. Sans elle, les boîtes mail ne sont pas provisionnées.
     #[arg(long, global = true, env = "HLB_STALWART_URL")]
     stalwart_url: Option<String>,
@@ -157,6 +161,14 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+
+    /// Mesh WireGuard entre nœuds (§2ter, §6.3).
+    #[command(subcommand)]
+    Mesh(MeshCmd),
+
+    /// Videur CrowdSec : enrôlement et état (§8bis).
+    #[command(subcommand)]
+    Crowdsec(CrowdsecCmd),
 
     /// Inventaire des secrets : noms et usages, jamais les valeurs.
     Secrets,
@@ -265,6 +277,18 @@ enum PitrCmd {
         #[arg(long, default_value = "/archive/wal")]
         dir: String,
     },
+    /// 🔴 Produire une sauvegarde de base. Sans elle, le WAL ne restaure rien.
+    Base {
+        /// Répertoire recevant les sauvegardes de base.
+        #[arg(long, default_value = "/archive/base")]
+        dest: String,
+        /// Réseau Docker sur lequel l'hôte de l'URL est résolvable.
+        #[arg(long, default_value = "hlb_platform")]
+        network: String,
+        /// Exécuter réellement. Sans ce drapeau, on n'affiche que ce qui serait fait.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Préparer une restauration à un instant donné. N'exécute RIEN.
     Plan {
         /// Instant cible en UTC : « 2026-08-16 14:04:00 ».
@@ -288,11 +312,54 @@ enum UpdateCmd {
 }
 
 #[derive(Subcommand)]
+enum MeshCmd {
+    /// Ajouter un nœud au mesh et produire sa configuration.
+    Add {
+        /// Nom du nœud, tel qu'affiché par `hlb cluster status`.
+        node: String,
+        /// Adresse publique joignable. Absente = nœud derrière NAT.
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// La configuration `wg-quick` d'un nœud déjà enregistré.
+    Show { node: String },
+    /// Les nœuds du mesh et leurs adresses.
+    List,
+}
+
+#[derive(Subcommand)]
+enum CrowdsecCmd {
+    /// Enrôler le videur et déposer sa clé au coffre. Sans lui, rien n'est bloqué.
+    Enroll {
+        /// Service Swarm portant CrowdSec.
+        #[arg(long, default_value = "crowdsec")]
+        service: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Le filtrage est-il RÉELLEMENT actif ?
+    Status {
+        #[arg(long, default_value = "crowdsec")]
+        service: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CatalogCmd {
     /// Lister les apps disponibles.
     List,
     /// Valider tous les manifests et le graphe de dépendances.
     Validate,
+}
+
+/// L'instant présent, en secondes depuis l'époque.
+fn maintenant() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Nom du secret portant la clé de déverrouillage du Swarm.
@@ -306,10 +373,91 @@ const SECRET_AUTOLOCK: &str = "swarm-unlock-key";
 async fn pitr(
     cmd: &PitrCmd,
     state_path: &std::path::Path,
+    admin_url: Option<&str>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     use hlb_backup::pitr;
 
     match cmd {
+        PitrCmd::Base { dest, network, apply } => {
+            let state = State::open(state_path).await?;
+
+            // 🔴 Les identifiants viennent de `--postgres-admin`, la MÊME source que
+            // le provisionnement des bases. Les redemander séparément ferait diverger
+            // deux vérités, et la sauvegarde casserait le jour où l'une change.
+            let Some(url) = admin_url else {
+                eprintln!("Aucune URL PostgreSQL — utilise --postgres-admin.");
+                eprintln!();
+                eprintln!("  Forme attendue :");
+                eprintln!("    postgres://utilisateur:motdepasse@hôte:5432/postgres");
+                eprintln!();
+                eprintln!("  🔴 L'utilisateur doit avoir l'attribut REPLICATION : une");
+                eprintln!("     sauvegarde de base passe par le protocole de réplication,");
+                eprintln!("     pas par une connexion SQL ordinaire.");
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let Some(creds) = pitr::parse_pg_url(url) else {
+                eprintln!("URL PostgreSQL illisible : « {url} »");
+                eprintln!("Attendu : postgres://utilisateur:motdepasse@hôte:5432/base");
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let (host, user, password) = (creds.host, creds.user, creds.password);
+            let at = maintenant();
+            let nom = pitr::basebackup::directory_name(at);
+
+            if !apply {
+                println!("Produirait une sauvegarde de base :");
+                println!("  destination : {dest}/{nom}");
+                println!("  serveur     : {user}@{host}:{} (réseau {network})", creds.port);
+                println!();
+                println!("  Elle streame le WAL pendant la copie, sinon le résultat");
+                println!("  serait incohérent et PostgreSQL refuserait de démarrer.");
+                println!();
+                println!("  ⚠️  Prévois la place : c'est une copie COMPLÈTE du répertoire");
+                println!("     de données, pas un incrément.");
+                println!();
+                println!("  Relance avec --apply.");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            let cible = pitr::basebackup::Target::new(dest, &host)
+                .credentials(&user, &password)
+                .network(network);
+
+            print!("Sauvegarde de base en cours… ");
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+
+            match pitr::basebackup::run(&cible, at).await {
+                Ok(id) => {
+                    // 🔴 L'enregistrement est ce qui rend la base VISIBLE pour
+                    // `pitr window` et `pitr plan`. Sans lui, la sauvegarde existe sur
+                    // le disque et le système continue de dire qu'il n'en a aucune.
+                    state
+                        .record_backup("postgres", "pg-basebackup", Some(&id), None)
+                        .await?;
+                    state
+                        .audit("cli", ACTEUR_ROLE, "pg-basebackup", &id, "ok", None)
+                        .await?;
+                    println!("✓ {id}");
+                    println!();
+                    println!("Fenêtre restaurable mise à jour : hlb backup pitr window");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    // L'échec est enregistré : `base_backups` l'exclut, donc la
+                    // fenêtre annoncée n'inclut pas une base qui n'existe pas.
+                    state
+                        .record_backup("postgres", "pg-basebackup", None, Some(&e.to_string()))
+                        .await?;
+                    println!("✗");
+                    eprintln!("{e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+
         PitrCmd::Config { dir } => {
             let a = pitr::WalArchive::new(dir);
             println!("{}", a.render_settings());
@@ -325,7 +473,16 @@ async fn pitr(
             println!("#");
             println!("#    Puis : une sauvegarde de base est OBLIGATOIRE. Le WAL seul");
             println!("#    ne restaure rien.");
-            println!("#      pg_basebackup -D <dest> -Ft -Xs -P");
+            println!("#      hlb backup pitr base --apply");
+            println!("#");
+            println!("# 🔴 ET pg_hba.conf, que postgresql.conf ne remplace PAS :");
+            println!("#      host replication all all scram-sha-256");
+            println!("#");
+            println!("#    pg_basebackup passe par le protocole de RÉPLICATION, que");
+            println!("#    pg_hba traite comme une base à part. Un utilisateur qui se");
+            println!("#    connecte très bien en psql est refusé ici. L'image postgres");
+            println!("#    officielle ne l'autorise que depuis 127.0.0.1 — donc jamais");
+            println!("#    depuis un autre conteneur.");
             Ok(ExitCode::SUCCESS)
         }
 
@@ -797,6 +954,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 if let Some(m) = &mail {
                     exec = exec.with_mail(m);
                 }
+                exec = exec.with_crowdsec(&cli.crowdsec_url);
                 let out = match exec.run(app, &plan).await {
                     Ok(o) => o,
                     Err(e) => {
@@ -944,7 +1102,31 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     ));
                 }
 
-                let cfg = hlb_ingress::Config::default();
+                // 🔴 CrowdSec n'est activé QUE si sa clé est au coffre. Générer avec
+                // une clé vide donnerait un Caddyfile valide, un Caddy qui démarre, et
+                // plus aucun bannissement — sans erreur nulle part.
+                let mut cfg = hlb_ingress::Config::default();
+                match state.secret(hlb_ingress::crowdsec::SECRET_NAME).await? {
+                    Some(ct) => {
+                        let vault = Vault::open_or_init(&cli.master_key)?;
+                        let cle = vault.decrypt(&ct)?;
+                        if hlb_ingress::crowdsec::looks_like_key(&cle) {
+                            cfg.crowdsec = Some(hlb_ingress::CrowdSec {
+                                api_url: cli.crowdsec_url.clone(),
+                                api_key: cle,
+                            });
+                            println!("Videur CrowdSec : actif ({})", cli.crowdsec_url);
+                        } else {
+                            eprintln!("🔴 clé de videur invalide au coffre — filtrage DÉSACTIVÉ.");
+                            eprintln!("   hlb crowdsec status");
+                        }
+                    }
+                    None => {
+                        eprintln!("⚠️  CrowdSec non enrôlé : le trafic ne sera pas filtré.");
+                        eprintln!("   hlb crowdsec enroll --apply");
+                    }
+                }
+
                 let front = hlb_ingress::render_frontend(&routes, &cfg);
                 let back = hlb_ingress::render_backend(&routes, &cfg);
 
@@ -1116,6 +1298,263 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Mesh(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+                let vault = Vault::open_or_init(&cli.master_key)?;
+
+                // La topologie vit au coffre comme le reste. Les clés publiques et les
+                // adresses ne sont pas secrètes, mais les garder avec les clés PRIVÉES
+                // évite deux sources de vérité qui divergeraient.
+                const TOPOLOGIE: &str = "mesh-topology";
+
+                let mut mesh = match state.secret(TOPOLOGIE).await? {
+                    Some(ct) => {
+                        let pairs: Vec<hlb_mesh::Peer> =
+                            serde_json::from_str(&vault.decrypt(&ct)?)?;
+                        hlb_mesh::MeshConfig::from_peers([10, 42, 0], 51820, pairs)
+                    }
+                    None => hlb_mesh::MeshConfig::default(),
+                };
+
+                match cmd {
+                    MeshCmd::List => {
+                        let pairs: Vec<_> = mesh.peers().collect();
+                        if pairs.is_empty() {
+                            println!("Aucun nœud dans le mesh.");
+                            println!("  hlb mesh add <nœud> --endpoint <ip-publique> --apply");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                        }
+
+                        println!("Mesh {} — {} nœud(s)", mesh.cidr(), pairs.len());
+                        for p in &pairs {
+                            println!(
+                                "  {:<15} {}  {}",
+                                p.mesh_ip.to_string(),
+                                p.name,
+                                match &p.endpoint {
+                                    Some(e) => format!("↔ {e}:{}", mesh.port()),
+                                    None => "(derrière NAT)".to_string(),
+                                }
+                            );
+                        }
+
+                        if pairs.iter().all(|p| p.endpoint.is_none()) {
+                            println!();
+                            println!("🔴 Aucun nœud n'a d'adresse publique : personne ne peut");
+                            println!("   initier de tunnel. Le mesh ne s'établira jamais.");
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    MeshCmd::Show { node } => {
+                        let Some(ct) = state.secret(&format!("mesh-key-{node}")).await? else {
+                            eprintln!("Le nœud « {node} » n'est pas dans le mesh.");
+                            eprintln!("  hlb mesh add {node} --apply");
+                            return Ok(ExitCode::FAILURE);
+                        };
+                        let privee = vault.decrypt(&ct)?;
+
+                        match mesh.render_for(node, &privee) {
+                            Some(c) => {
+                                println!("{c}");
+                                println!("# À déposer en /etc/wireguard/hlb0.conf sur {node}, puis :");
+                                println!("#   chmod 600 /etc/wireguard/hlb0.conf");
+                                println!("#   systemctl enable --now wg-quick@hlb0");
+                                println!("#");
+                                println!("# 🔴 Puis faire écouter Swarm sur l'adresse du mesh :");
+                                println!("#   --advertise-addr {}", mesh.advertise_addr_for(node).unwrap_or_default());
+                                println!("#   Sans ça, les ports 2377/7946/4789 restent exposés");
+                                println!("#   sur l'interface publique — 4789 n'a AUCUNE");
+                                println!("#   authentification.");
+                                Ok(ExitCode::SUCCESS)
+                            }
+                            None => {
+                                eprintln!("Topologie incohérente : « {node} » a une clé mais pas de pair.");
+                                Ok(ExitCode::FAILURE)
+                            }
+                        }
+                    }
+
+                    MeshCmd::Add { node, endpoint, apply } => {
+                        if mesh.get(node).is_some() {
+                            println!("✓ « {node} » est déjà dans le mesh.");
+                            println!("  hlb mesh show {node}   # sa configuration");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        if !apply {
+                            println!("Ajouterait « {node} » au mesh {}.", mesh.cidr());
+                            match endpoint {
+                                Some(e) => println!("  joignable en {e}:{}", mesh.port()),
+                                None => {
+                                    println!("  ⚠️  sans --endpoint : nœud considéré derrière NAT.");
+                                    println!("     Il n'écoutera pas et devra initier ses tunnels.");
+                                    println!("     Au moins UN nœud doit avoir une adresse publique.");
+                                }
+                            }
+                            println!();
+                            println!("  Une paire de clés sera générée ; la privée ira au coffre");
+                            println!("  et n'en sortira que pour `hlb mesh show`.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let (pair, cles) =
+                            hlb_mesh::provision_node(&mut mesh, node, endpoint.clone())?;
+
+                        // La clé privée d'abord : si la topologie était écrite en
+                        // premier et que ceci échouait, le mesh porterait un nœud dont
+                        // personne ne peut produire la configuration.
+                        state
+                            .store_secret_if_absent(
+                                &format!("mesh-key-{node}"),
+                                &vault.encrypt(&cles.private)?,
+                                &format!("clé privée WireGuard de {node}"),
+                            )
+                            .await?;
+
+                        let pairs: Vec<_> = mesh.peers().cloned().collect();
+                        let json = serde_json::to_string(&pairs)?;
+                        let ct = vault.encrypt(&json)?;
+                        match state.secret(TOPOLOGIE).await? {
+                            Some(_) => state.rotate_secret(TOPOLOGIE, &ct).await?,
+                            None => {
+                                state
+                                    .store_secret_if_absent(TOPOLOGIE, &ct, "topologie du mesh")
+                                    .await?;
+                            }
+                        }
+
+                        state
+                            .audit("cli", ACTEUR_ROLE, "mesh-add", node, "ok", None)
+                            .await?;
+
+                        println!("✓ « {node} » ajouté au mesh en {}", pair.mesh_ip);
+                        println!();
+                        println!("  hlb mesh show {node}    # sa configuration wg-quick");
+                        println!();
+                        println!("⚠️  Les configurations des AUTRES nœuds ont changé : elles");
+                        println!("   doivent connaître ce nouveau pair. Redéploie-les toutes,");
+                        println!("   sinon le nouveau nœud restera injoignable depuis eux.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
+        }
+
+        Command::Crowdsec(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_ingress::crowdsec::{self, Cscli};
+                let state = State::open(&cli.state).await?;
+
+                match cmd {
+                    CrowdsecCmd::Status { service } => {
+                        let au_coffre = state.secret(crowdsec::SECRET_NAME).await?.is_some();
+                        let cscli = Cscli::new(service);
+                        let enrole = cscli.is_enrolled().await;
+
+                        println!("Videur CrowdSec « {} »", crowdsec::BOUNCER_NAME);
+                        println!(
+                            "  enrôlé côté CrowdSec : {}",
+                            match &enrole {
+                                Ok(true) => "oui".to_string(),
+                                Ok(false) => "NON".to_string(),
+                                Err(e) => format!("indéterminé ({e})"),
+                            }
+                        );
+                        println!(
+                            "  clé au coffre        : {}",
+                            if au_coffre { "oui" } else { "NON" }
+                        );
+                        println!();
+
+                        match (enrole.unwrap_or(false), au_coffre) {
+                            (true, true) => {
+                                println!("✓ Le filtrage peut être appliqué.");
+                                println!("  Il ne l'est réellement qu'après un `hlb ingress --apply`.");
+                            }
+                            (true, false) => {
+                                // 🔴 Le pire des cas : CrowdSec croit avoir un videur,
+                                // et personne ne détient sa clé.
+                                println!("🔴 Videur enrôlé mais clé ABSENTE du coffre.");
+                                println!("   Elle n'est affichée qu'à la création : elle est perdue.");
+                                println!("   Supprime le videur puis réenrôle :");
+                                println!("     cscli bouncers delete {}", crowdsec::BOUNCER_NAME);
+                                println!("     hlb crowdsec enroll --apply");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                            (false, _) => {
+                                // 🔴 Le cas silencieux : CrowdSec détecte tout et ne
+                                // bloque rien. Aucune erreur nulle part.
+                                println!("🔴 Aucun videur : CrowdSec DÉTECTE mais ne BLOQUE rien.");
+                                println!("   Les alertes s'accumulent, personne n'est banni.");
+                                println!("     hlb crowdsec enroll --apply");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    CrowdsecCmd::Enroll { service, apply } => {
+                        if state.secret(crowdsec::SECRET_NAME).await?.is_some() {
+                            println!("✓ Une clé de videur est déjà au coffre.");
+                            println!("  Réenrôler en créerait un second, sans savoir lequel sert.");
+                            println!("  hlb crowdsec status  # pour vérifier l'état réel");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        if !apply {
+                            println!("Enrôlerait le videur « {} » auprès de CrowdSec.", crowdsec::BOUNCER_NAME);
+                            println!();
+                            println!("  Sa clé sera déposée au coffre. Elle n'est affichée");
+                            println!("  qu'une fois : la perdre oblige à supprimer le videur");
+                            println!("  et à recommencer.");
+                            println!();
+                            println!("  ⚠️  Le Caddy frontal devra être une image construite avec");
+                            println!("     github.com/hslatman/caddy-crowdsec-bouncer. Une image");
+                            println!("     Caddy standard refusera de démarrer sur la directive.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let cle = Cscli::new(service).enroll().await?;
+                        if !crowdsec::looks_like_key(&cle) {
+                            eprintln!("cscli a renvoyé quelque chose qui n'est pas une clé :");
+                            eprintln!("  « {cle} »");
+                            eprintln!();
+                            eprintln!("Rien n'est enregistré : une clé invalide produirait un");
+                            eprintln!("Caddyfile valide qui ne bloquerait plus rien.");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        let vault = Vault::open_or_init(&cli.master_key)?;
+                        state
+                            .store_secret_if_absent(
+                                crowdsec::SECRET_NAME,
+                                &vault.encrypt(&cle)?,
+                                "clé du videur CrowdSec au frontal",
+                            )
+                            .await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "crowdsec-enroll", crowdsec::BOUNCER_NAME, "ok", None)
+                            .await?;
+
+                        println!("✓ Videur enrôlé, clé au coffre.");
+                        println!();
+                        println!("Le filtrage n'est pas actif pour autant : regénère l'entrée.");
+                        println!("  hlb ingress --apply");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Secrets => {
@@ -1393,7 +1832,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    BackupCmd::Pitr(sous) => pitr(sous, &cli.state).await,
+                    BackupCmd::Pitr(sous) => pitr(sous, &cli.state, cli.postgres_admin.as_deref()).await,
                 }
             })
         }

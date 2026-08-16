@@ -36,6 +36,24 @@ pub struct AppState {
     pub started_at: std::time::Instant,
     pub version: &'static str,
     pub last_poll: LastPoll,
+    /// Jeton attendu sur `/metrics`. `None` = point d'exposition ouvert.
+    ///
+    /// 🔴 `/metrics` en dit long : noms des apps installées, âge des sauvegardes,
+    /// nœuds saturés, actions manuelles en attente. C'est une carte de ce qui est
+    /// fragile, et donc de quoi choisir un moment pour frapper.
+    pub metrics_token: Option<String>,
+}
+
+/// Comparaison à temps constant.
+///
+/// Un `==` sur des chaînes s'arrête au premier octet différent : le temps de réponse
+/// révèle combien de caractères sont corrects, ce qui permet de deviner le jeton
+/// octet par octet. Le surcoût ici est nul, l'absence de protection ne l'est pas.
+fn constant_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Erreur d'API, rendue en JSON plutôt qu'en page HTML.
@@ -204,7 +222,29 @@ async fn list_audit(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<Aud
 /// Exposition Prometheus (§8bis).
 ///
 /// Texte brut, pas JSON : c'est le format d'exposition attendu par les collecteurs.
-async fn prometheus(AxumState(s): AxumState<Arc<AppState>>) -> Response {
+async fn prometheus(
+    AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if let Some(attendu) = &s.metrics_token {
+        let fourni = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+
+        if !constant_eq(fourni, attendu) {
+            // 401 avec `WWW-Authenticate` : un collecteur mal configuré doit
+            // comprendre qu'il lui manque un jeton, pas croire à une panne.
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
+                "jeton requis\n",
+            )
+                .into_response();
+        }
+    }
+
     let mut apps = Vec::new();
 
     let installees = match s.state.installed_apps().await {
@@ -282,6 +322,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             version: "test",
             last_poll: Default::default(),
+            metrics_token: None,
         }))
     }
 
@@ -383,6 +424,61 @@ mod tests {
         let (_, _, body) = texte(app().await, "/metrics").await;
         assert!(!body.contains("PrivateKey"), "{body}");
         assert!(!body.to_lowercase().contains("password"), "{body}");
+    }
+
+    async fn app_protegee() -> Router {
+        let st = State::in_memory().await.expect("base");
+        st.upsert_app("gitea", &manifest("gitea"), None).await.expect("upsert");
+        router(Arc::new(AppState {
+            state: Arc::new(st),
+            started_at: std::time::Instant::now(),
+            version: "test",
+            last_poll: Default::default(),
+            metrics_token: Some("jeton-secret-de-test".into()),
+        }))
+    }
+
+    async fn get_avec_jeton(r: Router, jeton: Option<&str>) -> StatusCode {
+        let mut req = Request::builder().uri("/metrics");
+        if let Some(j) = jeton {
+            req = req.header("Authorization", format!("Bearer {j}"));
+        }
+        r.oneshot(req.body(Body::empty()).expect("requête"))
+            .await
+            .expect("réponse")
+            .status()
+    }
+
+    #[tokio::test]
+    async fn metrics_can_be_protected_by_a_token() {
+        // 🔴 `/metrics` est une carte de ce qui est fragile : quelles apps ne sont
+        // plus sauvegardées, quels nœuds saturent. De quoi choisir son moment.
+        assert_eq!(get_avec_jeton(app_protegee().await, None).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            get_avec_jeton(app_protegee().await, Some("mauvais")).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            get_avec_jeton(app_protegee().await, Some("jeton-secret-de-test")).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_token_configured_metrics_stay_open() {
+        // Rétrocompatible : un déploiement existant ne casse pas du jour au lendemain.
+        assert_eq!(get_avec_jeton(app().await, None).await, StatusCode::OK);
+    }
+
+    #[test]
+    fn token_comparison_does_not_leak_its_length_by_timing() {
+        // Un `==` s'arrête au premier octet différent : le temps de réponse dirait
+        // combien de caractères sont bons, et le jeton se devinerait octet par octet.
+        assert!(constant_eq("abc", "abc"));
+        assert!(!constant_eq("abc", "abd"));
+        assert!(!constant_eq("abc", "abcd"));
+        assert!(!constant_eq("", "x"));
+        assert!(constant_eq("", ""));
     }
 
     #[tokio::test]

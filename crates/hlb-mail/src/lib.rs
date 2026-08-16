@@ -24,7 +24,37 @@
 //! et contre `crates/registry/src/schema/structs.rs` du dépôt amont — pas déduite
 //! d'un billet de blog.
 //!
-//! ## Les trois pièges de cette API
+//! ## 🔴 Un filtre = UNE propriété
+//!
+//! La désérialisation d'un filtre de registre fait `*self = RegistryFilter::Property
+//! { … }` **à chaque clé rencontrée**. Une condition portant deux propriétés n'en
+//! garde donc qu'une — la dernière — sans le moindre avertissement.
+//!
+//! Chercher `{"name": "gitea", "domainId": "d1"}` revient à chercher `{"domainId":
+//! "d1"}` : on retrouverait n'importe quel compte du domaine, ou un `gitea` d'un
+//! **autre** domaine selon l'ordre des clés. Pour un provisionnement idempotent, c'est
+//! l'erreur qui fait qu'une app reçoit les identifiants d'une boîte qui n'est pas la
+//! sienne.
+//!
+//! La forme correcte est le `AND` de JMAP, une propriété par condition :
+//!
+//! ```json
+//! { "filter": { "operator": "AND", "conditions": [
+//!     { "name": "gitea" }, { "domainId": "d1" } ] } }
+//! ```
+//!
+//! Seul `AND` est accepté : `OR` et `NOT` sont rejetés par le serveur.
+//!
+//! ## Sur `accountId`
+//!
+//! Les méthodes JMAP standard exigent un `accountId`. Ici, **non** : `Account` et
+//! `Domain` portent les drapeaux `OBJ_FILTER_TENANT | OBJ_SEQ_ID`, pas
+//! `OBJ_FILTER_ACCOUNT`. Le serveur ne lit `accountId` que pour les objets marqués de
+//! ce dernier (`ArchivedItem`, `MaskedEmail`, `PublicKey`, `SpamTrainingSample`), et
+//! `SetResponse::from_request` traite son absence sans erreur. On l'omet donc
+//! délibérément — ce n'est pas un oubli.
+//!
+//! ## Les trois autres pièges de cette API
 //!
 //! 1. **`emailAddress` est calculé par le serveur.** On pose `name` (la partie locale)
 //!    et `domainId` ; envoyer `emailAddress` ne produit aucune erreur et n'a aucun
@@ -218,6 +248,8 @@ impl Stalwart {
     /// Un domaine absent de Stalwart ne peut pas accueillir de compte, et il vaut
     /// mieux le dire ici que laisser la création échouer de façon obscure.
     pub async fn domain_id(&self, domain: &str) -> Result<String> {
+        // Une seule propriété : la forme plate convient ici, contrairement à la
+        // recherche de compte qui en croise deux.
         let args = self
             .call(
                 "x:Domain/query",
@@ -232,13 +264,18 @@ impl Stalwart {
     }
 
     /// Cherche un compte par sa partie locale, dans un domaine donné.
+    ///
+    /// 🔴 Les deux critères sont indispensables **et** doivent être des conditions
+    /// séparées (cf. l'en-tête du module). Sur `name` seul, deux domaines hébergeant
+    /// chacun un `contact@` se confondraient.
     pub async fn find_account(&self, local: &str, domain_id: &str) -> Result<Option<String>> {
         let args = self
             .call(
                 "x:Account/query",
-                serde_json::json!({
-                    "filter": { "name": local, "domainId": domain_id }
-                }),
+                serde_json::json!({ "filter": and(&[
+                    serde_json::json!({ "name": local }),
+                    serde_json::json!({ "domainId": domain_id }),
+                ])}),
             )
             .await?;
         Ok(ids(&args).into_iter().next())
@@ -366,6 +403,17 @@ fn account_body(
     })
 }
 
+/// Un `AND` de conditions, chacune ne portant qu'une seule propriété.
+///
+/// Une seule condition n'a pas besoin de l'enveloppe : la passer telle quelle évite
+/// une indirection inutile côté serveur.
+fn and(conditions: &[serde_json::Value]) -> serde_json::Value {
+    match conditions {
+        [seule] => seule.clone(),
+        autres => serde_json::json!({ "operator": "AND", "conditions": autres }),
+    }
+}
+
 /// Les identifiants renvoyés par un `/query`.
 fn ids(args: &serde_json::Value) -> Vec<String> {
     args.get("ids")
@@ -459,6 +507,34 @@ mod tests {
     fn an_empty_alias_is_dropped() {
         let b = account_body("gitea", "d1", "mdp", &["@example.fr".into(), "".into()]);
         assert!(b["aliases"].as_array().expect("liste").is_empty(), "{b}");
+    }
+
+    #[test]
+    fn a_two_property_filter_becomes_an_and_of_conditions() {
+        // 🔴 Le bug que ce test verrouille : côté serveur, chaque clé d'une même
+        // condition ÉCRASE la précédente. Un filtre plat à deux propriétés n'en
+        // garderait qu'une, et l'on retrouverait le « contact@ » d'un autre domaine.
+        let f = and(&[
+            serde_json::json!({ "name": "gitea" }),
+            serde_json::json!({ "domainId": "d1" }),
+        ]);
+
+        assert_eq!(f["operator"], "AND");
+        let c = f["conditions"].as_array().expect("conditions");
+        assert_eq!(c.len(), 2, "chaque propriété doit avoir SA condition");
+        assert_eq!(c[0]["name"], "gitea");
+        assert_eq!(c[1]["domainId"], "d1");
+
+        // Et surtout : jamais les deux propriétés dans le même objet.
+        assert!(c[0].get("domainId").is_none(), "{f}");
+        assert!(c[1].get("name").is_none(), "{f}");
+    }
+
+    #[test]
+    fn a_single_condition_needs_no_envelope() {
+        let f = and(&[serde_json::json!({ "name": "gitea" })]);
+        assert_eq!(f["name"], "gitea");
+        assert!(f.get("operator").is_none(), "{f}");
     }
 
     #[test]

@@ -22,11 +22,10 @@
 //! Autrement dit : **archiver vers une destination cassée est plus dangereux que ne
 //! pas archiver du tout.**
 //!
-//! ⚠️ **Ce garde-fou n'est PAS encore en place.** L'agent (§9bis) ne surveille que `/`
-//! et `/var/lib/docker` par défaut ; le répertoire d'archivage n'y est pas. Tant que
-//! `HLB_AGENT_PATHS` ne le contient pas, une panne d'archivage remplit `pg_wal` sans
-//! qu'aucune alerte ne parte. `hlb backup pitr config` le dit à l'utilisateur, ce qui
-//! est un pis-aller — pas une surveillance.
+//! C'est pour ça que l'agent surveille `/archive/wal` et `/archive/base` par défaut
+//! (§9bis) : la saturation du disque d'archivage déclenche les mêmes paliers que
+//! n'importe quel autre système de fichiers. Un chemin absent est ignoré sans bruit —
+//! tous les nœuds n'archivent pas.
 //!
 //! ## Ce que ce module fait
 //!
@@ -747,5 +746,434 @@ mod tests {
         assert_eq!(iso8601(J0), "2026-08-16 12:00:00 UTC");
         // Un instant antérieur à l'époque ne doit pas produire d'aberration.
         assert_eq!(iso8601(-86_400), "1969-12-31 00:00:00 UTC");
+    }
+}
+
+/// Production d'une sauvegarde de base (`pg_basebackup`).
+///
+/// 🔴 **Sans elle, l'archivage WAL ne sert à rien.** C'est le point de départ obligé
+/// de tout rejeu : les journaux disent comment passer d'un état à un autre, jamais
+/// quel est l'état initial. Un homelab qui archiverait consciencieusement son WAL
+/// depuis six mois sans une seule sauvegarde de base ne pourrait rien restaurer.
+pub mod basebackup {
+    use super::*;
+
+    /// Où écrire la sauvegarde, et à qui se connecter.
+    #[derive(Debug, Clone)]
+    pub struct Target {
+        /// Volume ou chemin hôte recevant la copie.
+        pub destination: String,
+        pub host: String,
+        pub port: u16,
+        /// 🔴 Un rôle avec l'attribut `REPLICATION`. Le super-utilisateur convient,
+        /// mais un rôle dédié limite ce qu'une fuite de ce mot de passe permettrait.
+        pub user: String,
+        pub password: String,
+        /// Réseau Docker sur lequel le serveur est joignable.
+        pub network: Option<String>,
+        /// Image cliente. Sa version majeure doit correspondre au serveur.
+        pub image: String,
+    }
+
+    impl Target {
+        pub fn new(destination: impl Into<String>, host: impl Into<String>) -> Self {
+            Self {
+                destination: destination.into(),
+                host: host.into(),
+                port: 5432,
+                user: "postgres".into(),
+                password: String::new(),
+                network: None,
+                image: "postgres:17-alpine".into(),
+            }
+        }
+
+        pub fn credentials(mut self, user: impl Into<String>, password: impl Into<String>) -> Self {
+            self.user = user.into();
+            self.password = password.into();
+            self
+        }
+
+        pub fn network(mut self, net: impl Into<String>) -> Self {
+            self.network = Some(net.into());
+            self
+        }
+
+        pub fn image(mut self, image: impl Into<String>) -> Self {
+            self.image = image.into();
+            self
+        }
+    }
+
+    /// Les arguments de `pg_basebackup`, isolés pour être testables sans Docker.
+    ///
+    /// Chaque option porte une conséquence :
+    ///
+    /// - `--format=tar` + `--gzip` : une arborescence brute serait recopiée fichier
+    ///   par fichier, et les permissions se perdraient au passage sur un volume monté.
+    /// - `--wal-method=stream` : 🔴 **le point critique.** Une sauvegarde de base met
+    ///   plusieurs minutes ; pendant ce temps le serveur continue d'écrire. Sans les
+    ///   journaux produits *pendant* la copie, la sauvegarde obtenue est incohérente et
+    ///   PostgreSQL refuse de démarrer dessus. `stream` ouvre une seconde connexion qui
+    ///   les capture au fil de l'eau. Le défaut historique (`fetch`) exige en plus que
+    ///   `wal_keep_size` soit assez grand, faute de quoi la sauvegarde échoue *à la
+    ///   fin*, après avoir tout copié.
+    /// - `--checkpoint=fast` : sans lui, PostgreSQL attend le prochain checkpoint
+    ///   naturel — jusqu'à plusieurs minutes d'attente avant que la copie ne démarre.
+    /// - `--no-password` : jamais d'invite interactive. Un conteneur qui attend une
+    ///   saisie reste bloqué jusqu'au délai d'expiration, sans rien dire.
+    pub fn args(label: &str) -> Vec<String> {
+        [
+            "pg_basebackup",
+            "--pgdata=/sauvegarde",
+            "--format=tar",
+            "--gzip",
+            "--wal-method=stream",
+            "--checkpoint=fast",
+            "--progress",
+            "--no-password",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(format!("--label={label}")))
+        .collect()
+    }
+
+    /// Enrichit les erreurs dont le message brut n'indique pas quoi faire.
+    ///
+    /// 🔴 `pg_basebackup` passe par le **protocole de réplication**, pas par une
+    /// connexion SQL ordinaire. `pg_hba.conf` traite `replication` comme une base de
+    /// données distincte : un utilisateur qui se connecte parfaitement en `psql` est
+    /// refusé pour une sauvegarde de base. L'image officielle n'autorise la
+    /// réplication que depuis `127.0.0.1`, donc jamais depuis un autre conteneur.
+    pub(crate) fn expliquer(stderr: &str) -> String {
+        if stderr.contains("no pg_hba.conf entry for replication") {
+            return format!(
+                "{stderr}\n\n\
+                 🔴 pg_basebackup utilise le protocole de RÉPLICATION, que pg_hba.conf\n\
+                 traite comme une base de données à part. Se connecter en psql ne prouve\n\
+                 donc rien. L'image postgres officielle ne l'autorise que depuis\n\
+                 127.0.0.1 — jamais depuis un autre conteneur.\n\n\
+                 Ajoute cette ligne à pg_hba.conf, puis recharge :\n\
+                 \x20   host replication all all scram-sha-256\n\
+                 \x20   psql -U postgres -c 'SELECT pg_reload_conf()'"
+            );
+        }
+
+        if stderr.contains("must be superuser or replication role")
+            || stderr.contains("permission denied to start WAL sender")
+        {
+            return format!(
+                "{stderr}\n\n\
+                 🔴 L'utilisateur n'a pas l'attribut REPLICATION :\n\
+                 \x20   ALTER ROLE <utilisateur> REPLICATION;"
+            );
+        }
+
+        if stderr.contains("directory") && stderr.contains("exists and is not empty") {
+            return format!(
+                "{stderr}\n\n\
+                 Une sauvegarde porte déjà ce nom. On n'écrase JAMAIS une sauvegarde\n\
+                 existante : déplace-la ou supprime-la à la main si elle est inutile."
+            );
+        }
+
+        stderr.to_string()
+    }
+
+    /// Le nom du sous-répertoire d'une sauvegarde de base.
+    ///
+    /// Horodaté et trié lexicographiquement : l'ordre des noms est l'ordre
+    /// chronologique, ce dont dépend le choix de la base de départ (`base_for`).
+    pub fn directory_name(at: i64) -> String {
+        let (y, m, d, hh, mm, ss) = civil(at);
+        format!("base-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z")
+    }
+
+    /// Exécute `pg_basebackup` dans un conteneur.
+    ///
+    /// Renvoie le nom du répertoire créé, qui sert d'identifiant d'instantané dans
+    /// l'état — c'est ce que `hlb backup pitr plan` affichera.
+    pub async fn run(target: &Target, at: i64) -> Result<String> {
+        let nom = directory_name(at);
+
+        let mut cmd = tokio::process::Command::new("docker");
+        cmd.args(["run", "--rm"]);
+
+        if let Some(n) = &target.network {
+            cmd.arg("--network");
+            cmd.arg(n);
+        }
+
+        for (k, v) in [
+            ("PGHOST", target.host.clone()),
+            ("PGPORT", target.port.to_string()),
+            ("PGUSER", target.user.clone()),
+            // Comme partout ailleurs : par l'environnement, jamais sur la ligne de
+            // commande, lisible par tout utilisateur de la machine.
+            ("PGPASSWORD", target.password.clone()),
+        ] {
+            cmd.arg("-e");
+            cmd.arg(format!("{k}={v}"));
+        }
+
+        // Le sous-répertoire est créé par le montage : `pg_basebackup` exige une
+        // destination VIDE et échouerait sur un répertoire déjà peuplé — ce qui est
+        // exactement le comportement voulu, on n'écrase jamais une base existante.
+        cmd.arg("-v");
+        cmd.arg(format!(
+            "{}/{nom}:/sauvegarde",
+            target.destination.trim_end_matches('/')
+        ));
+
+        cmd.arg(&target.image);
+        cmd.args(args(&nom));
+
+        let out = cmd.output().await.map_err(|e| {
+            Error::ResticMissing(format!("docker introuvable : {e}"))
+        })?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+
+            // Un échec laisse un répertoire vide créé par le montage. L'accumuler à
+            // chaque tentative encombrerait l'archive de coquilles indiscernables des
+            // vraies sauvegardes pour qui regarde le disque.
+            let _ = tokio::fs::remove_dir(format!(
+                "{}/{nom}",
+                target.destination.trim_end_matches('/')
+            ))
+            .await;
+
+            return Err(Error::Dump {
+                database: format!("sauvegarde de base « {nom} »"),
+                stderr: expliquer(&stderr),
+            });
+        }
+
+        tracing::info!(base = %nom, "sauvegarde de base produite");
+        Ok(nom)
+    }
+}
+
+#[cfg(test)]
+mod tests_basebackup {
+    use super::basebackup::*;
+
+    const J0: i64 = 1_786_881_600;
+
+    #[test]
+    fn wal_is_streamed_during_the_copy() {
+        // 🔴 L'option qui décide si la sauvegarde est restaurable. Une copie dure
+        // plusieurs minutes pendant lesquelles le serveur écrit ; sans les journaux
+        // produits À CE MOMENT-LÀ, PostgreSQL refuse de démarrer sur le résultat.
+        let a = args("base-test");
+        assert!(a.contains(&"--wal-method=stream".to_string()), "{a:?}");
+        assert!(
+            !a.iter().any(|x| x.contains("wal-method=fetch")),
+            "`fetch` échouerait en FIN de sauvegarde si wal_keep_size est trop petit"
+        );
+    }
+
+    #[test]
+    fn the_checkpoint_is_forced() {
+        // Sans ça, la copie attend le prochain checkpoint naturel : plusieurs minutes
+        // d'immobilité que personne ne saurait expliquer.
+        assert!(args("x").contains(&"--checkpoint=fast".to_string()));
+    }
+
+    #[test]
+    fn no_interactive_prompt_is_ever_possible() {
+        // Un conteneur qui attend une saisie reste bloqué en silence jusqu'au délai
+        // d'expiration.
+        assert!(args("x").contains(&"--no-password".to_string()));
+    }
+
+    #[test]
+    fn the_label_reaches_the_command() {
+        assert!(args("base-20260816T120000Z")
+            .contains(&"--label=base-20260816T120000Z".to_string()));
+    }
+
+    #[test]
+    fn directory_names_sort_chronologically() {
+        // 🔴 Le choix de la base de départ dépend de l'ordre. Un nom qui ne trierait
+        // pas comme le temps ferait rejouer depuis la mauvaise sauvegarde.
+        let a = directory_name(J0);
+        let b = directory_name(J0 + 3600);
+        let c = directory_name(J0 + 86_400);
+
+        assert_eq!(a, "base-20260816T120000Z");
+        assert!(a < b, "{a} < {b}");
+        assert!(b < c, "{b} < {c}");
+    }
+
+    #[test]
+    fn the_replication_refusal_says_exactly_what_to_add() {
+        // 🔴 Le message brut de PostgreSQL est exact mais inexploitable : rien n'y
+        // dit que « replication » est une base au sens de pg_hba, ni que l'image
+        // officielle ne l'autorise que depuis 127.0.0.1. Constaté sur un vrai
+        // serveur : un utilisateur qui se connecte en psql est refusé ici.
+        let brut = "pg_basebackup: error: connection to server at \"pg\" failed: \
+                    FATAL:  no pg_hba.conf entry for replication connection from \
+                    host \"172.27.0.3\", user \"postgres\", no encryption";
+        let m = expliquer(brut);
+
+        assert!(m.contains("host replication all all scram-sha-256"), "{m}");
+        assert!(m.contains("pg_reload_conf"), "{m}");
+        assert!(m.contains(brut), "le message d'origine doit rester lisible");
+    }
+
+    #[test]
+    fn a_role_without_replication_is_diagnosed() {
+        let m = expliquer("FATAL: must be superuser or replication role to start walsender");
+        assert!(m.contains("ALTER ROLE"), "{m}");
+    }
+
+    #[test]
+    fn an_ordinary_error_is_left_alone() {
+        // On n'ajoute du texte que quand on a quelque chose d'utile à dire.
+        let brut = "pg_basebackup: error: could not connect: timeout";
+        assert_eq!(expliquer(brut), brut);
+    }
+
+    #[test]
+    fn the_password_never_appears_in_the_arguments() {
+        // Une ligne de commande est lisible par tout utilisateur de la machine.
+        let t = Target::new("/archive/base", "postgres").credentials("hlb", "s3cr3t");
+        assert!(!args("x").iter().any(|a| a.contains("s3cr3t")));
+        assert_eq!(t.password, "s3cr3t", "il passe par l'environnement");
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_double_up() {
+        let t = Target::new("/archive/base/", "postgres");
+        let chemin = format!("{}/{}", t.destination.trim_end_matches('/'), directory_name(J0));
+        assert!(!chemin.contains("//"), "{chemin}");
+    }
+}
+
+/// Les identifiants de connexion extraits d'une URL PostgreSQL.
+///
+/// Le CLI reçoit déjà `--postgres-admin` sous la forme
+/// `postgres://user:password@hôte:port/base`. Les redemander séparément pour la
+/// sauvegarde de base ferait diverger deux sources de vérité — et le jour où l'une
+/// change, la sauvegarde échoue sur une authentification refusée.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Credentials {
+    pub user: String,
+    pub password: String,
+    pub host: String,
+    pub port: u16,
+}
+
+/// Analyse `postgres://user:password@hôte:port/base`.
+///
+/// ⚠️ Le mot de passe peut contenir des caractères encodés (`%40` pour `@`). On les
+/// décode : les passer tels quels ferait échouer l'authentification avec un message
+/// parfaitement trompeur — « mot de passe incorrect » alors qu'il est bon.
+pub fn parse_pg_url(url: &str) -> Option<Credentials> {
+    let reste = url
+        .strip_prefix("postgres://")
+        .or_else(|| url.strip_prefix("postgresql://"))?;
+
+    // On coupe sur le DERNIER `@` : un mot de passe peut en contenir un.
+    let (identifiants, hote) = reste.rsplit_once('@')?;
+    let (user, password) = identifiants.split_once(':').unwrap_or((identifiants, ""));
+
+    // Le chemin (`/base`) et la chaîne de requête ne nous concernent pas.
+    let hote = hote.split(['/', '?']).next()?;
+    let (host, port) = match hote.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse().unwrap_or(5432)),
+        None => (hote, 5432),
+    };
+
+    if host.is_empty() || user.is_empty() {
+        return None;
+    }
+
+    Some(Credentials {
+        user: percent_decode(user),
+        password: percent_decode(password),
+        host: host.to_string(),
+        port,
+    })
+}
+
+/// Décodage pour-cent minimal, suffisant pour un identifiant d'URL.
+fn percent_decode(s: &str) -> String {
+    let o = s.as_bytes();
+    let mut out = Vec::with_capacity(o.len());
+    let mut i = 0;
+
+    while i < o.len() {
+        if o[i] == b'%' && i + 2 < o.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(o[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests_url {
+    use super::*;
+
+    #[test]
+    fn a_standard_url_is_parsed() {
+        let c = parse_pg_url("postgres://admin:secret@db.local:5433/postgres")
+            .expect("analysable");
+        assert_eq!(c.user, "admin");
+        assert_eq!(c.password, "secret");
+        assert_eq!(c.host, "db.local");
+        assert_eq!(c.port, 5433);
+    }
+
+    #[test]
+    fn the_port_defaults_to_5432() {
+        let c = parse_pg_url("postgres://admin:x@db.local/postgres").expect("analysable");
+        assert_eq!(c.port, 5432);
+        assert_eq!(c.host, "db.local");
+    }
+
+    #[test]
+    fn an_encoded_password_is_decoded() {
+        // ⚠️ Sans décodage, l'authentification échoue en annonçant un mot de passe
+        // incorrect alors qu'il est bon — le diagnostic le plus coûteux qui soit.
+        let c = parse_pg_url("postgres://admin:p%40ss%3Aword@db/postgres").expect("analysable");
+        assert_eq!(c.password, "p@ss:word");
+    }
+
+    #[test]
+    fn a_password_containing_an_at_sign_still_parses() {
+        // On coupe sur le DERNIER `@`, sinon l'hôte serait tronqué.
+        let c = parse_pg_url("postgres://admin:a@b@db.local/postgres").expect("analysable");
+        assert_eq!(c.password, "a@b");
+        assert_eq!(c.host, "db.local");
+    }
+
+    #[test]
+    fn the_postgresql_scheme_works_too() {
+        assert!(parse_pg_url("postgresql://a:b@h/db").is_some());
+    }
+
+    #[test]
+    fn a_query_string_is_ignored() {
+        let c = parse_pg_url("postgres://a:b@h:5432/db?sslmode=require").expect("analysable");
+        assert_eq!(c.host, "h");
+        assert_eq!(c.port, 5432);
+    }
+
+    #[test]
+    fn nonsense_is_refused() {
+        assert!(parse_pg_url("").is_none());
+        assert!(parse_pg_url("mysql://a:b@h/db").is_none(), "mauvais schéma");
+        assert!(parse_pg_url("postgres://db.local/base").is_none(), "sans identifiants");
+        assert!(parse_pg_url("postgres://:mdp@h/db").is_none(), "sans utilisateur");
     }
 }

@@ -1,0 +1,39 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: ntfy
+  displayName: ntfy
+  category: platform
+  homepage: https://ntfy.sh
+spec:
+  image: { repo: binwiederhier/ntfy, tag: "v2" }
+  requires:
+    # Cache des messages et abonnements. Sauvegardé : le reperdre déconnecte tous
+    # les téléphones abonnés, qui devraient être réabonnés à la main.
+    - kind: storage
+      name: cache
+      path: /var/cache/ntfy
+      tier: local
+      backup: true
+  ingress:
+    # 🔴 Public, et c'est délibéré : une alerte qui n'arrive que depuis le VPN
+    # n'arrive pas quand le VPN est tombé — soit précisément le moment où elle
+    # compte. Le sujet fait office de secret d'accès.
+    - host: "{{ domain }}"
+      port: 80
+      chain: [caddy-front, caddy-back]
+      expose: public
+  security:
+    # Écrit son cache SQLite et abandonne ses privilèges au démarrage.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # 🔴 Une seule instance : le cache est un SQLite local. Deux réplicas se
+    # partageraient deux bases différentes, et un abonné ne verrait qu'un message
+    # sur deux selon le nœud qui répond.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/v1/health | grep -q true"]
+  update:
+    channel: minor

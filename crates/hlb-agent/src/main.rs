@@ -34,9 +34,21 @@ struct Cli {
     #[arg(long, default_value = "0.0.0.0:8421", env = "HLB_AGENT_LISTEN")]
     listen: String,
 
-    /// Chemins à surveiller. `/var/lib/docker` est le plus important : c'est lui
-    /// qui sature en premier (images, volumes, journaux).
-    #[arg(long, default_values = ["/", "/var/lib/docker"], env = "HLB_AGENT_PATHS")]
+    /// Chemins à surveiller.
+    ///
+    /// `/var/lib/docker` sature en premier : images, volumes, journaux.
+    ///
+    /// 🔴 `/archive/wal` est là pour une raison précise (§8.1) : un `archive_command`
+    /// qui échoue ne PERD pas les journaux, il les garde. `pg_wal` grossit alors sans
+    /// limite jusqu'à arrêter PostgreSQL. Sans ce chemin surveillé, la panne est
+    /// totalement silencieuse jusqu'à ce que la base tombe.
+    ///
+    /// Un chemin inexistant est ignoré sans bruit : tous les nœuds n'archivent pas.
+    #[arg(
+        long,
+        default_values = ["/", "/var/lib/docker", "/archive/wal", "/archive/base"],
+        env = "HLB_AGENT_PATHS"
+    )]
     watch: Vec<String>,
 }
 

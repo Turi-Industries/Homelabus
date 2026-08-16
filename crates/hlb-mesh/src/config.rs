@@ -13,7 +13,7 @@ use crate::keys::KeyPair;
 use crate::{Error, Result};
 
 /// Un nœud du mesh.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Peer {
     pub name: String,
     /// Adresse dans le réseau du mesh.
@@ -146,6 +146,19 @@ impl MeshConfig {
         }
 
         Some(s)
+    }
+
+    /// Reconstruit un mesh depuis des pairs déjà attribués.
+    ///
+    /// 🔴 Les adresses sont **reprises telles quelles**, jamais recalculées : un nœud
+    /// qui changerait d'adresse au rechargement invaliderait les configurations
+    /// déployées sur toutes les autres machines.
+    pub fn from_peers(network: [u8; 3], port: u16, peers: Vec<Peer>) -> Self {
+        Self {
+            network,
+            port,
+            peers: peers.into_iter().map(|p| (p.name.clone(), p)).collect(),
+        }
     }
 
     /// Les adresses mesh de tous les nœuds — ce sur quoi Swarm doit écouter.
@@ -303,5 +316,66 @@ mod tests {
             m.add_node("de-trop", "k", None),
             Err(Error::AddressPoolExhausted(..))
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests_persistance {
+    use super::*;
+
+    #[test]
+    fn reloading_preserves_every_address() {
+        // 🔴 Recalculer les adresses au rechargement les réattribuerait dans l'ordre
+        // alphabétique, invalidant d'un coup toutes les configurations déployées
+        // ailleurs — sans le moindre message d'erreur.
+        let mut m = MeshConfig::default();
+        m.add_node("zeta", "k1", None).expect("ajout");
+        m.add_node("alpha", "k2", None).expect("ajout");
+
+        let avant: Vec<_> = m.peers().map(|p| (p.name.clone(), p.mesh_ip)).collect();
+
+        let recharge = MeshConfig::from_peers(
+            [10, 42, 0],
+            51820,
+            m.peers().cloned().collect(),
+        );
+        let apres: Vec<_> = recharge.peers().map(|p| (p.name.clone(), p.mesh_ip)).collect();
+
+        assert_eq!(avant, apres);
+        // `zeta`, ajouté en premier, garde .2 bien qu'il trie après `alpha`.
+        assert_eq!(
+            recharge.get("zeta").expect("zeta").mesh_ip,
+            std::net::Ipv4Addr::new(10, 42, 0, 2)
+        );
+    }
+
+    #[test]
+    fn a_new_node_takes_the_first_free_address_after_reload() {
+        let m = MeshConfig::from_peers(
+            [10, 42, 0],
+            51820,
+            vec![Peer {
+                name: "n1".into(),
+                mesh_ip: std::net::Ipv4Addr::new(10, 42, 0, 5),
+                public_key: "k".into(),
+                endpoint: None,
+            }],
+        );
+        let mut m = m;
+        let p = m.add_node("n2", "k2", None).expect("ajout");
+        // .2 est libre : les trous laissés par un retrait se réutilisent.
+        assert_eq!(p.mesh_ip, std::net::Ipv4Addr::new(10, 42, 0, 2));
+    }
+
+    #[test]
+    fn peers_survive_a_json_round_trip() {
+        let p = Peer {
+            name: "n1".into(),
+            mesh_ip: std::net::Ipv4Addr::new(10, 42, 0, 2),
+            public_key: "cle".into(),
+            endpoint: Some("n1.example.fr".into()),
+        };
+        let j = serde_json::to_string(&p).expect("sérialisable");
+        assert_eq!(serde_json::from_str::<Peer>(&j).expect("analysable"), p);
     }
 }

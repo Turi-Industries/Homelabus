@@ -191,9 +191,18 @@ qui a tort, pas le test.
   contenu compté depuis un conteneur. Un `tempfile::tempdir()` y apparaît vide, ce qui
   fait conclure à une sauvegarde vide sur une sauvegarde saine.
 - **Stalwart n'a pas d'API REST pour les comptes.** Tout passe par JMAP (`POST /jmap/`,
-  capacité `urn:stalwart:jmap`, méthodes `x:Account/set` et `x:Domain/query`). Le
-  discriminant est `@type`, `emailAddress` est calculé par le serveur, et un `/set` qui
-  échoue renvoie quand même HTTP 200 — l'échec vit dans `notCreated`.
+  capacité `urn:stalwart:jmap`, méthodes `x:Account/set` et `x:Domain/query`), à partir
+  de la **v0.16** seulement. Le discriminant est `@type`, `emailAddress` est calculé par
+  le serveur, et un `/set` qui échoue renvoie quand même HTTP 200 — l'échec vit dans
+  `notCreated`. **Une condition de filtre ne porte qu'UNE propriété** : chaque clé
+  écrase la précédente, il faut un `AND` de conditions séparées. `accountId` n'est en
+  revanche pas requis pour `Account`/`Domain` (ils n'ont pas `OBJ_FILTER_ACCOUNT`).
+- **`pg_basebackup` passe par le protocole de réplication**, que `pg_hba.conf` traite
+  comme une base à part. Un utilisateur qui se connecte parfaitement en `psql` est
+  refusé. L'image officielle n'autorise la réplication que depuis `127.0.0.1` : il faut
+  `host replication all all scram-sha-256`.
+- **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
+  fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
   unique bâti dessus seul produit des doublons entre deux appels rapprochés.
 
@@ -210,7 +219,8 @@ d'isolation en test d'intégration), boucle de réconciliation, mesh WireGuard
 pitr`).
 
 Fait également : client Stalwart (`hlb-mail`) et provisionnement des boîtes,
-`hlb backup verify` (restauration réelle puis comparaison), inventaire des segments
-WAL pour la fenêtre PITR.
+`hlb backup verify` (restauration réelle + relecture de blocs), inventaire des
+segments WAL, `hlb backup pitr base` (pg_basebackup), `hlb crowdsec enroll`,
+`hlb mesh add/show/list`, `/metrics` protégé par jeton.
 
 Reste la feuille de route du §12 de PLAN.md, dont l'UI web.

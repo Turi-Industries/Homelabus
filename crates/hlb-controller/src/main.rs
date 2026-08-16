@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long, default_value = "homelab", env = "HLB_NTFY_TOPIC")]
     ntfy_topic: String,
 
+    /// Jeton exigé sur /metrics. Absent : point d'exposition ouvert.
+    #[arg(long, env = "HLB_METRICS_TOKEN")]
+    metrics_token: Option<String>,
+
     /// Intervalle de réconciliation.
     #[arg(long, default_value = "60", env = "HLB_RECONCILE_SECS")]
     reconcile_secs: u64,
@@ -360,6 +364,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         started_at: std::time::Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
         last_poll: dernier_sondage,
+        metrics_token: cli.metrics_token.clone(),
     }));
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;

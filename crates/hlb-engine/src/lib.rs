@@ -90,6 +90,8 @@ pub struct Executor<'a, O: Orchestrator> {
     /// encore routée, ce qui est un état légitime.
     ingress: Option<&'a CaddyAdmin>,
     mail: Option<&'a Stalwart>,
+    /// URL de l'API CrowdSec. Absente : pas de filtrage réputationnel.
+    crowdsec_url: Option<String>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
     apply: bool,
 }
@@ -105,6 +107,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             identity: None,
             ingress: None,
             mail: None,
+            crowdsec_url: None,
             apply: false,
         }
     }
@@ -136,6 +139,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_mail(mut self, s: &'a Stalwart) -> Self {
         self.mail = Some(s);
+        self
+    }
+
+    pub fn with_crowdsec(mut self, url: impl Into<String>) -> Self {
+        self.crowdsec_url = Some(url.into());
         self
     }
 
@@ -219,6 +227,42 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         }
 
         Ok(out)
+    }
+
+    /// La configuration d'entrée, CrowdSec compris quand il est enrôlé.
+    ///
+    /// 🔴 CrowdSec n'est activé QUE si sa clé de videur est au coffre. Sans elle, on
+    /// génère un Caddyfile sans videur plutôt qu'un Caddyfile avec une clé vide : ce
+    /// dernier démarrerait normalement et ne bloquerait plus rien, en silence.
+    async fn ingress_config(&self) -> Result<hlb_ingress::Config> {
+        let mut cfg = hlb_ingress::Config::default();
+
+        let (Some(vault), Some(url)) = (self.vault, &self.crowdsec_url) else {
+            return Ok(cfg);
+        };
+
+        match self.state.secret(hlb_ingress::crowdsec::SECRET_NAME).await? {
+            Some(ct) => {
+                let cle = vault.decrypt(&ct)?;
+                if hlb_ingress::crowdsec::looks_like_key(&cle) {
+                    cfg.crowdsec = Some(hlb_ingress::CrowdSec {
+                        api_url: url.clone(),
+                        api_key: cle,
+                    });
+                } else {
+                    // Une clé abîmée au coffre ne doit pas produire un videur muet.
+                    tracing::error!(
+                        "🔴 clé de videur CrowdSec invalide au coffre — filtrage DÉSACTIVÉ ; \
+                         réenrôle avec `hlb crowdsec enroll --apply`"
+                    );
+                }
+            }
+            None => tracing::warn!(
+                "CrowdSec non enrôlé : le trafic n'est pas filtré \
+                 (hlb crowdsec enroll --apply)"
+            ),
+        }
+        Ok(cfg)
     }
 
     /// Les routes de toutes les apps installées.
@@ -415,7 +459,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 // cette app. Caddy remplace toute sa config à chaque `/load` : envoyer
                 // un fragment supprimerait les routes des autres apps.
                 let routes = self.all_routes().await?;
-                let cfg = hlb_ingress::Config::default();
+                let cfg = self.ingress_config().await?;
                 caddy
                     .load_caddyfile(&hlb_ingress::render_frontend(&routes, &cfg))
                     .await?;
