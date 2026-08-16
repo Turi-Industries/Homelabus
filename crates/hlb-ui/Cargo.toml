@@ -1,0 +1,33 @@
+[package]
+name = "hlb-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tableau de bord egui : client de l'API du controller."
+
+[lib]
+name = "hlb_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hlb-ui"
+path = "src/main.rs"
+
+[dependencies]
+hlb-api.workspace = true
+egui = "0.33"
+# `glow` plutôt que `wgpu` : le rendu OpenGL démarre partout, y compris dans une
+# machine virtuelle ou en SSH avec redirection X11 — soit exactement les conditions
+# d'un homelab. `wgpu` échoue à s'initialiser sur beaucoup de ces configurations.
+eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts"] }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

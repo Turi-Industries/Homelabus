@@ -1,0 +1,16 @@
+[package]
+name = "hlb-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Types de l'API du controller, partagés par le serveur et l'UI."
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -34,9 +34,10 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 23 tests |
 | `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
 | `hlb-cli` — `install`, `node add`, `access`, `backup`, `dr`, `pki`, `mesh`, `crowdsec`… | ✅ utilisable |
-| UI web (SvelteKit) | ⬜ à venir |
+| `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 11 tests |
+| `hlb-ui` — tableau de bord **egui** (natif + web) | ✅ 6 + 2 tests |
 
-**616 tests unitaires + 62 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**640 tests unitaires + 64 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

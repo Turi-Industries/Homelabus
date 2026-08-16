@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use hlb_api::{AppSummary, AuditItem, GuideItem, Health, SecretItem};
 
 use hlb_state::State;
 
@@ -77,49 +77,6 @@ impl IntoResponse for ApiError {
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
 
-#[derive(Serialize)]
-pub struct Health {
-    pub status: &'static str,
-    pub version: &'static str,
-    pub uptime_secs: u64,
-}
-
-#[derive(Serialize)]
-pub struct AppSummary {
-    pub name: String,
-    pub status: String,
-    pub image: String,
-    pub domain: Option<String>,
-    /// Âge de la dernière sauvegarde réussie, en secondes. `null` = jamais.
-    pub last_backup_secs: Option<i64>,
-    pub last_verification_secs: Option<i64>,
-    /// Actions manuelles bloquantes encore en attente (§4.6).
-    pub blocking_guides: i64,
-}
-
-#[derive(Serialize)]
-pub struct GuideItem {
-    pub app: String,
-    pub id: String,
-    pub title: String,
-    pub blocking: bool,
-}
-
-#[derive(Serialize)]
-pub struct AuditItem {
-    pub at: String,
-    pub actor: String,
-    pub action: String,
-    pub target: String,
-    pub outcome: String,
-}
-
-#[derive(Serialize)]
-pub struct SecretItem {
-    pub name: String,
-    pub purpose: String,
-}
-
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -135,8 +92,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn healthz(AxumState(s): AxumState<Arc<AppState>>) -> Json<Health> {
     Json(Health {
-        status: "ok",
-        version: s.version,
+        status: "ok".into(),
+        version: s.version.to_string(),
         uptime_secs: s.started_at.elapsed().as_secs(),
     })
 }

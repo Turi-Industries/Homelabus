@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 hlb-types.workspace = true
+hlb-api.workspace = true
 hlb-state.workspace = true
 hlb-engine.workspace = true
 hlb-orchestrator.workspace = true

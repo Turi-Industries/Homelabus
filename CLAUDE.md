@@ -221,6 +221,13 @@ qui a tort, pas le test.
   donnant l'impression de l'avoir fait.
 - **Le forward-auth doit effacer les en-têtes d'identité entrants.** Sinon
   `curl -H "X-Auth-Request-User: admin"` suffit à usurper un compte.
+- **egui n'embarque pas tous les glyphes.** « ● » et le sélecteur de variante de
+  « ⚠️ » s'affichent en carré vide, et un « tofu » ressemble assez à une icône pour
+  passer inaperçu en relecture. Les formes d'état sont **peintes**, pas écrites, et
+  les textes affichés vivent dans `app::texte` pour être testés.
+- **Une donnée périmée ne doit jamais ressembler à une donnée fraîche.** Si le
+  controller tombe, l'UI garderait son dernier état connu : toutes les apps vertes
+  pendant que le cluster brûle. D'où `Freshness`, que le type oblige à regarder.
 
 ## État d'avancement
 
@@ -244,5 +251,9 @@ Fait aussi : `hlb node add` (SSH, clé dédiée révocable, dépendances, join, 
 (`hlb pki`), scan Trivy + cosign avant mise à jour, MariaDB, forward-auth pour les apps
 sans SSO natif, ACME DNS-01 wildcard, instantanés SQLite + Litestream, `hlb dr promote`.
 
-Reste la feuille de route du §12 de PLAN.md, essentiellement **l'UI web** (et son
-préalable, l'OpenAPI `utoipa` qui génère les types TypeScript).
+Fait enfin : l'UI en **egui** (`hlb-ui`), avec `hlb-api` qui définit les types de
+l'API **une seule fois** pour le serveur et l'interface. L'OpenAPI `utoipa` + la
+génération TypeScript du plan §11bis sont donc sans objet.
+
+Reste la feuille de route du §12 : phase 7 (runtime compose pour mailcow, HA
+PostgreSQL en réplication streaming, exercices de reprise automatisés).
