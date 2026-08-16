@@ -27,12 +27,13 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
+| `hlb-bootstrap` — distributions, dépendances, préchecks | ✅ 53 + 4 tests |
 | `hlb-controller` — daemon : API de lecture + boucles de fond | ✅ 14 tests |
 | `hlb-cli` — `catalog`, `plan`, `order`, `install`, `reconcile`, `ingress`, `todo`, `ack`, `secrets`, `ps` | ✅ utilisable |
 | Archivage WAL (PITR), UI web, RBAC | ⬜ à venir |
 | Controller HTTP (axum), agent, UI | ⬜ à venir |
 
-**274 tests unitaires + 43 tests d'intégration.**
+**327 tests unitaires + 47 tests d'intégration.**
 
 ### Tests d'intégration PostgreSQL
 
@@ -53,6 +54,17 @@ teste pas contre un bouchon : chaque registre a ses particularités.
 
 ```sh
 cargo test -p hlb-registry -- --ignored --nocapture   # accès réseau requis
+```
+
+### Tests multi-distribution
+
+⚠️ Ces tests **ne téléchargent jamais d'image** : une distribution dont l'image
+n'est pas déjà présente localement est ignorée, et le test le dit. `docker pull`
+reste à ta main.
+
+```sh
+export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
+cargo test -p hlb-bootstrap -- --ignored --test-threads=1 --nocapture
 ```
 
 ### Tests PocketID

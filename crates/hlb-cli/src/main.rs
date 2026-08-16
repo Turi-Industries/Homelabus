@@ -118,6 +118,10 @@ enum Command {
     #[command(subcommand)]
     Backup(BackupCmd),
 
+    /// Nœuds : préchecks et dépendances (§2ter).
+    #[command(subcommand)]
+    Node(NodeCmd),
+
     /// État des services gérés par HomelabUS.
     Ps,
 
@@ -150,6 +154,30 @@ enum Command {
     History {
         #[arg(long, default_value = "20")]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodeCmd {
+    /// Vérifier qu'une machine peut accueillir un nœud. Ne modifie RIEN.
+    Check {
+        /// Hôte SSH. Absent : la machine locale.
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        identity: Option<String>,
+    },
+    /// Ce qui manque, et ce qui sera installé. Aperçu par défaut.
+    Deps {
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        /// Installer réellement les paquets manquants.
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -310,6 +338,63 @@ async fn export_git(
 /// la clé maîtresse. Le RBAC (§9ter) protège l'API, pas la ligne de commande — mais
 /// les actions sont journalisées de la même façon.
 const ACTEUR_ROLE: hlb_types::Role = hlb_types::Role::Admin;
+
+/// Local ou distant, selon qu'un hôte est donné.
+fn build_runner(
+    host: Option<&str>,
+    user: Option<&str>,
+    port: Option<u16>,
+    identity: Option<&str>,
+) -> Box<dyn hlb_bootstrap::Runner> {
+    match host {
+        None => Box::new(hlb_bootstrap::LocalRunner),
+        Some(h) => {
+            let mut r = hlb_bootstrap::SshRunner::new(h);
+            if let Some(u) = user {
+                r = r.user(u);
+            }
+            if let Some(p) = port {
+                r = r.port(p);
+            }
+            if let Some(i) = identity {
+                r = r.identity(i);
+            }
+            Box::new(r)
+        }
+    }
+}
+
+/// Sonde la version de chaque dépendance connue.
+async fn observe_dependencies(
+    runner: &dyn hlb_bootstrap::Runner,
+) -> Result<Vec<(&'static str, Option<String>)>, Box<dyn std::error::Error>> {
+    let mut out = Vec::new();
+    for dep in hlb_bootstrap::deps::BASE {
+        // `--version` est la convention la plus répandue ; on se contente de
+        // constater la présence quand elle n'est pas respectée.
+        let v = runner
+            .run(&[dep.name.to_string(), "--version".to_string()])
+            .await
+            .ok()
+            .filter(|o| o.ok())
+            .and_then(|o| o.first_line())
+            .map(|l| extract_version(&l));
+        out.push((dep.name, v));
+    }
+    Ok(out)
+}
+
+/// Extrait le premier groupe qui ressemble à une version d'une ligne comme
+/// « Docker version 27.3.1, build ce1223035a ».
+fn extract_version(line: &str) -> String {
+    line.split_whitespace()
+        .find(|t| {
+            let t = t.trim_start_matches('v').trim_end_matches(',');
+            t.contains('.') && t.chars().next().is_some_and(|c| c.is_ascii_digit())
+        })
+        .map(|t| t.trim_start_matches('v').trim_end_matches(',').to_string())
+        .unwrap_or_else(|| line.to_string())
+}
 
 fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -980,6 +1065,93 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         let _ = app;
                         Ok(ExitCode::FAILURE)
                     }
+                }
+            })
+        }
+
+        Command::Node(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let (runner, apply) = match cmd {
+                    NodeCmd::Check { host, user, port, identity } => {
+                        (build_runner(host.as_deref(), user.as_deref(), *port, identity.as_deref()), false)
+                    }
+                    NodeCmd::Deps { host, user, apply } => {
+                        (build_runner(host.as_deref(), user.as_deref(), None, None), *apply)
+                    }
+                };
+
+                println!("Machine : {}\n", runner.label());
+                let obs = hlb_bootstrap::observe(runner.as_ref()).await?;
+                let rapport = hlb_bootstrap::preflight::run(&obs);
+
+                for c in &rapport.checks {
+                    println!("  {}", c.describe());
+                }
+
+                if matches!(cmd, NodeCmd::Check { .. }) {
+                    println!();
+                    if rapport.can_proceed() {
+                        println!("✓ cette machine peut accueillir un nœud.");
+                        return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                    }
+                    eprintln!(
+                        "🔴 {} point(s) bloquant(s) — corrige-les avant d'ajouter ce nœud.",
+                        rapport.blocking().len()
+                    );
+                    return Ok(ExitCode::FAILURE);
+                }
+
+                // hlb node deps : le plan des dépendances.
+                let Some(distro) = rapport.distro else {
+                    eprintln!("\n🔴 distribution non identifiée : impossible de planifier.");
+                    return Ok(ExitCode::FAILURE);
+                };
+
+                let observees = observe_dependencies(runner.as_ref()).await?;
+                let refs: Vec<(&str, Option<String>)> =
+                    observees.iter().map(|(n, v)| (*n, v.clone())).collect();
+                let plan = hlb_bootstrap::plan_dependencies(&distro, &refs);
+
+                println!("\nDépendances :");
+                for d in &plan.decisions {
+                    println!("  {}", d.describe());
+                }
+
+                if plan.is_satisfied() {
+                    println!("\n✓ rien à installer.");
+                    return Ok(ExitCode::SUCCESS);
+                }
+
+                let paquets = plan.to_install();
+                if !apply {
+                    println!(
+                        "\n{} paquet(s) à installer via {:?}.",
+                        paquets.len(),
+                        distro.package_manager()
+                    );
+                    println!("  Relance avec --apply pour les installer.");
+                    return Ok(ExitCode::SUCCESS);
+                }
+
+                // 🔴 Rien n'est installé sans avoir été annoncé au-dessus (§2ter.6).
+                let pm = distro.package_manager();
+                if let Some(refresh) = pm.refresh_command() {
+                    println!("\nrafraîchissement de l'index…");
+                    let out = runner.run(&refresh).await?;
+                    if !out.ok() {
+                        eprintln!("⚠️  index non rafraîchi : {}", out.stderr.trim());
+                    }
+                }
+
+                println!("installation de {} paquet(s)…", paquets.len());
+                let out = runner.run(&pm.install_command(&paquets)).await?;
+                if out.ok() {
+                    println!("✓ dépendances installées.");
+                    Ok(ExitCode::SUCCESS)
+                } else {
+                    eprintln!("✗ échec : {}", out.stderr.trim());
+                    Ok(ExitCode::FAILURE)
                 }
             })
         }
