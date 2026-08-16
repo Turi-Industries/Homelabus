@@ -341,6 +341,20 @@ enum UpdateCmd {
         /// Passer outre la fenêtre de maintenance.
         #[arg(long)]
         force_window: bool,
+        /// 🔴 Appliquer malgré des vulnérabilités critiques. À justifier.
+        #[arg(long)]
+        force_vulnerable: bool,
+    },
+    /// Analyser une image sans rien appliquer : CVE et signature (§7).
+    Scan {
+        /// Image complète, ex. gitea/gitea:1.25
+        image: String,
+        /// Expression de l'identité attendue du signataire.
+        #[arg(long, env = "HLB_COSIGN_IDENTITY")]
+        identity: Option<String>,
+        /// Émetteur OIDC attendu, ex. https://token.actions.githubusercontent.com
+        #[arg(long, env = "HLB_COSIGN_ISSUER")]
+        issuer: Option<String>,
     },
 }
 
@@ -2336,9 +2350,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let registry = hlb_registry::RegistryClient::new();
                 let now = chrono::Local::now().naive_local();
 
+                // `Scan` ne dépend d'aucun candidat : on le traite avant d'interroger
+                // les registres, qui prend du temps et de la bande passante.
+                if let UpdateCmd::Scan { image, identity, issuer } = cmd {
+                    println!("Analyse de {image}…\n");
+                    let r = hlb_updater::audit(image, identity.as_deref(), issuer.as_deref())
+                        .await?;
+                    println!("{}", r.describe());
+
+                    if r.unchecked() > 0 {
+                        println!();
+                        println!("⚠️  {} contrôle(s) NON effectué(s).", r.unchecked());
+                        println!("   Installe trivy et cosign pour qu'ils comptent :");
+                        println!("     brew install trivy cosign   # ou le paquet de ta distro");
+                    }
+                    return Ok::<_, Box<dyn std::error::Error>>(if r.blocks() {
+                        ExitCode::FAILURE
+                    } else {
+                        ExitCode::SUCCESS
+                    });
+                }
+
                 let candidates = hlb_updater::check(&state, &registry, &now).await?;
 
                 match cmd {
+                    // Traité au-dessus.
+                    UpdateCmd::Scan { .. } => unreachable!(),
                     UpdateCmd::Check => {
                         if candidates.is_empty() {
                             println!("✓ tout est à jour.");
@@ -2354,11 +2391,51 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    UpdateCmd::Apply { app, force_window } => {
+                    UpdateCmd::Apply { app, force_window, force_vulnerable } => {
                         let Some(c) = candidates.iter().find(|c| &c.app == app) else {
                             println!("Rien à mettre à jour pour « {app} ».");
                             return Ok(ExitCode::SUCCESS);
                         };
+
+                        // 🔴 On analyse AVANT de déployer, pas après. Une image
+                        // critique déployée puis signalée a déjà tourné.
+                        let cible = match &c.kind {
+                            hlb_updater::UpdateKind::NewVersion { to_tag } => {
+                                let m = state.app_manifest(app).await?;
+                                format!("{}:{to_tag}", m.spec.image.repo)
+                            }
+                            _ => state.app_manifest(app).await?.spec.image.reference(),
+                        };
+
+                        let rapport = hlb_updater::audit(
+                            &cible,
+                            std::env::var("HLB_COSIGN_IDENTITY").ok().as_deref(),
+                            std::env::var("HLB_COSIGN_ISSUER").ok().as_deref(),
+                        )
+                        .await?;
+
+                        println!("{}\n", rapport.describe());
+
+                        if rapport.blocks() && !force_vulnerable {
+                            eprintln!("🔴 Mise à jour REFUSÉE.");
+                            eprintln!();
+                            eprintln!("   Passer outre est parfois légitime — un correctif");
+                            eprintln!("   urgent dans une image qui traîne d'autres CVE.");
+                            eprintln!("   Mais ça doit être une décision, pas un défaut :");
+                            eprintln!("     hlb update apply {app} --force-vulnerable");
+                            state
+                                .audit("cli", ACTEUR_ROLE, "update-refused", app, "refused",
+                                       Some(&rapport.describe()))
+                                .await?;
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        if rapport.blocks() {
+                            eprintln!("⚠️  Vulnérabilités critiques ignorées sur demande.");
+                            state
+                                .audit("cli", ACTEUR_ROLE, "update-forced", app, "ok",
+                                       Some(&rapport.describe()))
+                                .await?;
+                        }
 
                         if !c.in_window && !force_window {
                             eprintln!(

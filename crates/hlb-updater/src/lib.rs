@@ -16,10 +16,12 @@
 //! jour est **refusée**. Une migration de schéma n'est pas réversible par un rollback
 //! d'image — prétendre avoir sauvegardé serait le pire mensonge possible.
 
+pub mod scan;
 pub mod apply;
 pub mod window;
 
 pub use apply::{apply, UpdateOutcome};
+pub use scan::{audit, Report as ScanReport, Verdict};
 pub use window::MaintenanceWindow;
 
 use hlb_registry::{best_upgrade, ImageRef, RegistryClient};
@@ -28,6 +30,9 @@ use hlb_types::UpdateChannel;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("analyse de l'image : {0}")]
+    Scan(String),
+
     #[error(transparent)]
     State(#[from] hlb_state::Error),
 

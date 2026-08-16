@@ -1337,6 +1337,7 @@ dependencies = [
  "hlb-registry",
  "hlb-state",
  "hlb-types",
+ "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.19",
  "tokio",
