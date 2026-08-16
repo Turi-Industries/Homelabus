@@ -10,6 +10,7 @@
 
 pub mod pgdump;
 pub mod pitr;
+pub mod sqlite;
 pub mod pgrunner;
 pub mod provider;
 pub mod restic;
@@ -26,6 +27,7 @@ pub use retention::RetentionPolicy;
 pub use schedule::Schedule;
 pub use verify::{verify_by_restore, verify_snapshot, Verification};
 pub use pitr::{parse_pg_url, scan_archive, wal_coverage, Segment};
+pub use sqlite::{snapshot as sqlite_snapshot, snapshot_all as sqlite_snapshot_all};
 pub use runner::{ContainerRunner, HostRunner};
 
 #[derive(Debug, thiserror::Error)]

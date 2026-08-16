@@ -425,13 +425,13 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::CreateVolume { name, backup, .. } => {
+            Action::CreateVolume { name, backup, sqlite, .. } => {
                 let info = self.orchestrator.create_volume(name).await?;
 
                 // On mémorise le point de montage RÉEL : c'est ce que la sauvegarde
                 // ira lire (§8). Sans lui, on ne sait pas quoi sauvegarder.
                 self.state
-                    .add_volume(app, &info.name, &info.mountpoint, *backup)
+                    .add_volume(app, &info.name, &info.mountpoint, *backup, *sqlite)
                     .await?;
 
                 if info.existed {

@@ -417,3 +417,113 @@ async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
     assert!(d.ok, "blocs illisibles : {:?}", d.detail);
     assert_eq!(d.subset, "5%");
 }
+
+/// Une base SQLite survit-elle à un aller-retour complet ? (§3.4)
+///
+/// 🔴 C'est la preuve qui compte. La comparaison de tailles dirait « conforme » sur un
+/// fichier SQLite copié à chaud et pourtant inexploitable : le fichier a la bonne
+/// taille, ses octets sont fidèlement rendus, et SQLite refuse de l'ouvrir — ou pire,
+/// l'ouvre en ayant silencieusement perdu les transactions du WAL.
+///
+/// Ce test relit donc **les données**, pas les octets.
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn a_sqlite_database_survives_the_whole_pipeline() {
+    use hlb_backup::pgdump::scheduled::{archive, Dump};
+
+    let travail = tempfile::tempdir().expect("répertoire");
+    let source = travail.path().join("app.db");
+
+    // Une base en mode WAL avec assez de lignes pour que le WAL compte, et qu'on ne
+    // ferme PAS proprement — comme une app qui tourne.
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&source)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("base");
+
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, nom TEXT)")
+            .execute(&pool)
+            .await
+            .expect("table");
+        for i in 0..1000 {
+            sqlx::query("INSERT INTO users (nom) VALUES (?1)")
+                .bind(format!("user{i}"))
+                .execute(&pool)
+                .await
+                .expect("insertion");
+        }
+        // Pas de `pool.close()` : le WAL reste chargé.
+    }
+
+    // 1. Instantané cohérent.
+    let staging = tempfile::tempdir().expect("transit");
+    let produits = hlb_backup::sqlite_snapshot_all(travail.path(), staging.path())
+        .await
+        .expect("instantané");
+    assert_eq!(produits.len(), 1, "{produits:?}");
+
+    // 2. Archivage dans un vrai dépôt restic.
+    let depot = "hlb-test-sqlite-depot";
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", depot])
+        .output();
+    make_volume(depot);
+
+    let contenu = std::fs::read(&produits[0]).expect("lecture");
+    let d = Dump {
+        app: "pocket-id".into(),
+        database: "app".into(),
+        filename: "app.db.snapshot".into(),
+        bytes: contenu,
+    };
+    let id = archive(depot, "mot-de-passe-de-test", &d)
+        .await
+        .expect("archivage");
+
+    // 3. Restauration depuis le dépôt, dans un fichier neuf.
+    let restaure = travail.path().join("restaure.db");
+    let out = std::process::Command::new("docker")
+        .args([
+            "run", "--rm", "-e", "RESTIC_PASSWORD=mot-de-passe-de-test",
+            "-v", &format!("{depot}:/depot"),
+            "--entrypoint", "sh", "restic/restic:latest", "-c",
+            &format!("restic -r /depot dump {id} /staging/app.db.snapshot"),
+        ])
+        .output()
+        .expect("restic");
+    assert!(
+        out.status.success(),
+        "restauration impossible :\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(&restaure, &out.stdout).expect("écriture");
+
+    // 4. 🔴 La preuve : les DONNÉES sont là, pas seulement les octets.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", restaure.display()))
+        .await
+        .expect("🔴 la base restaurée doit s'OUVRIR — un fichier copié à chaud échoue ici");
+
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .expect("comptage");
+    assert_eq!(n, 1000, "🔴 lignes perdues : le WAL n'a pas été capturé");
+
+    let dernier: String = sqlx::query_scalar("SELECT nom FROM users ORDER BY id DESC LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("dernière ligne");
+    assert_eq!(dernier, "user999", "la dernière transaction doit être là");
+
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", depot])
+        .output();
+}

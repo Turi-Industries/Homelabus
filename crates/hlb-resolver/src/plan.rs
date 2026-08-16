@@ -42,6 +42,11 @@ pub enum Action {
         path: String,
         tier: StorageTier,
         backup: bool,
+        /// 🔴 Le volume contient une base SQLite (§3.4). Elle ne doit JAMAIS être
+        /// copiée à chaud : le fichier principal et son WAL sont capturés à des
+        /// instants différents, et la base restaurée est corrompue — sans que rien
+        /// ne le signale au moment de la sauvegarde.
+        sqlite: bool,
     },
 
     ProvisionMailAccount {
@@ -117,10 +122,11 @@ impl fmt::Display for Action {
                 "créer le client OIDC « {app} » dans PocketID → {}",
                 redirect_uris.join(", ")
             ),
-            Self::CreateVolume { name, path, tier, backup } => write!(
+            Self::CreateVolume { name, path, tier, backup, sqlite } => write!(
                 f,
-                "créer le volume {name} sur {path} (tier {tier:?}, sauvegarde {})",
-                if *backup { "activée" } else { "désactivée" }
+                "créer le volume {name} sur {path} (tier {tier:?}, sauvegarde {}{})",
+                if *backup { "activée" } else { "désactivée" },
+                if *sqlite { ", instantané SQLite" } else { "" }
             ),
             Self::ProvisionMailAccount { address, aliases } => write!(
                 f,

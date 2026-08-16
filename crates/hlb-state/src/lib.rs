@@ -181,21 +181,47 @@ impl State {
         name: &str,
         mountpoint: &str,
         backup: bool,
+        sqlite: bool,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO app_volumes (app, name, mountpoint, backup)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO app_volumes (app, name, mountpoint, backup, sqlite)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(app, name) DO UPDATE SET
                  mountpoint = excluded.mountpoint,
-                 backup = excluded.backup",
+                 backup = excluded.backup,
+                 sqlite = excluded.sqlite",
         )
         .bind(app)
         .bind(name)
         .bind(mountpoint)
         .bind(backup as i64)
+        .bind(sqlite as i64)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Les volumes qui contiennent une base SQLite (§3.4).
+    ///
+    /// 🔴 Ceux-là ne peuvent PAS être sauvegardés par simple copie de fichiers : il
+    /// leur faut un instantané cohérent au préalable. Renvoie `(app, nom, montage)`.
+    pub async fn sqlite_volumes(&self) -> Result<Vec<(String, String, String)>> {
+        let rows = sqlx::query(
+            "SELECT app, name, mountpoint FROM app_volumes
+             WHERE sqlite = 1 AND backup = 1 ORDER BY app, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("app")?,
+                    r.try_get("name")?,
+                    r.try_get("mountpoint")?,
+                ))
+            })
+            .collect()
     }
 
     /// Les volumes d'une app à sauvegarder : (nom, point de montage).
@@ -692,6 +718,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sqlite_volumes_are_listed_apart() {
+        // 🔴 Un volume SQLite ne peut pas être sauvegardé par copie de fichiers : le
+        // fichier principal et son WAL seraient capturés à des instants différents,
+        // et la base restaurée serait corrompue sans que rien ne l'ait signalé.
+        let s = st().await;
+        s.upsert_app("pocket-id", &manifest("pocket-id"), None).await.expect("upsert");
+        s.add_volume("pocket-id", "pid-data", "/mnt/pid", true, true).await.expect("volume");
+        s.add_volume("pocket-id", "pid-cache", "/mnt/cache", false, true).await.expect("volume");
+        s.upsert_app("gitea", &manifest("gitea"), None).await.expect("upsert");
+        s.add_volume("gitea", "g-data", "/mnt/g", true, false).await.expect("volume");
+
+        let v = s.sqlite_volumes().await.expect("lecture");
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].1, "pid-data");
+        // Un volume SQLite non sauvegardé n'a pas besoin d'instantané.
+        assert!(!v.iter().any(|(_, n, _)| n == "pid-cache"));
+    }
+
+    #[tokio::test]
     async fn databases_come_from_the_frozen_manifest() {
         // 🔴 Le manifest FIGÉ, pas le catalogue courant (§4.8). Une app installée il
         // y a six mois doit être sauvegardée selon ce qu'elle demandait alors ; un
@@ -978,11 +1023,11 @@ mod tests {
         let s = st().await;
         s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
 
-        s.add_volume("gitea", "gitea-data", "/var/lib/docker/volumes/gitea-data/_data", true)
+        s.add_volume("gitea", "gitea-data", "/var/lib/docker/volumes/gitea-data/_data", true, false)
             .await
             .unwrap();
         // Un cache : pas de sauvegarde.
-        s.add_volume("gitea", "gitea-cache", "/ailleurs", false).await.unwrap();
+        s.add_volume("gitea", "gitea-cache", "/ailleurs", false, false).await.unwrap();
 
         let v = s.volumes_to_backup("gitea").await.unwrap();
         assert_eq!(v.len(), 1, "seul le volume à sauvegarder doit remonter");
@@ -994,8 +1039,8 @@ mod tests {
     async fn recording_a_volume_twice_updates_it() {
         let s = st().await;
         s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        s.add_volume("gitea", "d", "/ancien", true).await.unwrap();
-        s.add_volume("gitea", "d", "/nouveau", true).await.unwrap();
+        s.add_volume("gitea", "d", "/ancien", true, false).await.unwrap();
+        s.add_volume("gitea", "d", "/nouveau", true, false).await.unwrap();
 
         let v = s.volumes_to_backup("gitea").await.unwrap();
         assert_eq!(v.len(), 1);

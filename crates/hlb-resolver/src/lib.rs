@@ -314,12 +314,13 @@ fn resolve_capability(
             });
         }
 
-        Capability::Storage { name, path, tier, backup, .. } => {
+        Capability::Storage { name, path, tier, backup, sqlite } => {
             plan.push(Action::CreateVolume {
                 name: format!("{app}-{name}"),
                 path: path.clone(),
                 tier: *tier,
                 backup: *backup,
+                sqlite: *sqlite,
             });
         }
     }

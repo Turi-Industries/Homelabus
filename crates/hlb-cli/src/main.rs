@@ -913,6 +913,61 @@ async fn export_git(
 const ACTEUR_ROLE: hlb_types::Role = hlb_types::Role::Admin;
 
 /// Local ou distant, selon qu'un hôte est donné.
+/// Instantanie les bases SQLite d'un volume, puis les archive.
+///
+/// 🔴 On sauvegarde l'INSTANTANÉ, jamais le fichier vivant. Une base SQLite en mode
+/// WAL est trois fichiers (`.db`, `.db-wal`, `.db-shm`) que restic copie l'un après
+/// l'autre ; entre-temps l'app écrit, et le jeu obtenu est incohérent.
+async fn snapshot_sqlite_volume(
+    state: &State,
+    vault: &Vault,
+    repo: Option<&str>,
+    app: &str,
+    mountpoint: &str,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let Some(depot) = repo else {
+        return Err("aucun dépôt configuré".into());
+    };
+
+    let staging = tempfile::tempdir()?;
+    let bases =
+        hlb_backup::sqlite_snapshot_all(std::path::Path::new(mountpoint), staging.path()).await?;
+
+    let password = restic_password(state, vault).await?;
+    let mut ok = 0;
+
+    for chemin in &bases {
+        let contenu = std::fs::read(chemin)?;
+        let nom = chemin
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "base.snapshot".into());
+
+        // Le même transit par volume Docker que les dumps SQL, et pour la même
+        // raison : le dossier temporaire de l'hôte n'est pas visible du conteneur.
+        let d = hlb_backup::pgdump::scheduled::Dump {
+            app: app.to_string(),
+            database: nom.trim_end_matches(".snapshot").to_string(),
+            filename: nom,
+            bytes: contenu,
+        };
+
+        match hlb_backup::pgdump::scheduled::archive(depot, &password, &d).await {
+            Ok(id) => {
+                state.record_backup(app, "sqlite-snapshot", Some(&id), None).await?;
+                ok += 1;
+            }
+            Err(e) => {
+                state
+                    .record_backup(app, "sqlite-snapshot", None, Some(&e.to_string()))
+                    .await?;
+                return Err(e.into());
+            }
+        }
+    }
+    Ok(ok)
+}
+
 /// Sauvegarde logique de chaque base déclarée.
 ///
 /// Renvoie le nombre de dumps réussis. Un échec sur une base n'interrompt pas les
@@ -2717,6 +2772,28 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                        // 🔴 Les bases SQLite d'abord : un volume SQLite copié à
+                        // chaud donne une base restaurée CORROMPUE, sans que rien ne
+                        // le signale au moment de la sauvegarde (§3.4).
+                        for (app, volume, montage) in state.sqlite_volumes().await? {
+                            print!("{app}/{volume} (instantané SQLite)… ");
+                            use std::io::Write as _;
+                            let _ = std::io::stdout().flush();
+
+                            match snapshot_sqlite_volume(
+                                &state, &vault, cli.backup_repo.as_deref(),
+                                &app, &montage,
+                            )
+                            .await
+                            {
+                                Ok(n) => {
+                                    println!("✓ {n} base(s)");
+                                    faites += 1;
+                                }
+                                Err(e) => println!("✗ {e}"),
+                            }
+                        }
+
                         // 🔴 Les bases de données ensuite. Un volume PostgreSQL copié
                         // pendant une écriture ne restaure PAS : pages, WAL et fichiers
                         // de contrôle sont capturés à des instants différents. Seul un
