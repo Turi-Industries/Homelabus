@@ -413,6 +413,11 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Exposé pour les autres modules qui horodatent des noms de fichiers.
+pub(crate) fn civil_public(epoch: i64) -> (i64, u32, u32, u32, u32, u32) {
+    civil(epoch)
+}
+
 fn civil(epoch: i64) -> (i64, u32, u32, u32, u32, u32) {
     let jours = epoch.div_euclid(86_400);
     let reste = epoch.rem_euclid(86_400);

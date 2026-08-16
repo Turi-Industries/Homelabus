@@ -34,6 +34,14 @@ struct Cli {
     #[arg(long, default_value = "homelab", env = "HLB_NTFY_TOPIC")]
     ntfy_topic: String,
 
+    /// URL d'administration PostgreSQL. Sans elle, les bases ne sont PAS dumpées.
+    #[arg(long, env = "HLB_POSTGRES_ADMIN")]
+    postgres_admin: Option<String>,
+
+    /// Réseau Docker où les services de plateforme sont joignables par leur nom.
+    #[arg(long, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
+    platform_network: String,
+
     /// Jeton exigé sur /metrics. Absent : point d'exposition ouvert.
     #[arg(long, env = "HLB_METRICS_TOKEN")]
     metrics_token: Option<String>,
@@ -196,6 +204,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let st = state.clone();
                 let rx = shutdown_rx.clone();
                 let notif_bck = notif.clone();
+                let pg_admin = cli.postgres_admin.clone();
+                let platform_net = cli.platform_network.clone();
+                let depot_pour_sql = repo.clone();
+                let mdp_depot = match restic_password(&state, &cli.master_key).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("mot de passe du dépôt illisible : {e}");
+                        String::new()
+                    }
+                };
+                if cli.postgres_admin.is_none() {
+                    tracing::warn!(
+                        "🔴 --postgres-admin absent : les BASES ne seront pas sauvegardées, \
+                         seulement leurs volumes — ce qui ne restaure pas"
+                    );
+                }
                 tracing::info!(dépôt = %repo, "boucle de sauvegarde");
 
                 taches.push(tokio::spawn(loops::every(
@@ -204,6 +228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     move || {
                         let (bl, provider, st, notif) =
                             (bl.clone(), provider.clone(), st.clone(), notif_bck.clone());
+                        let (pg_url, reseau, depot_sql, mdp_sql) = (
+                            pg_admin.clone(), platform_net.clone(),
+                            depot_pour_sql.clone(), mdp_depot.clone(),
+                        );
                         async move {
                             use hlb_updater::BackupProvider;
                             let dues = match bl.due_apps().await {
@@ -244,6 +272,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
+                            // 🔴 Les bases ensuite. Un volume PostgreSQL copié à
+                            // chaud ne restaure PAS : seul un dump logique est
+                            // transactionnellement cohérent (§8.1). Sans ce bloc,
+                            // les apps à base de données ne sont sauvegardées qu'en
+                            // apparence.
+                            if let Some(url) = &pg_url {
+                                for (app, moteur, base, _) in
+                                    st.app_databases().await.unwrap_or_default()
+                                {
+                                    if moteur != "postgres" {
+                                        tracing::warn!(
+                                            app, moteur,
+                                            "moteur sans dumper — base NON sauvegardée"
+                                        );
+                                        continue;
+                                    }
+                                    match dump_database(&st, url, &reseau, &depot_sql,
+                                                        &mdp_sql, &app, &base).await
+                                    {
+                                        Ok(id) => tracing::info!(
+                                            app, base,
+                                            instantané = %&id[..8.min(id.len())],
+                                            "base sauvegardée"
+                                        ),
+                                        Err(e) => tracing::error!(app, base, "dump échoué : {e}"),
+                                    }
+                                }
+                            }
+
                             // Alerte sur ce qui dérive vraiment (§8bis).
                             if let Ok(tard) = bl.overdue_apps().await {
                                 for app in tard {
@@ -400,16 +457,19 @@ async fn export(
 }
 
 /// Assemble le fournisseur de sauvegarde depuis l'état et le coffre.
-async fn build_provider(
-    repo: &str,
-    master_key: &std::path::Path,
+/// Le mot de passe du dépôt restic, partagé entre l'instantané et les dumps.
+///
+/// 🔴 Le MÊME que celui de `build_provider` : deux mots de passe différents
+/// produiraient deux dépôts qui ne se lisent pas l'un l'autre, dans le même
+/// répertoire.
+async fn restic_password(
     state: &State,
-) -> Result<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>, Box<dyn std::error::Error>>
-{
+    master_key: &std::path::Path,
+) -> Result<String, Box<dyn std::error::Error>> {
     let vault = hlb_secrets::Vault::open_or_init(master_key)?;
-
     const SECRET: &str = "restic-repo-password";
-    let password = match state.secret(SECRET).await? {
+
+    Ok(match state.secret(SECRET).await? {
         Some(ct) => vault.decrypt(&ct)?,
         None => {
             let p = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
@@ -418,7 +478,70 @@ async fn build_provider(
                 .await?;
             p
         }
+    })
+}
+
+/// Un dump logique d'une base, archivé dans le dépôt.
+async fn dump_database(
+    state: &State,
+    admin_url: &str,
+    network: &str,
+    repo: &str,
+    password: &str,
+    app: &str,
+    database: &str,
+) -> Result<String, String> {
+    use hlb_backup::pgdump::{scheduled, PgDumper, PgTarget};
+
+    let creds = hlb_backup::parse_pg_url(admin_url)
+        .ok_or_else(|| "URL PostgreSQL illisible".to_string())?;
+
+    // Identifiants d'ADMINISTRATION : le rôle isolé de l'app ne peut pas lire toutes
+    // ses dépendances, et le dump serait incomplet sans erreur.
+    let cible = PgTarget {
+        host: creds.host,
+        port: creds.port,
+        database: database.to_string(),
+        user: creds.user,
+        password: creds.password,
     };
+
+    let dumper = PgDumper::new(hlb_backup::PgContainerRunner::default().network(network));
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let d = match scheduled::produce(&dumper, app, &cible, at).await {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await;
+            return Err(e.to_string());
+        }
+    };
+
+    match scheduled::archive(repo, password, &d).await {
+        Ok(id) => {
+            let _ = state.record_backup(app, "sql-dump", Some(&id), None).await;
+            Ok(id)
+        }
+        Err(e) => {
+            let _ = state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await;
+            Err(e.to_string())
+        }
+    }
+}
+
+async fn build_provider(
+    repo: &str,
+    master_key: &std::path::Path,
+    state: &State,
+) -> Result<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>, Box<dyn std::error::Error>>
+{
+    let vault = hlb_secrets::Vault::open_or_init(master_key)?;
+
+    let _ = &vault;
+    let password = restic_password(state, master_key).await?;
 
     let mut par_app = std::collections::BTreeMap::new();
     for (app, _) in state.installed_apps().await? {

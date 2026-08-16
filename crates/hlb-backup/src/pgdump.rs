@@ -291,3 +291,183 @@ mod tests {
         assert_eq!(base64_encode(&[0x00, 0xff, 0x80]), "AP+A");
     }
 }
+
+/// Sauvegarde logique d'une base, poussée dans le dépôt restic (§8.1, couche L1).
+///
+/// 🔴 **C'est ce qui manquait le plus.** Sans cette couche, un PostgreSQL n'est
+/// sauvegardé qu'au niveau de ses fichiers — et un fichier de base copié pendant une
+/// écriture ne restaure pas : les pages, le WAL et les fichiers de contrôle sont
+/// capturés à des instants différents. Le fichier existe, restic le rend fidèlement,
+/// et PostgreSQL refuse de démarrer dessus.
+pub mod scheduled {
+    use super::*;
+
+    /// Un dump prêt à archiver.
+    pub struct Dump {
+        pub app: String,
+        pub database: String,
+        /// Nom de fichier au format `<app>-<base>-<horodatage>.dump`.
+        pub filename: String,
+        pub bytes: Vec<u8>,
+    }
+
+    impl Dump {
+        /// Le nom de fichier d'un dump.
+        ///
+        /// Horodaté et trié lexicographiquement, comme les sauvegardes de base : c'est
+        /// ce qui permet de retrouver le plus récent sans lire les métadonnées.
+        pub fn name_for(app: &str, database: &str, at: i64) -> String {
+            let (y, m, d, hh, mm, ss) = crate::pitr::civil_public(at);
+            format!("{app}-{database}-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z.dump")
+        }
+    }
+
+    /// Produit le dump d'une base.
+    pub async fn produce<R: DumpRunner>(
+        dumper: &PgDumper<R>,
+        app: &str,
+        target: &PgTarget,
+        at: i64,
+    ) -> Result<Dump> {
+        let bytes = dumper.dump(target).await?;
+        Ok(Dump {
+            app: app.to_string(),
+            database: target.database.clone(),
+            filename: Dump::name_for(app, &target.database, at),
+            bytes,
+        })
+    }
+
+    /// Archive un dump dans le dépôt restic.
+    ///
+    /// ## 🔴 Pourquoi un volume Docker et pas un fichier temporaire
+    ///
+    /// Même raison que pour la vérification (§8.3) : sur macOS, le dossier temporaire
+    /// de l'hôte **n'est pas partagé avec la VM Docker**. Un dump écrit là et monté
+    /// dans le conteneur restic n'y apparaît pas, et restic répond « does not exist,
+    /// skipping » — puis sort en erreur. Le dump a bien été produit, il n'est
+    /// simplement jamais archivé.
+    ///
+    /// Le fichier voyage donc par un volume jetable, du même côté de la frontière que
+    /// restic.
+    ///
+    /// ⚠️ Le dump contient les données en clair : le volume est détruit dans tous les
+    /// cas, succès comme échec.
+    pub async fn archive(
+        repo_location: &str,
+        password: &str,
+        dump: &Dump,
+    ) -> Result<String> {
+        let volume = format!("hlb-dump-{}", crate::verify::jeton_public());
+        docker(&["volume", "create", &volume]).await?;
+
+        let r = archiver_dans(&volume, repo_location, password, dump).await;
+
+        if let Err(e) = docker(&["volume", "rm", "-f", &volume]).await {
+            tracing::warn!(volume, "volume de transit non supprimé : {e}");
+        }
+        r
+    }
+
+    async fn archiver_dans(
+        volume: &str,
+        repo_location: &str,
+        password: &str,
+        dump: &Dump,
+    ) -> Result<String> {
+        use crate::runner::ContainerRunner;
+        use tokio::io::AsyncWriteExt;
+
+        // Le dump entre dans le volume par l'entrée standard d'un conteneur : c'est
+        // le seul chemin qui traverse la frontière hôte/VM de façon fiable.
+        let mut enfant = tokio::process::Command::new("docker")
+            .args([
+                "run", "--rm", "-i", "--entrypoint", "sh",
+                "-v", &format!("{volume}:/staging"),
+                "restic/restic:latest", "-c",
+                &format!("cat > /staging/{}", dump.filename),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Unexpected(format!("docker introuvable : {e}")))?;
+
+        if let Some(mut si) = enfant.stdin.take() {
+            si.write_all(&dump.bytes)
+                .await
+                .map_err(|e| Error::Unexpected(format!("envoi du dump : {e}")))?;
+            si.shutdown()
+                .await
+                .map_err(|e| Error::Unexpected(format!("fermeture du flux : {e}")))?;
+        }
+
+        let out = enfant
+            .wait_with_output()
+            .await
+            .map_err(|e| Error::Unexpected(format!("transfert du dump : {e}")))?;
+
+        if !out.status.success() {
+            return Err(Error::Unexpected(format!(
+                "dump non transféré : {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+
+        let runner = ContainerRunner::default()
+            .mount(repo_location, "/depot")
+            .mount(volume, "/staging");
+        let repo = crate::restic::Repository::new(runner, "/depot", password.to_string());
+
+        repo.init().await?;
+        repo.backup(
+            &format!("/staging/{}", dump.filename),
+            &[
+                &format!("app:{}", dump.app),
+                &format!("db:{}", dump.database),
+                "kind:sql-dump",
+            ],
+        )
+        .await
+    }
+
+    async fn docker(args: &[&str]) -> Result<String> {
+        let out = tokio::process::Command::new("docker")
+            .args(args)
+            .output()
+            .await
+            .map_err(|e| Error::Unexpected(format!("docker introuvable : {e}")))?;
+
+        if !out.status.success() {
+            return Err(Error::Unexpected(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests_scheduled {
+    use super::scheduled::Dump;
+
+    const J0: i64 = 1_786_881_600;
+
+    #[test]
+    fn dump_names_sort_chronologically() {
+        // Retrouver le dump le plus récent doit être un simple tri de noms.
+        let a = Dump::name_for("gitea", "gitea", J0);
+        let b = Dump::name_for("gitea", "gitea", J0 + 3600);
+        assert_eq!(a, "gitea-gitea-20260816T120000Z.dump");
+        assert!(a < b, "{a} < {b}");
+    }
+
+    #[test]
+    fn the_name_carries_both_app_and_database() {
+        // Une app peut avoir une base au nom différent du sien : les deux doivent
+        // être lisibles sans décoder les étiquettes restic.
+        let n = Dump::name_for("vikunja", "taches", J0);
+        assert!(n.starts_with("vikunja-taches-"), "{n}");
+        assert!(n.ends_with(".dump"), "{n}");
+    }
+}

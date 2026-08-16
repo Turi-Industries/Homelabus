@@ -338,6 +338,11 @@ async fn docker(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Exposé pour les autres modules qui créent des volumes jetables.
+pub(crate) fn jeton_public() -> String {
+    jeton()
+}
+
 /// Un suffixe unique, sans dépendance de génération aléatoire.
 ///
 /// ⚠️ L'horodatage **seul** ne suffit pas : sur macOS, `SystemTime::now()` n'a pas la

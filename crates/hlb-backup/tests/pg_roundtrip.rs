@@ -263,3 +263,74 @@ async fn dumping_a_missing_database_fails_clearly() {
     println!("✓ erreur explicite : {err}");
     stop_postgres();
 }
+
+/// Le cycle complet de la sauvegarde planifiée : dump → dépôt restic → restauration.
+///
+/// 🔴 Ce test existe parce que la première version de `scheduled::archive` écrivait le
+/// dump dans un `tempfile::tempdir()` de l'hôte avant de le donner à un restic
+/// conteneurisé. Sur macOS, ce dossier n'est pas partagé avec la VM Docker : restic
+/// répondait « does not exist, skipping » puis sortait en erreur. Le dump était bien
+/// produit et n'arrivait jamais dans le dépôt.
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn a_scheduled_dump_reaches_the_repository_and_comes_back() {
+    use hlb_backup::pgdump::scheduled;
+
+    start_postgres();
+
+    psql("postgres", "DROP DATABASE IF EXISTS planifiee");
+    psql("postgres", "CREATE DATABASE planifiee");
+    psql(
+        "planifiee",
+        "CREATE TABLE depots (id int PRIMARY KEY, nom text);
+         INSERT INTO depots VALUES (1, 'projet-a'), (2, 'projet-b');",
+    );
+
+    // 1. Produire le dump.
+    let d = scheduled::produce(&dumper(), "gitea", &target("planifiee"), 1_786_881_600)
+        .await
+        .expect("dump produit");
+
+    assert_eq!(d.filename, "gitea-planifiee-20260816T120000Z.dump");
+    assert!(!d.bytes.is_empty(), "un dump vide n'est jamais normal");
+
+    // 2. L'archiver dans un dépôt neuf.
+    let depot = "hlb-test-dump-depot";
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", depot])
+        .output();
+    docker(&["volume", "create", depot]);
+
+    let id = scheduled::archive(depot, "mot-de-passe-de-test", &d)
+        .await
+        .expect("🔴 archivage : si ça échoue en « does not exist », le transit ne traverse pas la VM Docker");
+
+    assert!(!id.is_empty(), "un identifiant d'instantané est attendu");
+
+    // 3. Le relire et vérifier qu'il contient bien le dump, octet pour octet.
+    let out = docker(&[
+        "run", "--rm", "-e", "RESTIC_PASSWORD=mot-de-passe-de-test",
+        "-v", &format!("{depot}:/depot"),
+        "--entrypoint", "sh", "restic/restic:latest", "-c",
+        &format!("restic -r /depot dump {id} /staging/{} | wc -c", d.filename),
+    ]);
+    assert!(
+        out.status.success(),
+        "relecture impossible :\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let taille: usize = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("taille lisible");
+    assert_eq!(
+        taille,
+        d.bytes.len(),
+        "le dump archivé n'a pas la taille de celui qu'on a produit"
+    );
+
+    let _ = std::process::Command::new("docker")
+        .args(["volume", "rm", "-f", depot])
+        .output();
+}

@@ -55,6 +55,14 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_CADDY_ADMIN")]
     caddy_admin: Option<String>,
 
+    /// Réseau Docker où les services de plateforme sont joignables par leur nom.
+    ///
+    /// ⚠️ Les outils clients (pg_dump, pg_basebackup) tournent dans des conteneurs
+    /// jetables : sans ce réseau, ils ne résolvent pas « postgres » et échouent sur
+    /// une erreur de DNS qui ne dit pas que c'est le réseau le problème.
+    #[arg(long, global = true, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
+    platform_network: String,
+
     /// API locale de CrowdSec. Sans elle, le Caddyfile est généré sans videur.
     #[arg(long, global = true, default_value = "http://crowdsec:8080", env = "HLB_CROWDSEC_URL")]
     crowdsec_url: String,
@@ -306,9 +314,6 @@ enum PitrCmd {
         /// Répertoire recevant les sauvegardes de base.
         #[arg(long, default_value = "/archive/base")]
         dest: String,
-        /// Réseau Docker sur lequel l'hôte de l'URL est résolvable.
-        #[arg(long, default_value = "hlb_platform")]
-        network: String,
         /// Exécuter réellement. Sans ce drapeau, on n'affiche que ce qui serait fait.
         #[arg(long)]
         apply: bool,
@@ -437,11 +442,12 @@ async fn pitr(
     cmd: &PitrCmd,
     state_path: &std::path::Path,
     admin_url: Option<&str>,
+    network: &str,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     use hlb_backup::pitr;
 
     match cmd {
-        PitrCmd::Base { dest, network, apply } => {
+        PitrCmd::Base { dest, apply } => {
             let state = State::open(state_path).await?;
 
             // 🔴 Les identifiants viennent de `--postgres-admin`, la MÊME source que
@@ -810,6 +816,85 @@ async fn export_git(
 const ACTEUR_ROLE: hlb_types::Role = hlb_types::Role::Admin;
 
 /// Local ou distant, selon qu'un hôte est donné.
+/// Sauvegarde logique de chaque base déclarée.
+///
+/// Renvoie le nombre de dumps réussis. Un échec sur une base n'interrompt pas les
+/// autres : perdre le dump de gitea ne doit pas priver vaultwarden du sien.
+async fn dump_databases(
+    state: &State,
+    vault: &Vault,
+    admin_url: &str,
+    repo: Option<&str>,
+    network: &str,
+    bases: &[(String, String, String, String)],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    use hlb_backup::pgdump::{scheduled, PgDumper, PgTarget};
+
+    let Some(depot) = repo else {
+        eprintln!("🔴 aucun dépôt : les dumps n'auraient nulle part où aller.");
+        return Ok(0);
+    };
+    let Some(creds) = hlb_backup::parse_pg_url(admin_url) else {
+        eprintln!("🔴 URL PostgreSQL illisible : dumps ignorés.");
+        return Ok(0);
+    };
+
+    let password = restic_password(state, vault).await?;
+    let at = maintenant();
+    let mut ok = 0;
+
+    for (app, moteur, base, _secret) in bases {
+        if moteur != "postgres" {
+            // Les autres moteurs n'ont pas encore de dumper : on le DIT plutôt que
+            // de laisser croire que tout est sauvegardé.
+            eprintln!("⚠️  {app} : moteur « {moteur} » — dump non implémenté, base NON sauvegardée");
+            continue;
+        }
+
+        print!("{app}/{base} (dump)… ");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+
+        // 🔴 On se connecte avec les identifiants d'ADMINISTRATION, pas ceux de
+        // l'app : le rôle isolé de l'app n'a pas le droit de lire ses propres
+        // séquences ni ses extensions, et le dump serait incomplet sans erreur.
+        let cible = PgTarget {
+            host: creds.host.clone(),
+            port: creds.port,
+            database: base.clone(),
+            user: creds.user.clone(),
+            password: creds.password.clone(),
+        };
+
+        let dumper = PgDumper::new(
+            hlb_backup::PgContainerRunner::default().network(network),
+        );
+
+        match scheduled::produce(&dumper, app, &cible, at).await {
+            Ok(d) => {
+                match scheduled::archive(depot, &password, &d).await {
+                    Ok(id) => {
+                        state
+                            .record_backup(app, "sql-dump", Some(&id), None)
+                            .await?;
+                        println!("✓ {} Ko", d.bytes.len() / 1024);
+                        ok += 1;
+                    }
+                    Err(e) => {
+                        state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                        println!("✗ archivage : {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                println!("✗ {e}");
+            }
+        }
+    }
+    Ok(ok)
+}
+
 /// Nom du secret portant la clé privée de HomelabUS.
 const SECRET_SSH: &str = "homelabus-ssh-key";
 
@@ -2223,6 +2308,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                        // 🔴 Les bases de données ensuite. Un volume PostgreSQL copié
+                        // pendant une écriture ne restaure PAS : pages, WAL et fichiers
+                        // de contrôle sont capturés à des instants différents. Seul un
+                        // dump logique est transactionnellement cohérent (§8.1).
+                        let bases = state.app_databases().await?;
+                        if !bases.is_empty() {
+                            match cli.postgres_admin.as_deref() {
+                                None => {
+                                    eprintln!();
+                                    eprintln!(
+                                        "🔴 {} base(s) NON sauvegardée(s) : --postgres-admin absent.",
+                                        bases.len()
+                                    );
+                                    eprintln!("   Leurs volumes le sont, mais un volume PostgreSQL");
+                                    eprintln!("   copié à chaud ne restaure pas.");
+                                }
+                                Some(url) => {
+                                    faites += dump_databases(
+                                        &state, &vault, url, cli.backup_repo.as_deref(),
+                                        &cli.platform_network, &bases,
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
+
                         if faites == 0 {
                             println!("Rien à faire.");
                         }
@@ -2304,7 +2415,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    BackupCmd::Pitr(sous) => pitr(sous, &cli.state, cli.postgres_admin.as_deref()).await,
+                    BackupCmd::Pitr(sous) => {
+                        pitr(sous, &cli.state, cli.postgres_admin.as_deref(), &cli.platform_network).await
+                    }
                 }
             })
         }

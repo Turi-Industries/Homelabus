@@ -307,6 +307,45 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Les bases de données de chaque app, telles que son manifest FIGÉ les déclare.
+    ///
+    /// 🔴 On lit le manifest figé (§4.8), pas le catalogue courant : une app installée
+    /// il y a six mois doit être sauvegardée selon ce qu'elle demandait ALORS. Un
+    /// catalogue qui aurait changé de nom de base ferait sauvegarder une base vide en
+    /// laissant l'ancienne dériver sans filet.
+    ///
+    /// Renvoie `(app, moteur, base, rôle, secret du mot de passe)`.
+    pub async fn app_databases(&self) -> Result<Vec<(String, String, String, String)>> {
+        let mut out = Vec::new();
+
+        for (app, statut) in self.installed_apps().await? {
+            // Une app en échec n'a probablement pas de base provisionnée ; tenter de
+            // la sauvegarder produirait un échec par app à chaque tour.
+            if statut == "failed" {
+                continue;
+            }
+            let Ok(m) = self.app_manifest(&app).await else {
+                continue;
+            };
+
+            for c in &m.spec.requires {
+                if let hlb_types::Capability::Database { engine, name } = c {
+                    // Même convention que le résolveur : sans nom explicite, la base
+                    // porte le nom de l'app. Les deux DOIVENT rester alignés, sinon on
+                    // sauvegarderait une base qui n'existe pas.
+                    let db = name.clone().unwrap_or_else(|| app.clone());
+                    out.push((
+                        app.clone(),
+                        engine.service_name().to_string(),
+                        db,
+                        format!("{app}-db-password"),
+                    ));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Les sauvegardes de base PostgreSQL réussies, les plus anciennes d'abord (§8.1).
     ///
     /// Ce sont les points de départ possibles d'un rejeu WAL. Les échecs sont exclus :
@@ -650,6 +689,51 @@ mod tests {
 
     async fn st() -> State {
         State::in_memory().await.expect("base en mémoire")
+    }
+
+    #[tokio::test]
+    async fn databases_come_from_the_frozen_manifest() {
+        // 🔴 Le manifest FIGÉ, pas le catalogue courant (§4.8). Une app installée il
+        // y a six mois doit être sauvegardée selon ce qu'elle demandait alors ; un
+        // catalogue qui aurait renommé la base ferait sauvegarder du vide.
+        let s = st().await;
+        let y = "apiVersion: hlb/v1\nkind: App\nmetadata: { name: gitea }\n\
+                 spec:\n  image: { repo: a/b, tag: \"1\" }\n\
+                 \x20 requires:\n    - kind: database\n      engine: postgres\n";
+        let m: Manifest = serde_yaml_ng::from_str(y).expect("manifest");
+        s.upsert_app("gitea", &m, None).await.expect("upsert");
+        s.set_app_status("gitea", "running").await.expect("statut");
+
+        let d = s.app_databases().await.expect("lecture");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].0, "gitea");
+        assert_eq!(d[0].1, "postgres");
+        // Sans nom explicite, la base porte le nom de l'app — MÊME convention que
+        // le résolveur. Les deux doivent rester alignés.
+        assert_eq!(d[0].2, "gitea");
+        assert_eq!(d[0].3, "gitea-db-password");
+    }
+
+    #[tokio::test]
+    async fn an_app_without_a_database_is_not_listed() {
+        let s = st().await;
+        s.upsert_app("statique", &manifest("statique"), None).await.expect("upsert");
+        s.set_app_status("statique", "running").await.expect("statut");
+        assert!(s.app_databases().await.expect("lecture").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_app_is_skipped() {
+        // Sa base n'a probablement jamais été provisionnée : la sauvegarder
+        // produirait un échec à chaque tour de boucle, pour rien.
+        let s = st().await;
+        let y = "apiVersion: hlb/v1\nkind: App\nmetadata: { name: casse }\n\
+                 spec:\n  image: { repo: a/b, tag: \"1\" }\n\
+                 \x20 requires:\n    - kind: database\n      engine: postgres\n";
+        let m: Manifest = serde_yaml_ng::from_str(y).expect("manifest");
+        s.upsert_app("casse", &m, None).await.expect("upsert");
+        s.set_app_status("casse", "failed").await.expect("statut");
+        assert!(s.app_databases().await.expect("lecture").is_empty());
     }
 
     #[tokio::test]
