@@ -144,7 +144,7 @@ impl<R: DumpRunner> PgDumper<R> {
 /// Encodage base64 minimal, pour transporter un binaire à travers l'environnement.
 ///
 /// Évite une dépendance de plus pour une poignée de lignes.
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
 

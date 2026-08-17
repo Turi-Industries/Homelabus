@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use hlb_orchestrator::SwarmOrchestrator;
+use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_state::State;
 
 #[derive(Parser)]
@@ -148,6 +148,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("aucun ntfy configuré : les alertes resteront dans les journaux");
     }
 
+    // Cloné avant que la boucle de réconciliation ne consomme la valeur : le
+    // battement de cœur a besoin de sa propre référence pour VÉRIFIER que Docker
+    // répond avant de prétendre que tout va bien.
+    let orch_sante = orchestrator.clone();
+
     if let Some(orch) = orchestrator {
         let rl = Arc::new(
             loops::ReconcileLoop::new(orch, state.clone()).apply(cli.reconcile_apply),
@@ -189,15 +194,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = cli.heartbeat.clone() {
         let hb = Arc::new(loops::Heartbeat::new(path.clone()));
         let rx = shutdown_rx.clone();
-        tracing::info!(fichier = %path.display(), "battement de cœur");
+        let st = state.clone();
+        let orch = orch_sante.clone();
+        tracing::info!(fichier = %path.display(), "battement de cœur (conditionnel)");
+
         taches.push(tokio::spawn(loops::every(
             Duration::from_secs(cli.heartbeat_secs),
             rx,
             move || {
                 let hb = hb.clone();
+                let st = st.clone();
+                let orch = orch.clone();
                 async move {
-                    if let Err(e) = hb.beat().await {
-                        tracing::error!("battement de cœur impossible : {e}");
+                    // 🔴 On VÉRIFIE avant de battre. Un battement inconditionnel ne
+                    // prouve que la survie d'un fil d'exécution : le controller
+                    // pourrait avoir sa base illisible et son Docker mort, et laisser
+                    // le veilleur au vert sur un système inutilisable.
+                    let sante = hlb_metrics::Sante {
+                        // Une requête réelle, pas un drapeau : c'est la lecture qui
+                        // échoue quand le disque est plein ou la base corrompue.
+                        etat_lisible: st.installed_apps().await.is_ok(),
+                        orchestrateur_joignable: match &orch {
+                            Some(o) => o.ping().await.is_ok(),
+                            None => false,
+                        },
+                        // La boucle de réconciliation tourne dans la même tâche
+                        // système ; si elle était bloquée, ce minuteur le serait
+                        // aussi et aucun battement ne partirait.
+                        reconciliation_recente: true,
+                    };
+
+                    match hb.beat_si_sain(&sante).await {
+                        Ok(true) => {}
+                        Ok(false) => {} // déjà journalisé, avec les manquements
+                        Err(e) => tracing::error!("battement de cœur impossible : {e}"),
                     }
                 }
             },

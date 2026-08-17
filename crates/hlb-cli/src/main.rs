@@ -208,6 +208,10 @@ enum Command {
     #[command(subcommand)]
     Replication(ReplCmd),
 
+    /// Observabilité : collecte, règles d'alerte, deadman switch (§8bis).
+    #[command(subcommand)]
+    Metrics(MetricsCmd),
+
     /// 🔴 Reprise après sinistre : basculer PostgreSQL sur un autre nœud (§2bis.5).
     #[command(subcommand)]
     Dr(DrCmd),
@@ -503,6 +507,36 @@ enum ReplCmd {
     },
     /// 🔴 Les standbys suivent-ils, et un slot mort remplit-il le disque ?
     Status,
+}
+
+#[derive(Subcommand)]
+enum MetricsCmd {
+    /// La configuration de collecte de VictoriaMetrics.
+    Scrape {
+        /// Adresse du controller, telle que VictoriaMetrics la joindra.
+        #[arg(long, default_value = "hlb-controller:8080")]
+        controller: String,
+        /// Jeton de LECTURE (rôle metrics). Sans lui, la collecte reçoit des 401.
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Les règles d'alerte livrées, et ce qu'elles surveillent.
+    Rules,
+    /// Évaluer les règles maintenant, contre VictoriaMetrics.
+    Check {
+        /// URL de VictoriaMetrics.
+        #[arg(long, default_value = "http://victoria-metrics:8428")]
+        url: String,
+    },
+    /// 🔴 Le veilleur externe : le script à poser sur le NAS (§8bis).
+    Deadman {
+        /// Fichier où le NAS reçoit les battements.
+        #[arg(long, default_value = "/var/lib/hlb/battement")]
+        heartbeat_file: String,
+        /// Sujet ntfy du veilleur. DISTINCT de celui de HomelabUS.
+        #[arg(long)]
+        ntfy: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1257,12 +1291,9 @@ async fn dump_databases(
     let mut ok = 0;
 
     for (app, moteur, base, _secret) in bases {
-        if moteur != "postgres" {
-            // Les autres moteurs n'ont pas encore de dumper : on le DIT plutôt que
-            // de laisser croire que tout est sauvegardé.
-            eprintln!("⚠️  {app} : moteur « {moteur} » — dump non implémenté, base NON sauvegardée");
-            continue;
-        }
+        // L'appelant a déjà trié par moteur ; ce garde-fou empêche qu'un futur appel
+        // envoie une base MariaDB à `pg_dump`, qui échouerait de façon obscure.
+        debug_assert_eq!(moteur, "postgres");
 
         print!("{app}/{base} (dump)… ");
         use std::io::Write as _;
@@ -1306,6 +1337,126 @@ async fn dump_databases(
         }
     }
     Ok(ok)
+}
+
+/// Sauvegarde logique des bases MariaDB.
+///
+/// Le pendant de [`dump_databases`]. Deux différences qui comptent :
+///
+/// 🔴 **La cohérence atteignable est mesurée avant CHAQUE dump.**
+/// `--single-transaction` ne protège que les tables transactionnelles ; sur une table
+/// MyISAM ou Aria il est accepté sans un mot et n'apporte rien. Une migration d'app
+/// peut introduire une telle table des mois après l'installation, donc la question se
+/// repose à chaque passage — pas une fois pour toutes.
+///
+/// ⚠️ Quand on ne peut pas lire les moteurs, on retombe sur le verrouillage plutôt que
+/// de supposer l'InnoDB : un dump bloquant vaut mieux qu'un dump incohérent.
+async fn dump_mariadb_databases(
+    state: &State,
+    vault: &Vault,
+    admin_url: &str,
+    repo: Option<&str>,
+    network: &str,
+    bases: &[(String, String, String, String)],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    use hlb_backup::mariadump::{self, Coherence, MariaDumper, MariaTarget};
+
+    let Some(depot) = repo else {
+        eprintln!("🔴 aucun dépôt : les dumps MariaDB n'auraient nulle part où aller.");
+        return Ok(0);
+    };
+    let Some(creds) = hlb_backup::parse_maria_url(admin_url) else {
+        eprintln!("🔴 URL MariaDB illisible : dumps ignorés.");
+        return Ok(0);
+    };
+
+    let password = restic_password(state, vault).await?;
+    let at = maintenant();
+    let mut ok = 0;
+
+    // Une seule connexion d'administration pour interroger les moteurs de stockage.
+    let admin = match hlb_platform::MariadbProvisioner::connect(admin_url).await {
+        Ok(a) => Some(a),
+        Err(e) => {
+            eprintln!("⚠️  MariaDB injoignable ({e}) : cohérence indéterminée.");
+            None
+        }
+    };
+
+    for (app, _moteur, base, _secret) in bases {
+        print!("{app}/{base} (dump)… ");
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+
+        // 🔴 Identifiants d'ADMINISTRATION, comme en PostgreSQL : le rôle isolé de
+        // l'app n'a pas le droit de lire ses propres routines ni ses déclencheurs, et
+        // le dump serait amputé sans la moindre erreur.
+        let cible = MariaTarget {
+            host: creds.host.clone(),
+            port: creds.port,
+            database: base.clone(),
+            user: creds.user.clone(),
+            password: creds.password.clone(),
+        };
+
+        let coherence = match &admin {
+            Some(a) => match a.column_values(&mariadump::requete_moteurs(base)).await {
+                Ok(moteurs) => mariadump::coherence_pour(&moteurs),
+                Err(e) => {
+                    eprintln!("(moteurs illisibles : {e}) ");
+                    Coherence::VerrouillageRequis
+                }
+            },
+            None => Coherence::VerrouillageRequis,
+        };
+
+        if coherence == Coherence::VerrouillageRequis {
+            // L'app est bloquée en écriture le temps du dump : ça se dit.
+            print!("[verrou] ");
+        }
+
+        let dumper = MariaDumper::new(
+            hlb_backup::MariaContainerRunner::default().network(network),
+        );
+
+        match mariadump::scheduled::produce(&dumper, app, &cible, coherence, at).await {
+            Ok(d) => match hlb_backup::pgdump::scheduled::archive(depot, &password, &d).await {
+                Ok(id) => {
+                    state.record_backup(app, "sql-dump", Some(&id), None).await?;
+                    println!("✓ {} Ko", d.bytes.len() / 1024);
+                    ok += 1;
+                }
+                Err(e) => {
+                    state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                    println!("✗ archivage : {e}");
+                }
+            },
+            Err(e) => {
+                state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                println!("✗ {e}");
+            }
+        }
+    }
+    Ok(ok)
+}
+
+/// Encodage pour-cent d'une requête PromQL destinée à une chaîne de requête.
+///
+/// ⚠️ Une requête PromQL contient `+`, `(`, `{`, `"` et des espaces. Passée telle
+/// quelle, elle est tronquée au premier `&` ou mal interprétée — et la règle rend
+/// alors « aucune donnée », qu'on lirait comme un problème de métrique alors que c'est
+/// l'URL qui est cassée.
+fn encoder_url(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
+            _ => o.push_str(&format!("%{b:02X}")),
+        }
+    }
+    o
 }
 
 /// Nom du secret portant la clé privée de HomelabUS.
@@ -2838,6 +2989,131 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
+        Command::Metrics(cmd) => {
+            use hlb_metrics::{deadman, rules, scrape};
+
+            match cmd {
+                MetricsCmd::Scrape { controller, token } => {
+                    if token.is_none() {
+                        // 🔴 Sans jeton, VictoriaMetrics collecte des 401 en boucle et
+                        // le tableau de bord reste vide — sans que rien n'indique que
+                        // c'est un problème d'authentification.
+                        eprintln!("⚠️  Aucun jeton : /metrics est protégé (§9ter) et la");
+                        eprintln!("   collecte ne recevra que des 401. Crée-en un :");
+                        eprintln!("     hlb token create collecte --role metrics");
+                        eprintln!();
+                    }
+                    let cible = scrape::Cible::controller(controller.clone(), token.clone());
+                    print!("{}", scrape::config_collecte(&[cible]));
+                    println!();
+                    println!("# Rétention conseillée : -retentionPeriod={}", scrape::RETENTION);
+                    Ok(ExitCode::SUCCESS)
+                }
+
+                MetricsCmd::Rules => {
+                    for r in rules::regles_par_defaut() {
+                        println!("{} [{:?}]", r.nom, r.niveau);
+                        println!("  {}", r.explication);
+                        println!("  requête : {}", r.requete);
+                        let sens = match r.comparaison {
+                            hlb_metrics::Comparaison::Depasse => ">",
+                            hlb_metrics::Comparaison::TombeSous => "<",
+                        };
+                        println!("  déclenche si {sens} {}", r.seuil);
+                        if r.absence_alarmante {
+                            println!("  ⚠️ l'absence de donnée est elle-même une alerte");
+                        }
+                        println!();
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+
+                MetricsCmd::Check { url } => {
+                    let rt = tokio::runtime::Runtime::new()?;
+                    rt.block_on(async {
+                    let mut alertes = 0;
+                    let mut aveugles = 0;
+
+                    for r in rules::regles_par_defaut() {
+                        let point = format!(
+                            "{}/api/v1/query?query={}",
+                            url.trim_end_matches('/'),
+                            encoder_url(r.requete)
+                        );
+
+                        let evaluation = match reqwest::get(&point).await {
+                            Ok(rep) => match rep.text().await {
+                                Ok(corps) => match hlb_metrics::valeurs_promql(&corps) {
+                                    Ok(v) => r.juger(&v),
+                                    Err(e) => hlb_metrics::Evaluation::Inconnu {
+                                        raison: e.to_string(),
+                                    },
+                                },
+                                Err(e) => hlb_metrics::Evaluation::Inconnu {
+                                    raison: e.to_string(),
+                                },
+                            },
+                            // 🔴 VictoriaMetrics injoignable n'est PAS « rien à
+                            // signaler » : c'est la surveillance elle-même qui est
+                            // tombée, donc toutes les règles sont aveugles.
+                            Err(e) => hlb_metrics::Evaluation::Inconnu {
+                                raison: format!("VictoriaMetrics injoignable : {e}"),
+                            },
+                        };
+
+                        match &evaluation {
+                            hlb_metrics::Evaluation::Ok => println!("✓ {}", r.nom),
+                            hlb_metrics::Evaluation::Declenchee { valeur } => {
+                                println!("🔴 {} — {} (mesuré {valeur:.2})", r.nom, r.explication);
+                                alertes += 1;
+                            }
+                            hlb_metrics::Evaluation::Inconnu { raison } => {
+                                println!("❓ {} — AVEUGLE : {raison}", r.nom);
+                                aveugles += 1;
+                            }
+                        }
+                    }
+
+                    println!();
+                    if aveugles > 0 {
+                        // 🔴 « Je ne sais pas » ne doit jamais se lire comme « tout va
+                        // bien » : c'est exactement ce que ce module existe pour
+                        // empêcher. Un code de sortie 0 le ferait croire.
+                        println!("🔴 {aveugles} règle(s) AVEUGLE(S) : ce n'est pas « rien à");
+                        println!("   signaler », c'est « on ne sait pas ».");
+                    }
+                    if alertes > 0 {
+                        println!("🔴 {alertes} alerte(s) active(s).");
+                    }
+                    if alertes == 0 && aveugles == 0 {
+                        println!("Toutes les règles sont vertes, et toutes ont des données.");
+                    }
+
+                    Ok::<_, Box<dyn std::error::Error>>(if alertes + aveugles > 0 {
+                        ExitCode::FAILURE
+                    } else {
+                        ExitCode::SUCCESS
+                    })
+                    })
+                }
+
+                MetricsCmd::Deadman { heartbeat_file, ntfy } => {
+                    println!("{}", deadman::script_veilleur(heartbeat_file, ntfy, "HomelabUS"));
+                    eprintln!("# ─────────────────────────────────────────────────────");
+                    eprintln!("# 🔴 À poser sur le NAS, PAS sur le nœud du controller :");
+                    eprintln!("#    un veilleur hébergé par ce qu'il surveille meurt");
+                    eprintln!("#    avec lui et ne détecte rien.");
+                    eprintln!("#");
+                    eprintln!("# 🔴 Le sujet ntfy doit être DISTINCT de celui de");
+                    eprintln!("#    HomelabUS : si le controller est mort, c'est le");
+                    eprintln!("#    veilleur seul qui doit pouvoir parler.");
+                    eprintln!("#");
+                    eprintln!("# Battements manqués tolérés : 3 (soit {} s de silence).", deadman::SILENCE_MAX_S);
+                    Ok(ExitCode::SUCCESS)
+                }
+            }
+        }
+
         Command::Dr(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
@@ -3908,13 +4184,22 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         // de contrôle sont capturés à des instants différents. Seul un
                         // dump logique est transactionnellement cohérent (§8.1).
                         let bases = state.app_databases().await?;
-                        if !bases.is_empty() {
+
+                        // 🔴 Chaque moteur a son dumper et son URL d'administration.
+                        // Les traiter en bloc ferait passer les bases MariaDB pour
+                        // sauvegardées dès lors qu'un PostgreSQL est joignable.
+                        let (pg, autres): (Vec<_>, Vec<_>) =
+                            bases.iter().cloned().partition(|(_, m, _, _)| m == "postgres");
+                        let (maria, inconnues): (Vec<_>, Vec<_>) =
+                            autres.into_iter().partition(|(_, m, _, _)| m == "mariadb");
+
+                        if !pg.is_empty() {
                             match cli.postgres_admin.as_deref() {
                                 None => {
                                     eprintln!();
                                     eprintln!(
-                                        "🔴 {} base(s) NON sauvegardée(s) : --postgres-admin absent.",
-                                        bases.len()
+                                        "🔴 {} base(s) PostgreSQL NON sauvegardée(s) : --postgres-admin absent.",
+                                        pg.len()
                                     );
                                     eprintln!("   Leurs volumes le sont, mais un volume PostgreSQL");
                                     eprintln!("   copié à chaud ne restaure pas.");
@@ -3922,11 +4207,39 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 Some(url) => {
                                     faites += dump_databases(
                                         &state, &vault, url, cli.backup_repo.as_deref(),
-                                        &cli.platform_network, &bases,
+                                        &cli.platform_network, &pg,
                                     )
                                     .await?;
                                 }
                             }
+                        }
+
+                        if !maria.is_empty() {
+                            match cli.mariadb_admin.as_deref() {
+                                None => {
+                                    eprintln!();
+                                    eprintln!(
+                                        "🔴 {} base(s) MariaDB NON sauvegardée(s) : --mariadb-admin absent.",
+                                        maria.len()
+                                    );
+                                    eprintln!("   Le volume seul ne restaure pas davantage qu'en");
+                                    eprintln!("   PostgreSQL : InnoDB copié à chaud est incohérent.");
+                                }
+                                Some(url) => {
+                                    faites += dump_mariadb_databases(
+                                        &state, &vault, url, cli.backup_repo.as_deref(),
+                                        &cli.platform_network, &maria,
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
+
+                        // Un moteur qu'on ne sait pas dumper se DIT, il ne se tait pas.
+                        for (app, moteur, _, _) in &inconnues {
+                            eprintln!(
+                                "⚠️  {app} : moteur « {moteur} » — aucun dumper, base NON sauvegardée"
+                            );
                         }
 
                         if faites == 0 {

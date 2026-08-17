@@ -1,0 +1,19 @@
+[package]
+name = "hlb-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Règles d'alerte, configuration de collecte et deadman switch (§8bis)."
+
+[dependencies]
+hlb-notify.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

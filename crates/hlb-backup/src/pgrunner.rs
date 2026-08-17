@@ -38,6 +38,56 @@ impl Default for PgContainerRunner {
     }
 }
 
+/// Exécution des outils clients MariaDB dans un conteneur.
+///
+/// Même raisonnement que pour PostgreSQL, avec un piège de plus : les binaires ont été
+/// **renommés** en MariaDB 10.5 (`mysqldump` → `mariadb-dump`). Les anciens noms
+/// existent encore en liens symboliques, mais ils émettent un avertissement de
+/// dépréciation sur stderr — donc du bruit dans une sortie qu'on lit pour diagnostiquer.
+///
+/// ⚠️ L'image doit correspondre au serveur, comme pour `pg_dump`. Le tag par défaut
+/// suit celui du catalogue (`catalog/_platform/mariadb`).
+pub struct MariaContainerRunner {
+    image: String,
+    network: Option<String>,
+}
+
+impl MariaContainerRunner {
+    pub fn new(image: impl Into<String>) -> Self {
+        Self {
+            image: image.into(),
+            network: None,
+        }
+    }
+
+    pub fn network(mut self, net: impl Into<String>) -> Self {
+        self.network = Some(net.into());
+        self
+    }
+}
+
+impl Default for MariaContainerRunner {
+    fn default() -> Self {
+        // Aligné sur `catalog/_platform/mariadb/manifest.yaml`.
+        Self::new("mariadb:11.8")
+    }
+}
+
+#[async_trait::async_trait]
+impl DumpRunner for MariaContainerRunner {
+    async fn run(&self, args: &[String], env: &[(String, String)]) -> Result<RawOutput> {
+        // Le chemin d'exécution est rigoureusement le même que pour PostgreSQL : seule
+        // l'image change. Le mutualiser évite que les deux divergent — notamment sur le
+        // transit du contenu par stdin, qui est la partie subtile.
+        let r = PgContainerRunner::new(self.image.clone());
+        let r = match &self.network {
+            Some(n) => r.network(n.clone()),
+            None => r,
+        };
+        r.run(args, env).await
+    }
+}
+
 #[async_trait::async_trait]
 impl DumpRunner for PgContainerRunner {
     async fn run(&self, args: &[String], env: &[(String, String)]) -> Result<RawOutput> {

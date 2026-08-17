@@ -132,11 +132,22 @@ impl BackupLoop {
 
 /// Le battement de cœur du §8bis : « qui surveille le surveillant ? ».
 ///
-/// Le controller écrit un horodatage à intervalle régulier, **hors du cluster**. Un
-/// simple `cron` de trois lignes sur le NAS constate qu'il n'a pas bougé et alerte.
+/// Le controller écrit un horodatage **hors du cluster**. Un `cron` trivial sur le NAS
+/// constate qu'il n'a pas bougé et alerte — voir `hlb metrics deadman`, qui produit ce
+/// script. C'est la seule chose qui préviendra si le controller meurt, puisque c'est
+/// lui qui envoie toutes les autres alertes.
 ///
-/// C'est la seule chose qui préviendra si le cluster entier meurt — puisque c'est le
-/// controller lui-même qui envoie les alertes.
+/// ## 🔴 Le battement est CONDITIONNEL, jamais périodique
+///
+/// La première version battait à chaque tour de minuteur, sans rien vérifier. C'est le
+/// piège de ce dispositif : un tel battement prouve qu'un fil d'exécution vit encore,
+/// et **rien d'autre**. Le controller peut avoir sa boucle de réconciliation bloquée,
+/// son Docker injoignable et sa base illisible, et continuer à battre imperturbablement.
+///
+/// Le veilleur resterait alors au vert sur un système inutilisable — ce qui est pire
+/// que pas de deadman du tout, parce qu'on lui fait confiance. Le battement passe donc
+/// par [`hlb_metrics::Battement::emettre_si`], et **se tait** quand quelque chose ne va
+/// pas : le silence est le signal.
 pub struct Heartbeat {
     path: std::path::PathBuf,
 }
@@ -146,6 +157,31 @@ impl Heartbeat {
         Self { path: path.into() }
     }
 
+    /// Bat si — et seulement si — le système est en état de le prétendre.
+    ///
+    /// Renvoie `true` si le battement est parti.
+    pub async fn beat_si_sain(&self, sante: &hlb_metrics::Sante) -> std::io::Result<bool> {
+        match hlb_metrics::Battement::emettre_si(sante) {
+            hlb_metrics::Emission::Envoyer => {
+                self.beat().await?;
+                Ok(true)
+            }
+            hlb_metrics::Emission::Taire { manquements } => {
+                // 🔴 On se TAIT, et on dit pourquoi dans les journaux. Battre ici
+                // laisserait le veilleur au vert sur un système en panne.
+                tracing::error!(
+                    manquements = manquements.join(", "),
+                    "battement de cœur RETENU : le veilleur va alerter, c'est voulu"
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    /// Écrit le battement, sans condition.
+    ///
+    /// ⚠️ Réservé aux tests et à [`Self::beat_si_sain`]. L'appeler directement depuis
+    /// une boucle recrée exactement le défaut décrit en tête de type.
     pub async fn beat(&self) -> std::io::Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -268,6 +304,59 @@ mod tests {
         // Un second battement écrase proprement.
         h.beat().await.expect("second battement");
         assert!(tokio::fs::read_to_string(&p).await.expect("lecture").trim().parse::<u64>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_sick_controller_does_not_beat() {
+        // 🔴 Le défaut que ce test protège existait vraiment : le battement partait à
+        // chaque tour de minuteur, sans rien vérifier. Un tel battement ne prouve que
+        // la survie d'un fil d'exécution — le controller pouvait avoir sa base
+        // illisible et son Docker mort, et laisser le veilleur au vert sur un système
+        // inutilisable. Ce qui est PIRE que pas de deadman, puisqu'on s'y fie.
+        let dir = tempfile::tempdir().expect("dossier temporaire");
+        let p = dir.path().join("battement");
+        let h = Heartbeat::new(&p);
+
+        let malade = hlb_metrics::Sante {
+            etat_lisible: true,
+            orchestrateur_joignable: false,
+            reconciliation_recente: true,
+        };
+        assert!(!h.beat_si_sain(&malade).await.expect("décision"), "ne doit pas battre");
+        assert!(!p.exists(), "aucun fichier ne doit être écrit : le silence EST le signal");
+
+        let saine = hlb_metrics::Sante {
+            etat_lisible: true,
+            orchestrateur_joignable: true,
+            reconciliation_recente: true,
+        };
+        assert!(h.beat_si_sain(&saine).await.expect("décision"), "doit battre");
+        assert!(p.exists(), "un système sain écrit bien son battement");
+    }
+
+    #[tokio::test]
+    async fn a_stale_beat_is_never_refreshed_by_a_sick_controller() {
+        // Cas plus vicieux : le controller a battu quand il allait bien, puis est
+        // tombé. Le fichier existe déjà — il ne doit PLUS être rafraîchi, sinon le
+        // veilleur ne verra jamais le silence.
+        let dir = tempfile::tempdir().expect("dossier temporaire");
+        let p = dir.path().join("battement");
+        let h = Heartbeat::new(&p);
+
+        h.beat().await.expect("battement initial");
+        let avant = tokio::fs::read_to_string(&p).await.expect("lecture");
+
+        // Le temps passe, et le système tombe.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let malade = hlb_metrics::Sante {
+            etat_lisible: false,
+            orchestrateur_joignable: true,
+            reconciliation_recente: true,
+        };
+        assert!(!h.beat_si_sain(&malade).await.expect("décision"));
+
+        let apres = tokio::fs::read_to_string(&p).await.expect("lecture");
+        assert_eq!(avant, apres, "l'horodatage doit VIEILLIR, pas se rafraîchir");
     }
 
     #[tokio::test]

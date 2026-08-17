@@ -23,22 +23,23 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 33 + 7 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, rollback, **Trivy + cosign** | ✅ 30 tests |
-| `hlb-backup` — restic, PITR, SQLite, Litestream, DR, **exercices**, **réplication** | ✅ 163 + 18 tests |
+| `hlb-backup` — restic, PITR, SQLite, Litestream, DR, **exercices**, **réplication**, **MariaDB** | ✅ 177 + 18 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-mail` — client Stalwart (JMAP) : boîtes et aliases | ✅ 16 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
 | `hlb-bootstrap` — distributions, préchecks, **accès SSH gérés** | ✅ 72 + 6 tests |
 | `hlb-agent` — état du nœud, seuils disque, **PKI + mTLS** | ✅ 37 + 10 tests |
-| `hlb-controller` — daemon : API de lecture, `/metrics`, boucles de fond | ✅ 35 + 3 tests |
+| `hlb-controller` — daemon : API de lecture, `/metrics`, boucles de fond | ✅ 45 + 3 tests |
 | `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 23 tests |
 | `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
 | `hlb-cli` — `install`, `node add`, `access`, `backup`, `dr`, `pki`, `mesh`, `crowdsec`… | ✅ utilisable |
 | `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 11 tests |
 | `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 22 tests |
 | `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
+| `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
 
-**749 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**796 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 
@@ -150,12 +151,35 @@ docker node update --label-add tier=heavy $(docker node ls -q)
 ```
 
 Le battement de cœur va **hors du cluster** (§8bis) : c'est le controller qui
-envoie les alertes, donc rien ne préviendrait s'il mourait. Trois lignes de cron
-sur le NAS suffisent :
+envoie les alertes, donc rien ne préviendrait s'il mourait.
+
+🔴 **Le battement est conditionnel, pas périodique.** Il ne part que si la base
+d'état répond et que Docker répond. Un battement de simple minuteur ne prouverait
+que la survie d'un fil d'exécution : le controller pourrait avoir sa base illisible
+et son orchestrateur mort, et laisser le veilleur au vert sur un système
+inutilisable — pire que pas de deadman, puisqu'on s'y fie.
+
+Le script du veilleur se génère, et se pose **sur le NAS** :
 
 ```sh
-[ $(( $(date +%s) - $(stat -c %Y /srv/hlb/heartbeat) )) -gt 900 ] && notify "HomelabUS muet"
+hlb metrics deadman --ntfy https://ntfy.sh/mon-veilleur > veilleur.sh
+# puis, en cron toutes les 5 minutes, SUR LE NAS :
+#   */5 * * * * /srv/hlb/veilleur.sh
 ```
+
+Son sujet ntfy doit être **distinct** de celui de HomelabUS : si le controller est
+mort, c'est le veilleur seul qui doit pouvoir parler.
+
+## Observabilité
+
+```sh
+hlb metrics rules                      # les règles livrées et leurs seuils
+hlb metrics scrape --token <jeton>     # config de collecte VictoriaMetrics
+hlb metrics check                      # évalue tout maintenant
+```
+
+🔴 `hlb metrics check` distingue **« aveugle »** de **« vert »** : une règle sans
+donnée n'est pas une règle satisfaite, et le code de sortie le reflète.
 
 ## Développement
 

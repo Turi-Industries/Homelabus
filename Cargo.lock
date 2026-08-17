@@ -1765,6 +1765,7 @@ dependencies = [
  "hlb-ingress",
  "hlb-mail",
  "hlb-mesh",
+ "hlb-metrics",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1793,6 +1794,7 @@ dependencies = [
  "hlb-backup",
  "hlb-engine",
  "hlb-gitops",
+ "hlb-metrics",
  "hlb-notify",
  "hlb-orchestrator",
  "hlb-secrets",
@@ -1905,6 +1907,17 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "x25519-dalek",
+]
+
+[[package]]
+name = "hlb-metrics"
+version = "0.1.0"
+dependencies = [
+ "hlb-notify",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

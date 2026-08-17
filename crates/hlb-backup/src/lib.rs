@@ -8,6 +8,7 @@
 //! 3. **Un backup non testé n'est pas un backup** (§8.3) : la vérification de
 //!    restauration fait partie du module, pas d'un raffinement ultérieur.
 
+pub mod mariadump;
 pub mod pgdump;
 pub mod dr;
 pub mod drill;
@@ -24,16 +25,17 @@ pub mod verify;
 pub mod runner;
 
 pub use pgdump::{PgDumper, PgTarget};
-pub use pgrunner::PgContainerRunner;
+pub use pgrunner::{MariaContainerRunner, PgContainerRunner};
 pub use provider::{provider_for_state, ResticBackupProvider};
 pub use restic::{Repository, Runner, Snapshot};
 pub use retention::RetentionPolicy;
 pub use schedule::Schedule;
 pub use verify::{verify_by_restore, verify_snapshot, Verification};
-pub use pitr::{parse_pg_url, scan_archive, wal_coverage, Segment};
+pub use pitr::{parse_maria_url, parse_pg_url, scan_archive, wal_coverage, Segment};
 pub use dr::{plan_promotion, Profile as DrProfile};
 pub use drill::{Readiness, Scope as DrillScope, Target as DrillTarget};
 pub use replication::{Health as StandbyHealth, StandbyStatus};
+pub use mariadump::{Coherence, MariaDumper, MariaTarget};
 // ⚠️ `Snapshot` existe déjà pour restic : renommé ici, sinon les deux notions —
 // « instantané restic » et « instantané de système de fichiers » — se confondraient
 // à l'usage alors qu'elles ne protègent PAS des mêmes pannes.

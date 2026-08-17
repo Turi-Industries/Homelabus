@@ -2560,6 +2560,50 @@ NAS vérifie l'horodatage et te notifie directement s'il n'a pas bougé depuis 1
 
 C'est trivial, et c'est la seule chose qui te préviendra si le cluster entier meurt.
 
+#### État : fait (`hlb-metrics`, `hlb metrics …`)
+
+Trois écarts par rapport à l'esquisse ci-dessus, chacun venant d'un défaut constaté :
+
+**1. Le battement est CONDITIONNEL, pas périodique.** La première version écrivait
+l'horodatage à chaque tour de minuteur. Un tel battement prouve qu'un fil d'exécution
+vit, et **rien d'autre** : le controller peut avoir sa base illisible et son Docker
+mort, et battre imperturbablement. Le veilleur reste alors au vert sur un système
+inutilisable — ce qui est **pire que pas de deadman**, puisqu'on lui fait confiance. Le
+battement passe désormais par une vérification (base d'état lisible, orchestrateur
+joignable) et **se tait** sinon : le silence est le signal.
+
+**2. « Jamais armé » est distinct de « silencieux ».** Même raison que `NeverSucceeded`
+face à `Stale` dans l'UI : un deadman qui n'a jamais reçu de battement n'a jamais rien
+protégé. Le confondre avec une panne récente ferait chercher un incident du jour, alors
+que l'installation était mauvaise depuis le début.
+
+**3. Le veilleur a un repli sur stderr.** Constaté en exécutant réellement le script :
+`curl … >/dev/null 2>&1` avale son propre échec, donc une alerte perdue ne laisse
+aucune trace — le veilleur ne peut pas signaler qu'il n'a pas pu signaler. Le repli
+passe par stderr, que cron envoie par courriel : une seconde voie qui ne partage ni le
+réseau ni le service de la première.
+
+Trois battements manqués sont tolérés avant l'alerte : une alerte à chaque hoquet du
+Wi-Fi est une alerte qu'on finit par couper, et un deadman coupé ne protège de rien.
+
+#### Écart assumé : ni Alloy, ni Alertmanager
+
+**VictoriaMetrics seul** collecte, stocke et répond en PromQL. Prometheus + Alloy + un
+stockage distant ajouterait deux services à maintenir pour un résultat identique, et
+Alloy n'apporte rien tant qu'il n'y a pas de journaux à router.
+
+**Les règles sont évaluées par HomelabUS**, pas par `vmalert` → Alertmanager. La raison
+est précise : `hlb-notify` porte déjà les quatre niveaux de ce paragraphe et les heures
+calmes, testés. Confier le routage à Alertmanager obligerait à **redire** ces règles
+dans sa configuration, dans une autre syntaxe et sans test — et deux définitions de
+« qu'est-ce qui mérite de réveiller quelqu'un » finissent toujours par diverger.
+
+**🔴 Une règle sans donnée n'est jamais « verte ».** Elle est *aveugle*, ce qui est un
+troisième état, visible et distinct — et pour les règles qui comptent, l'absence de
+donnée déclenche une alerte de son propre chef, à un niveau qui dit « je ne sais plus »
+plutôt que « le seuil est franchi ». C'est le même invariant que la métrique absente
+plutôt qu'à zéro, appliqué un cran plus haut.
+
 ---
 
 ## 9. Sécurité (défense en profondeur)

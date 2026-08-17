@@ -174,6 +174,25 @@ impl MariadbProvisioner {
             .filter_map(|r| r.try_get::<String, _>("table_schema").ok())
             .collect())
     }
+
+    /// Les valeurs de la première colonne d'une requête, en texte.
+    ///
+    /// ⚠️ Réservé aux vues d'`information_schema`, dont la forme varie d'une version à
+    /// l'autre : une requête typée figerait la version supportée.
+    ///
+    /// Sert notamment à lire les moteurs de stockage d'une base avant de la dumper —
+    /// `--single-transaction` ne protège pas les tables non transactionnelles.
+    pub async fn column_values(&self, sql: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>(0).ok())
+            .collect())
+    }
 }
 
 /// Un identifiant acceptable ?

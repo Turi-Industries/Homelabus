@@ -1,0 +1,44 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: victoria-metrics
+  displayName: VictoriaMetrics
+  category: platform
+  homepage: https://victoriametrics.com
+spec:
+  image: { repo: victoriametrics/victoria-metrics, tag: "v1.111.0" }
+  requires:
+    # 🔴 L'historique DOIT survivre au redémarrage. Une base de métriques repartie
+    # de zéro répond « je ne sais pas » à la seule question qu'on lui pose vraiment :
+    # « est-ce que c'était déjà comme ça avant ? ».
+    - kind: storage
+      name: data
+      path: /victoria-metrics-data
+      tier: local
+      # ⚠️ NON sauvegardé, délibérément. Ces données sont dérivées : elles se
+      # reconstituent en collectant à nouveau, et leur volume écraserait le dépôt
+      # restic au détriment de ce qui est réellement irremplaçable. Perdre
+      # l'historique est ennuyeux ; perdre une base d'app est un sinistre.
+      backup: false
+  ingress:
+    # 🔴 PRIVÉ. L'API de VictoriaMetrics est en écriture ET n'a aucune
+    # authentification native : exposée, n'importe qui peut y injecter de fausses
+    # mesures — donc éteindre les alertes en les noyant sous des valeurs saines.
+    - host: "{{ domain }}"
+      port: 8428
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+  swarm:
+    # 🔴 Une seule instance : le stockage est un répertoire local. Deux réplicas
+    # tiendraient deux historiques différents et répondraient à tour de rôle, ce
+    # qui produirait des graphes en dents de scie sans cause réelle.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8428/health | grep -q OK"]
+  update:
+    # Le format de stockage évolue entre versions majeures et la migration n'est
+    # pas réversible par un simple rollback d'image.
+    channel: minor

@@ -1081,6 +1081,22 @@ pub fn parse_pg_url(url: &str) -> Option<Credentials> {
     let reste = url
         .strip_prefix("postgres://")
         .or_else(|| url.strip_prefix("postgresql://"))?;
+    parse_url_apres_schema(reste, 5432)
+}
+
+/// Analyse `mysql://user:password@hôte:port/base`.
+///
+/// ⚠️ Le port par défaut diffère (3306). Le reste de l'analyse est **identique** à
+/// PostgreSQL, et notamment la coupe sur le DERNIER `@` : la dupliquer aurait laissé
+/// les deux versions diverger sur ce détail, qui est justement celui qui casse.
+pub fn parse_maria_url(url: &str) -> Option<Credentials> {
+    let reste = url
+        .strip_prefix("mysql://")
+        .or_else(|| url.strip_prefix("mariadb://"))?;
+    parse_url_apres_schema(reste, 3306)
+}
+
+fn parse_url_apres_schema(reste: &str, port_defaut: u16) -> Option<Credentials> {
 
     // On coupe sur le DERNIER `@` : un mot de passe peut en contenir un.
     let (identifiants, hote) = reste.rsplit_once('@')?;
@@ -1089,8 +1105,8 @@ pub fn parse_pg_url(url: &str) -> Option<Credentials> {
     // Le chemin (`/base`) et la chaîne de requête ne nous concernent pas.
     let hote = hote.split(['/', '?']).next()?;
     let (host, port) = match hote.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse().unwrap_or(5432)),
-        None => (hote, 5432),
+        Some((h, p)) => (h, p.parse().unwrap_or(port_defaut)),
+        None => (hote, port_defaut),
     };
 
     if host.is_empty() || user.is_empty() {
@@ -1180,5 +1196,31 @@ mod tests_url {
         assert!(parse_pg_url("mysql://a:b@h/db").is_none(), "mauvais schéma");
         assert!(parse_pg_url("postgres://db.local/base").is_none(), "sans identifiants");
         assert!(parse_pg_url("postgres://:mdp@h/db").is_none(), "sans utilisateur");
+    }
+
+    #[test]
+    fn the_two_parsers_differ_only_by_their_default_port() {
+        // 🔴 3306, pas 5432. Un port par défaut hérité de PostgreSQL enverrait le dump
+        // MariaDB sur le port du mauvais serveur : la connexion échoue, ou pire, elle
+        // aboutit sur un service qui n'est pas celui qu'on croit.
+        let m = parse_maria_url("mysql://admin:mdp@mariadb/app").expect("URL mysql");
+        assert_eq!(m.port, 3306);
+        assert_eq!(m.host, "mariadb");
+        assert_eq!(m.user, "admin");
+
+        assert_eq!(
+            parse_maria_url("mariadb://a:b@h:3307/db").expect("schéma mariadb").port,
+            3307
+        );
+
+        // Le reste de l'analyse reste commun, y compris la coupe sur le DERNIER `@`
+        // et le décodage pour-cent — c'est tout l'intérêt de ne pas l'avoir dupliquée.
+        let dur = parse_maria_url("mysql://u:p%40ss@h/db").expect("mot de passe encodé");
+        assert_eq!(dur.password, "p@ss");
+        let arobase = parse_maria_url("mysql://u:a@b@h/db").expect("arobase dans le mdp");
+        assert_eq!(arobase.host, "h");
+
+        // Et chacun refuse le schéma de l'autre, plutôt que de deviner.
+        assert!(parse_maria_url("postgres://a:b@h/db").is_none());
     }
 }

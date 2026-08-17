@@ -211,6 +211,27 @@ qui a tort, pas le test.
 - **Un slot de réplication neuf ne retient rien** tant qu'aucun standby ne s'y connecte
   (sauf `immediately_reserve`). Le cas dangereux n'est pas le slot jamais utilisé, c'est
   celui *qui a servi* et dont le consommateur a disparu : lui seul fait grossir `pg_wal`.
+- **Un dump MariaDB n'inclut PAS les routines, déclencheurs ni événements** sans
+  `--routines --triggers --events`. Le dump réussit, restaure sans erreur, et l'app est
+  subtilement cassée — un déclencheur manquant ne se voit qu'à la première écriture
+  concernée.
+- **`--single-transaction` ne protège que les tables transactionnelles.** Sur MyISAM ou
+  Aria, l'option est acceptée SANS avertissement et n'apporte aucune cohérence. D'où la
+  lecture des moteurs avant chaque dump — et une liste illisible vaut `VerrouillageRequis`,
+  jamais « c'est sûrement de l'InnoDB ».
+- **Un dump MariaDB tronqué reste du SQL valide.** C'est du texte écrit au fil de l'eau :
+  interrompu, il restaure une base à qui il manque des tables, sans une seule erreur. La
+  ligne `-- Dump completed` est la seule preuve de complétude — d'où l'interdiction de
+  `--skip-comments`, qui la supprimerait.
+- **Un battement de cœur périodique ne prouve rien.** Il atteste qu'un fil d'exécution
+  vit, pas que le système marche : le controller peut avoir sa base illisible et son
+  Docker mort, et battre imperturbablement. Le veilleur reste alors au vert sur un
+  système inutilisable — **pire que pas de deadman, puisqu'on s'y fie**. Le battement
+  est conditionné à une vérification réussie, et le silence est le signal.
+- **Le veilleur ne tourne pas sur ce qu'il surveille**, et n'alerte pas à travers lui.
+  Un deadman hébergé par le controller meurt avec lui ; une alerte relayée par le
+  controller ne part pas quand c'est lui qui est mort. Et si `curl` échoue, l'échec est
+  avalé par `>/dev/null 2>&1` : d'où le repli sur stderr, que cron envoie par courriel.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -295,6 +316,15 @@ vérifiée contre un vrai couple primaire/standby — copie initiale, rattrapage
 coupure, alerte de slot orphelin avec son remède, et détection des standbys qu'on ne
 sait pas distinguer. Asynchrone par décision : en synchrone, la panne du standby
 bloquerait les écritures de la primaire.
+
+Fait aussi : les **dumps MariaDB** (`hlb-backup::mariadump`), qui manquaient — une app
+MariaDB était provisionnée mais n'avait aucune sauvegarde logique.
+
+Fait enfin : l'**observabilité complète** (`hlb-metrics`) — VictoriaMetrics et Grafana
+au catalogue, règles d'alerte évaluées par HomelabUS et routées vers `hlb-notify`
+(plutôt qu'Alertmanager, qui dupliquerait les niveaux et les heures calmes), et le
+**deadman switch** du §8bis avec son veilleur pour le NAS. `hlb metrics rules / scrape /
+check / deadman`.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

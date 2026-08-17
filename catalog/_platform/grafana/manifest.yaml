@@ -1,0 +1,42 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: grafana
+  displayName: Grafana
+  category: platform
+  homepage: https://grafana.com
+spec:
+  image: { repo: grafana/grafana, tag: "11.6.0" }
+  requires:
+    # 🔴 SSO natif, pas de forward-auth. Grafana gère les rôles lui-même : passer
+    # par un proxy d'authentification donnerait à tout le monde le même niveau,
+    # et un lecteur pourrait modifier les sources de données.
+    - kind: sso
+      mode: native
+      redirectPaths: ["/login/generic_oauth"]
+    # Tableaux de bord, préférences, clés d'API. SQLite : petit, mais sa perte
+    # signifie refaire tous les tableaux de bord à la main.
+    - kind: storage
+      name: data
+      path: /var/lib/grafana
+      tier: local
+      backup: true
+  ingress:
+    # Privé : le tableau de bord n'a aucune raison d'être joignable depuis
+    # l'extérieur, et il expose la topologie complète de l'installation.
+    - host: "{{ domain }}"
+      port: 3000
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # 🔴 Une seule instance : sa base est un SQLite local (§3.4). Deux réplicas
+    # verraient deux jeux de tableaux de bord différents.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+  update:
+    channel: minor

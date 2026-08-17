@@ -17,6 +17,7 @@ members = [
     "crates/hlb-agent",
     "crates/hlb-mesh",
     "crates/hlb-notify",
+    "crates/hlb-metrics",
     "crates/hlb-mail",
     "crates/hlb-api",
     "crates/hlb-ui",
@@ -53,6 +54,7 @@ hlb-bootstrap = { path = "crates/hlb-bootstrap" }
 hlb-agent = { path = "crates/hlb-agent" }
 hlb-mesh = { path = "crates/hlb-mesh" }
 hlb-notify = { path = "crates/hlb-notify" }
+hlb-metrics = { path = "crates/hlb-metrics" }
 hlb-mail = { path = "crates/hlb-mail" }
 hlb-api = { path = "crates/hlb-api" }
 hlb-selfupdate = { path = "crates/hlb-selfupdate" }
