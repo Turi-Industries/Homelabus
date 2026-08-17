@@ -32,10 +32,12 @@
 pub mod alias;
 pub mod generation;
 pub mod profil;
+pub mod sieve;
 
 pub use alias::{Alias, Duree, Etat as EtatAlias};
 pub use generation::Genere;
 pub use profil::{Demande, Profil, Refus, Usage};
+pub use sieve::Regle as RegleSieve;
 
 use serde::{Deserialize, Serialize};
 

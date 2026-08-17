@@ -1,0 +1,41 @@
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Fais pointer {{ domain }} vers le cluster. Un wildcard suffit.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: managesieve
+    title: Activer ManageSieve côté Stalwart
+    phase: pre-install
+    severity: blocking
+    body: |
+      Le greffon `managesieve` de Roundcube parle au port 4190 de Stalwart. Sans
+      ce service actif, l'onglet « Filtres » s'affiche et reste VIDE — l'erreur
+      est côté serveur et Roundcube ne la remonte pas clairement.
+
+      C'est aussi par ce chemin que tu reliras et corrigeras les règles de tri
+      que HomelabUS génère pour tes aliases.
+
+  - id: pourquoi-sans-sso
+    title: Pourquoi Roundcube n'est PAS derrière le SSO
+    phase: post-install
+    severity: tip
+    body: |
+      C'est délibéré, et c'est toute sa raison d'être ici.
+
+      Roundcube s'authentifie directement en IMAP auprès de Stalwart. Le jour où
+      PocketID tombe — ou Bulwark casse à une mise à jour — il reste le chemin
+      qui marche encore pour lire son courrier.
+
+      Un filet de sécurité qui dépend de ce qu'il doit rattraper n'est pas un
+      filet de sécurité.
+
+      Contrepartie assumée : son formulaire de connexion n'est protégé que par le
+      mot de passe de la boîte. D'où l'exposition PRIVÉE — il reste joignable
+      depuis le VPN, ce qui suffit pour un dépannage.

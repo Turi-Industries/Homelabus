@@ -334,6 +334,17 @@ qui a tort, pas le test.
 - **Ce qui compte dans une purge, c'est ce qui reste OUVERT, pas le nombre d'erreurs.**
   Une purge sans erreur qui n'a rien retiré laisse autant de portes ouvertes qu'une
   purge qui a échoué bruyamment.
+- **Un script Sieve est un fichier UNIQUE par compte.** Le réécrire entièrement
+  effacerait les règles écrites à la main — des heures de réglages, perdues sans un
+  avertissement, pour une simple création d'alias. D'où un bloc délimité par des
+  marqueurs : HomelabUS n'écrit qu'entre eux, et le bloc va en FIN de script (en tête,
+  il capterait les messages avant les règles de l'utilisateur).
+- **Un guillemet non échappé dans un nom de dossier casse TOUT le script**, y compris
+  les règles de l'utilisateur, que Stalwart refuse alors en bloc. Le nom vient de
+  l'utilisateur : il s'échappe.
+- **`NULL` ≠ chaîne vide pour un dossier de tri.** `NULL` = « rien n'a été décidé », on
+  propose un défaut ; `""` = « je ne veux PAS de tri », et c'est un choix explicite.
+  Les confondre réimpose un dossier à chaque régénération.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -470,6 +481,12 @@ indépendants** — permanent ou temporaire, généré ou choisi, avec ou sans i
 site — et `hlb user alias purge` est ce qui rend l'expiration vraie, Stalwart n'en
 ayant aucune notion — et le controller la fait tourner toutes les heures, sinon la
 promesse ne tiendrait que si quelqu'un pensait à lancer la commande.
+
+Fait aussi : les deux **webmails** du §5bis.2ter — **Bulwark** (JMAP natif pour
+Stalwart, `channel: pin` : aucune release Git ni licence déclarée, seules les images
+existent) et **Roundcube** comme filet de sécurité, délibérément SANS SSO pour rester
+joignable quand PocketID tombe. Et la **génération des règles Sieve** de tri par alias,
+avec dossier configurable par l'utilisateur.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

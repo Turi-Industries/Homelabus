@@ -631,6 +631,11 @@ enum AliasCmd {
         /// Note libre, pour s'en souvenir dans six mois.
         #[arg(long)]
         note: Option<String>,
+        /// Dossier de tri. Absent : proposé d'après `--pour`. Vide : pas de tri.
+        ///
+        /// 🔴 C'est TON rangement, pas le nôtre : le système propose, il n'impose pas.
+        #[arg(long)]
+        dossier: Option<String>,
     },
     /// Tous les aliases d'un compte, avec leur état réel.
     List {
@@ -645,6 +650,24 @@ enum AliasCmd {
     /// permet de compter ce qui frappe encore à la porte — donc de savoir combien de
     /// temps un marchand a continué de vendre l'adresse après sa fermeture.
     Disable { nom: String, alias: String },
+    /// Changer le dossier de tri d'un alias.
+    ///
+    /// Une chaîne vide veut dire « pas de tri » — et c'est respecté.
+    Folder {
+        nom: String,
+        alias: String,
+        dossier: String,
+    },
+    /// Le script Sieve de tri, tel qu'il serait posé.
+    ///
+    /// ⚠️ Affiche le bloc géré par HomelabUS. Les règles écrites à la main hors de ce
+    /// bloc ne sont jamais touchées.
+    Sieve {
+        nom: String,
+        /// Boîte concernée. Par défaut, la boîte par défaut.
+        #[arg(long)]
+        boite: Option<String>,
+    },
     /// 🔴 Supprimer les aliases temporaires expirés.
     ///
     /// Sans cette purge, un alias « temporaire » reste actif POUR TOUJOURS : Stalwart
@@ -1521,7 +1544,7 @@ async fn gerer_alias(
     use hlb_users::{generation::Genere, Demande, Profil};
 
     match cmd {
-        AliasCmd::Add { nom, boite, nom_alias, pour, pendant, note } => {
+        AliasCmd::Add { nom, boite, nom_alias, pour, pendant, note, dossier } => {
             let c = charger_compte(state, nom).await?;
             let p = Profil::par_nom(&c.profil).unwrap_or_else(Profil::standard);
             let maintenant = maintenant();
@@ -1599,6 +1622,19 @@ async fn gerer_alias(
                 .add_alias(nom, &cible, &local, expire_le, indice.as_deref(), note.as_deref())
                 .await?;
 
+            // Le dossier de tri : celui demandé, ou le défaut dérivé de l'indice.
+            //
+            // 🔴 Le défaut n'est qu'une PROPOSITION. Les gens rangent leur courrier
+            // selon leur logique, et un système qui décide à leur place produit une
+            // arborescence qu'il faut ensuite défaire à la main.
+            let choisi = match dossier {
+                Some(d) => Some(d.clone()),
+                None => hlb_users::sieve::Regle::dossier_par_defaut(indice.as_deref()),
+            };
+            if let Some(d) = &choisi {
+                state.set_alias_folder(nom, &local, Some(d)).await?;
+            }
+
             let dom = c
                 .boites
                 .iter()
@@ -1619,6 +1655,12 @@ async fn gerer_alias(
                     println!("     il faut que « hlb user alias purge --apply » tourne.");
                 }
                 None => println!("  permanent"),
+            }
+
+            match &choisi {
+                Some(d) if d.is_empty() => println!("  pas de tri"),
+                Some(d) => println!("  trié dans « {d} »  (change-le : hlb user alias folder)"),
+                None => println!("  pas de tri (aucun indice pour proposer un dossier)"),
             }
 
             if nom_alias.is_some() {
@@ -1667,6 +1709,58 @@ async fn gerer_alias(
             // porte, donc de savoir combien de temps un marchand a vendu l'adresse.
             println!("  Il rejette le courrier mais reste visible : c'est ce qui permet");
             println!("  de voir qui continue d'écrire à une adresse fermée.");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        AliasCmd::Folder { nom, alias, dossier } => {
+            // 🔴 Une chaîne vide est un choix EXPLICITE — « je ne veux pas de tri » —
+            // et non l'absence de choix. Les confondre réimposerait un dossier à
+            // chaque régénération, à quelqu'un qui n'en veut pas.
+            state.set_alias_folder(nom, alias, Some(dossier)).await?;
+            if dossier.is_empty() {
+                println!("✓ {alias} : plus de tri, le courrier reste en réception.");
+            } else {
+                println!("✓ {alias} → dossier « {dossier} »");
+            }
+            println!("⚠️ Applique le script pour que ça prenne effet : hlb user alias sieve {nom}");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        AliasCmd::Sieve { nom, boite } => {
+            let c = charger_compte(state, nom).await?;
+            let cible = match boite {
+                Some(b) => b.clone(),
+                None => match c.boite_par_defaut() {
+                    Some(b) => b.local.clone(),
+                    None => {
+                        eprintln!("🔴 {nom} n'a aucune boîte.");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                },
+            };
+
+            let regles: Vec<hlb_users::sieve::Regle> = state
+                .alias_rules(nom, &cible)
+                .await?
+                .into_iter()
+                .filter_map(|(local, folder, hint)| {
+                    // Dossier explicite, sinon défaut d'après l'indice. Une chaîne
+                    // vide veut dire « pas de tri » : aucune règle produite.
+                    let d = match folder {
+                        Some(f) if f.is_empty() => return None,
+                        Some(f) => f,
+                        None => hlb_users::sieve::Regle::dossier_par_defaut(hint.as_deref())?,
+                    };
+                    Some(hlb_users::sieve::Regle::new(local, d))
+                })
+                .collect();
+
+            print!("{}", hlb_users::sieve::bloc(&regles));
+            println!();
+            println!("# ─────────────────────────────────────────────────────────");
+            println!("# ⚠️ Ce bloc s'insère dans le script Sieve du compte SANS toucher");
+            println!("#    aux règles écrites à la main : elles vivent hors des marqueurs.");
+            println!("#    Relis-les et corrige-les dans Roundcube (greffon managesieve).");
             Ok(ExitCode::SUCCESS)
         }
 

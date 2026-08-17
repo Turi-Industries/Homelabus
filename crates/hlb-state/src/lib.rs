@@ -660,6 +660,51 @@ impl State {
             .collect()
     }
 
+    /// Fixe le dossier de tri d'un alias.
+    ///
+    /// 🔴 `None` remet « rien n'a été décidé » (un défaut sera proposé) ; `Some("")`
+    /// veut dire « pas de tri », et c'est un choix EXPLICITE qu'il faut respecter.
+    /// Confondre les deux réimposerait un dossier à quelqu'un qui n'en veut pas, à
+    /// chaque régénération.
+    pub async fn set_alias_folder(
+        &self,
+        user: &str,
+        local: &str,
+        folder: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE user_aliases SET folder = ?3 WHERE user = ?1 AND local = ?2")
+            .bind(user)
+            .bind(local)
+            .bind(folder)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Les règles de tri d'une boîte : `(alias, dossier, indice)`.
+    ///
+    /// Les aliases INACTIFS sont exclus : trier le courrier d'une adresse qui n'existe
+    /// plus produirait une règle morte, et le script grossirait indéfiniment.
+    #[allow(clippy::type_complexity)]
+    pub async fn alias_rules(
+        &self,
+        user: &str,
+        mailbox: &str,
+    ) -> Result<Vec<(String, Option<String>, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT local, folder, hint FROM user_aliases
+             WHERE user = ?1 AND mailbox = ?2 AND active = 1 ORDER BY local",
+        )
+        .bind(user)
+        .bind(mailbox)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| Ok((r.try_get("local")?, r.try_get("folder")?, r.try_get("hint")?)))
+            .collect()
+    }
+
     /// Marque un alias comme retiré de Stalwart.
     pub async fn deactivate_alias(&self, user: &str, local: &str) -> Result<()> {
         sqlx::query("UPDATE user_aliases SET active = 0 WHERE user = ?1 AND local = ?2")

@@ -1,0 +1,71 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: roundcube
+  displayName: Roundcube
+  category: mail
+  homepage: https://roundcube.net
+spec:
+  image: { repo: roundcube/roundcubemail, tag: "1.7.3-apache" }
+  requires:
+    # Préférences, carnet d'adresses, cache des dossiers. Petit mais pas jetable :
+    # le perdre efface les identités d'envoi et les contacts locaux.
+    - kind: database
+      engine: postgres
+
+    # 🔴 PAS de SSO. Roundcube s'authentifie en IMAP auprès de Stalwart avec les
+    # identifiants de la boîte — c'est ce qui en fait un FILET DE SÉCURITÉ : le jour
+    # où PocketID est en panne, il reste joignable. Le mettre derrière le SSO
+    # supprimerait précisément la raison de l'installer.
+    - kind: sso
+      mode: none
+
+    # Pièces jointes en cours de rédaction, aperçus. Reconstructible.
+    - kind: storage
+      name: temp
+      path: /tmp/roundcube-temp
+      tier: local
+      backup: false
+  env:
+    # ⚠️ `tls://` et le nom de service INTERNE : contrairement à Bulwark, c'est le
+    # CONTENEUR qui parle IMAP, pas le navigateur. Y mettre l'URL publique ferait
+    # sortir puis rentrer le trafic par le proxy, pour rien.
+    ROUNDCUBEMAIL_DEFAULT_HOST: "tls://stalwart"
+    ROUNDCUBEMAIL_DEFAULT_PORT: "993"
+    ROUNDCUBEMAIL_SMTP_SERVER: "tls://stalwart"
+    ROUNDCUBEMAIL_SMTP_PORT: "587"
+
+    ROUNDCUBEMAIL_DB_TYPE: pgsql
+    ROUNDCUBEMAIL_DB_HOST: "{{ db.host }}"
+    ROUNDCUBEMAIL_DB_PORT: "{{ db.port }}"
+    ROUNDCUBEMAIL_DB_NAME: "{{ db.name }}"
+    ROUNDCUBEMAIL_DB_USER: "{{ db.user }}"
+    ROUNDCUBEMAIL_DB_PASSWORD: "{{ db.password }}"
+
+    # 🔴 `managesieve` est le greffon qui rend les règles de tri MODIFIABLES par
+    # l'utilisateur. Sans lui, les règles générées par HomelabUS existent chez
+    # Stalwart mais personne ne peut les relire ni les corriger — et une règle qu'on
+    # ne peut pas inspecter est une règle à laquelle on ne fait pas confiance.
+    ROUNDCUBEMAIL_PLUGINS: "archive,zipdownload,managesieve"
+    ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE: 25M
+  ingress:
+    - host: "{{ domain }}"
+      port: 80
+      chain: [caddy-front, caddy-back]
+      # 🔴 Privé. C'est un formulaire de connexion vers TOUTES les boîtes du domaine :
+      # public, il devient la cible de bourrage d'identifiants la plus rentable de
+      # l'installation.
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # 🔴 Une seule instance : les sessions PHP et les pièces jointes en cours de
+    # rédaction vivent sur le disque local. Deux réplicas déconnecteraient
+    # l'utilisateur une requête sur deux.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/ >/dev/null || exit 1"]
+  update:
+    channel: minor

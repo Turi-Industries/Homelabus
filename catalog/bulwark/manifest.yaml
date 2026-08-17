@@ -1,0 +1,51 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: bulwark
+  displayName: Bulwark
+  category: mail
+  homepage: https://github.com/daemonless/bulwark-webmail
+spec:
+  # 🔴 `pin` sans discussion. Le §5bis.2ter le dit : projet jeune, v1 visée en 2026.
+  # Constaté en vérifiant : le dépôt n'a AUCUNE release ni tag Git, et ne déclare
+  # aucune licence — seules les images sont publiées. Une mise à jour automatique sur
+  # un projet à ce stade casserait l'accès au courrier une nuit, sans prévenir.
+  image: { repo: ghcr.io/daemonless/bulwark-webmail, tag: "1.8.1" }
+  requires:
+    # Aucune base, aucun volume : Bulwark est un client JMAP sans état. Tout —
+    # messages, dossiers, filtres, contacts — vit chez Stalwart. C'est ce qui le rend
+    # jetable : le perdre ne perd rien, et le redéployer ne restaure rien à faire.
+    #
+    # 🔴 PAS de capacité `sso` : l'authentification se fait auprès de Stalwart en
+    # JMAP, avec les identifiants de la boîte. Déclarer un client OIDC créerait un
+    # client que personne n'utiliserait, et laisserait croire à une protection qui
+    # n'existe pas — même erreur que Jellyfin.
+    - kind: sso
+      mode: none
+  env:
+    # ⚠️ L'URL PUBLIQUE de Stalwart, pas son nom de service interne : c'est le
+    # NAVIGATEUR qui parle JMAP, pas le conteneur. Mettre « stalwart:8080 » ici
+    # donnerait une page qui charge et ne se connecte jamais, sans erreur lisible.
+    JMAP_SERVER_URL: "https://mail.{{ domain }}"
+    TZ: Europe/Paris
+  ingress:
+    - host: "{{ domain }}"
+      port: 3000
+      # Pas d'Anubis : le client fait de longues requêtes JMAP en arrière-plan et un
+      # proof-of-work les casserait.
+      chain: [caddy-front, caddy-back]
+      # 🔴 Privé tant que le projet n'est pas mûr. Un webmail public est une page de
+      # connexion face à Internet, et celle-ci vient d'un projet à une étoile.
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # Sans état : plusieurs réplicas seraient possibles. Un seul suffit largement pour
+    # un usage domestique, et évite de payer de la mémoire pour rien.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ >/dev/null || exit 1"]
+  update:
+    channel: pin

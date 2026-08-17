@@ -1,0 +1,43 @@
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Fais pointer {{ domain }} vers le cluster. Un wildcard suffit.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: filet-de-securite
+    title: 🔴 Garder Roundcube en second webmail
+    phase: post-install
+    severity: required
+    body: |
+      Bulwark est jeune : aucune release Git, aucune licence déclarée, et sa v1
+      n'est visée qu'en 2026 (§5bis.2ter).
+
+      Le jour où une mise à jour le casse, tu perds l'accès à ton courrier — pas
+      les messages, qui sont chez Stalwart, mais le moyen de les lire. Roundcube
+      installé à côté sur un autre sous-domaine coûte ~100 Mo de RAM et supprime
+      ce risque : les deux tapent le même serveur et ne partagent aucun état.
+
+        hlb install roundcube --domain webmail.{{ base_domain }}
+
+      C'est exactement ce que recommande le plan, et c'est le genre de chose que
+      le catalogue rend trivial.
+
+  - id: url-jmap
+    title: Vérifier l'URL JMAP
+    phase: post-install
+    severity: blocking
+    after: [filet-de-securite]
+    body: |
+      ⚠️ `JMAP_SERVER_URL` doit être l'adresse PUBLIQUE de Stalwart : c'est le
+      NAVIGATEUR qui s'y connecte, pas le conteneur.
+
+      Si tu y as mis un nom de service interne, la page se charge normalement et
+      la connexion échoue sans message clair. Ouvre {{ domain }} et connecte-toi
+      avec les identifiants d'une boîte pour le vérifier tout de suite.
+    deeplink: "https://{{ domain }}/"
