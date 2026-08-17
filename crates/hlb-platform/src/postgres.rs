@@ -98,6 +98,20 @@ impl PostgresProvisioner {
         Ok(created)
     }
 
+    /// Exécute une requête qui rend une seule colonne texte, une ligne par résultat.
+    ///
+    /// ⚠️ Réservé aux vues système de PostgreSQL (`pg_stat_replication`,
+    /// `pg_replication_slots`), dont la forme change d'une version majeure à l'autre :
+    /// une requête typée figerait la version supportée, là où une ligne de texte
+    /// laisse l'appelant s'adapter.
+    pub async fn query_raw(&self, sql: &str) -> Result<String> {
+        let rows = sqlx::query_scalar::<_, String>(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+        Ok(rows.join("\n"))
+    }
+
     /// Rotation du mot de passe d'un rôle existant (§9quater).
     pub async fn set_password(&self, role: &str, password: &str) -> Result<()> {
         validate_identifier(role)?;

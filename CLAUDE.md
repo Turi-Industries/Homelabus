@@ -203,6 +203,14 @@ qui a tort, pas le test.
   comme une base à part. Un utilisateur qui se connecte parfaitement en `psql` est
   refusé. L'image officielle n'autorise la réplication que depuis `127.0.0.1` : il faut
   `host replication all all scram-sha-256`.
+- **`pg_basebackup -R` écrase `postgresql.auto.conf`**, qui est lu APRÈS
+  `postgresql.conf` et l'emporte donc. Le `primary_conninfo` qu'il écrit n'a pas
+  d'`application_name` : des réglages posés AVANT sont silencieusement perdus, et tous
+  les standbys s'annoncent `walreceiver`. On voit alors qu'un nœud décroche sans savoir
+  lequel — d'où l'avertissement d'ambiguïté dans `hlb replication status`.
+- **Un slot de réplication neuf ne retient rien** tant qu'aucun standby ne s'y connecte
+  (sauf `immediately_reserve`). Le cas dangereux n'est pas le slot jamais utilisé, c'est
+  celui *qui a servi* et dont le consommateur a disparu : lui seul fait grossir `pg_wal`.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -282,6 +290,12 @@ de mailcow dans PLAN.md sont historiques : elles expliquent le choix de Stalwart
 Fait aussi : `hlb dr exercise` — la restauration répétée pour de vrai dans un
 conteneur jetable (§8.3), avec un compteur de péremption dans `dr status`.
 
-Reste la feuille de route du §12 : HA PostgreSQL en réplication streaming (phase 7,
-demande un second nœud `heavy`) et la bascule des binaires de `hlb self update`, qui
-attend une source de distribution signée.
+Fait enfin : la **réplication streaming PostgreSQL** (`hlb replication config/status`),
+vérifiée contre un vrai couple primaire/standby — copie initiale, rattrapage après une
+coupure, alerte de slot orphelin avec son remède, et détection des standbys qu'on ne
+sait pas distinguer. Asynchrone par décision : en synchrone, la panne du standby
+bloquerait les écritures de la primaire.
+
+Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
+réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de
+distribution (la vérification Ed25519 et la bascule du binaire sont faites).

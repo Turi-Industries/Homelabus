@@ -204,6 +204,10 @@ enum Command {
     #[command(name = "self")]
     Selfy(SelfCmd),
 
+    /// Réplication PostgreSQL : standby en streaming (§3.2).
+    #[command(subcommand)]
+    Replication(ReplCmd),
+
     /// 🔴 Reprise après sinistre : basculer PostgreSQL sur un autre nœud (§2bis.5).
     #[command(subcommand)]
     Dr(DrCmd),
@@ -482,6 +486,23 @@ enum SelfCmd {
         #[arg(long)]
         apply: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ReplCmd {
+    /// Les réglages à poser sur la primaire et sur le standby.
+    Config {
+        /// Nom du nœud qui portera le standby.
+        standby: String,
+        /// Hôte de la primaire, tel que le standby la joindra.
+        #[arg(long, default_value = "postgres")]
+        primary_host: String,
+        /// Rôle de réplication.
+        #[arg(long, default_value = "replicant")]
+        user: String,
+    },
+    /// 🔴 Les standbys suivent-ils, et un slot mort remplit-il le disque ?
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -2703,6 +2724,114 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         println!("⚠️  Le processus EN COURS tourne toujours sur l'ancien code :");
                         println!("   sous Unix, son inode reste vivant. Redémarre le controller");
                         println!("   pour que la nouvelle version prenne effet.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
+        }
+
+        Command::Replication(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_backup::replication as repl;
+
+                match cmd {
+                    ReplCmd::Config { standby, primary_host, user } => {
+                        let slot = repl::slot_name(standby)?;
+
+                        println!("═══ Sur la PRIMAIRE, dans postgresql.conf ═══");
+                        println!("{}", repl::primary_settings(1));
+                        println!("═══ Puis, une fois redémarrée ═══");
+                        println!("  CREATE ROLE {user} WITH REPLICATION LOGIN PASSWORD '…';");
+                        println!("  SELECT pg_create_physical_replication_slot('{slot}');");
+                        println!();
+                        println!("  Et dans pg_hba.conf — la réplication est traitée comme");
+                        println!("  une base à part, se connecter en psql ne suffit pas :");
+                        println!("    host replication {user} all scram-sha-256");
+                        println!();
+                        println!("═══ Sur le STANDBY ═══");
+                        println!("  1. Copie initiale, qui pose déjà standby.signal :");
+                        println!("       pg_basebackup -h {primary_host} -U {user} \\");
+                        println!("         -D /var/lib/postgresql/data -R -X stream -S {slot} -P");
+                        println!();
+                        println!("  2. Dans postgresql.auto.conf, APRÈS le pg_basebackup :");
+                        println!("{}", repl::APPLIQUER_APRES_BASEBACKUP);
+                        println!();
+                        println!("{}", repl::standby_settings(primary_host, 5432, &slot, user));
+                        Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
+                    }
+
+                    ReplCmd::Status => {
+                        let Some(url) = cli.postgres_admin.as_deref() else {
+                            eprintln!("Aucune URL PostgreSQL — utilise --postgres-admin.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        let pg = hlb_platform::PostgresProvisioner::connect(url).await?;
+
+                        let standbys = repl::parse_standbys(
+                            &pg.query_raw(
+                                "SELECT application_name || '|' || state || '|' ||
+                                 COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn), 0)
+                                 FROM pg_stat_replication",
+                            )
+                            .await?,
+                        );
+
+                        // 🔴 `wal_status = 'lost'` est l'invalidation : le slot ne
+                        // retient plus rien, mais le standby est irrécupérable.
+                        let slots = repl::parse_slots(
+                            &pg.query_raw(
+                                "SELECT slot_name || '|' || CASE WHEN active THEN 't' ELSE 'f' END
+                                 || '|' || COALESCE(
+                                      pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0)
+                                 || '|' || CASE WHEN wal_status = 'lost' THEN 't' ELSE 'f' END
+                                 FROM pg_replication_slots WHERE slot_type = 'physical'",
+                            )
+                            .await?,
+                        );
+
+                        if standbys.is_empty() {
+                            println!("Aucun standby connecté.");
+                        } else {
+                            println!("Standbys :");
+                            for s in &standbys {
+                                println!("  {}", s.describe());
+                            }
+
+                            // 🔴 Deux standbys sous le même nom rendent cette sortie
+                            // inutile au pire moment : on voit qu'un nœud décroche
+                            // sans pouvoir dire lequel. Cause quasi certaine : les
+                            // réglages posés AVANT `pg_basebackup -R`, qui réécrit
+                            // postgresql.auto.conf et emporte l'application_name.
+                            for nom in repl::indistinguishable(&standbys) {
+                                println!();
+                                println!("⚠️ Plusieurs standbys s'annoncent « {nom} » : impossible");
+                                println!("   de savoir lequel décroche. Pose un application_name");
+                                println!("   distinct sur chacun (hlb replication config).");
+                            }
+                        }
+
+                        let dangereux: Vec<_> =
+                            slots.iter().filter(|s| s.is_dangerous()).collect();
+                        if !slots.is_empty() {
+                            println!();
+                            println!("Slots sans consommateur :");
+                            for s in &slots {
+                                println!("  {}", s.describe());
+                            }
+                        }
+
+                        let mauvais = standbys
+                            .iter()
+                            .any(|s| s.health() == hlb_backup::StandbyHealth::Lagging);
+
+                        if !dangereux.is_empty() || mauvais {
+                            println!();
+                            println!("🔴 Le disque de la PRIMAIRE est en jeu : un slot sans");
+                            println!("   consommateur retient le WAL jusqu'à saturation.");
+                            return Ok(ExitCode::FAILURE);
+                        }
                         Ok(ExitCode::SUCCESS)
                     }
                 }

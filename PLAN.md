@@ -744,6 +744,35 @@ Approche recommandée, par ordre croissant d'ambition :
 Ne commence pas par la phase 3. Le PITR te sauvera bien plus souvent qu'un failover
 automatique.
 
+#### État : phase 2 faite (`hlb replication config` / `status`)
+
+**Asynchrone, par décision.** En synchrone, la primaire attend la confirmation du
+standby avant de valider chaque transaction : si le standby tombe, **plus aucune
+écriture n'aboutit**. Sur deux nœuds, ça transforme la panne du nœud de secours en
+panne totale — l'inverse du but. Le coût est un RPO de quelques centaines de
+millisecondes, et il est choisi plutôt que subi.
+
+**Le standby ne remplace ni l'instantané ni le PITR.** Il suit la primaire, donc il
+suit aussi ses erreurs : une table effacée par mégarde est répliquée immédiatement. Le
+standby protège de la panne matérielle ; le PITR protège de l'erreur humaine.
+
+**🔴 Le slot de réplication est le même piège que l'`archive_command` du §8.1.** Un
+slot garantit la rétention du WAL tant que le standby n'a pas consommé — donc un
+standby mort dont le slot survit fait grossir `pg_wal` jusqu'à saturer le disque de la
+**primaire**. D'où `max_slot_wal_keep_size = 8GB` : au-delà, le slot est invalidé et le
+standby devra être reconstruit, ce qui est très préférable à une primaire à l'arrêt
+faute de place. `hlb replication status` sort en échec sur un slot orphelin et donne
+la commande de remède.
+
+Vérifié contre un vrai couple : copie initiale, rattrapage après coupure (les données
+écrites pendant l'absence sont bien là), refus des écritures côté standby, et alerte
+de slot orphelin. Deux pièges constatés à cette occasion sont notés dans CLAUDE.md —
+`pg_basebackup -R` qui écrase `postgresql.auto.conf` en perdant l'`application_name`,
+et le fait qu'un slot **neuf** ne retient rien (le danger vient du slot qui a servi).
+
+Reste, pour un déploiement réel : un second nœud `heavy` et la bascule assistée
+(`hlb db failover`), volontairement non automatique.
+
 ### 3.3 Le cas Valkey/Redis
 
 Certaines apps supposent d'être seules sur la DB 0. Stratégie :
