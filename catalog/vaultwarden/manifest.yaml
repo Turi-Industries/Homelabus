@@ -21,6 +21,21 @@ spec:
       tier: local
       backup: true
     - kind: smtp
+  # §4.3 — Vaultwarden n'accepte qu'une URL complète pour sa base.
+  env:
+    # 🔴 `db.url` porte le mot de passe : c'est un SECRET, malgré son air d'adresse.
+    DATABASE_URL: "{{ db.url }}"
+    DOMAIN: "https://{{ domain }}"
+
+    SMTP_HOST: "{{ smtp.host }}"
+    SMTP_PORT: "{{ smtp.port }}"
+    SMTP_USERNAME: "{{ smtp.user }}"
+    SMTP_PASSWORD: "{{ smtp.password }}"
+
+    SSO_ENABLED: "true"
+    SSO_AUTHORITY: "{{ oidc.issuer }}"
+    SSO_CLIENT_ID: "{{ oidc.client_id }}"
+    SSO_CLIENT_SECRET: "{{ oidc.client_secret }}"
   ingress:
     - host: "{{ domain }}"
       port: 80

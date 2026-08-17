@@ -34,6 +34,34 @@ spec:
 
     # Les workflows envoient des mails (notification d'échec, rapports).
     - kind: smtp
+  # 🔴 §4.3 — comment n8n reçoit ce que le résolveur a provisionné.
+  #
+  # Sans ce bloc, la base `n8n` était créée, son rôle isolé aussi, son mot de passe
+  # déposé au coffre — et n8n démarrait sans rien savoir de tout ça, puis retombait
+  # sur son SQLite interne. Service sain, sonde verte, et les données dans un fichier
+  # que personne ne sauvegardait pendant qu'une base vide était dumpée chaque nuit.
+  #
+  # ⚠️ Les jetons de secret ne sont PAS résolus dans le plan : `hlb plan` affiche
+  # « {{ db.password }} », et seule Swarm voit la valeur.
+  env:
+    DB_TYPE: postgresdb
+    DB_POSTGRESDB_HOST: "{{ db.host }}"
+    DB_POSTGRESDB_PORT: "{{ db.port }}"
+    DB_POSTGRESDB_DATABASE: "{{ db.name }}"
+    DB_POSTGRESDB_USER: "{{ db.user }}"
+    DB_POSTGRESDB_PASSWORD: "{{ db.password }}"
+
+    # n8n construit ses URL de webhook à partir de là. Sans ces trois lignes il
+    # annonce « localhost:5678 », que rien d'extérieur ne sait joindre.
+    N8N_HOST: "{{ domain }}"
+    N8N_PROTOCOL: https
+    WEBHOOK_URL: "https://{{ domain }}/"
+
+    # Le relais de la plateforme, pour les notifications d'échec de workflow.
+    N8N_SMTP_HOST: "{{ smtp.host }}"
+    N8N_SMTP_PORT: "{{ smtp.port }}"
+    N8N_SMTP_USER: "{{ smtp.user }}"
+    N8N_SMTP_PASS: "{{ smtp.password }}"
   ingress:
     - host: "{{ domain }}"
       port: 5678

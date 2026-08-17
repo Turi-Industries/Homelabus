@@ -110,18 +110,36 @@ pub fn resolve_with_guide(
     // en compte. L'échelle du §4.6bis n'est donc pas purement séquentielle à
     // l'exécution : `env` est résolu ICI, au moment du plan, tandis que `exec` et
     // `api` s'exécutent une fois le service sain.
-    let mut env: Vec<(String, String)> = Vec::new();
+    // 🔴 Les liaisons du manifest : comment l'app reçoit ce qu'on a provisionné pour
+    // elle (§4.3). C'était la moitié manquante du résolveur — créer la base, le rôle
+    // et le mot de passe sans jamais les transmettre laissait l'app retomber sur son
+    // SQLite interne : service sain, sonde verte, tableau de bord au vert, et les
+    // données dans un fichier que personne ne sauvegardait, pendant qu'une base vide
+    // était fidèlement dumpée chaque nuit.
+    //
+    // 🔴 Les jetons de SECRET ne sont PAS résolus ici. Le plan est affiché par
+    // `hlb plan`, enregistré dans l'état et exporté vers le miroir Git (§2.3) : y
+    // substituer un mot de passe le publierait aux trois endroits, dont un dépôt qui
+    // garde l'historique. La substitution a lieu dans l'exécuteur.
+    //
+    // ⚠️ `BTreeMap` : le tri est ce qui rend le plan reproductible d'une exécution à
+    // l'autre, et l'insertion ordonnée donne une règle de priorité claire — le guide
+    // écrase le manifest, parce qu'il porte une décision prise à l'installation
+    // (« fermer les inscriptions ») là où le manifest porte un défaut de catalogue.
+    let mut table: std::collections::BTreeMap<String, String> = m.spec.env.clone();
     for s in &guide.steps {
         for a in &s.automate {
             if let hlb_types::Automation::Env { vars } = a {
                 for (k, v) in vars {
-                    env.push((k.clone(), hlb_types::guide::render(v, &domain_vars(params))));
+                    table.insert(
+                        k.clone(),
+                        hlb_types::guide::render(v, &domain_vars(params)),
+                    );
                 }
             }
         }
     }
-    env.sort();
-    env.dedup_by(|a, b| a.0 == b.0);
+    let env: Vec<(String, String)> = table.into_iter().collect();
 
     // 4. Les volumes à monter, déduits des capacités `storage`.
     //

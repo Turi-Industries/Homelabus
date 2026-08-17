@@ -298,6 +298,138 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         Ok(routes)
     }
 
+    /// Résout les jetons de liaison d'un ensemble de variables (§4.3).
+    ///
+    /// 🔴 **C'est ici, et nulle part avant, que les secrets prennent leur valeur.** Le
+    /// plan traverse l'affichage de `hlb plan`, l'état SQLite et le miroir Git : un
+    /// mot de passe substitué en amont serait publié aux trois endroits, dont un dépôt
+    /// qui garde l'historique. Seule Swarm voit la valeur finale.
+    ///
+    /// ⚠️ Un jeton qu'on ne sait pas remplir est laissé **littéral** plutôt que vidé.
+    /// Une variable vide ressemble à une configuration absente : l'app se plaindrait
+    /// d'un mot de passe incorrect, alors que `{{ db.password }}` dans ses journaux
+    /// désigne le vrai problème du premier coup.
+    async fn resoudre_liaisons(
+        &self,
+        app: &str,
+        env: &[(String, String)],
+    ) -> Result<Vec<(String, String)>> {
+        use hlb_types::binding::{substitute, tokens_in, Token};
+
+        // Rien à faire si aucun jeton n'est utilisé : on évite d'aller chercher des
+        // secrets pour des apps qui n'en ont pas besoin.
+        let utilises: Vec<Token> = {
+            let mut v: Vec<Token> = env.iter().flat_map(|(_, x)| tokens_in(x)).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        if utilises.is_empty() {
+            return Ok(env.to_vec());
+        }
+
+        let manifest = self.state.app_manifest(app).await.ok();
+        let domaine = self.state.app_domain(app).await.unwrap_or_default();
+
+        let mut valeurs: std::collections::BTreeMap<Token, String> = Default::default();
+
+        if let Some(d) = &domaine {
+            valeurs.insert(Token::Domain, d.clone());
+        }
+
+        // Les coordonnées de la base viennent de la CAPACITÉ déclarée, pas d'une
+        // constante : c'est ce qui permet au même manifest de suivre la topologie.
+        if let Some(m) = &manifest {
+            for c in &m.spec.requires {
+                match c {
+                    hlb_types::Capability::Database { engine, name } => {
+                        let base = name.clone().unwrap_or_else(|| app.to_string());
+                        let hote = engine.service_name().to_string();
+                        let port = match engine {
+                            hlb_types::DbEngine::Postgres => "5432",
+                            hlb_types::DbEngine::Mariadb => "3306",
+                        };
+
+                        valeurs.insert(Token::DbHost, hote.clone());
+                        valeurs.insert(Token::DbPort, port.to_string());
+                        valeurs.insert(Token::DbName, base.clone());
+                        // Le rôle porte le nom de la base : c'est ce que produit
+                        // `ProvisionDatabase`, et les deux doivent rester alignés.
+                        valeurs.insert(Token::DbUser, base.clone());
+
+                        if let Some(mdp) = self.lire_secret(&format!("{app}-db-password")).await? {
+                            let schema = match engine {
+                                hlb_types::DbEngine::Postgres => "postgres",
+                                hlb_types::DbEngine::Mariadb => "mysql",
+                            };
+                            valeurs.insert(
+                                Token::DbUrl,
+                                format!("{schema}://{base}:{mdp}@{hote}:{port}/{base}"),
+                            );
+                            valeurs.insert(Token::DbPassword, mdp);
+                        }
+                    }
+
+                    hlb_types::Capability::Cache { engine, dedicated } => {
+                        // Une instance dédiée porte le nom de l'app en préfixe (§3.3).
+                        let hote = if *dedicated {
+                            format!("{app}-{}", engine.service_name())
+                        } else {
+                            engine.service_name().to_string()
+                        };
+                        valeurs.insert(Token::CacheHost, hote.clone());
+                        valeurs.insert(Token::CachePort, "6379".into());
+                        valeurs.insert(Token::CacheUrl, format!("redis://{hote}:6379"));
+                    }
+
+                    hlb_types::Capability::Sso { .. } => {
+                        valeurs.insert(Token::OidcClientId, app.to_string());
+                        if let Some(s) = self.lire_secret(&format!("{app}-oidc-secret")).await? {
+                            valeurs.insert(Token::OidcClientSecret, s);
+                        }
+                    }
+
+                    hlb_types::Capability::Smtp => {
+                        valeurs.insert(Token::SmtpHost, "stalwart".into());
+                        valeurs.insert(Token::SmtpPort, "587".into());
+                        valeurs.insert(Token::SmtpUser, app.to_string());
+                        if let Some(s) = self.lire_secret(&format!("{app}-smtp-password")).await? {
+                            valeurs.insert(Token::SmtpPassword, s);
+                        }
+                    }
+
+                    hlb_types::Capability::MailAccount { .. }
+                    | hlb_types::Capability::Storage { .. } => {}
+                }
+            }
+        }
+
+        // L'émetteur OIDC dépend du domaine de PocketID, pas de celui de l'app.
+        if let Ok(Some(d)) = self.state.app_domain("pocket-id").await {
+            valeurs.insert(Token::OidcIssuer, format!("https://{d}"));
+        }
+
+        Ok(env
+            .iter()
+            .map(|(k, v)| (k.clone(), substitute(v, &valeurs)))
+            .collect())
+    }
+
+    /// Lit un secret du coffre, ou `None` s'il n'existe pas encore.
+    ///
+    /// ⚠️ Absent n'est pas une erreur ici : un plan peut être exécuté avant que le
+    /// secret ne soit généré, et l'action correspondante s'en chargera. Le jeton reste
+    /// alors littéral, ce qui se voit.
+    async fn lire_secret(&self, nom: &str) -> Result<Option<String>> {
+        let Some(vault) = self.vault else {
+            return Ok(None);
+        };
+        match self.state.secret(nom).await? {
+            Some(ct) => Ok(Some(vault.decrypt(&ct)?)),
+            None => Ok(None),
+        }
+    }
+
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService {
@@ -310,6 +442,10 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                     Ok(m) if m.spec.image.is_pinned() => m.spec.image.reference(),
                     _ => image.clone(),
                 };
+
+                // 🔴 Les jetons de liaison prennent leur valeur ICI, pas dans le plan
+                // (§4.3). C'est ce qui fait qu'une app apprend enfin où est sa base.
+                let env = self.resoudre_liaisons(app, env).await?;
 
                 let mut spec = ServiceSpec::new(name, &resolved)
                     .replicas(*replicas)
@@ -576,12 +712,20 @@ mod tests {
     use std::sync::Mutex;
 
     /// Orchestrateur factice : enregistre les appels, peut échouer à la demande.
-    #[derive(Default)]
+        /// Ce qu'un déploiement a réellement transmis : nom du service et variables.
+    type Deploiement = (String, Vec<(String, String)>);
+
+#[derive(Default)]
     struct Fake {
         deployed: Mutex<Vec<String>>,
         waited: Mutex<Vec<String>>,
         updated: Mutex<Vec<(String, String)>>,
         scaled: Mutex<Vec<(String, u64)>>,
+        /// Les variables réellement transmises à Swarm, par service.
+        ///
+        /// 🔴 C'est le SEUL endroit où l'on peut constater qu'un jeton a bien été
+        /// résolu : le plan, lui, doit continuer à porter le jeton littéral.
+        deployed_env: Mutex<Vec<Deploiement>>,
         /// Ce que `list()` renverra : l'état « observé » du cluster.
         observed: Mutex<Vec<ServiceStatus>>,
         fail_deploy: bool,
@@ -597,6 +741,10 @@ mod tests {
                 return Err(hlb_orchestrator::Error::Unexpected("échec simulé".into()));
             }
             self.deployed.lock().expect("mutex").push(s.name.clone());
+            self.deployed_env
+                .lock()
+                .expect("mutex")
+                .push((s.name.clone(), s.env.clone()));
             Ok("id".into())
         }
         async fn update_image(&self, name: &str, image: &str) -> hlb_orchestrator::Result<()> {
@@ -857,6 +1005,126 @@ spec:
     - kind: mail-account
       aliases: true
 "#;
+
+    #[tokio::test]
+    async fn an_app_finally_learns_where_its_database_is() {
+        // 🔴 LE défaut que ce test protège : le résolveur créait la base, le rôle
+        // isolé et le mot de passe — puis déployait l'app SANS RIEN LUI DIRE. Elle
+        // retombait sur son SQLite interne. Service sain, sonde verte, tableau de
+        // bord au vert, et les données dans un fichier que personne ne sauvegardait
+        // pendant qu'une base vide était fidèlement dumpée chaque nuit.
+        const AVEC_LIAISON: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: acme/demo, tag: "1.0", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: postgres
+  env:
+    DB_HOST: "{{ db.host }}"
+    DB_NAME: "{{ db.name }}"
+    DB_USER: "{{ db.user }}"
+    DB_PASSWORD: "{{ db.password }}"
+    DB_URL: "postgres://{{ db.user }}:{{ db.password }}@{{ db.host }}/{{ db.name }}"
+"#;
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::init(dir.path().join("master.key")).unwrap();
+
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(AVEC_LIAISON).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+
+        let p = hlb_resolver::resolve(&m, &Default::default()).unwrap();
+
+        // 🔴 Le PLAN ne doit porter que le jeton. Il est affiché par `hlb plan`,
+        // enregistré dans l'état et exporté vers le miroir Git : un mot de passe
+        // substitué ici serait publié aux trois endroits, dont un dépôt qui garde
+        // l'historique.
+        let texte_du_plan = p
+            .actions
+            .iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !texte_du_plan.contains("postgres://demo:"),
+            "le plan ne doit jamais porter d'identifiants résolus : {texte_du_plan}"
+        );
+
+        Executor::new(&o, &s)
+            .with_vault(&vault)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
+
+        // En revanche, ce qui atteint Swarm doit être RÉSOLU.
+        let deploiements = o.deployed_env.lock().unwrap().clone();
+        let (_, env) = deploiements
+            .iter()
+            .find(|(n, _)| n == "demo")
+            .expect("demo déployée");
+        let table: std::collections::BTreeMap<&str, &str> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+        assert_eq!(table.get("DB_HOST"), Some(&"postgres"));
+        assert_eq!(table.get("DB_NAME"), Some(&"demo"));
+        assert_eq!(table.get("DB_USER"), Some(&"demo"));
+
+        let mdp = table.get("DB_PASSWORD").expect("mot de passe transmis");
+        assert!(!mdp.contains("{{"), "jeton non résolu : {mdp}");
+        assert!(mdp.len() >= 16, "mot de passe trop court : {mdp}");
+
+        // Et l'URL composite doit porter le MÊME mot de passe, pas un autre tirage.
+        let url = table.get("DB_URL").expect("URL transmise");
+        assert_eq!(*url, format!("postgres://demo:{mdp}@postgres/demo"));
+    }
+
+    #[tokio::test]
+    async fn an_unresolvable_token_stays_visible_instead_of_becoming_empty() {
+        // 🔴 Sans coffre, le mot de passe ne peut pas être lu. Le jeton doit rester
+        // LITTÉRAL plutôt que devenir une chaîne vide : une variable vide ressemble à
+        // une configuration absente, et l'app se plaindrait d'un mot de passe
+        // incorrect — on chercherait longtemps du côté du mot de passe.
+        const M: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: acme/demo, tag: "1.0", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: postgres
+  env:
+    DB_PASSWORD: "{{ db.password }}"
+    DB_HOST: "{{ db.host }}"
+"#;
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(M).unwrap();
+        s.upsert_app("demo", &m, None).await.unwrap();
+
+        let p = hlb_resolver::resolve(&m, &Default::default()).unwrap();
+        // Pas de `.with_vault(...)` : aucun secret n'est lisible.
+        Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+
+        let deploiements = o.deployed_env.lock().unwrap().clone();
+        let (_, env) = deploiements.iter().find(|(n, _)| n == "demo").expect("déployée");
+        let table: std::collections::BTreeMap<&str, &str> =
+            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+        assert_eq!(
+            table.get("DB_PASSWORD"),
+            Some(&"{{ db.password }}"),
+            "un jeton irrésolu doit rester visible, jamais devenir vide"
+        );
+        // Ce qui est connaissable sans coffre l'est quand même : l'hôte ne dépend
+        // d'aucun secret, et le taire n'aiderait personne.
+        assert_eq!(table.get("DB_HOST"), Some(&"postgres"));
+    }
 
     #[tokio::test]
     async fn a_mailbox_is_never_pretended_without_a_stalwart() {

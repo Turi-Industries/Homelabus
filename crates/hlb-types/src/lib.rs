@@ -16,6 +16,9 @@ pub mod manifest;
 pub use token::{generate as generate_token, StoredToken};
 pub use rbac::Role;
 pub use guide::{Automation, Guide, GuideStep, Phase, Severity, Verify};
+pub mod binding;
+
+pub use binding::{redact, substitute, Token};
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{
     ApiVersion, ExposePolicy, Healthcheck, Image, Ingress, Kind, Manifest, Metadata, Runtime,
@@ -73,6 +76,26 @@ pub fn validate(m: &Manifest) -> Result<()> {
                     m.metadata.name
                 )));
             }
+        }
+    }
+
+    // 🔴 §4.3 — un jeton de liaison exige la capacité correspondante.
+    //
+    // Sans ce contrôle, un `{{ db.password }}` dans une app qui ne déclare aucune base
+    // partirait vers Swarm avec le TEXTE DU JETON pour valeur. L'app se plaindrait
+    // alors d'un mot de passe incorrect, et le diagnostic partirait du côté du mot de
+    // passe — jamais du côté du manifest.
+    for t in binding::tokens_used(&m.spec.env) {
+        let Some(besoin) = t.requires() else { continue };
+
+        let declaree = m.spec.requires.iter().any(|c| c.id() == besoin);
+        if !declaree {
+            return Err(Error::Validation(format!(
+                "{} : « {} » est utilisé dans env mais l'app ne déclare aucune capacité \
+                 « {besoin} ». La variable partirait avec le texte du jeton pour valeur",
+                m.metadata.name,
+                t.placeholder()
+            )));
         }
     }
 
@@ -160,6 +183,36 @@ spec:
              path: /data\n      tier: nfs\n      sqlite: true\n"
         );
         assert!(validate(&manifest(&y)).unwrap_err().to_string().contains("NFS"));
+    }
+
+    #[test]
+    fn rejects_a_binding_token_without_its_capability() {
+        // 🔴 Sans ce refus, la variable partirait vers Swarm avec « {{ db.password }} »
+        // pour valeur. L'app dirait « mot de passe incorrect », et l'on chercherait
+        // pendant longtemps du côté du mot de passe.
+        let y = format!(
+            "{BASE}  env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n"
+        );
+        let e = validate(&manifest(&y)).unwrap_err().to_string();
+        assert!(e.contains("db.password"), "{e}");
+        assert!(e.contains("database"), "l'erreur doit nommer la capacité manquante : {e}");
+    }
+
+    #[test]
+    fn accepts_a_binding_token_when_the_capability_is_declared() {
+        let y = format!(
+            "{BASE}  requires:\n    - kind: database\n      engine: postgres\n  \
+             env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n"
+        );
+        validate(&manifest(&y)).expect("la capacité est déclarée");
+    }
+
+    #[test]
+    fn the_domain_token_needs_no_capability() {
+        // Le domaine vient des paramètres d'installation : l'exiger comme capacité
+        // serait un faux blocage sur toutes les apps.
+        let y = format!("{BASE}  env:\n    URL: \"https://{{{{ domain }}}}\"\n");
+        validate(&manifest(&y)).expect("le domaine est toujours disponible");
     }
 
     #[test]

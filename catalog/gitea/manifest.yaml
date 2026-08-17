@@ -18,6 +18,17 @@ spec:
       path: /data
       tier: local
       backup: true
+  # §4.3 — Gitea reçoit ses coordonnées par des variables GITEA__section__clé.
+  env:
+    GITEA__database__DB_TYPE: postgres
+    GITEA__database__HOST: "{{ db.host }}:{{ db.port }}"
+    GITEA__database__NAME: "{{ db.name }}"
+    GITEA__database__USER: "{{ db.user }}"
+    GITEA__database__PASSWD: "{{ db.password }}"
+
+    # Sans ROOT_URL, Gitea fabrique ses URL de clone à partir du nom de conteneur.
+    GITEA__server__ROOT_URL: "https://{{ domain }}/"
+    GITEA__server__DOMAIN: "{{ domain }}"
   ingress:
     - host: "{{ domain }}"
       port: 3000

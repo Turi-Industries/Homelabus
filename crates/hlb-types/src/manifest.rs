@@ -61,6 +61,30 @@ pub struct Spec {
     #[serde(default)]
     pub update: UpdatePolicy,
 
+    /// Comment l'app reçoit ce que le résolveur a provisionné (§4.3).
+    ///
+    /// 🔴 **La moitié manquante du résolveur de capacités.** Déclarer
+    /// `kind: database` crée la base, le rôle et le mot de passe — et ne dit
+    /// toujours pas à l'app comment s'y connecter. Sans ce champ, une app démarre et
+    /// retombe en silence sur son SQLite interne : elle a l'air de marcher, et ses
+    /// données ne sont ni dans la base provisionnée, ni sauvegardées avec elle.
+    ///
+    /// Les valeurs peuvent porter des **jetons** résolus au déploiement :
+    /// `{{ db.host }}`, `{{ db.name }}`, `{{ db.user }}`, `{{ db.password }}`,
+    /// `{{ db.url }}`, `{{ cache.host }}`, `{{ oidc.issuer }}`,
+    /// `{{ oidc.client_id }}`, `{{ oidc.client_secret }}`, `{{ smtp.host }}`,
+    /// `{{ smtp.user }}`, `{{ smtp.password }}`, `{{ domain }}`.
+    ///
+    /// 🔴 **Un jeton de secret n'est JAMAIS résolu ici.** Le plan est affiché par
+    /// `hlb plan`, enregistré dans l'état et exporté vers le miroir Git : y faire
+    /// entrer un mot de passe le publierait aux trois endroits. La substitution a
+    /// lieu dans l'exécuteur, au moment du déploiement, et seule Swarm voit la valeur.
+    ///
+    /// ⚠️ `BTreeMap` et non `HashMap` : les plans doivent être reproductibles d'une
+    /// exécution à l'autre, sinon les tests d'instantané deviennent inutilisables.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+
     #[serde(default)]
     pub security: SecuritySpec,
 }

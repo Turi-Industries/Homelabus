@@ -237,6 +237,19 @@ qui a tort, pas le test.
   `mode: none` (exclusion volontaire) recevait un client OIDC aux URI VIDES, et une app
   derrière portail un client pointant vers elle au lieu d'oauth2-proxy. Le compilateur
   ne pouvait pas le dire — c'est exactement ce que l'exhaustivité devait empêcher.
+- **Provisionner n'est pas connecter.** Le résolveur créait la base, le rôle isolé et le
+  mot de passe, puis déployait l'app sans rien lui dire : elle retombait sur son SQLite
+  interne. Service sain, sonde verte, tableau de bord au vert — et les données dans un
+  fichier que personne ne sauvegardait, pendant qu'une base vide était fidèlement dumpée
+  chaque nuit. D'où `spec.env` et les jetons de liaison.
+- **Un secret ne doit jamais entrer dans un plan.** Le plan traverse `hlb plan`
+  (affichage), l'état SQLite (enregistrement) et le miroir Git (export avec historique).
+  La substitution des jetons de secret a donc lieu dans l'exécuteur, au déploiement.
+  `{{ db.url }}` compte comme un secret malgré son air d'adresse : elle contient le mot
+  de passe.
+- **Un jeton irrésolu reste littéral, jamais vide.** Une variable vide ressemble à une
+  configuration absente : l'app se plaint d'un mot de passe incorrect et l'on cherche du
+  côté du mot de passe. `{{ db.password }}` dans les journaux désigne le vrai problème.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -328,11 +341,11 @@ volontaire, callback de portail pointant vers l'app, `native` sans `redirectPath
 accepté), tous corrigés — c'est bien l'ajout d'apps aux combinaisons différentes qui
 fait sortir ces trous, pas le volume.
 
-🔴 **Trou connu, non corrigé : les identifiants de base n'atteignent pas le conteneur.**
-`ProvisionDatabase` crée la base, le rôle et le mot de passe, mais `DeployService` ne
-reçoit que les variables statiques du `guide.yaml`. Une app à base de données démarre
-donc sans savoir s'y connecter — et retombe en silence sur son SQLite interne. C'est la
-moitié manquante du résolveur de capacités.
+Fait : **les liaisons** (`spec.env` + `hlb-types::binding`), la moitié qui manquait au
+résolveur. Une app déclare comment elle veut recevoir ce qui a été provisionné, par des
+jetons (`{{ db.host }}`, `{{ db.password }}`, `{{ oidc.client_secret }}`…). 🔴 Les
+jetons de secret sont résolus **dans l'exécuteur**, jamais dans le plan : celui-ci est
+affiché, enregistré dans l'état et exporté vers le miroir Git.
 
 Fait aussi : les **dumps MariaDB** (`hlb-backup::mariadump`), qui manquaient — une app
 MariaDB était provisionnée mais n'avait aucune sauvegarde logique.

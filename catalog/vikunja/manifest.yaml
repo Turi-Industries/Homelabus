@@ -19,6 +19,16 @@ spec:
       tier: local
       backup: true
     - kind: smtp
+  # §4.3 — Vikunja lit sa configuration par des variables VIKUNJA_*.
+  env:
+    VIKUNJA_DATABASE_TYPE: postgres
+    VIKUNJA_DATABASE_HOST: "{{ db.host }}"
+    VIKUNJA_DATABASE_DATABASE: "{{ db.name }}"
+    VIKUNJA_DATABASE_USER: "{{ db.user }}"
+    VIKUNJA_DATABASE_PASSWORD: "{{ db.password }}"
+
+    # Sans elle, les liens de partage et les invitations pointent vers localhost.
+    VIKUNJA_SERVICE_PUBLICURL: "https://{{ domain }}/"
   ingress:
     - host: "{{ domain }}"
       port: 3456
