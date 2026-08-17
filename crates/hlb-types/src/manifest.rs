@@ -61,6 +61,20 @@ pub struct Spec {
     #[serde(default)]
     pub update: UpdatePolicy,
 
+    /// Conteneurs compagnons, déployés **avec** l'app et pour elle seule (§4.8).
+    ///
+    /// Certaines apps ne tiennent pas dans un conteneur : Immich a besoin d'un service
+    /// d'apprentissage automatique séparé, Seafile d'un cache mémoire. Ce ne sont pas
+    /// des services de plateforme — ils ne sont partagés avec personne, ils naissent et
+    /// meurent avec l'app.
+    ///
+    /// 🔴 **Un compagnon n'a jamais d'`ingress`.** C'est une aide interne, pas un
+    /// service : lui ouvrir une route publierait un composant conçu pour ne parler
+    /// qu'à son app, souvent sans la moindre authentification. La règle est structurelle
+    /// — le type n'a simplement pas de champ pour ça.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<Companion>,
+
     /// Comment l'app reçoit ce que le résolveur a provisionné (§4.3).
     ///
     /// 🔴 **La moitié manquante du résolveur de capacités.** Déclarer
@@ -98,7 +112,7 @@ pub enum Runtime {
     Compose,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Image {
     pub repo: String,
@@ -168,6 +182,74 @@ impl Default for SwarmSpec {
     fn default() -> Self {
         Self { replicas: 1, healthcheck: None, tier: None }
     }
+}
+
+/// Un conteneur compagnon (§4.8).
+///
+/// Déployé sous le nom `<app>-<name>`, sur le même réseau que l'app, qui le joint donc
+/// par ce nom. Il partage son cycle de vie : installé avec elle, arrêté avec elle.
+///
+/// ## 🔴 Ce qu'un compagnon n'a PAS, et pourquoi
+///
+/// - **Pas d'`ingress`.** Une aide interne exposée publiquement, c'est un composant
+///   sans authentification face à Internet. La règle est dans le type, pas dans une
+///   consigne : il n'y a pas de champ à remplir.
+/// - **Pas de `requires`.** Un compagnon qui réclamerait sa propre base ou son propre
+///   client OIDC serait une app déguisée, et devrait en être une. Ses seuls besoins
+///   sont un volume et des variables.
+/// - **Pas de `replicas`.** Un seul exemplaire. Répartir un cache ou un modèle entre
+///   plusieurs instances demande une coordination que rien ici ne fournit, et l'app
+///   verrait ses requêtes atterrir tantôt sur l'une, tantôt sur l'autre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Companion {
+    /// Suffixe du nom de service, et nom sous lequel l'app le joint.
+    ///
+    /// ⚠️ Minuscules, chiffres et tirets : c'est un nom DNS dans le réseau Swarm.
+    pub name: String,
+
+    pub image: Image,
+
+    /// Volumes propres au compagnon, `(nom, chemin)`.
+    ///
+    /// ⚠️ Le nom est préfixé par `<app>-<compagnon>-`. Un cache de modèles n'a pas
+    /// besoin d'être sauvegardé : il se retélécharge. Le drapeau existe quand même,
+    /// parce que certains compagnons portent de l'état qui ne se reconstruit pas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub storage: Vec<CompanionVolume>,
+
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthcheck: Option<Healthcheck>,
+
+    /// Placement. Absent : celui de l'app.
+    ///
+    /// ⚠️ Un compagnon qui fait du calcul (apprentissage automatique) mérite `heavy`
+    /// même si son app est `light`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+
+    #[serde(default)]
+    pub security: SecuritySpec,
+}
+
+/// Un volume de compagnon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompanionVolume {
+    pub name: String,
+    pub path: String,
+    /// Faux par défaut, **à l'inverse des volumes d'app**.
+    ///
+    /// 🔴 L'asymétrie est délibérée. Un volume d'app contient des données
+    /// irremplaçables et le défaut sûr est de sauvegarder. Un volume de compagnon
+    /// contient presque toujours du dérivé — modèles téléchargés, cache — dont la
+    /// sauvegarde alourdirait le dépôt sans rien protéger. Le compagnon qui fait
+    /// exception le déclare.
+    #[serde(default)]
+    pub backup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

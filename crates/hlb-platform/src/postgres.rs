@@ -17,6 +17,11 @@ type Result<T> = std::result::Result<T, Error>;
 /// Se connecte en tant qu'administrateur pour créer bases et rôles.
 pub struct PostgresProvisioner {
     pool: PgPool,
+    /// Conservée pour ouvrir une connexion vers une base PRÉCISE.
+    ///
+    /// ⚠️ `CREATE EXTENSION` est local à une base : le pool d'administration pointe
+    /// sur `postgres` et poser l'extension par lui la rendrait invisible à l'app.
+    admin_url: String,
 }
 
 impl PostgresProvisioner {
@@ -30,7 +35,19 @@ impl PostgresProvisioner {
             .await
             .map_err(|e| Error::Connect(e.to_string()))?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            admin_url: admin_url.to_string(),
+        })
+    }
+
+    /// L'URL d'administration, redirigée vers une autre base.
+    fn database_url(&self, database: &str) -> String {
+        // On remplace le dernier segment de chemin, qui est le nom de base.
+        match self.admin_url.rsplit_once('/') {
+            Some((prefixe, _)) => format!("{prefixe}/{database}"),
+            None => format!("{}/{database}", self.admin_url),
+        }
     }
 
     /// Crée le rôle et sa base s'ils n'existent pas, et coupe l'accès public.
@@ -110,6 +127,38 @@ impl PostgresProvisioner {
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;
         Ok(rows.join("\n"))
+    }
+
+    /// Active une extension DANS la base de l'app.
+    ///
+    /// 🔴 `CREATE EXTENSION` est **local à une base**. Exécutée sur `postgres` — la
+    /// base d'administration — elle réussit et l'app ne la voit jamais : la panne
+    /// apparaît à la première requête vectorielle, sur un « type vector does not
+    /// exist » qui ne dit rien du fait qu'on a visé la mauvaise base.
+    ///
+    /// ⚠️ L'extension doit être PRÉSENTE dans l'image du serveur. Sinon PostgreSQL
+    /// répond « extension "x" is not available », ce qui ressemble à un problème de
+    /// droits alors que c'est un problème d'image.
+    pub async fn create_extension(&self, database: &str, extension: &str) -> Result<()> {
+        validate_identifier(database)?;
+        validate_identifier(extension)?;
+
+        // Une connexion à la base CIBLE, pas à celle d'administration.
+        let url = self.database_url(database);
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect(&url)
+            .await
+            .map_err(|e| Error::Connect(e.to_string()))?;
+
+        sqlx::query(&format!("CREATE EXTENSION IF NOT EXISTS \"{extension}\""))
+            .execute(&pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+
+        tracing::info!(database, extension, "extension activée");
+        Ok(())
     }
 
     /// Rotation du mot de passe d'un rôle existant (§9quater).

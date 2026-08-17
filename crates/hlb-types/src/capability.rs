@@ -27,6 +27,17 @@ pub enum Capability {
         /// Nom de la base. Par défaut, le nom de l'app.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// Extensions à activer dans la base (`vector`, `vchord`, `cube`…).
+        ///
+        /// 🔴 Une extension ne s'installe pas depuis SQL : elle doit être PRÉSENTE
+        /// dans l'image du serveur. `CREATE EXTENSION` échoue sinon sur « extension
+        /// n'est pas disponible », ce qui ressemble à un problème de droits.
+        ///
+        /// Les déclarer ici rend l'exigence visible dans le catalogue et permet à
+        /// l'exécuteur d'échouer avec le remède — quelle image poser — au lieu de
+        /// laisser l'app démarrer sur une base incomplète.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extensions: Vec<String>,
     },
 
     /// Un cache. Partagé par défaut, dédié si l'app ne supporte pas de voisins (§3.3).
@@ -43,6 +54,30 @@ pub enum Capability {
         /// Jamais d'URL en dur : le domaine n'est connu qu'au déploiement.
         #[serde(default)]
         redirect_paths: Vec<String>,
+    },
+
+    /// Un compartiment S3 dédié, sur le stockage objet de la plateforme (§3.5).
+    ///
+    /// ## Pourquoi ce n'est pas un `Storage` de plus
+    ///
+    /// Un volume est monté dans un chemin ; un compartiment se parle en HTTP avec des
+    /// clés d'accès. L'app n'a pas besoin d'être placée près de sa donnée, et le
+    /// volume cesse d'être une contrainte de placement — c'est précisément l'intérêt
+    /// sur un cluster hétérogène.
+    ///
+    /// 🔴 **Isolation par compartiment ET par clé**, comme les bases (§3.1). Une clé
+    /// unique partagée donnerait à chaque app la lecture des compartiments de toutes
+    /// les autres : les photos d'Immich lisibles depuis le wiki, et réciproquement.
+    ObjectStorage {
+        /// Nom du compartiment. Par défaut, le nom de l'app.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bucket: Option<String>,
+        /// 🔴 Le contenu est-il irremplaçable ?
+        ///
+        /// Vrai par défaut, comme pour les volumes. Un compartiment de cache le
+        /// déclare faux — mais l'oubli doit pencher du côté qui sauvegarde.
+        #[serde(default = "default_true")]
+        backup: bool,
     },
 
     /// Envoi de mail sortant via le relais de la plateforme.
@@ -80,6 +115,7 @@ impl Capability {
             Self::Smtp => "smtp",
             Self::MailAccount { .. } => "mail-account",
             Self::Storage { .. } => "storage",
+            Self::ObjectStorage { .. } => "object-storage",
         }
     }
 
@@ -93,6 +129,9 @@ impl Capability {
             Self::Cache { engine, .. } => Some(engine.service_name()),
             Self::Sso { .. } => Some("pocket-id"),
             Self::Smtp | Self::MailAccount { .. } => Some("stalwart"),
+            // Le compartiment est servi par le stockage objet de la plateforme :
+            // l'app doit donc attendre qu'il soit debout (§4.7).
+            Self::ObjectStorage { .. } => Some("garage"),
             Self::Storage { .. } => None,
         }
     }
@@ -177,7 +216,8 @@ mod tests {
             c,
             Capability::Database {
                 engine: DbEngine::Postgres,
-                name: Some("vikunja".into())
+                name: Some("vikunja".into()),
+                extensions: Vec::new(),
             }
         );
         assert_eq!(c.platform_service(), Some("postgres"));

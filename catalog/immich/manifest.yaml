@@ -1,0 +1,97 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: immich
+  displayName: Immich
+  category: media
+  homepage: https://immich.app
+spec:
+  image: { repo: ghcr.io/immich-app/immich-server, tag: "v3.1.0" }
+  requires:
+    # 🔴 Les extensions vectorielles ne s'installent PAS depuis SQL : elles doivent
+    # être dans l'image du serveur PostgreSQL. C'est la raison pour laquelle le
+    # service `postgres` du catalogue utilise l'image d'Immich — voir son manifest,
+    # et le guide `reindex-collation` qui va avec.
+    - kind: database
+      engine: postgres
+      extensions: [vector, vchord]
+
+    # Files d'attente : indexation, génération de miniatures, transcodage.
+    #
+    # ⚠️ Partagé, pas dédié : Immich préfixe ses clés, et une instance Valkey de plus
+    # coûterait de la mémoire sur un nœud qui en manque déjà à cause du transcodage.
+    - kind: cache
+      engine: valkey
+
+    - kind: sso
+      mode: native
+      redirectPaths: ["/auth/login", "/api/oauth/mobile-redirect"]
+
+    # 🔴 Les photos. Le seul volume du catalogue qu'on ne peut pas se permettre de
+    # perdre ET qui grossit sans limite. Sur le NAS, donc, comme la médiathèque de
+    # Jellyfin — mais `backup: true` cette fois : ce sont des originaux, pas des
+    # fichiers retéléchargeables.
+    - kind: storage
+      name: data
+      path: /data
+      tier: nfs
+      backup: true
+  companions:
+    # 🔴 Le service d'apprentissage automatique. C'est LUI qui rend Immich utile :
+    # reconnaissance de visages, recherche par description, détection d'objets.
+    #
+    # Sans lui, Immich démarre parfaitement et importe les photos — et ne reconnaît
+    # jamais personne. Rien n'indique que la moitié de la fonctionnalité est absente.
+    # D'où le déploiement AVANT l'app, avec attente de sa mise en santé.
+    - name: machine-learning
+      image: { repo: ghcr.io/immich-app/immich-machine-learning, tag: "v3.1.0" }
+      storage:
+        # Modèles téléchargés au premier usage. NON sauvegardé : ils se
+        # retéléchargent, et ils pèsent plusieurs gigaoctets.
+        - name: cache
+          path: /cache
+          backup: false
+      # ⚠️ L'inférence est la charge la plus lourde de tout le catalogue.
+      tier: heavy
+      security:
+        readOnlyRootfs: false
+      healthcheck:
+        test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:3003/ping')\" || exit 1"]
+  env:
+    DB_HOSTNAME: "{{ db.host }}"
+    DB_PORT: "{{ db.port }}"
+    DB_DATABASE_NAME: "{{ db.name }}"
+    DB_USERNAME: "{{ db.user }}"
+    DB_PASSWORD: "{{ db.password }}"
+
+    REDIS_HOSTNAME: "{{ cache.host }}"
+    REDIS_PORT: "{{ cache.port }}"
+
+    # 🔴 L'adresse du compagnon. Le jeton évite d'écrire « immich-machine-learning »
+    # en dur : le nom est dérivé de l'app et du compagnon, et les deux resteraient
+    # alignés même si l'un changeait.
+    IMMICH_MACHINE_LEARNING_URL: "http://{{ companion.machine-learning.host }}:3003"
+
+    IMMICH_PORT: "2283"
+  ingress:
+    - host: "{{ domain }}"
+      port: 2283
+      # Pas d'Anubis : casserait les applications mobiles, qui font la sauvegarde
+      # automatique des photos — la fonction pour laquelle on installe Immich.
+      chain: [caddy-front, caddy-back]
+      expose: after-guide
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # 🔴 Une seule instance : les téléversements arrivent par morceaux et un second
+    # réplica recevrait la moitié des morceaux d'un fichier que l'autre assemble.
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:2283/api/server/ping || exit 1"]
+  update:
+    # 🔴 Immich migre son schéma à chaque version mineure et ces migrations ne sont
+    # pas réversibles : un rollback d'image laisserait une base déjà migrée face à
+    # un code plus ancien. La mise à jour se valide à la main, après sauvegarde.
+    channel: pin

@@ -1821,6 +1821,7 @@ dependencies = [
  "hlb-identity",
  "hlb-ingress",
  "hlb-mail",
+ "hlb-objstore",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1926,6 +1927,18 @@ version = "0.1.0"
 dependencies = [
  "reqwest",
  "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-objstore"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

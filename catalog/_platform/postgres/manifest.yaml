@@ -5,7 +5,23 @@ metadata:
   displayName: PostgreSQL
   category: platform
 spec:
-  image: { repo: postgres, tag: "17-alpine" }
+  # 🔴 L'image d'Immich, et non `postgres:17-alpine`. Même version majeure (17),
+  # mais elle embarque `pgvector` et `vchord` — que des apps comme Immich exigent
+  # et qui ne s'installent PAS depuis SQL : une extension doit être dans l'image.
+  #
+  # ⚠️ PIÈGE À LA BASCULE, sur une installation qui a déjà des données. L'image
+  # alpine est bâtie sur musl, celle-ci sur glibc, et les deux ne trient PAS le
+  # texte dans le même ordre. Les index B-tree construits sous l'une deviennent
+  # incohérents sous l'autre : recherches incomplètes, contraintes d'unicité qui
+  # laissent passer des doublons — et PostgreSQL ne le signale que par un
+  # avertissement de « collation version mismatch », facile à ne pas voir.
+  #
+  # Après bascule, sur CHAQUE base :
+  #   REINDEX DATABASE <base>;
+  #   ALTER DATABASE <base> REFRESH COLLATION VERSION;
+  #
+  # Sur une installation neuve, il n'y a rien à faire.
+  image: { repo: ghcr.io/immich-app/postgres, tag: "17-vectorchord0.4.3-pgvector0.8.0" }
   requires:
     # §10.2 — jamais sur NFS : le verrouillage de fichiers n'y est pas fiable.
     - kind: storage

@@ -1,0 +1,92 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: seafile
+  displayName: Seafile
+  category: files
+  homepage: https://www.seafile.com
+spec:
+  # Édition communautaire (`-mc`). ⚠️ Le stockage objet S3 est une fonction PRO :
+  # inutile de déclarer une capacité `object-storage` ici, elle ne serait pas lue.
+  image: { repo: seafileltd/seafile-mc, tag: "13.0.25" }
+  requires:
+    # 🔴 TROIS bases, un seul rôle. Seafile sépare son annuaire (ccnet), ses
+    # bibliothèques (seafile) et son interface web (seahub) — et s'y connecte avec
+    # un unique compte. C'est ce cas qui a fait déplacer le rôle du nom de la base
+    # vers le nom de l'app.
+    - kind: database
+      engine: mariadb
+      name: ccnet_db
+    - kind: database
+      engine: mariadb
+      name: seafile_db
+    - kind: database
+      engine: mariadb
+      name: seahub_db
+
+    # Cache et sessions. Seafile 13 attend un Redis ; Valkey en est un.
+    - kind: cache
+      engine: valkey
+
+    # 🔴 PAS de SSO natif ici. Seafile sait faire de l'OAuth, mais sa configuration
+    # passe par un fichier Python (`seahub_settings.py`) écrit dans le volume, pas
+    # par des variables d'environnement. Le portail couvre l'accès en attendant.
+    - kind: sso
+      mode: proxy-only
+
+    # Toutes les données : bibliothèques, fichiers, configuration, journaux.
+    - kind: storage
+      name: shared
+      path: /shared
+      tier: nfs
+      backup: true
+
+    - kind: smtp
+  env:
+    SEAFILE_MYSQL_DB_HOST: "{{ db.host }}"
+    SEAFILE_MYSQL_DB_PORT: "{{ db.port }}"
+    SEAFILE_MYSQL_DB_USER: "{{ db.user }}"
+    SEAFILE_MYSQL_DB_PASSWORD: "{{ db.password }}"
+
+    # ⚠️ Écrits en clair, PAS via {{ db.name }} : avec trois bases, le jeton serait
+    # ambigu. Ces noms sont un choix de Seafile, pas une donnée de topologie.
+    SEAFILE_MYSQL_DB_CCNET_DB_NAME: ccnet_db
+    SEAFILE_MYSQL_DB_SEAFILE_DB_NAME: seafile_db
+    SEAFILE_MYSQL_DB_SEAHUB_DB_NAME: seahub_db
+
+    CACHE_PROVIDER: redis
+    REDIS_HOST: "{{ cache.host }}"
+    REDIS_PORT: "{{ cache.port }}"
+
+    # 🔴 Sans ces deux lignes, Seafile fabrique ses liens de partage en http:// et
+    # sur son nom de conteneur — les liens envoyés à quelqu'un ne s'ouvrent pas.
+    SEAFILE_SERVER_HOSTNAME: "{{ domain }}"
+    SEAFILE_SERVER_PROTOCOL: https
+
+    SEAFILE_LOG_TO_STDOUT: "true"
+    # Le serveur de fichiers en Go : nettement plus rapide sur les gros dépôts.
+    ENABLE_GO_FILESERVER: "true"
+
+    # ⚠️ Non root refusé ici : l'image gère elle-même son abandon de privilèges au
+    # démarrage, et forcer NON_ROOT casse l'initialisation des trois bases.
+    NON_ROOT: "false"
+  ingress:
+    - host: "{{ domain }}"
+      port: 80
+      # Pas d'Anubis : le client de synchronisation de bureau n'est pas un
+      # navigateur et ne résoudrait aucun défi.
+      chain: [caddy-front, caddy-back]
+      expose: after-guide
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # 🔴 Une seule instance : l'état des bibliothèques est tenu en mémoire par le
+    # serveur, et deux réplicas se contrediraient sur ce qui est déjà synchronisé.
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/api2/ping/ || exit 1"]
+  update:
+    # Migrations de schéma à chaque version mineure, non réversibles.
+    channel: pin

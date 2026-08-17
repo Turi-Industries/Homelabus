@@ -11,6 +11,7 @@ hlb-types.workspace = true
 hlb-resolver.workspace = true
 hlb-orchestrator.workspace = true
 hlb-state.workspace = true
+hlb-objstore.workspace = true
 hlb-secrets.workspace = true
 hlb-platform.workspace = true
 hlb-registry.workspace = true

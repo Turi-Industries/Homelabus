@@ -535,7 +535,7 @@ impl State {
             };
 
             for c in &m.spec.requires {
-                if let hlb_types::Capability::Database { engine, name } = c {
+                if let hlb_types::Capability::Database { engine, name, .. } = c {
                     // Même convention que le résolveur : sans nom explicite, la base
                     // porte le nom de l'app. Les deux DOIVENT rester alignés, sinon on
                     // sauvegarderait une base qui n'existe pas.

@@ -250,6 +250,29 @@ qui a tort, pas le test.
 - **Un jeton irrésolu reste littéral, jamais vide.** Une variable vide ressemble à une
   configuration absente : l'app se plaint d'un mot de passe incorrect et l'on cherche du
   côté du mot de passe. `{{ db.password }}` dans les journaux désigne le vrai problème.
+- **Une extension PostgreSQL ne s'installe pas depuis SQL.** Elle doit être dans
+  l'IMAGE du serveur, sinon `CREATE EXTENSION` échoue sur « n'est pas disponible », ce
+  qui ressemble à un problème de droits. Et elle est **locale à une base** : posée sur
+  `postgres`, elle réussit et l'app ne la voit jamais.
+- **Changer la libc de l'image PostgreSQL casse les index texte.** musl (alpine) et
+  glibc (debian) ne trient pas pareil. Les B-tree construits sous l'une deviennent
+  incohérents sous l'autre : recherches incomplètes, contraintes d'unicité qui laissent
+  passer des doublons. PostgreSQL ne le signale que par un avertissement de « collation
+  version mismatch ». D'où `REINDEX DATABASE` + `REFRESH COLLATION VERSION`.
+- **Le rôle appartient à l'APP, pas à la base.** Seafile veut trois bases et s'y
+  connecte avec un seul compte. Nommer le rôle d'après la base produirait trois comptes
+  pour un jeu d'identifiants, et l'app échouerait sur deux d'entre elles.
+- **Garage ne redonne JAMAIS une clé secrète.** `CreateKey` la donne une fois ;
+  `GetKeyInfo` la rend nulle ensuite. L'idempotence ne peut donc pas reposer sur « la
+  clé existe-t-elle ? » — c'est le coffre qui fait autorité, sinon une reprise repart
+  sans secret et l'app échoue sur une « signature invalide » qui n'oriente vers rien.
+- **Une app n'est jamais propriétaire de son compartiment S3.** `read` + `write`, jamais
+  `owner` : propriétaire, une app compromise pourrait supprimer son propre
+  compartiment — effaçant ce que les sauvegardes protégeaient.
+- **Un compagnon absent ne se voit pas.** Immich sans son service d'apprentissage
+  importe et affiche les photos parfaitement, et ne reconnaît jamais personne. D'où le
+  déploiement du compagnon AVANT l'app, avec attente de sa mise en santé, et une étape
+  de guide qui fait vérifier que ça marche vraiment.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -355,6 +378,19 @@ au catalogue, règles d'alerte évaluées par HomelabUS et routées vers `hlb-no
 (plutôt qu'Alertmanager, qui dupliquerait les niveaux et les heures calmes), et le
 **deadman switch** du §8bis avec son veilleur pour le NAS. `hlb metrics rules / scrape /
 check / deadman`.
+
+Fait : le **multi-conteneur** (`spec.companions`, §4.8) — un compagnon est déployé
+avant l'app et attendu sain, n'a jamais d'ingress ni de capacités propres, et se joint
+par `{{ companion.<nom>.host }}`. Et le **stockage objet** (`Capability::ObjectStorage`
++ `hlb-objstore` + Garage au catalogue), avec compartiment et clé isolés par app.
+
+Catalogue : Gitea, Vikunja, Vaultwarden, n8n, Jellyfin, LibreSpeed, Termix, **Immich**
+(avec son compagnon d'apprentissage automatique) et **Seafile CE** (trois bases, un
+rôle). Voir `catalog/CATALOGUE.md` pour les candidats suivants.
+
+⚠️ L'image du service `postgres` est passée à `ghcr.io/immich-app/postgres:17-…`, qui
+porte `pgvector` et `vchord`. Même version majeure, mais **libc différente** : lire le
+guide `reindex-collation` d'Immich avant de basculer une installation existante.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

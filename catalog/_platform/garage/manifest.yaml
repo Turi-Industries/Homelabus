@@ -1,0 +1,60 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: garage
+  displayName: Garage
+  category: platform
+  homepage: https://garagehq.deuxfleurs.fr
+spec:
+  # v2.3.0 : c'est la version de l'API d'administration que parle `hlb-objstore`.
+  image: { repo: dxflrs/garage, tag: "v2.3.0" }
+  requires:
+    # Métadonnées : quels objets existent, où, avec quelles permissions.
+    #
+    # 🔴 Sauvegardé, et c'est la partie qui compte. Les perdre rend les données
+    # illisibles même si les blocs sont intacts : Garage ne saurait plus quel bloc
+    # appartient à quel objet. C'est l'équivalent d'un catalogue de bibliothèque.
+    - kind: storage
+      name: meta
+      path: /var/lib/garage/meta
+      tier: local
+      backup: true
+      # Base LMDB, pas SQLite — le drapeau ne s'applique pas, mais le principe si :
+      # arrêter le service avant de copier reste la seule façon d'être cohérent.
+
+    # Les blocs de données eux-mêmes.
+    #
+    # ⚠️ NON sauvegardé par restic, délibérément. Sauvegarder un stockage objet
+    # DANS restic reviendrait à doubler chaque octet, et à faire du dépôt de
+    # sauvegarde le point unique de défaillance de tout. La protection des blocs
+    # est la RÉPLICATION de Garage entre nœuds — c'est ce pour quoi il est fait.
+    - kind: storage
+      name: data
+      path: /var/lib/garage/data
+      tier: local
+      backup: false
+  ingress:
+    # 🔴 PRIVÉ. Garage n'a pas d'authentification autre que la signature S3, et
+    # son API d'administration donne les pleins pouvoirs avec un simple jeton.
+    # Exposer l'un ou l'autre publierait le stockage de toutes les apps.
+    - host: "{{ domain }}"
+      port: 3900
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+  swarm:
+    # 🔴 UNE seule instance tant qu'il n'y a qu'un nœud de stockage. Garage sait
+    # répliquer entre plusieurs nœuds, mais chaque instance a son propre volume de
+    # métadonnées : deux réplicas Swarm sur le MÊME volume corrompraient LMDB, et
+    # sur deux volumes distincts formeraient deux clusters qui s'ignorent.
+    #
+    # Le multi-nœuds passe par `garage layout`, pas par `replicas`.
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3903/health >/dev/null || exit 1"]
+  update:
+    # Le format des métadonnées évolue entre versions majeures, et la migration
+    # n'est pas réversible par un rollback d'image.
+    channel: minor

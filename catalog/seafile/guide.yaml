@@ -1,0 +1,69 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: jwt-key
+    title: 🔴 Déposer la clé JWT avant l'installation
+    phase: pre-install
+    severity: blocking
+    body: |
+      Seafile 13 EXIGE `JWT_PRIVATE_KEY` et refuse de démarrer sans elle. Elle
+      signe les jetons entre ses composants internes.
+
+      🔴 Elle ne doit JAMAIS changer : la remplacer invalide toutes les sessions
+      et casse le serveur de fichiers en cours de route.
+
+        openssl rand -base64 48 | hlb secret-set seafile-jwt-key
+
+      La valeur est lue sur l'entrée standard, jamais passée en argument — un
+      argument reste lisible par `ps` pour tout utilisateur de la machine.
+
+  - id: nfs-shared
+    title: Vérifier le partage NFS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Le volume `seafile-shared` doit pointer vers le partage NFS du NAS.
+
+      ⚠️ Sans lui, Seafile s'initialise dans la couche éphémère du conteneur :
+      les trois bases sont créées, l'admin aussi, tout marche — et disparaît au
+      premier redéploiement.
+
+  - id: compte-admin
+    title: Créer le compte administrateur
+    phase: post-install
+    severity: blocking
+    body: |
+      L'assistant de première ouverture crée le compte administrateur.
+
+      Tant que ce n'est pas fait, Seafile reste joignable depuis le VPN
+      uniquement — c'est ce que `expose: after-guide` garantit.
+    deeplink: "https://{{ domain }}/"
+    verify:
+      type: http
+      url: "https://{{ domain }}/api2/ping/"
+
+  - id: pas-de-s3
+    title: Comprendre la limite du stockage
+    phase: post-install
+    severity: tip
+    after: [compte-admin]
+    body: |
+      L'édition communautaire stocke tout sur le volume NFS. Le stockage objet
+      (S3, donc Garage) est une fonction de l'édition PRO et ne s'active pas ici,
+      quelle que soit la configuration.
+
+      Concrètement : la taille de ton partage NFS est la limite, et la
+      sauvegarde restic copie ces fichiers un par un. Sur plusieurs centaines de
+      gigaoctets, vérifie la durée d'une sauvegarde complète avant d'en dépendre.

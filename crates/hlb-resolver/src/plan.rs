@@ -26,6 +26,22 @@ pub enum Action {
         role: String,
         /// Le secret qui porte le mot de passe. Il doit être généré AVANT.
         password_secret: String,
+        /// Extensions à activer. ⚠️ Elles doivent être présentes dans l'IMAGE.
+        #[allow(clippy::struct_field_names)]
+        extensions: Vec<String>,
+    },
+
+    /// Un compartiment S3 avec sa clé d'accès isolée (§3.5).
+    ///
+    /// 🔴 Une clé PAR APP, jamais une clé d'administration partagée — même raison
+    /// qu'un rôle PostgreSQL par app (§3.1) : une clé unique donnerait à chaque app la
+    /// lecture des compartiments de toutes les autres.
+    ProvisionBucket {
+        bucket: String,
+        /// Nom de la clé d'accès, qui porte le nom de l'app.
+        key_name: String,
+        /// Le secret qui portera la clé secrète. Généré AVANT.
+        secret_name: String,
     },
 
     /// Mot de passe généré aléatoirement, jamais saisi, jamais dans le Git.
@@ -109,10 +125,22 @@ impl Action {
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProvisionDatabase { engine, database, role, password_secret } => write!(
+            Self::ProvisionDatabase { engine, database, role, password_secret, extensions } => {
+                write!(
+                    f,
+                    "créer la base {database} sur {} avec le rôle {role} \
+                     (isolé, mot de passe {password_secret})",
+                    engine.service_name()
+                )?;
+                if !extensions.is_empty() {
+                    write!(f, " + extensions {}", extensions.join(", "))?;
+                }
+                Ok(())
+            }
+            Self::ProvisionBucket { bucket, key_name, secret_name } => write!(
                 f,
-                "créer la base {database} sur {} avec le rôle {role} (isolé, mot de passe {password_secret})",
-                engine.service_name()
+                "créer le compartiment {bucket} avec la clé isolée {key_name} \
+                 (secret {secret_name})"
             ),
             Self::GenerateSecret { name, purpose } => {
                 write!(f, "générer le secret {name} ({purpose})")

@@ -18,6 +18,7 @@ use hlb_platform::{MariadbProvisioner, PostgresProvisioner};
 use hlb_identity::PocketId;
 use hlb_ingress::CaddyAdmin;
 use hlb_mail::Stalwart;
+use hlb_objstore::Garage;
 use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
@@ -49,6 +50,21 @@ pub enum Error {
     #[error(transparent)]
     Mail(#[from] hlb_mail::Error),
 
+    #[error(transparent)]
+    ObjStore(#[from] hlb_objstore::Error),
+
+    #[error("🔴 l'extension « {extension} » n'a pas pu être activée sur « {database} ». \
+             Une extension ne s'installe PAS depuis SQL : elle doit être présente dans \
+             l'image du serveur PostgreSQL. Vérifie l'image du service `postgres` au \
+             catalogue — pour les extensions vectorielles, \
+             ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.0 les porte. \
+             Cause : {cause}")]
+    MissingExtension {
+        extension: String,
+        database: String,
+        cause: String,
+    },
+
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
 
@@ -58,6 +74,18 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Le point d'entrée S3 de la plateforme.
+///
+/// ⚠️ Nom de service Swarm, pas une URL publique : le trafic objet reste sur le réseau
+/// interne. L'exposer ferait sortir du cluster des octets qui n'ont aucune raison d'en
+/// sortir, et Garage n'a pas d'authentification autre que la signature S3.
+const S3_ENDPOINT: &str = "http://garage:3900";
+
+/// Garage ignore la région mais la SIGNATURE S3 la couvre : un client qui en annonce
+/// une autre voit ses requêtes refusées sur une erreur de signature, qui ne dit rien
+/// de la région.
+const S3_REGION: &str = "garage";
 
 /// Ce qui a été fait, pour le compte rendu.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -93,6 +121,9 @@ pub struct Executor<'a, O: Orchestrator> {
     /// encore routée, ce qui est un état légitime.
     ingress: Option<&'a CaddyAdmin>,
     mail: Option<&'a Stalwart>,
+    /// Absent tant que Garage n'est pas déployé et qu'on n'a pas son jeton
+    /// d'administration : aucun compartiment ne peut alors être provisionné.
+    objstore: Option<&'a Garage>,
     /// URL de l'API CrowdSec. Absente : pas de filtrage réputationnel.
     crowdsec_url: Option<String>,
     /// Faux par défaut : on n'écrit rien tant que ce n'est pas demandé.
@@ -111,6 +142,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             identity: None,
             ingress: None,
             mail: None,
+            objstore: None,
             crowdsec_url: None,
             apply: false,
         }
@@ -148,6 +180,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
     pub fn with_mail(mut self, s: &'a Stalwart) -> Self {
         self.mail = Some(s);
+        self
+    }
+
+    pub fn with_objstore(mut self, g: &'a Garage) -> Self {
+        self.objstore = Some(g);
         self
     }
 
@@ -332,6 +369,10 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         let domaine = self.state.app_domain(app).await.unwrap_or_default();
 
         let mut valeurs: std::collections::BTreeMap<Token, String> = Default::default();
+        // 🔴 Comme les compagnons, les jetons S3 vivent hors de l'énumération `Token` :
+        // le compartiment et la clé sont des chaînes libres, et forcer un ensemble
+        // ouvert dans un type fermé aurait affaibli l'exhaustivité pour tous les autres.
+        let mut s3: std::collections::BTreeMap<String, String> = Default::default();
 
         if let Some(d) = &domaine {
             valeurs.insert(Token::Domain, d.clone());
@@ -342,7 +383,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         if let Some(m) = &manifest {
             for c in &m.spec.requires {
                 match c {
-                    hlb_types::Capability::Database { engine, name } => {
+                    hlb_types::Capability::Database { engine, name, .. } => {
                         let base = name.clone().unwrap_or_else(|| app.to_string());
                         let hote = engine.service_name().to_string();
                         let port = match engine {
@@ -353,9 +394,10 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                         valeurs.insert(Token::DbHost, hote.clone());
                         valeurs.insert(Token::DbPort, port.to_string());
                         valeurs.insert(Token::DbName, base.clone());
-                        // Le rôle porte le nom de la base : c'est ce que produit
-                        // `ProvisionDatabase`, et les deux doivent rester alignés.
-                        valeurs.insert(Token::DbUser, base.clone());
+                        // 🔴 Le rôle porte le nom de l'APP, pas celui de la base :
+                        // une app à plusieurs bases s'y connecte avec un seul compte.
+                        // Doit rester aligné sur `ProvisionDatabase` du résolveur.
+                        valeurs.insert(Token::DbUser, app.to_string());
 
                         if let Some(mdp) = self.lire_secret(&format!("{app}-db-password")).await? {
                             let schema = match engine {
@@ -364,7 +406,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                             };
                             valeurs.insert(
                                 Token::DbUrl,
-                                format!("{schema}://{base}:{mdp}@{hote}:{port}/{base}"),
+                                format!("{schema}://{app}:{mdp}@{hote}:{port}/{base}"),
                             );
                             valeurs.insert(Token::DbPassword, mdp);
                         }
@@ -398,6 +440,18 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                         }
                     }
 
+                    hlb_types::Capability::ObjectStorage { bucket, .. } => {
+                        let compartiment =
+                            bucket.clone().unwrap_or_else(|| app.to_string());
+                        s3.insert("{{ s3.bucket }}".to_string(), compartiment);
+                        s3.insert("{{ s3.endpoint }}".to_string(), S3_ENDPOINT.into());
+                        s3.insert("{{ s3.region }}".to_string(), S3_REGION.into());
+                        s3.insert("{{ s3.access_key }}".to_string(), app.to_string());
+                        if let Some(k) = self.lire_secret(&format!("{app}-s3-secret")).await? {
+                            s3.insert("{{ s3.secret_key }}".to_string(), k);
+                        }
+                    }
+
                     hlb_types::Capability::MailAccount { .. }
                     | hlb_types::Capability::Storage { .. } => {}
                 }
@@ -409,9 +463,39 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             valeurs.insert(Token::OidcIssuer, format!("https://{d}"));
         }
 
+        // 🔴 Les compagnons ne passent PAS par l'énumération `Token` : leur ensemble
+        // est ouvert — chaque app définit les siens — là où `Token` est fermé par
+        // dessein, pour que l'ajout d'une variante fasse échouer la compilation
+        // partout. Un jeton paramétré ne rentre pas dans ce contrat, et l'y forcer
+        // aurait affaibli l'énumération pour tous les autres.
+        let compagnons: Vec<(String, String)> = manifest
+            .as_ref()
+            .map(|m| {
+                m.spec
+                    .companions
+                    .iter()
+                    .map(|c| {
+                        (
+                            format!("{{{{ companion.{}.host }}}}", c.name),
+                            format!("{app}-{}", c.name),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(env
             .iter()
-            .map(|(k, v)| (k.clone(), substitute(v, &valeurs)))
+            .map(|(k, v)| {
+                let mut s = substitute(v, &valeurs);
+                for (jeton, valeur) in &s3 {
+                    s = s.replace(jeton, valeur);
+                }
+                for (jeton, hote) in &compagnons {
+                    s = s.replace(jeton, hote);
+                }
+                (k.clone(), s)
+            })
             .collect())
     }
 
@@ -490,7 +574,47 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::ProvisionDatabase { engine, database, role, password_secret } => {
+            Action::ProvisionBucket { bucket, key_name, secret_name } => {
+                let (Some(garage), Some(vault)) = (self.objstore, self.vault) else {
+                    // 🔴 Jamais `Done` : prétendre avoir créé un compartiment ferait
+                    // démarrer l'app sur un stockage qui n'existe pas, et elle
+                    // écrirait dans le vide.
+                    return Ok(Step::NotImplemented);
+                };
+
+                // 🔴 Le coffre fait autorité, pas Garage. Une clé présente chez Garage
+                // dont le secret est perdu est INUTILISABLE — il n'est donné qu'à la
+                // création. Interroger Garage seul ferait repartir une reprise sans
+                // secret, et l'app échouerait sur une « signature invalide » qui
+                // n'oriente vers rien.
+                let connu = match self.state.secret(secret_name).await? {
+                    Some(ct) => Some(vault.decrypt(&ct)?),
+                    None => None,
+                };
+
+                let id = garage.ensure_bucket(bucket).await?;
+                let cle = garage.ensure_key(key_name, connu.as_deref()).await?;
+
+                // Le secret part au coffre AVANT d'accorder l'accès : si l'octroi
+                // échoue, on garde de quoi reprendre ; l'inverse perdrait la clé.
+                let ct = vault.encrypt(&cle.secret_access_key)?;
+                if !self
+                    .state
+                    .store_secret_if_absent(secret_name, &ct, "clé secrète S3")
+                    .await?
+                {
+                    // Le secret existait déjà : c'est une reprise, et `ensure_key`
+                    // vient de nous rendre CE secret-là. La rotation le réécrit à
+                    // l'identique, ce qui est sans effet — mais couvre le cas où
+                    // Garage avait perdu la clé et vient d'en créer une neuve.
+                    self.state.rotate_secret(secret_name, &ct).await?;
+                }
+
+                garage.allow(&id, &cle.access_key_id).await?;
+                Ok(Step::Done)
+            }
+
+            Action::ProvisionDatabase { engine, database, role, password_secret, extensions } => {
                 let Some(vault) = self.vault else {
                     return Ok(Step::NotImplemented);
                 };
@@ -523,6 +647,27 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
                 if created {
                     tracing::info!(database, role, moteur = ?engine, "base provisionnée");
+                }
+
+                // 🔴 Les extensions APRÈS la base, et sur la base de l'app — pas sur
+                // `postgres`. `CREATE EXTENSION` est local à une base : posée au
+                // mauvais endroit, elle réussit et l'app ne la voit pas.
+                if !extensions.is_empty() {
+                    let Some(pg) = self.postgres else {
+                        return Ok(Step::NotImplemented);
+                    };
+                    for ext in extensions {
+                        if let Err(e) = pg.create_extension(database, ext).await {
+                            // Le remède est dans le message : une extension absente
+                            // de l'IMAGE ne s'installe pas depuis SQL, et l'erreur
+                            // brute de PostgreSQL ressemble à un problème de droits.
+                            return Err(Error::MissingExtension {
+                                extension: ext.clone(),
+                                database: database.clone(),
+                                cause: e.to_string(),
+                            });
+                        }
+                    }
                 }
                 Ok(Step::Done)
             }
@@ -692,6 +837,7 @@ enum Step {
 fn kind_of(a: &Action) -> &'static str {
     match a {
         Action::ProvisionDatabase { .. } => "ProvisionDatabase",
+        Action::ProvisionBucket { .. } => "ProvisionBucket",
         Action::GenerateSecret { .. } => "GenerateSecret",
         Action::CreateOidcClient { .. } => "CreateOidcClient",
         Action::CreateVolume { .. } => "CreateVolume",
@@ -1081,6 +1227,63 @@ spec:
         // Et l'URL composite doit porter le MÊME mot de passe, pas un autre tirage.
         let url = table.get("DB_URL").expect("URL transmise");
         assert_eq!(*url, format!("postgres://demo:{mdp}@postgres/demo"));
+    }
+
+    #[tokio::test]
+    async fn several_databases_share_one_role() {
+        // 🔴 Seafile veut TROIS bases et s'y connecte avec UN compte. Nommer le rôle
+        // d'après la base produirait trois comptes pour un seul jeu d'identifiants, et
+        // l'app échouerait sur deux d'entre elles — sur une erreur d'authentification
+        // qui ne dirait pas laquelle.
+        const TROIS: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: seafile }
+spec:
+  image: { repo: acme/seafile, tag: "1.0", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: mariadb
+      name: ccnet_db
+    - kind: database
+      engine: mariadb
+      name: seafile_db
+    - kind: database
+      engine: mariadb
+      name: seahub_db
+"#;
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(TROIS).unwrap();
+        let p = hlb_resolver::resolve(&m, &Default::default()).unwrap();
+
+        let roles: Vec<&str> = p
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::ProvisionDatabase { role, .. } => Some(role.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(roles, vec!["seafile", "seafile", "seafile"], "un seul rôle");
+
+        let bases: Vec<&str> = p
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::ProvisionDatabase { database, .. } => Some(database.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bases, vec!["ccnet_db", "seafile_db", "seahub_db"], "trois bases");
+
+        // ⚠️ Un seul rôle veut dire un seul mot de passe : trois générations
+        // identiques encombreraient le plan et l'état sans rien changer.
+        let secrets = p
+            .actions
+            .iter()
+            .filter(|a| matches!(a, Action::GenerateSecret { name, .. } if name.ends_with("-db-password")))
+            .count();
+        assert_eq!(secrets, 1, "un seul mot de passe pour un seul rôle");
     }
 
     #[tokio::test]

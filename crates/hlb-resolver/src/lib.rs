@@ -158,6 +158,68 @@ pub fn resolve_with_guide(
         })
         .collect();
 
+    // 4bis. Les compagnons, AVANT l'app (§4.8).
+    //
+    // 🔴 L'ordre est le mécanisme, comme pour le graphe de dépendances (§4.7) : Swarm
+    // n'a pas de `depends_on`, et une app qui démarre avant son compagnon boucle en
+    // erreur — ou pire, démarre en mode dégradé sans le dire. Immich sans son service
+    // d'apprentissage indexe les photos sans jamais reconnaître un visage, et rien
+    // n'indique que la moitié de la fonctionnalité est absente.
+    for c in &m.spec.companions {
+        let service = format!("{app}-{}", c.name);
+
+        for v in &c.storage {
+            plan.push(Action::CreateVolume {
+                name: format!("{service}-{}", v.name),
+                path: v.path.clone(),
+                // Un compagnon est toujours local : ses volumes sont du cache ou du
+                // modèle, et NFS n'apporterait que de la latence.
+                tier: hlb_types::StorageTier::Local,
+                backup: v.backup,
+                // Un compagnon ne porte pas de base applicative (pas de `requires`).
+                sqlite: false,
+            });
+        }
+
+        if !c.image.is_pinned() {
+            plan.push(Action::ResolveDigest {
+                repo: c.image.repo.clone(),
+                tag: c.image.tag.clone(),
+            });
+        }
+
+        let mut contraintes = Vec::new();
+        // Le tier du compagnon prime sur celui de l'app : un service de calcul mérite
+        // `heavy` même quand son app est `light`.
+        if let Some(t) = c.tier.as_ref().or(m.spec.swarm.tier.as_ref()) {
+            contraintes.push(format!("node.labels.tier=={t}"));
+        }
+
+        plan.push(Action::DeployService {
+            name: service.clone(),
+            image: c.image.reference(),
+            // Un seul exemplaire : le type ne permet pas d'en demander plus.
+            replicas: 1,
+            constraints: contraintes,
+            env: c.env.clone().into_iter().collect(),
+            mounts: c
+                .storage
+                .iter()
+                .map(|v| (format!("{service}-{}", v.name), v.path.clone()))
+                .collect(),
+            hardening: c.security.clone(),
+            healthcheck: c.healthcheck.clone(),
+        });
+
+        // 🔴 On attend qu'il soit sain avant de déployer l'app. Sans cette attente,
+        // l'ordre du plan ne garantirait que l'ordre des APPELS à Swarm, pas celui
+        // des démarrages réels.
+        plan.push(Action::WaitHealthy {
+            name: service,
+            timeout_secs: params.health_timeout_secs,
+        });
+    }
+
     // 5. Le service lui-même.
     let mut constraints = Vec::new();
     if let Some(tier) = &m.spec.swarm.tier {
@@ -261,21 +323,39 @@ fn resolve_capability(
     // Le `match` est exhaustif : ajouter une variante à `Capability` fait échouer la
     // compilation ici. C'est exactement pourquoi le plan a retenu Rust (§1).
     match cap {
-        Capability::Database { engine, name } => {
+        Capability::Database { engine, name, extensions } => {
             let db = name.clone().unwrap_or_else(|| app.to_string());
             let secret = format!("{app}-db-password");
 
             // ⚠️ L'ordre compte : le mot de passe doit exister avant le rôle qui
             // l'utilise. L'inverse produisait une base impossible à créer.
-            plan.push(Action::GenerateSecret {
-                name: secret.clone(),
-                purpose: format!("mot de passe du rôle {db}"),
-            });
+            //
+            // ⚠️ Et une seule fois : une app à plusieurs bases (Seafile en a trois)
+            // partage UN rôle, donc UN mot de passe. Trois générations identiques
+            // encombreraient le plan et l'état sans rien changer — la seconde serait
+            // de toute façon ignorée, `store_secret_if_absent` ne réécrivant jamais.
+            let deja = plan.actions.iter().any(
+                |a| matches!(a, Action::GenerateSecret { name, .. } if name == &secret),
+            );
+            if !deja {
+                plan.push(Action::GenerateSecret {
+                    name: secret.clone(),
+                    // Le rôle, pas la base : c'est lui que le mot de passe protège.
+                    purpose: format!("mot de passe du rôle {app}"),
+                });
+            }
             plan.push(Action::ProvisionDatabase {
                 engine: *engine,
                 database: db.clone(),
-                role: db.clone(),
+                // 🔴 Le rôle porte le nom de l'APP, pas celui de la base.
+                //
+                // Une app peut avoir plusieurs bases — Seafile en veut trois — et elle
+                // s'y connecte avec UN seul compte. Nommer le rôle d'après la base
+                // produirait trois comptes distincts pour un seul jeu d'identifiants,
+                // et l'app échouerait sur deux d'entre elles.
+                role: app.to_string(),
                 password_secret: secret,
+                extensions: extensions.clone(),
             });
         }
 
@@ -361,6 +441,25 @@ fn resolve_capability(
             }
         }
 
+        Capability::ObjectStorage { bucket, .. } => {
+            let compartiment = bucket.clone().unwrap_or_else(|| app.to_string());
+            let secret = format!("{app}-s3-secret");
+
+            // Le secret AVANT le compartiment qui l'utilise, comme pour les bases.
+            plan.push(Action::GenerateSecret {
+                name: secret.clone(),
+                purpose: "clé secrète S3".into(),
+            });
+            plan.push(Action::ProvisionBucket {
+                bucket: compartiment,
+                // 🔴 Une clé par app. Partager la clé d'administration donnerait à
+                // chaque app la lecture des compartiments de toutes les autres —
+                // les photos d'Immich lisibles depuis le wiki, et réciproquement.
+                key_name: app.to_string(),
+                secret_name: secret,
+            });
+        }
+
         Capability::Smtp => {
             plan.push(Action::GenerateSecret {
                 name: format!("{app}-smtp-password"),
@@ -439,6 +538,7 @@ mod tests {
             database: "gitea".into(),
             role: "gitea".into(),
             password_secret: "gitea-db-password".into(),
+            extensions: Vec::new(),
         }));
         // §3.1 — un rôle par app, jamais de mot de passe réutilisé.
         assert!(p

@@ -1,0 +1,96 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: postgres-vectoriel
+    title: 🔴 PostgreSQL doit porter les extensions vectorielles
+    phase: pre-install
+    severity: blocking
+    body: |
+      Immich a besoin des extensions `vector` et `vchord`. Une extension ne
+      s'installe PAS depuis SQL : elle doit être présente dans l'IMAGE du serveur.
+
+      Le service `postgres` du catalogue utilise donc
+      ghcr.io/immich-app/postgres:17-vectorchord…, même version majeure que
+      l'image précédente.
+
+      ⚠️ Si ton PostgreSQL tournait déjà sur `postgres:17-alpine`, LIS l'étape
+      « reindex-collation » avant de basculer : le changement de bibliothèque C
+      modifie l'ordre de tri du texte, et les index existants deviennent faux
+      SANS que rien ne le signale.
+
+      Sur une installation neuve, il n'y a rien à faire.
+
+  - id: reindex-collation
+    title: 🔴 Réindexer après un changement d'image PostgreSQL
+    phase: pre-install
+    severity: blocking
+    after: [postgres-vectoriel]
+    body: |
+      Ne concerne QUE les installations qui avaient déjà des données sur
+      `postgres:17-alpine` (musl) et passent à l'image Debian (glibc).
+
+      Les deux bibliothèques ne trient pas le texte dans le même ordre. Les index
+      B-tree construits sous l'une deviennent incohérents sous l'autre : les
+      recherches renvoient des résultats incomplets, les contraintes d'unicité
+      laissent passer des doublons — et PostgreSQL ne le signale que par un
+      avertissement de version de collation, facile à manquer.
+
+      Après la bascule, sur CHAQUE base :
+
+        REINDEX DATABASE nom_de_la_base;
+        ALTER DATABASE nom_de_la_base REFRESH COLLATION VERSION;
+
+      Fais une sauvegarde avant. `hlb backup run --force` s'en charge.
+
+  - id: nfs-photos
+    title: Vérifier le partage NFS des photos
+    phase: pre-install
+    severity: blocking
+    body: |
+      Le volume `immich-data` doit pointer vers le partage NFS du NAS.
+
+      ⚠️ Sans lui, Immich démarre et accepte les téléversements — dans la couche
+      éphémère du conteneur. Tout disparaît au premier redéploiement, et rien ne
+      prévient. C'est le seul volume du catalogue à la fois irremplaçable et sans
+      limite de taille.
+
+  - id: premier-compte
+    title: Créer le compte administrateur
+    phase: post-install
+    severity: blocking
+    body: |
+      Le PREMIER compte inscrit devient administrateur. Tant que ce n'est pas
+      fait, Immich reste joignable depuis le VPN uniquement.
+    deeplink: "https://{{ domain }}/auth/register"
+    verify:
+      type: http
+      url: "https://{{ domain }}/api/server/ping"
+
+  - id: verifier-ml
+    title: Vérifier que la reconnaissance fonctionne vraiment
+    phase: post-install
+    severity: required
+    after: [premier-compte]
+    body: |
+      🔴 Immich fonctionne parfaitement sans son service d'apprentissage : il
+      importe, affiche et sauvegarde les photos. Il ne reconnaît simplement
+      jamais personne, et rien sur l'écran ne dit que la moitié de la
+      fonctionnalité est absente.
+
+      Téléverse une photo contenant un visage, puis va dans
+      Administration → Tâches. La ligne « Reconnaissance faciale » doit avancer.
+
+      Si elle reste à zéro, le compagnon ne répond pas :
+        hlb ps | grep immich-machine-learning

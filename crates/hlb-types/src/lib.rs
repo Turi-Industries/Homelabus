@@ -21,7 +21,8 @@ pub mod binding;
 pub use binding::{redact, substitute, Token};
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{
-    ApiVersion, ExposePolicy, Healthcheck, Image, Ingress, Kind, Manifest, Metadata, Runtime,
+    ApiVersion, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image, Ingress, Kind,
+    Manifest, Metadata, Runtime,
     SecuritySpec, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
 };
 
@@ -97,6 +98,38 @@ pub fn validate(m: &Manifest) -> Result<()> {
                 t.placeholder()
             )));
         }
+    }
+
+    // §4.8 — un compagnon devient un nom DNS dans le réseau Swarm.
+    //
+    // ⚠️ Une majuscule ou un point produit un service que Swarm crée sans broncher et
+    // que l'app ne résout pas : la panne apparaît à la première requête, sur un
+    // « connection refused » qui ne dit rien du nom.
+    let mut vus: Vec<&str> = Vec::new();
+    for c in &m.spec.companions {
+        if c.name.is_empty()
+            || !c
+                .name
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        {
+            return Err(Error::Validation(format!(
+                "{} : compagnon « {} » — le nom devient une entrée DNS et n'accepte \
+                 que minuscules, chiffres et tirets",
+                m.metadata.name, c.name
+            )));
+        }
+
+        // Deux compagnons homonymes produiraient deux services de même nom : le
+        // second écraserait le premier, en silence.
+        if vus.contains(&c.name.as_str()) {
+            return Err(Error::Validation(format!(
+                "{} : compagnon « {} » déclaré deux fois — le second écraserait le \
+                 premier sans un mot",
+                m.metadata.name, c.name
+            )));
+        }
+        vus.push(&c.name);
     }
 
     // §10.2 — une base sur NFS finit par se corrompre : le verrouillage de fichiers

@@ -38,8 +38,9 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 22 tests |
 | `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
 | `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
+| `hlb-objstore` — client Garage : compartiments et clés isolées | ✅ 6 tests |
 
-**813 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**820 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 
