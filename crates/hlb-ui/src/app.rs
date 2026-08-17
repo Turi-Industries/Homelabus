@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use hlb_api::{Attention, AuditItem, GuideItem};
 
-use crate::client::{Shared, Snapshot};
+use crate::client::{Poller, Shared, Snapshot};
 
 /// Les textes affichés à l'écran.
 ///
@@ -41,17 +41,6 @@ mod texte {
     pub const JOURNAL_VIDE: &str = "Journal vide.";
     pub const AUCUN_SECRET: &str = "Aucun secret au coffre.";
 
-    /// Tous les textes, pour la vérification de police.
-    #[cfg(test)]
-    pub const TOUS: &[&str] = &[
-        ACK_EST_UNE_ATTESTATION,
-        SECRETS_SANS_VALEUR,
-        DERNIER_ETAT_CONNU,
-        AUCUNE_APP,
-        RIEN_EN_ATTENTE,
-        JOURNAL_VIDE,
-        AUCUN_SECRET,
-    ];
 }
 
 /// Les couleurs des trois niveaux d'attention.
@@ -119,6 +108,17 @@ fn mot(a: Attention) -> &'static str {
     }
 }
 
+/// Largeur en dessous de laquelle on passe en disposition téléphone.
+///
+/// 390 points correspond à un iPhone récent en portrait ; 600 laisse la marge pour
+/// les petits Android et les fenêtres réduites. Au-dessus, la disposition large tient
+/// confortablement.
+///
+/// ⚠️ Le seuil porte sur la largeur **disponible**, pas sur celle de l'écran : une
+/// fenêtre native réduite à 500 points a exactement le même problème qu'un téléphone,
+/// et doit recevoir le même traitement.
+const SEUIL_ETROIT: f32 = 600.0;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Onglet {
     #[default]
@@ -146,19 +146,32 @@ impl std::str::FromStr for Onglet {
 
 pub struct Dashboard {
     shared: Arc<Shared>,
-    url: String,
+    poller: Poller,
     onglet: Onglet,
 }
 
 impl Dashboard {
-    pub fn new(shared: Arc<Shared>, url: String, onglet: Onglet) -> Self {
-        Self { shared, url, onglet }
+    pub fn new(shared: Arc<Shared>, poller: Poller, onglet: Onglet) -> Self {
+        Self { shared, poller, onglet }
     }
 }
 
 impl eframe::App for Dashboard {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let (data, fraicheur) = self.shared.read();
+        // ⚠️ L'horloge d'egui, pas `Instant` : ce dernier panique en WebAssembly.
+        let maintenant = ctx.input(|i| i.time);
+
+        let reveil = {
+            let c = ctx.clone();
+            move || c.request_repaint()
+        };
+        self.poller.tick(maintenant, reveil);
+
+        // Sans ça, l'écran ne se redessine qu'au prochain mouvement de souris : la
+        // fraîcheur affichée resterait figée alors que les données vieillissent.
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+
+        let (data, fraicheur) = self.shared.read(maintenant);
 
         // 🔴 La bannière de péremption avant TOUT le reste, et en occupant de la
         // place. Un tableau de bord qui affiche son dernier état connu comme s'il
@@ -193,9 +206,13 @@ impl eframe::App for Dashboard {
             });
         }
 
+        // ⚠️ La largeur DISPONIBLE, pas celle de l'écran : une fenêtre native réduite
+        // a le même problème qu'un téléphone et mérite le même traitement.
+        let etroit = ctx.available_rect().width() < SEUIL_ETROIT;
+
         egui::TopBottomPanel::top("entete").show(ctx, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("HomelabUS");
                 ui.separator();
 
@@ -216,47 +233,69 @@ impl eframe::App for Dashboard {
                     ui.label(format!("{n} app(s), rien à signaler"));
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(&self.url).weak().small());
-                    if fraicheur.is_trustworthy() {
-                        ui.label(egui::RichText::new(fraicheur.describe()).weak().small());
-                    }
-                });
+                // Sur téléphone, l'URL et l'horodatage poussent le compteur d'alertes
+                // hors de l'écran. Le compteur prime : c'est lui qui dit s'il faut agir.
+                if !etroit {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(self.poller.base_url()).weak().small());
+                        if fraicheur.is_trustworthy() {
+                            ui.label(egui::RichText::new(fraicheur.describe()).weak().small());
+                        }
+                    });
+                }
             });
 
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let mut onglet = |o: Onglet, libelle: String| {
                     if ui.selectable_label(self.onglet == o, libelle).clicked() {
                         self.onglet = o;
                     }
                 };
-                onglet(Onglet::Apps, format!("Applications ({})", data.apps.len()));
 
                 let bloquants = data.todo.iter().filter(|g| g.blocking).count();
-                onglet(
-                    Onglet::Todo,
-                    if bloquants > 0 {
-                        format!("À faire ({} dont {bloquants} bloquantes)", data.todo.len())
-                    } else {
-                        format!("À faire ({})", data.todo.len())
-                    },
-                );
-                onglet(Onglet::Audit, "Journal".to_string());
-                onglet(Onglet::Secrets, format!("Secrets ({})", data.secrets.len()));
+
+                if etroit {
+                    // Sur téléphone, les libellés longs débordent et l'utilisateur ne
+                    // voit plus les derniers onglets. On garde les compteurs, qui
+                    // portent l'information, et on coupe les mots.
+                    onglet(Onglet::Apps, format!("Apps {}", data.apps.len()));
+                    onglet(
+                        Onglet::Todo,
+                        if bloquants > 0 {
+                            format!("À faire {} ({bloquants} bloq.)", data.todo.len())
+                        } else {
+                            format!("À faire {}", data.todo.len())
+                        },
+                    );
+                    onglet(Onglet::Audit, "Journal".into());
+                    onglet(Onglet::Secrets, format!("Secrets {}", data.secrets.len()));
+                } else {
+                    onglet(Onglet::Apps, format!("Applications ({})", data.apps.len()));
+                    onglet(
+                        Onglet::Todo,
+                        if bloquants > 0 {
+                            format!("À faire ({} dont {bloquants} bloquantes)", data.todo.len())
+                        } else {
+                            format!("À faire ({})", data.todo.len())
+                        },
+                    );
+                    onglet(Onglet::Audit, "Journal".to_string());
+                    onglet(Onglet::Secrets, format!("Secrets ({})", data.secrets.len()));
+                }
             });
             ui.add_space(4.0);
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.onglet {
-            Onglet::Apps => apps(ui, &data),
-            Onglet::Todo => todo(ui, &data.todo),
-            Onglet::Audit => audit(ui, &data.audit),
+            Onglet::Apps => apps(ui, &data, etroit),
+            Onglet::Todo => todo(ui, &data.todo, etroit),
+            Onglet::Audit => audit(ui, &data.audit, etroit),
             Onglet::Secrets => secrets(ui, &data),
         });
     }
 }
 
-fn apps(ui: &mut egui::Ui, data: &Snapshot) {
+fn apps(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) {
     if data.apps.is_empty() {
         vide(ui, texte::AUCUNE_APP, "hlb install <app> --apply");
         return;
@@ -291,13 +330,20 @@ fn apps(ui: &mut egui::Ui, data: &Snapshot) {
                         ui.separator();
                         ui.label(egui::RichText::new(&a.status).weak());
 
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.label(egui::RichText::new(&a.image).weak().small());
-                            },
-                        );
+                        // L'image à droite déborde sur un écran étroit et pousse le
+                        // nom hors de vue. Elle est secondaire : on la descend.
+                        if !etroit {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(egui::RichText::new(&a.image).weak().small());
+                                },
+                            );
+                        }
                     });
+                    if etroit {
+                        ui.label(egui::RichText::new(&a.image).weak().small());
+                    }
 
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 14.0;
@@ -347,7 +393,7 @@ fn apps(ui: &mut egui::Ui, data: &Snapshot) {
     });
 }
 
-fn todo(ui: &mut egui::Ui, items: &[GuideItem]) {
+fn todo(ui: &mut egui::Ui, items: &[GuideItem], etroit: bool) {
     if items.is_empty() {
         vide(ui, texte::RIEN_EN_ATTENTE, "");
         return;
@@ -359,7 +405,7 @@ fn todo(ui: &mut egui::Ui, items: &[GuideItem]) {
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for g in items {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if g.blocking {
                     pastille(ui, Attention::Critical);
                     ui.label(
@@ -374,17 +420,27 @@ fn todo(ui: &mut egui::Ui, items: &[GuideItem]) {
                 }
                 ui.label(egui::RichText::new(&g.app).strong());
                 ui.label(&g.title);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // La commande exacte, copiable : un tableau de bord en lecture
-                    // seule doit dire QUOI TAPER, sinon il oblige à chercher.
-                    ui.label(
-                        egui::RichText::new(format!("hlb ack {}/{}", g.app, g.id))
-                            .monospace()
-                            .weak()
-                            .small(),
-                    );
-                });
+                // La commande exacte, copiable : un tableau de bord en lecture seule
+                // doit dire QUOI TAPER, sinon il oblige à chercher.
+                if !etroit {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("hlb ack {}/{}", g.app, g.id))
+                                .monospace()
+                                .weak()
+                                .small(),
+                        );
+                    });
+                }
             });
+            if etroit {
+                ui.label(
+                    egui::RichText::new(format!("hlb ack {}/{}", g.app, g.id))
+                        .monospace()
+                        .weak()
+                        .small(),
+                );
+            }
             ui.separator();
         }
     });
@@ -397,9 +453,32 @@ fn todo(ui: &mut egui::Ui, items: &[GuideItem]) {
     );
 }
 
-fn audit(ui: &mut egui::Ui, items: &[AuditItem]) {
+fn audit(ui: &mut egui::Ui, items: &[AuditItem], etroit: bool) {
     if items.is_empty() {
         vide(ui, texte::JOURNAL_VIDE, "");
+        return;
+    }
+
+    // 🔴 Une grille à cinq colonnes sur 390 points ne se réduit pas, elle se coupe :
+    // les colonnes de droite — dont le RÉSULTAT — sortent de l'écran. Sur téléphone,
+    // chaque entrée passe donc sur deux lignes.
+    if etroit {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for e in items {
+                let (texte, c) = verdict(e);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(&e.action).strong());
+                    ui.label(&e.target);
+                    ui.label(egui::RichText::new(texte).color(c).small());
+                });
+                ui.label(
+                    egui::RichText::new(format!("{} · {}", e.at, e.actor))
+                        .weak()
+                        .small(),
+                );
+                ui.separator();
+            }
+        });
         return;
     }
 
@@ -415,22 +494,27 @@ fn audit(ui: &mut egui::Ui, items: &[AuditItem]) {
                     ui.label(egui::RichText::new(&e.action).strong());
                     ui.label(&e.target);
 
-                    // 🔴 Un refus n'est PAS un échec : c'est le système qui a protégé
-                    // l'utilisateur. Les afficher pareil rendrait le journal
-                    // inexploitable — on ne saurait plus distinguer « ça a planté »
-                    // de « on t'a empêché de faire une bêtise ».
-                    let (texte, c) = if e.is_refusal() {
-                        ("refusé (protection)", couleur(Attention::Notice))
-                    } else if e.is_failure() {
-                        ("échec", couleur(Attention::Critical))
-                    } else {
-                        ("ok", couleur(Attention::Ok))
-                    };
+                    let (texte, c) = verdict(e);
                     ui.label(egui::RichText::new(texte).color(c).small());
                     ui.end_row();
                 }
             });
     });
+}
+
+/// Comment afficher le résultat d'une entrée d'audit.
+///
+/// 🔴 Un refus n'est PAS un échec : c'est le système qui a protégé l'utilisateur. Les
+/// afficher pareil rendrait le journal inexploitable — on ne saurait plus distinguer
+/// « ça a planté » de « on t'a empêché de faire une bêtise ».
+fn verdict(e: &AuditItem) -> (&'static str, egui::Color32) {
+    if e.is_refusal() {
+        ("refusé (protection)", couleur(Attention::Notice))
+    } else if e.is_failure() {
+        ("échec", couleur(Attention::Critical))
+    } else {
+        ("ok", couleur(Attention::Ok))
+    }
 }
 
 fn secrets(ui: &mut egui::Ui, data: &Snapshot) {
@@ -502,16 +586,27 @@ mod tests {
 
     #[test]
     fn no_displayed_text_needs_a_glyph_egui_might_not_have() {
-        // 🔴 Deux glyphes ont déjà traversé la revue de code et n'ont été vus qu'à la
-        // capture d'écran. Les polices embarquées par egui couvrent le latin et un
-        // jeu d'émojis restreint ; tout le reste s'affiche en carré vide, et un tofu
-        // ressemble assez à une icône pour passer pour un choix délibéré.
-        for s in texte::TOUS {
-            for c in s.chars() {
+        // 🔴 Trois glyphes ont déjà traversé la revue de code et n'ont été vus qu'à la
+        // capture d'écran : « ● », le sélecteur de variante de « ⚠️ », et « ⚑ ». Les
+        // polices embarquées par egui couvrent le latin et un jeu d'émojis restreint ;
+        // tout le reste s'affiche en carré vide, et un tofu ressemble assez à une
+        // icône pour passer pour un choix délibéré.
+        //
+        // La première version de ce test ne regardait que les constantes, et « ⚑ »
+        // est passé par un libellé écrit en ligne. On scanne donc TOUS les littéraux
+        // du fichier, commentaires exclus — ceux-ci nomment les pièges.
+        let code: String = include_str!("app.rs")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for lit in code.split('"').skip(1).step_by(2) {
+            for c in lit.chars() {
                 let o = c as u32;
                 assert!(
                     o < 0x2C0 || (0x2000..=0x206F).contains(&o),
-                    "{c:?} (U+{o:04X}) dans « {s} » : risque de carré vide"
+                    "{c:?} (U+{o:04X}) dans « {lit} » : risque de carré vide à l'écran"
                 );
             }
         }
@@ -560,6 +655,38 @@ mod tests {
         ];
         items.sort_by_key(|g| (!g.blocking, g.app.clone()));
         assert!(items[0].blocking, "la bloquante arrête un déploiement");
+    }
+
+    #[test]
+    fn the_breakpoint_covers_real_phones() {
+        // 390 pt = iPhone récent en portrait ; 360 pt = Android courant. Les deux
+        // doivent basculer en disposition étroite, sinon les colonnes de droite —
+        // dont le RÉSULTAT d'une action d'audit — sortent de l'écran.
+        // `const` : vérifié à la COMPILATION, donc changer le seuil sans y penser
+        // ne compile même pas.
+        const _: () = assert!(390.0 < SEUIL_ETROIT);
+        const _: () = assert!(360.0 < SEUIL_ETROIT);
+        const _: () = assert!(1100.0 > SEUIL_ETROIT);
+    }
+
+    #[test]
+    fn a_narrow_native_window_is_treated_like_a_phone() {
+        // ⚠️ Le seuil porte sur la largeur DISPONIBLE, pas sur celle de l'écran :
+        // une fenêtre réduite à 500 pt a exactement le même problème.
+        const _: () = assert!(500.0 < SEUIL_ETROIT);
+    }
+
+    #[test]
+    fn a_refusal_is_never_shown_as_a_failure() {
+        let refus = AuditItem {
+            at: "x".into(), actor: "cli".into(), action: "update".into(),
+            target: "gitea".into(), outcome: "refused".into(),
+        };
+        let echec = AuditItem { outcome: "failed".into(), ..refus.clone() };
+
+        assert_ne!(verdict(&refus).0, verdict(&echec).0);
+        assert!(verdict(&refus).0.contains("protection"));
+        assert_ne!(verdict(&refus).1, verdict(&echec).1);
     }
 
     #[test]

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>HomelabUS</title>
+
+<!-- 🔴 `viewport-fit` et `user-scalable=no` : sans eux, le navigateur mobile
+     applique un zoom automatique au double-tap et le canevas egui se retrouve
+     décalé de la zone tactile. Les clics tombent alors à côté des boutons, sans
+     que rien ne le signale. -->
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#f7f7f7">
+
+<!-- Permet d'ajouter la page à l'écran d'accueil et de la lancer sans barre
+     d'adresse, comme une app. -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;   /* egui gère son propre défilement */
+    background: #f7f7f7;
+    /* Une police système : la police du texte est DANS le wasm, celle-ci ne sert
+       qu'au message de chargement. */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body { background: #1b1b1b; }
+    #chargement { color: #ddd; }
+  }
+  /* Le canevas occupe tout, y compris sous l'encoche des téléphones récents. */
+  canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    /* Sans ça, un appui long ouvre le menu de sélection de texte du navigateur
+       par-dessus l'interface. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #chargement {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #555;
+    font-size: 15px;
+  }
+</style>
+</head>
+<body>
+  <!-- ⚠️ L'identifiant « hlb » est celui que cherche `demarrer_web()`. Le changer
+       ici sans changer le code Rust donne une page blanche SANS erreur en console —
+       le mode d'échec le plus déroutant du portage web. -->
+  <canvas id="hlb"></canvas>
+
+  <div id="chargement">chargement…</div>
+
+  <script type="module">
+    import init from './hlb_ui.js';
+
+    init()
+      .then(() => {
+        const c = document.getElementById('chargement');
+        if (c) c.remove();
+      })
+      .catch((e) => {
+        // Une erreur ici est muette autrement : l'utilisateur voit une page vide
+        // et n'a aucun moyen de savoir pourquoi.
+        const c = document.getElementById('chargement');
+        if (c) {
+          c.textContent = 'échec du chargement : ' + e;
+          c.style.color = '#e53935';
+        }
+        console.error(e);
+      });
+  </script>
+</body>
+</html>

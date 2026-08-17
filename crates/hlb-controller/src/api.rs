@@ -42,6 +42,73 @@ pub struct AppState {
     /// nœuds saturés, actions manuelles en attente. C'est une carte de ce qui est
     /// fragile, et donc de quoi choisir un moment pour frapper.
     pub metrics_token: Option<String>,
+    /// Répertoire de l'UI web. `None` = API seule.
+    pub ui_dir: Option<std::path::PathBuf>,
+}
+
+/// Les types MIME dont le navigateur a besoin.
+///
+/// 🔴 `application/wasm` n'est pas décoratif : `WebAssembly.instantiateStreaming`
+/// **refuse** un flux servi en `application/octet-stream`, et le message d'erreur
+/// parle de « incorrect response MIME type » sans dire lequel il attendait. C'est
+/// l'échec le plus courant quand on sert une UI wasm depuis son propre serveur.
+fn mime_de(fichier: &str) -> &'static str {
+    match fichier.rsplit('.').next() {
+        Some("wasm") => "application/wasm",
+        Some("js") => "text/javascript",
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Un nom de fichier sûr ?
+///
+/// 🔴 Sans ce contrôle, `GET /../../etc/shadow` sort du répertoire de l'UI. Le
+/// serveur tourne souvent en root sur un nœud de cluster : l'enjeu n'est pas
+/// théorique.
+fn nom_sur(fichier: &str) -> bool {
+    !fichier.is_empty()
+        && !fichier.contains("..")
+        && !fichier.starts_with('/')
+        && !fichier.contains('\\')
+        // Un octet nul tronque le chemin côté système de fichiers.
+        && !fichier.contains('\0')
+}
+
+async fn ui_index(AxumState(s): AxumState<Arc<AppState>>) -> Response {
+    servir(&s, "index.html").await
+}
+
+async fn ui_fichier(
+    AxumState(s): AxumState<Arc<AppState>>,
+    Path(fichier): Path<String>,
+) -> Response {
+    servir(&s, &fichier).await
+}
+
+async fn servir(s: &AppState, fichier: &str) -> Response {
+    let Some(dir) = &s.ui_dir else {
+        return (
+            StatusCode::NOT_FOUND,
+            "UI web non déployée — lance le controller avec --ui-dir\n",
+        )
+            .into_response();
+    };
+
+    if !nom_sur(fichier) {
+        return (StatusCode::BAD_REQUEST, "nom de fichier refusé\n").into_response();
+    }
+
+    match tokio::fs::read(dir.join(fichier)).await {
+        Ok(octets) => (
+            [(axum::http::header::CONTENT_TYPE, mime_de(fichier))],
+            octets,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "fichier absent\n").into_response(),
+    }
 }
 
 /// Comparaison à temps constant.
@@ -87,6 +154,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/secrets", get(list_secrets))
         .route("/api/audit", get(list_audit))
         .route("/metrics", get(prometheus))
+        .route("/", get(ui_index))
+        .route("/{*fichier}", get(ui_fichier))
         .with_state(state)
 }
 
@@ -280,6 +349,7 @@ mod tests {
             version: "test",
             last_poll: Default::default(),
             metrics_token: None,
+            ui_dir: None,
         }))
     }
 
@@ -392,6 +462,7 @@ mod tests {
             version: "test",
             last_poll: Default::default(),
             metrics_token: Some("jeton-secret-de-test".into()),
+            ui_dir: None,
         }))
     }
 
@@ -436,6 +507,35 @@ mod tests {
         assert!(!constant_eq("abc", "abcd"));
         assert!(!constant_eq("", "x"));
         assert!(constant_eq("", ""));
+    }
+
+    #[test]
+    fn wasm_is_served_with_the_mime_the_browser_demands() {
+        // 🔴 `WebAssembly.instantiateStreaming` REFUSE un flux en
+        // application/octet-stream, avec un message qui ne dit pas ce qu'il attendait.
+        assert_eq!(mime_de("hlb_ui_bg.wasm"), "application/wasm");
+        assert_eq!(mime_de("hlb_ui.js"), "text/javascript");
+        assert!(mime_de("index.html").starts_with("text/html"));
+    }
+
+    #[test]
+    fn path_traversal_is_refused() {
+        // 🔴 Le controller tourne souvent en root sur un nœud : sortir du répertoire
+        // de l'UI n'est pas un risque théorique.
+        assert!(!nom_sur("../../etc/shadow"));
+        assert!(!nom_sur("/etc/passwd"));
+        assert!(!nom_sur("a/../../b"));
+        assert!(!nom_sur(""));
+        assert!(nom_sur("hlb_ui_bg.wasm"));
+        assert!(nom_sur("index.html"));
+    }
+
+    #[tokio::test]
+    async fn without_a_ui_directory_the_root_says_so() {
+        // Une 404 muette laisserait croire à une panne du controller.
+        let (s, _, corps) = texte(app().await, "/").await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert!(corps.contains("--ui-dir"), "{corps}");
     }
 
     #[tokio::test]

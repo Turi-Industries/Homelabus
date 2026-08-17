@@ -9,6 +9,15 @@ description = "Tableau de bord egui : client de l'API du controller."
 [lib]
 name = "hlb_ui"
 path = "src/lib.rs"
+# `cdylib` pour la cible web : c'est le format que wasm-bindgen sait traiter.
+# `rlib` reste nécessaire pour que le binaire natif et les tests puissent lier.
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Window", "Location", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1"
 
 [[bin]]
 name = "hlb-ui"
@@ -24,7 +33,10 @@ eframe = { version = "0.33", default-features = false, features = ["glow", "defa
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+# `ehttp` plutôt que `ureq` : il présente la MÊME API sur les deux cibles — threads
+# natifs d'un côté, `fetch` du navigateur de l'autre. Une pile TLS native comme
+# `ring` ne compile tout simplement pas pour wasm32.
+ehttp = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

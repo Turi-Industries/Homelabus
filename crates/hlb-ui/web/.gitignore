@@ -1,0 +1,4 @@
+# Les artefacts de compilation ne sont pas versionnés : ils se régénèrent avec
+# build-web.sh, et un .wasm de 3 Mo dans l'historique Git y reste pour toujours.
+hlb_ui_bg.wasm
+hlb_ui.js

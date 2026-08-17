@@ -35,9 +35,9 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
 | `hlb-cli` — `install`, `node add`, `access`, `backup`, `dr`, `pki`, `mesh`, `crowdsec`… | ✅ utilisable |
 | `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 11 tests |
-| `hlb-ui` — tableau de bord **egui** (natif + web) | ✅ 6 + 2 tests |
+| `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
 
-**640 tests unitaires + 64 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**650 tests unitaires + 64 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

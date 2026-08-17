@@ -66,17 +66,26 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
     let mut ctrl = demarrer(port, &base);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
-    let c = hlb_ui::client::Client::new(format!("http://127.0.0.1:{port}"), None);
-    hlb_ui::client::spawn_poller(c, shared.clone(), Duration::from_millis(200), || {});
+    let mut poller =
+        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+
+    // Le sondage est piloté par la boucle de rendu : ici on la simule, avec une
+    // horloge qui avance — exactement comme celle d'egui.
+    let mut horloge = 0.0_f64;
+    let avancer = |poller: &mut hlb_ui::client::Poller, horloge: &mut f64| {
+        *horloge += 0.1;
+        poller.tick(*horloge, || {});
+        std::thread::sleep(Duration::from_millis(100));
+    };
 
     // 1. Le controller répond : les données sont fiables.
     let mut vu_frais = false;
-    for _ in 0..40 {
-        if shared.read().1.is_trustworthy() {
+    for _ in 0..60 {
+        avancer(&mut poller, &mut horloge);
+        if shared.read(horloge).1.is_trustworthy() {
             vu_frais = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
     assert!(vu_frais, "le controller répond, les données doivent être fiables");
 
@@ -84,8 +93,9 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
     ctrl.stop();
 
     let mut vu_perime = false;
-    for _ in 0..50 {
-        let (_, f) = shared.read();
+    for _ in 0..80 {
+        avancer(&mut poller, &mut horloge);
+        let (_, f) = shared.read(horloge);
         if !f.is_trustworthy() {
             assert!(
                 f.describe().contains("INJOIGNABLE"),
@@ -95,7 +105,6 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
             vu_perime = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
     assert!(
         vu_perime,
@@ -116,24 +125,32 @@ fn the_last_known_state_is_kept_but_marked() {
     let mut ctrl = demarrer(port, &base);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
-    let c = hlb_ui::client::Client::new(format!("http://127.0.0.1:{port}"), None);
-    hlb_ui::client::spawn_poller(c, shared.clone(), Duration::from_millis(200), || {});
+    let mut poller =
+        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+
+    let mut horloge = 0.0_f64;
+    let avancer = |poller: &mut hlb_ui::client::Poller, horloge: &mut f64| {
+        *horloge += 0.1;
+        poller.tick(*horloge, || {});
+        std::thread::sleep(Duration::from_millis(100));
+    };
 
     let mut sante = None;
-    for _ in 0..40 {
-        let (d, f) = shared.read();
+    for _ in 0..60 {
+        avancer(&mut poller, &mut horloge);
+        let (d, f) = shared.read(horloge);
         if f.is_trustworthy() {
             sante = d.health.clone();
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
     assert!(sante.is_some(), "le controller doit avoir répondu");
 
     ctrl.stop();
 
-    for _ in 0..50 {
-        let (d, f) = shared.read();
+    for _ in 0..80 {
+        avancer(&mut poller, &mut horloge);
+        let (d, f) = shared.read(horloge);
         if !f.is_trustworthy() {
             // Les données sont TOUJOURS là…
             assert!(d.health.is_some(), "le dernier état connu reste disponible");
@@ -141,7 +158,6 @@ fn the_last_known_state_is_kept_but_marked() {
             assert!(!f.is_trustworthy());
             return;
         }
-        std::thread::sleep(Duration::from_millis(100));
     }
     panic!("la péremption n'a jamais été détectée");
 }

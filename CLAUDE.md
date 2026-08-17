@@ -221,10 +221,18 @@ qui a tort, pas le test.
   donnant l'impression de l'avoir fait.
 - **Le forward-auth doit effacer les en-têtes d'identité entrants.** Sinon
   `curl -H "X-Auth-Request-User: admin"` suffit à usurper un compte.
-- **egui n'embarque pas tous les glyphes.** « ● » et le sélecteur de variante de
-  « ⚠️ » s'affichent en carré vide, et un « tofu » ressemble assez à une icône pour
-  passer inaperçu en relecture. Les formes d'état sont **peintes**, pas écrites, et
-  les textes affichés vivent dans `app::texte` pour être testés.
+- **egui n'embarque pas tous les glyphes.** « ● », le sélecteur de variante de « ⚠️ »
+  et « ⚑ » s'affichent en carré vide, et un « tofu » ressemble assez à une icône pour
+  passer inaperçu en relecture. Les formes d'état sont **peintes**, pas écrites, et un
+  test scanne tous les littéraux du fichier (commentaires exclus).
+- **`std::time::Instant::now()` PANIQUE en WebAssembly**, et il n'y a ni thread ni
+  `sleep`. Toute la fraîcheur passe par l'horloge d'egui, et le sondage est piloté par
+  la boucle de rendu — un seul chemin de code pour le natif et le web.
+- **Servir du wasm exige `Content-Type: application/wasm`.**
+  `WebAssembly.instantiateStreaming` refuse un `application/octet-stream` avec un
+  message qui ne dit pas ce qu'il attendait.
+- **Le binaire `wasm-bindgen` doit avoir EXACTEMENT la version du crate.** Une
+  divergence donne un bundle qui se charge et plante à la première fonction.
 - **Une donnée périmée ne doit jamais ressembler à une donnée fraîche.** Si le
   controller tombe, l'UI garderait son dernier état connu : toutes les apps vertes
   pendant que le cluster brûle. D'où `Freshness`, que le type oblige à regarder.

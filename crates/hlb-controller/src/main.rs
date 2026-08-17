@@ -42,6 +42,14 @@ struct Cli {
     #[arg(long, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
     platform_network: String,
 
+    /// Répertoire de l'UI web (§11bis). Absent : API seule.
+    ///
+    /// Servie par le controller lui-même, donc joignable à la même adresse que l'API —
+    /// c'est ce qui permet d'ouvrir le tableau de bord depuis un téléphone sans rien
+    /// installer dessus.
+    #[arg(long, env = "HLB_UI_DIR")]
+    ui_dir: Option<std::path::PathBuf>,
+
     /// Jeton exigé sur /metrics. Absent : point d'exposition ouvert.
     #[arg(long, env = "HLB_METRICS_TOKEN")]
     metrics_token: Option<String>,
@@ -462,7 +470,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         version: env!("CARGO_PKG_VERSION"),
         last_poll: dernier_sondage,
         metrics_token: cli.metrics_token.clone(),
+        ui_dir: cli.ui_dir.clone(),
     }));
+
+    match &cli.ui_dir {
+        Some(d) => tracing::info!(répertoire = %d.display(), "UI web servie"),
+        None => tracing::info!("API seule (--ui-dir pour servir le tableau de bord)"),
+    }
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     tracing::info!(adresse = %cli.listen, "API en écoute (lecture seule)");

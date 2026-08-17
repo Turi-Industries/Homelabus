@@ -22,12 +22,9 @@
 //! de tout faire. C'est le principe du §11bis, et c'est ce qui permet de déboguer le
 //! jour où l'interface ne démarre plus.
 
-mod app;
-
-use hlb_ui::client;
+use hlb_ui::{app, client};
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 
@@ -41,6 +38,14 @@ struct Cli {
     /// Jeton, si le controller en exige un.
     #[arg(long, env = "HLB_METRICS_TOKEN")]
     token: Option<String>,
+
+    /// Largeur de la fenêtre, en points. Utile pour vérifier la disposition étroite.
+    #[arg(long, default_value = "1100")]
+    width: f32,
+
+    /// Hauteur de la fenêtre, en points.
+    #[arg(long, default_value = "700")]
+    height: f32,
 
     /// Onglet d'ouverture : apps, todo, journal, secrets.
     ///
@@ -70,33 +75,28 @@ fn main() -> eframe::Result<()> {
     };
 
     let shared = Arc::new(client::Shared::default());
-    let c = client::Client::new(&cli.url, cli.token.clone());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 700.0])
-            .with_min_inner_size([700.0, 400.0])
+            .with_inner_size([cli.width, cli.height])
+            // 320 pt : la largeur d'un téléphone ancien. En dessous, plus rien n'est
+            // lisible, mais au-dessus la disposition étroite doit tenir.
+            .with_min_inner_size([320.0, 300.0])
             .with_title("HomelabUS"),
         ..Default::default()
     };
 
-    let url = cli.url.clone();
     let partage = shared.clone();
-    let intervalle = Duration::from_secs(cli.refresh_secs.max(1));
+    let poller = client::Poller::new(
+        &cli.url,
+        cli.token.clone(),
+        cli.refresh_secs as f64,
+        partage.clone(),
+    );
 
     eframe::run_native(
         "HomelabUS",
         options,
-        Box::new(move |cc| {
-            // Le contexte egui n'existe qu'ici : c'est lui qui permet au sondeur de
-            // réveiller l'interface quand des données arrivent. Sans ça, l'écran ne
-            // se redessine qu'au prochain mouvement de souris et paraît figé.
-            let ctx = cc.egui_ctx.clone();
-            client::spawn_poller(c, partage.clone(), intervalle, move || {
-                ctx.request_repaint();
-            });
-
-            Ok(Box::new(app::Dashboard::new(partage, url, onglet)))
-        }),
+        Box::new(move |_cc| Ok(Box::new(app::Dashboard::new(partage, poller, onglet)))),
     )
 }
