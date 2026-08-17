@@ -1775,6 +1775,7 @@ dependencies = [
  "hlb-state",
  "hlb-types",
  "hlb-updater",
+ "hlb-users",
  "reqwest",
  "serde_json",
  "tempfile",
@@ -2071,6 +2072,16 @@ dependencies = [
  "hlb-types",
  "serde_json",
  "serde_yaml_ng",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-users"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

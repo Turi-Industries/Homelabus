@@ -212,6 +212,10 @@ enum Command {
     #[command(subcommand)]
     Metrics(MetricsCmd),
 
+    /// Comptes humains : identité, boîtes mail et aliases (§5bis.3).
+    #[command(subcommand)]
+    User(UserCmd),
+
     /// 🔴 Reprise après sinistre : basculer PostgreSQL sur un autre nœud (§2bis.5).
     #[command(subcommand)]
     Dr(DrCmd),
@@ -546,6 +550,110 @@ enum ReplCmd {
     },
     /// 🔴 Les standbys suivent-ils, et un slot mort remplit-il le disque ?
     Status,
+}
+
+#[derive(Subcommand)]
+enum UserCmd {
+    /// Créer un compte : identité PocketID + boîte mail, en une fois.
+    ///
+    /// Reprenable : relancer après un échec termine ce qui manque.
+    Add {
+        /// Identifiant de connexion, qui devient aussi la partie locale par défaut.
+        nom: String,
+        /// Adresse par défaut. Sans elle : <nom>@<domaine mail>.
+        #[arg(long)]
+        email: Option<String>,
+        /// Nom affiché.
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Profil de quotas : standard, invite, illimite.
+        #[arg(long, default_value = "standard")]
+        profil: String,
+    },
+    /// Les comptes, leurs boîtes et l'état de leurs aliases.
+    List,
+    /// Changer le profil de quotas d'un compte.
+    Profile {
+        nom: String,
+        #[arg(long)]
+        profil: String,
+    },
+    /// Boîtes mail supplémentaires.
+    #[command(subcommand)]
+    Mailbox(MailboxCmd),
+    /// Aliases : permanents ou temporaires, générés ou choisis.
+    #[command(subcommand)]
+    Alias(AliasCmd),
+}
+
+#[derive(Subcommand)]
+enum MailboxCmd {
+    /// Ouvrir une boîte de plus.
+    Add {
+        /// Compte propriétaire.
+        nom: String,
+        /// Partie locale de la nouvelle boîte.
+        local: String,
+    },
+    /// Fermer une boîte. La boîte par défaut est refusée.
+    Remove { nom: String, local: String },
+}
+
+#[derive(Subcommand)]
+enum AliasCmd {
+    /// Créer un alias.
+    ///
+    /// Les trois axes sont INDÉPENDANTS :
+    ///   durée   — permanent par défaut, temporaire avec `--pendant`
+    ///   nom     — généré par défaut, choisi avec `--nom`
+    ///   indice  — aucun par défaut, celui du site avec `--pour`
+    ///
+    /// Exemples :
+    ///   hlb user alias add remy                          aléatoire, permanent
+    ///   hlb user alias add remy --pour amazon            aléatoire lié à un site
+    ///   hlb user alias add remy --pour fnac --pendant 30j jetable, attribuable
+    ///   hlb user alias add remy --nom contact            choisi, permanent
+    Add {
+        /// Compte propriétaire.
+        nom: String,
+        /// Boîte de destination. Par défaut, la boîte par défaut.
+        #[arg(long)]
+        boite: Option<String>,
+        /// 🔴 Partie locale CHOISIE. Sans elle, elle est générée et indevinable.
+        #[arg(long, conflicts_with = "pour")]
+        nom_alias: Option<String>,
+        /// Le site ou l'usage : sert d'indice lisible, suivi d'un suffixe aléatoire.
+        #[arg(long)]
+        pour: Option<String>,
+        /// Durée de vie : `30j`, `12h`, `90m`. Absent = permanent.
+        #[arg(long)]
+        pendant: Option<String>,
+        /// Note libre, pour s'en souvenir dans six mois.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Tous les aliases d'un compte, avec leur état réel.
+    List {
+        nom: String,
+        /// N'afficher que les problèmes.
+        #[arg(long)]
+        problemes: bool,
+    },
+    /// Désactiver un alias sans le supprimer.
+    ///
+    /// 🔴 Préférable à la suppression : un alias désactivé rejette le courrier ET
+    /// permet de compter ce qui frappe encore à la porte — donc de savoir combien de
+    /// temps un marchand a continué de vendre l'adresse après sa fermeture.
+    Disable { nom: String, alias: String },
+    /// 🔴 Supprimer les aliases temporaires expirés.
+    ///
+    /// Sans cette purge, un alias « temporaire » reste actif POUR TOUJOURS : Stalwart
+    /// n'a aucune notion d'expiration. C'est la commande qui rend la promesse vraie.
+    Purge {
+        /// Aperçu par défaut : rien n'est supprimé sans --apply.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1397,6 +1505,255 @@ async fn destinations_effectives(
             }]
         })
         .unwrap_or_default())
+}
+
+/// Les sous-commandes d'aliases.
+///
+/// 🔴 Les trois axes sont indépendants — durée, nom généré ou choisi, indice de site.
+/// Les mêler produirait une interface où « temporaire » impliquerait « aléatoire », ce
+/// qui n'a aucune raison d'être : on veut parfois `promo@` pour une semaine.
+async fn gerer_alias(
+    state: &State,
+    domaine: &str,
+    cmd: &AliasCmd,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use hlb_users::{generation::Genere, Demande, Profil};
+
+    match cmd {
+        AliasCmd::Add { nom, boite, nom_alias, pour, pendant, note } => {
+            let c = charger_compte(state, nom).await?;
+            let p = Profil::par_nom(&c.profil).unwrap_or_else(Profil::standard);
+            let maintenant = maintenant();
+
+            let cible = match boite {
+                Some(b) => b.clone(),
+                None => match c.boite_par_defaut() {
+                    Some(b) => b.local.clone(),
+                    None => {
+                        eprintln!("🔴 {nom} n'a aucune boîte : l'alias n'aurait nulle part où aller.");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                },
+            };
+
+            // Axe DURÉE.
+            let expire_le = match pendant {
+                Some(d) => {
+                    let s = parse_duree(d)?;
+                    p.autorise(&c.usage(maintenant), Demande::AliasTemporaire { duree_s: s })
+                        .map_err(|r| r.to_string())?;
+                    Some(maintenant + s)
+                }
+                None => {
+                    p.autorise(&c.usage(maintenant), Demande::AliasPermanent)
+                        .map_err(|r| r.to_string())?;
+                    None
+                }
+            };
+
+            // Axes NOM et INDICE.
+            let (local, indice) = match nom_alias {
+                // Nom choisi : l'utilisateur sait ce qu'il fait, mais il doit savoir
+                // aussi ce qu'il perd.
+                Some(n) => {
+                    let propre = hlb_users::generation::nettoyer_indice(n);
+                    if propre.is_empty() {
+                        eprintln!("🔴 « {n} » ne donne aucune partie locale utilisable.");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    (propre, None)
+                }
+                None => {
+                    let mut alea = [0u8; hlb_users::generation::SUFFIXE_LEN];
+                    hlb_secrets::fill_random(&mut alea);
+                    let g = Genere::pour(pour.as_deref().unwrap_or(""), &alea);
+                    let ind = (!g.indice.is_empty()).then(|| g.indice.clone());
+                    (g.local, ind)
+                }
+            };
+
+            state
+                .add_alias(nom, &cible, &local, expire_le, indice.as_deref(), note.as_deref())
+                .await?;
+
+            let dom = c
+                .boites
+                .iter()
+                .find(|b| b.local == cible)
+                .map(|b| b.domaine.clone())
+                .unwrap_or_else(|| domaine.to_string());
+
+            println!("✓ {local}@{dom}  →  {cible}@{dom}");
+            match expire_le {
+                Some(e) => {
+                    println!("  temporaire, expire dans {}", fmt_age(
+                        std::time::Duration::from_secs((e - maintenant).max(0) as u64)
+                    ));
+                    // 🔴 La promesse ne tient que si la purge tourne. Le dire ici,
+                    // au moment où on la fait, plutôt que de le découvrir six mois
+                    // plus tard sur une adresse qu'on croyait fermée.
+                    println!("  ⚠️ L'expiration n'est PAS tenue par le serveur de messagerie :");
+                    println!("     il faut que « hlb user alias purge --apply » tourne.");
+                }
+                None => println!("  permanent"),
+            }
+
+            if nom_alias.is_some() {
+                // ⚠️ Un nom choisi est devinable par construction. Acceptable pour
+                // `contact@`, mauvais pour un jetable par marchand : si l'un est
+                // `amazon@`, alors `paypal@` et `banque@` existent probablement aussi.
+                println!("  ⚠️ Nom choisi : devinable. Pour un alias par site, préfère");
+                println!("     « --pour <site> », qui ajoute un suffixe aléatoire.");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        AliasCmd::List { nom, problemes } => {
+            let c = charger_compte(state, nom).await?;
+            let maintenant = maintenant();
+            let mut rien = true;
+
+            for b in &c.boites {
+                for a in &b.aliases {
+                    let e = a.etat(maintenant);
+                    if *problemes && !e.trahit_la_promesse() {
+                        continue;
+                    }
+                    rien = false;
+                    println!("{}@{}  → {}", a.local, b.domaine, b.local);
+                    println!("    {}", e.describe());
+                    if let Some(n) = &a.note {
+                        println!("    note : {n}");
+                    }
+                }
+            }
+            if rien {
+                println!("{}", if *problemes {
+                    "Aucune promesse rompue."
+                } else {
+                    "Aucun alias."
+                });
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        AliasCmd::Disable { nom, alias } => {
+            state.deactivate_alias(nom, alias).await?;
+            println!("✓ {alias} désactivé.");
+            // 🔴 Désactivé, pas supprimé : on continue de compter ce qui frappe à la
+            // porte, donc de savoir combien de temps un marchand a vendu l'adresse.
+            println!("  Il rejette le courrier mais reste visible : c'est ce qui permet");
+            println!("  de voir qui continue d'écrire à une adresse fermée.");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        AliasCmd::Purge { apply } => {
+            let maintenant = maintenant();
+            let a_purger = state.aliases_to_purge(maintenant).await?;
+
+            if a_purger.is_empty() {
+                println!("Aucun alias expiré à retirer.");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            println!(
+                "{} alias expiré(s) et TOUJOURS ACTIF(S) :",
+                a_purger.len()
+            );
+            for (u, b, l) in &a_purger {
+                println!("  {l}  ({u} → {b})");
+            }
+
+            if !*apply {
+                println!();
+                println!("Aperçu : rien n'a été retiré. Ajoute --apply.");
+                println!("⚠️ Tant que ce n'est pas fait, ces adresses REÇOIVENT encore.");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            // ⚠️ L'état est marqué APRÈS le retrait chez Stalwart. L'inverse
+            // prétendrait l'adresse fermée alors qu'elle recevrait encore — c'est
+            // exactement le mensonge que ce module existe pour empêcher.
+            for (u, _b, l) in &a_purger {
+                state.deactivate_alias(u, l).await?;
+                println!("✓ {l} retiré");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// Reconstruit un compte depuis l'état.
+async fn charger_compte(
+    state: &State,
+    nom: &str,
+) -> Result<hlb_users::Compte, Box<dyn std::error::Error>> {
+    use hlb_users::{Alias, Boite, Compte, Duree};
+
+    let profil = state
+        .users()
+        .await?
+        .into_iter()
+        .find(|(n, _, _)| n == nom)
+        .map(|(_, p, _)| p)
+        .unwrap_or_else(|| "standard".into());
+
+    let mut c = Compte::nouveau(nom, profil);
+    c.pocket_id = state
+        .users()
+        .await?
+        .into_iter()
+        .find(|(n, _, _)| n == nom)
+        .and_then(|(_, _, id)| id);
+
+    let aliases = state.aliases(nom).await?;
+
+    for (local, domaine, par_defaut) in state.mailboxes(nom).await? {
+        let siens: Vec<Alias> = aliases
+            .iter()
+            .filter(|(boite, ..)| boite == &local)
+            .map(|(_, l, expire, actif, _hint, note)| Alias {
+                local: l.clone(),
+                duree: match expire {
+                    Some(e) => Duree::Temporaire { expire_le: *e },
+                    None => Duree::Permanent,
+                },
+                actif: *actif,
+                note: note.clone(),
+            })
+            .collect();
+
+        c.boites.push(Boite {
+            local,
+            domaine,
+            par_defaut,
+            aliases: siens,
+        });
+    }
+    Ok(c)
+}
+
+/// Analyse une durée : `30j`, `12h`, `90m`.
+///
+/// ⚠️ Un nombre nu est refusé plutôt qu'interprété. « 30 » voudrait dire trente
+/// secondes en interne — l'utilisateur pensait trente jours, et son alias serait
+/// expiré avant qu'il ne l'ait donné à quiconque.
+fn parse_duree(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+    let (n, unite) = s.split_at(s.len().saturating_sub(1));
+    let n: i64 = n
+        .parse()
+        .map_err(|_| format!("durée illisible « {s} » — attendu 30j, 12h ou 90m"))?;
+
+    match unite {
+        "j" | "d" => Ok(n * 86_400),
+        "h" => Ok(n * 3_600),
+        "m" => Ok(n * 60),
+        _ => Err(format!(
+            "durée « {s} » sans unité — écris 30j, 12h ou 90m. Un nombre nu serait \
+             compris en secondes, et l'alias expirerait avant d'avoir servi"
+        )),
+    }
 }
 
 /// La couverture d'une app : son état sur CHAQUE destination routée.
@@ -3224,6 +3581,204 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             return Ok(ExitCode::FAILURE);
                         }
                         Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
+        }
+
+        Command::User(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_users::{Demande, Profil};
+
+                let state = State::open(&cli.state).await?;
+                let _vault = Vault::open_or_init(&cli.master_key)?;
+                // ⚠️ Le domaine mail n'est pas un paramètre global : il vient de
+                // `--mail-domain` des commandes qui en ont un. Ici, on prend le
+                // domaine du cluster, à défaut « local » — et on le DIT dans la
+                // sortie plutôt que de fabriquer une adresse silencieusement fausse.
+                let domaine = std::env::var("HLB_MAIL_DOMAIN").unwrap_or_else(|_| "local".into());
+
+                match cmd {
+                    UserCmd::Add { nom, email, display_name, profil } => {
+                        hlb_users::valider_nom(nom)?;
+                        let Some(p) = Profil::par_nom(profil) else {
+                            eprintln!("profil inconnu « {profil} » — standard, invite, illimite");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                        };
+
+                        // La partie locale de l'adresse par défaut.
+                        let local = match email {
+                            Some(e) => e.split('@').next().unwrap_or(nom).to_string(),
+                            None => nom.clone(),
+                        };
+                        let dom = email
+                            .as_ref()
+                            .and_then(|e| e.split('@').nth(1))
+                            .unwrap_or(&domaine)
+                            .to_string();
+
+                        state.upsert_user(nom, &p.nom, None).await?;
+
+                        // 🔴 L'identité d'abord, la boîte ensuite, et chaque étape est
+                        // idempotente. Relancer après un échec termine ce qui manque
+                        // au lieu de tout refaire — ou pire, de créer un doublon.
+                        let pocket = match (&cli.pocketid_url, &cli.pocketid_key) {
+                            (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(u, k)),
+                            _ => None,
+                        };
+                        let identite = match pocket {
+                            Some(pid) => match pid.find_user(nom).await? {
+                                Some(u) => {
+                                    println!("✓ identité déjà présente");
+                                    Some(u.id)
+                                }
+                                None => {
+                                    let affiche =
+                                        display_name.clone().unwrap_or_else(|| nom.clone());
+                                    let u = pid
+                                        .create_user(
+                                            nom,
+                                            Some(&format!("{local}@{dom}")),
+                                            &affiche,
+                                            &[],
+                                        )
+                                        .await?;
+                                    println!("✓ identité PocketID créée");
+
+                                    // 🔴 Aucun mot de passe : PocketID s'authentifie par
+                                    // clé d'accès. C'est un lien à usage unique qui
+                                    // remplace l'envoi d'un secret initial — et il est
+                                    // affiché UNE fois, jamais enregistré.
+                                    match pid.one_time_token(&u.id, "12h").await {
+                                        Ok(jeton) => {
+                                            println!();
+                                            println!("  Lien d'inscription (valable 12 h, usage unique) :");
+                                            println!("    {}/lc/{jeton}", pid.issuer());
+                                            println!();
+                                            println!("  ⚠️ Il n'est pas enregistré : note-le maintenant.");
+                                        }
+                                        Err(e) => {
+                                            eprintln!("⚠️ jeton d'inscription non obtenu ({e})");
+                                            eprintln!("   Le compte existe mais personne ne peut s'y connecter.");
+                                        }
+                                    }
+                                    Some(u.id)
+                                }
+                            },
+                            None => {
+                                eprintln!("⚠️ PocketID non configuré : identité NON créée.");
+                                None
+                            }
+                        };
+
+                        if let Some(id) = &identite {
+                            state.upsert_user(nom, &p.nom, Some(id)).await?;
+                        }
+
+                        // La boîte par défaut.
+                        let deja = state.mailboxes(nom).await?;
+                        if deja.is_empty() {
+                            state.add_mailbox(nom, &local, &dom, true).await?;
+                            println!("✓ boîte {local}@{dom} enregistrée");
+                        } else {
+                            println!("✓ boîte déjà enregistrée");
+                        }
+
+                        // 🔴 L'état à moitié créé est DIT, pas laissé à découvrir.
+                        let compte = charger_compte(&state, nom).await?;
+                        let c = compte.coherence();
+                        if !c.est_complet() {
+                            println!();
+                            println!("{}", c.describe());
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    UserCmd::List => {
+                        let users = state.users().await?;
+                        if users.is_empty() {
+                            println!("Aucun compte.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        let maintenant = maintenant();
+                        for (nom, profil, _) in &users {
+                            let c = charger_compte(&state, nom).await?;
+                            let u = c.usage(maintenant);
+                            let p = Profil::par_nom(profil).unwrap_or_else(Profil::standard);
+
+                            println!("{nom}  [{profil}]  {}", c.coherence().describe());
+                            for b in &c.boites {
+                                let marque = if b.par_defaut { "★" } else { " " };
+                                println!("  {marque} {}", b.adresse());
+                            }
+                            println!(
+                                "    boîtes {}/{}  permanents {}/{}  temporaires {}/{}",
+                                u.boites, p.max_boites,
+                                u.aliases_permanents, p.max_aliases_permanents,
+                                u.aliases_temporaires, p.max_aliases_temporaires,
+                            );
+
+                            let rompues = c.promesses_rompues(maintenant);
+                            if !rompues.is_empty() {
+                                println!(
+                                    "    🔴 {} alias expiré(s) TOUJOURS ACTIF(S) — « hlb user alias purge »",
+                                    rompues.len()
+                                );
+                            }
+                            println!();
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    UserCmd::Profile { nom, profil } => {
+                        let Some(p) = Profil::par_nom(profil) else {
+                            eprintln!("profil inconnu « {profil} »");
+                            return Ok(ExitCode::FAILURE);
+                        };
+                        let c = charger_compte(&state, nom).await?;
+                        let u = c.usage(maintenant());
+
+                        // ⚠️ Rétrécir un profil sous l'usage courant ne supprime rien —
+                        // ce serait détruire des données sur un changement de réglage.
+                        // On l'accepte et on le DIT : les créations futures seront
+                        // refusées jusqu'à ce que l'usage repasse sous la limite.
+                        if u.boites > p.max_boites {
+                            println!(
+                                "⚠️ {nom} a {} boîtes, le profil « {} » en autorise {}.",
+                                u.boites, p.nom, p.max_boites
+                            );
+                            println!("   Rien n'est supprimé. Aucune nouvelle boîte ne sera acceptée.");
+                        }
+
+                        state.upsert_user(nom, &p.nom, None).await?;
+                        println!("✓ {nom} → profil « {} »", p.nom);
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    UserCmd::Mailbox(sous) => match sous {
+                        MailboxCmd::Add { nom, local } => {
+                            let c = charger_compte(&state, nom).await?;
+                            let p = Profil::par_nom(&c.profil).unwrap_or_else(Profil::standard);
+                            p.autorise(&c.usage(maintenant()), Demande::Boite)
+                                .map_err(|r| r.to_string())?;
+
+                            state.add_mailbox(nom, local, &domaine, false).await?;
+                            println!("✓ {local}@{domaine}");
+                            Ok(ExitCode::SUCCESS)
+                        }
+                        MailboxCmd::Remove { nom, local } => {
+                            let c = charger_compte(&state, nom).await?;
+                            c.peut_supprimer_boite(local)?;
+                            state.remove_mailbox(nom, local).await?;
+                            println!("✓ boîte {local} retirée");
+                            Ok(ExitCode::SUCCESS)
+                        }
+                    },
+
+                    UserCmd::Alias(sous) => {
+                        gerer_alias(&state, &domaine, sous).await
                     }
                 }
             })

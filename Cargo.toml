@@ -19,6 +19,7 @@ members = [
     "crates/hlb-notify",
     "crates/hlb-metrics",
     "crates/hlb-objstore",
+    "crates/hlb-users",
     "crates/hlb-mail",
     "crates/hlb-api",
     "crates/hlb-ui",
@@ -57,6 +58,7 @@ hlb-mesh = { path = "crates/hlb-mesh" }
 hlb-notify = { path = "crates/hlb-notify" }
 hlb-metrics = { path = "crates/hlb-metrics" }
 hlb-objstore = { path = "crates/hlb-objstore" }
+hlb-users = { path = "crates/hlb-users" }
 hlb-mail = { path = "crates/hlb-mail" }
 hlb-api = { path = "crates/hlb-api" }
 hlb-selfupdate = { path = "crates/hlb-selfupdate" }

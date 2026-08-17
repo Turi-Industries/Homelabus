@@ -44,7 +44,26 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Un client OIDC tel que PocketID le décrit.
+/// Un compte HUMAIN, tel que PocketID le rend.
+///
+/// ⚠️ À ne pas confondre avec [`OidcClient`] : l'un est une personne, l'autre une
+/// application. Les deux vivent dans le même service, et c'est la source de confusion
+/// principale de cette API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default, rename = "displayName")]
+    pub display_name: String,
+    #[serde(default, rename = "isAdmin")]
+    pub is_admin: bool,
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+/// Un client OIDC tel que PocketID le décrit — une APPLICATION, pas une personne.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct OidcClient {
     pub id: String,
@@ -194,6 +213,122 @@ impl PocketId {
     }
 
     /// ⚠️ Génère un **nouveau** secret et invalide l'ancien.
+    /// Crée un compte HUMAIN dans PocketID.
+    ///
+    /// ⚠️ À ne pas confondre avec [`Self::create`], qui enregistre une *application*.
+    /// Les deux vivent dans le même service et n'ont rien à voir : l'un décrit qui a le
+    /// droit de se connecter, l'autre à quoi.
+    ///
+    /// Vérifié contre le code amont (`UserCreateDto`) : `username` est requis, `email`
+    /// facultatif mais validé, et `userGroupIds` porte les groupes.
+    pub async fn create_user(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        display_name: &str,
+        groups: &[String],
+    ) -> Result<User> {
+        let mut corps = serde_json::json!({
+            "username": username,
+            "displayName": display_name,
+            "firstName": display_name,
+            // 🔴 Jamais administrateur par défaut. Un compte créé en une commande ne
+            // doit pas pouvoir en créer d'autres ni supprimer le cluster : l'élévation
+            // se demande explicitement.
+            "isAdmin": false,
+            "disabled": false,
+            "userGroupIds": groups,
+        });
+
+        if let Some(e) = email {
+            corps["email"] = serde_json::Value::String(e.to_string());
+            // ⚠️ L'adresse vient d'être créée PAR NOUS dans Stalwart : elle est vérifiée
+            // par construction. La laisser « non vérifiée » enverrait un courriel de
+            // confirmation dans une boîte à laquelle la personne n'a pas encore accès.
+            corps["emailVerified"] = serde_json::Value::Bool(true);
+        }
+
+        let resp = self
+            .send(
+                self.http.post(self.url("/api/users")).json(&corps),
+                "création d'utilisateur",
+            )
+            .await?;
+
+        resp.json().await.map_err(|e| Error::Unexpected(format!(
+            "réponse de création d'utilisateur illisible : {e}"
+        )))
+    }
+
+    /// Le compte portant ce nom, s'il existe.
+    ///
+    /// 🔴 Sert à rendre la création **reprenable**. Sans cette recherche, relancer
+    /// `hlb user add` après un échec à mi-parcours produirait un doublon — ou une
+    /// erreur « déjà pris » qui bloquerait la reprise au lieu de la permettre.
+    pub async fn find_user(&self, username: &str) -> Result<Option<User>> {
+        let resp = self
+            .send(
+                self.http.get(self.url(&format!("/api/users?search={username}"))),
+                "recherche d'utilisateur",
+            )
+            .await?;
+
+        let brut: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Unexpected(format!("liste d'utilisateurs illisible : {e}")))?;
+
+        // ⚠️ La forme varie selon la version : liste nue ou page `{data: [...]}`. On
+        // accepte les deux plutôt que de figer celle qu'on n'a pas vérifiée partout —
+        // une reprise qui échouerait ici recréerait un doublon.
+        let items = brut
+            .get("data")
+            .and_then(|d| d.as_array())
+            .or_else(|| brut.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(items
+            .into_iter()
+            .filter_map(|v| serde_json::from_value::<User>(v).ok())
+            .find(|u| u.username == username))
+    }
+
+    /// Un jeton d'accès à usage unique, pour l'inscription.
+    ///
+    /// 🔴 C'est ce qui remplace un mot de passe initial. PocketID s'authentifie par
+    /// clé d'accès (passkey) : il n'y a **pas** de mot de passe à transmettre, et
+    /// vouloir en inventer un serait à la fois impossible et moins sûr.
+    ///
+    /// ⚠️ Le jeton est à usage unique et expire. Le noter dans un journal ou le passer
+    /// en argument de commande reviendrait à publier une session : il est affiché une
+    /// fois, sur la sortie standard, et jamais enregistré.
+    pub async fn one_time_token(&self, user_id: &str, ttl: &str) -> Result<String> {
+        let resp = self
+            .send(
+                self.http
+                    .post(self.url(&format!("/api/users/{user_id}/one-time-access-token")))
+                    .json(&serde_json::json!({ "ttl": ttl })),
+                "jeton d'inscription",
+            )
+            .await?;
+
+        let rep: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Unexpected(format!("jeton illisible : {e}")))?;
+
+        rep.get("token")
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| Error::Api {
+                status: 200,
+                detail: "aucun jeton dans la réponse — la personne ne pourrait pas \
+                         s'inscrire, et le compte resterait inutilisable"
+                    .into(),
+            })
+    }
+
     pub async fn regenerate_secret(&self, id: &str) -> Result<String> {
         let resp = self
             .send(

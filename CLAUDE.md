@@ -301,6 +301,28 @@ qui a tort, pas le test.
 - **`credentials_secret` est le NOM du secret, pas sa valeur.** Le passer tel quel
   enverrait « backup-dest-offsite » comme clé d'accès S3, et le serveur répondrait
   « signature invalide » — une erreur qui n'oriente vers rien.
+- **Un serveur de messagerie ne sait PAS expirer un alias.** La liste `aliases` d'un
+  compte Stalwart n'a pas de date : ce qui y est écrit y reste. Un alias « temporaire »
+  ne l'est que si une purge vient réellement le supprimer — sinon l'adresse qu'on croit
+  fermée reçoit pour toujours. D'où **trois** états et non deux : valide, expiré-et-
+  supprimé, et 🔴 expiré-mais-TOUJOURS-ACTIF.
+- **Un alias devinable annule le compartimentage.** Si celui d'Amazon est
+  `amazon@example.fr`, alors `paypal@`, `banque@` et `impots@` existent probablement
+  aussi, et un expéditeur de masse les essaie toutes pour le prix d'une. L'indice ne
+  fait jamais l'adresse : il est suivi d'un suffixe aléatoire.
+- **L'intérêt d'un alias jetable n'est pas de le jeter, c'est l'attribution.** Une
+  adresse par destinataire dit *qui* a laissé fuiter. D'où l'indice lisible conservé :
+  cinquante adresses purement aléatoires font perdre le seul vrai bénéfice.
+- **Désactiver vaut mieux que supprimer.** Un alias supprimé rejette le courrier et
+  n'apprend rien ; désactivé, il le rejette aussi mais laisse compter ce qui frappe
+  encore — donc combien de temps un marchand a continué de vendre l'adresse.
+- **Un compte à moitié créé paraît fonctionnel.** Identité sans boîte : la personne se
+  connecte partout et son adresse ne reçoit rien. Ça ne se voit qu'au premier courriel
+  perdu, souvent une réinitialisation de mot de passe. L'état est nommé, et la création
+  est reprenable.
+- **PocketID n'a pas de mot de passe** : authentification par clé d'accès. On ne
+  transmet donc pas un secret initial mais un **jeton à usage unique**, affiché une
+  fois et jamais enregistré.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -428,6 +450,14 @@ site) et `volumineux` (photos, fichiers — des centaines de Go, ça reste où l
 le permet), avec un réglage par app. `hlb backup run` sert chaque destination
 séparément — un échec sur l'une n'empêche pas les autres, et chacune a sa propre
 échéance.
+
+Fait : les **comptes humains** (`hlb-users`, `hlb user`). Jusque-là HomelabUS ne
+connaissait que des applications — `hlb-identity` créait des clients OIDC, jamais des
+personnes. Un compte se crée maintenant en une commande : identité PocketID + boîte
+mail, avec un lien d'inscription à usage unique. Les aliases couvrent **trois axes
+indépendants** — permanent ou temporaire, généré ou choisi, avec ou sans indice de
+site — et `hlb user alias purge` est ce qui rend l'expiration vraie, Stalwart n'en
+ayant aucune notion.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

@@ -507,6 +507,169 @@ impl State {
         rows.iter().map(|r| Ok(r.try_get("destination")?)).collect()
     }
 
+    // ─────────────────── Comptes humains (§5bis.3) ───────────────────
+
+    pub async fn upsert_user(&self, name: &str, profil: &str, pocket_id: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO users (name, profil, pocket_id) VALUES (?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET
+               profil = ?2,
+               -- ⚠️ On n'EFFACE jamais un identifiant déjà connu avec un NULL : une
+               -- reprise qui repasse ici sans l'identité perdrait le lien vers
+               -- PocketID, et le compte redeviendrait « à moitié créé » alors qu'il
+               -- ne l'est pas.
+               pocket_id = COALESCE(?3, users.pocket_id)",
+        )
+        .bind(name)
+        .bind(profil)
+        .bind(pocket_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// `(nom, profil, pocket_id)`.
+    pub async fn users(&self) -> Result<Vec<(String, String, Option<String>)>> {
+        let rows = sqlx::query("SELECT name, profil, pocket_id FROM users ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("name")?, r.try_get("profil")?, r.try_get("pocket_id")?)))
+            .collect()
+    }
+
+    pub async fn add_mailbox(
+        &self,
+        user: &str,
+        local: &str,
+        domain: &str,
+        is_default: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_mailboxes (user, local, domain, is_default)
+             VALUES (?1, ?2, ?3, ?4) ON CONFLICT(user, local) DO NOTHING",
+        )
+        .bind(user)
+        .bind(local)
+        .bind(domain)
+        .bind(i64::from(is_default))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// `(local, domaine, par_defaut)`.
+    pub async fn mailboxes(&self, user: &str) -> Result<Vec<(String, String, bool)>> {
+        let rows = sqlx::query(
+            "SELECT local, domain, is_default FROM user_mailboxes
+             WHERE user = ?1 ORDER BY is_default DESC, local",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("local")?,
+                    r.try_get("domain")?,
+                    r.try_get::<i64, _>("is_default")? != 0,
+                ))
+            })
+            .collect()
+    }
+
+    pub async fn remove_mailbox(&self, user: &str, local: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_mailboxes WHERE user = ?1 AND local = ?2")
+            .bind(user)
+            .bind(local)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn add_alias(
+        &self,
+        user: &str,
+        mailbox: &str,
+        local: &str,
+        expires_at: Option<i64>,
+        hint: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_aliases (user, mailbox, local, expires_at, hint, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(user)
+        .bind(mailbox)
+        .bind(local)
+        .bind(expires_at)
+        .bind(hint)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// `(boîte, local, expire_le, actif, indice, note)`.
+    #[allow(clippy::type_complexity)]
+    pub async fn aliases(
+        &self,
+        user: &str,
+    ) -> Result<Vec<(String, String, Option<i64>, bool, Option<String>, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT mailbox, local, expires_at, active, hint, note
+             FROM user_aliases WHERE user = ?1 ORDER BY mailbox, local",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("mailbox")?,
+                    r.try_get("local")?,
+                    r.try_get("expires_at")?,
+                    r.try_get::<i64, _>("active")? != 0,
+                    r.try_get("hint")?,
+                    r.try_get("note")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Les aliases temporaires expirés QUI SONT ENCORE ACTIFS.
+    ///
+    /// 🔴 Ce sont les promesses rompues : des adresses que leur propriétaire croit
+    /// fermées et qui reçoivent encore. Les plus anciennement expirées d'abord — si la
+    /// purge s'interrompt, ce sont les portes ouvertes depuis le plus longtemps qu'on
+    /// aura refermées.
+    pub async fn aliases_to_purge(&self, now: i64) -> Result<Vec<(String, String, String)>> {
+        let rows = sqlx::query(
+            "SELECT user, mailbox, local FROM user_aliases
+             WHERE active = 1 AND expires_at IS NOT NULL AND expires_at <= ?1
+             ORDER BY expires_at ASC",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| Ok((r.try_get("user")?, r.try_get("mailbox")?, r.try_get("local")?)))
+            .collect()
+    }
+
+    /// Marque un alias comme retiré de Stalwart.
+    pub async fn deactivate_alias(&self, user: &str, local: &str) -> Result<()> {
+        sqlx::query("UPDATE user_aliases SET active = 0 WHERE user = ?1 AND local = ?2")
+            .bind(user)
+            .bind(local)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Consigne un exercice de reprise (§8.3).
     ///
     /// 🔴 Les échecs sont enregistrés comme les réussites. Ne garder que les
