@@ -263,5 +263,14 @@ Fait enfin : l'UI en **egui** (`hlb-ui`), avec `hlb-api` qui définit les types 
 l'API **une seule fois** pour le serveur et l'interface. L'OpenAPI `utoipa` + la
 génération TypeScript du plan §11bis sont donc sans objet.
 
-Reste la feuille de route du §12 : phase 7 (runtime compose pour mailcow, HA
-PostgreSQL en réplication streaming, exercices de reprise automatisés).
+Fait enfin : `hlb self` (compatibilité, migrations réversibles, rollback du schéma),
+`hlb snapshot` (ZFS/btrfs), et l'**authentification de l'API par jetons** avec rôles
+(`hlb token`). Le controller REFUSE de démarrer sans jeton, sauf `--insecure-no-auth`.
+
+🔴 **mailcow est abandonné** (décision du 17/08/2026). Stalwart le remplace, et le
+runtime `compose` qui n'existait que pour lui n'a plus de raison d'être. Les mentions
+de mailcow dans PLAN.md sont historiques : elles expliquent le choix de Stalwart.
+
+Reste la feuille de route du §12 : phase 7 (HA PostgreSQL en réplication streaming,
+exercices de reprise automatisés) et la bascule des binaires de `hlb self update`,
+qui attend une source de distribution signée.

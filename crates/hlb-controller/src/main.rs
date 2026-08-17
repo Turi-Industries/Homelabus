@@ -50,9 +50,13 @@ struct Cli {
     #[arg(long, env = "HLB_UI_DIR")]
     ui_dir: Option<std::path::PathBuf>,
 
-    /// Jeton exigé sur /metrics. Absent : point d'exposition ouvert.
-    #[arg(long, env = "HLB_METRICS_TOKEN")]
-    metrics_token: Option<String>,
+    /// 🔴 Servir l'API SANS authentification.
+    ///
+    /// Le controller refuse de démarrer si aucun jeton n'existe et que ce drapeau
+    /// n'est pas posé : une API ouverte doit être une DÉCISION, jamais l'état par
+    /// défaut d'un déploiement qu'on croyait protégé.
+    #[arg(long, env = "HLB_INSECURE_NO_AUTH")]
+    insecure_no_auth: bool,
 
     /// Intervalle de réconciliation.
     #[arg(long, default_value = "60", env = "HLB_RECONCILE_SECS")]
@@ -464,13 +468,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )));
     }
 
+    // 🔴 Le refus de démarrage. Une API ouverte expose l'état du parc, le journal
+    // d'audit et les noms des secrets ; découvrir qu'elle l'était après coup est
+    // trop tard.
+    if !cli.insecure_no_auth && !state.has_tokens().await? {
+        tracing::error!("🔴 aucun jeton d'accès : l'API n'accepterait personne.");
+        tracing::error!("   Crée-en un :  hlb token create <nom> --role admin --apply");
+        tracing::error!("   Ou assume l'ouverture :  --insecure-no-auth");
+        return Err("aucun jeton d'accès".into());
+    }
+    if cli.insecure_no_auth {
+        tracing::error!(
+            "🔴 API SANS AUTHENTIFICATION — état du parc, journal d'audit et noms des \
+             secrets accessibles à quiconque atteint ce port."
+        );
+    }
+
     let app = api::router(Arc::new(api::AppState {
         state,
         started_at: std::time::Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
         last_poll: dernier_sondage,
-        metrics_token: cli.metrics_token.clone(),
         ui_dir: cli.ui_dir.clone(),
+        no_auth: cli.insecure_no_auth,
     }));
 
     match &cli.ui_dir {

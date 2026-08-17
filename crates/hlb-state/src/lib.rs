@@ -333,6 +333,93 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Enregistre un jeton d'accès (§9ter).
+    ///
+    /// 🔴 Seule l'empreinte est conservée : la valeur n'existe qu'une fois, au moment
+    /// où elle est affichée à l'utilisateur.
+    pub async fn store_token(&self, t: &hlb_types::StoredToken) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO api_tokens (name, fingerprint, role) VALUES (?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET
+                 fingerprint = excluded.fingerprint,
+                 role = excluded.role,
+                 created_at = datetime('now')",
+        )
+        .bind(&t.name)
+        .bind(&t.fingerprint)
+        .bind(t.role.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Retrouve le jeton correspondant à une valeur présentée.
+    ///
+    /// ⚠️ La recherche se fait par **empreinte**, donc en une requête indexée : on ne
+    /// parcourt pas la table en comparant un à un, ce qui rendrait le temps de
+    /// réponse dépendant du nombre de jetons — et donnerait un canal auxiliaire.
+    pub async fn find_token(&self, presented: &str) -> Result<Option<hlb_types::StoredToken>> {
+        let empreinte = hlb_types::token::fingerprint_of(presented);
+
+        let row = sqlx::query("SELECT name, fingerprint, role FROM api_tokens WHERE fingerprint = ?1")
+            .bind(&empreinte)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let Some(r) = row else { return Ok(None) };
+        let role: String = r.try_get("role")?;
+
+        Ok(Some(hlb_types::StoredToken {
+            name: r.try_get("name")?,
+            fingerprint: r.try_get("fingerprint")?,
+            // Un rôle illisible retombe sur le MOINS permissif : une valeur corrompue
+            // ne doit jamais élargir des droits.
+            role: hlb_types::Role::parse(&role).unwrap_or_default(),
+        }))
+    }
+
+    /// Note l'usage d'un jeton, pour repérer ceux qu'on a oubliés.
+    pub async fn touch_token(&self, name: &str) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used = datetime('now') WHERE name = ?1")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Les jetons : noms, rôles, dernier usage. **Jamais les valeurs.**
+    pub async fn list_tokens(&self) -> Result<Vec<(String, String, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT name, role, last_used FROM api_tokens ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| Ok((r.try_get("name")?, r.try_get("role")?, r.try_get("last_used")?)))
+            .collect()
+    }
+
+    /// Révoque un jeton. Renvoie `false` s'il n'existait pas.
+    pub async fn revoke_token(&self, name: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM api_tokens WHERE name = ?1")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Y a-t-il au moins un jeton ?
+    ///
+    /// 🔴 Sert au refus de démarrage : une API sans jeton et sans `--insecure-no-auth`
+    /// serait grande ouverte sans que personne l'ait décidé.
+    pub async fn has_tokens(&self) -> Result<bool> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM api_tokens")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get::<i64, _>("n")? > 0)
+    }
+
     /// Défait les migrations jusqu'à la version `cible` incluse (§7bis).
     ///
     /// 🔴 **Opération destructrice.** Chaque `down` supprime les tables que sa

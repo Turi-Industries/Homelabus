@@ -210,7 +210,13 @@ impl Poller {
                 let valeur = match resultat {
                     Err(e) => Err(lisible(&e)),
                     Ok(r) if !r.ok => Err(match r.status {
-                        401 => "jeton refusé (--token)".to_string(),
+                        // 🔴 Le cas le plus fréquent après un déploiement : dire
+                        // COMMENT obtenir un jeton, pas seulement qu'il en faut un.
+                        401 => "jeton absent ou refusé — « hlb token create <nom> \
+                                --role viewer --apply », puis ouvre l'UI avec \
+                                #token=<valeur>"
+                            .to_string(),
+                        403 => "jeton valide mais rôle insuffisant".to_string(),
                         s => format!("HTTP {s}"),
                     }),
                     Ok(r) => match r.text() {

@@ -36,14 +36,14 @@ pub struct AppState {
     pub started_at: std::time::Instant,
     pub version: &'static str,
     pub last_poll: LastPoll,
-    /// Jeton attendu sur `/metrics`. `None` = point d'exposition ouvert.
-    ///
-    /// 🔴 `/metrics` en dit long : noms des apps installées, âge des sauvegardes,
-    /// nœuds saturés, actions manuelles en attente. C'est une carte de ce qui est
-    /// fragile, et donc de quoi choisir un moment pour frapper.
-    pub metrics_token: Option<String>,
     /// Répertoire de l'UI web. `None` = API seule.
     pub ui_dir: Option<std::path::PathBuf>,
+    /// 🔴 `true` = API ouverte, sans authentification.
+    ///
+    /// N'existe que parce qu'un déploiement existant ne doit pas casser d'un coup.
+    /// Le controller refuse de démarrer dans cet état sans `--insecure-no-auth`
+    /// explicite : ouvert doit être une DÉCISION, jamais un défaut.
+    pub no_auth: bool,
 }
 
 /// Les types MIME dont le navigateur a besoin.
@@ -111,16 +111,64 @@ async fn servir(s: &AppState, fichier: &str) -> Response {
     }
 }
 
-/// Comparaison à temps constant.
+/// L'identité derrière une requête.
 ///
-/// Un `==` sur des chaînes s'arrête au premier octet différent : le temps de réponse
-/// révèle combien de caractères sont corrects, ce qui permet de deviner le jeton
-/// octet par octet. Le surcoût ici est nul, l'absence de protection ne l'est pas.
-fn constant_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
+/// 🔴 Un extracteur, donc une route qui en a besoin ne peut pas oublier de le
+/// demander : le compilateur l'exige dans sa signature. Une vérification écrite à la
+/// main dans chaque gestionnaire finit toujours par manquer quelque part.
+pub struct Authentifie {
+    pub role: hlb_types::Role,
+    pub token_name: String,
+}
+
+impl axum::extract::FromRequestParts<Arc<AppState>> for Authentifie {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        s: &Arc<AppState>,
+    ) -> std::result::Result<Self, Self::Rejection> {
+        if s.no_auth {
+            // Mode ouvert assumé : tout le monde est admin, et le démarrage l'a
+            // annoncé bruyamment.
+            return Ok(Self {
+                role: hlb_types::Role::Admin,
+                token_name: "anonyme".into(),
+            });
+        }
+
+        let presente = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+
+        // ⚠️ Même réponse pour « pas de jeton » et « jeton inconnu ». Les distinguer
+        // dirait à un attaquant si une valeur essayée existe.
+        match s.state.find_token(presente).await {
+            Ok(Some(t)) => {
+                // Sans attendre : noter l'usage ne doit pas ralentir la requête, et
+                // son échec ne doit pas la faire échouer.
+                let st = s.state.clone();
+                let nom = t.name.clone();
+                tokio::spawn(async move {
+                    let _ = st.touch_token(&nom).await;
+                });
+
+                Ok(Self {
+                    role: t.role,
+                    token_name: t.name,
+                })
+            }
+            _ => Err((
+                StatusCode::UNAUTHORIZED,
+                [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
+                "jeton requis ou invalide\n",
+            )
+                .into_response()),
+        }
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Erreur d'API, rendue en JSON plutôt qu'en page HTML.
@@ -180,7 +228,10 @@ async fn summarise(s: &AppState, name: &str, status: String) -> Result<AppSummar
     })
 }
 
-async fn list_apps(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<AppSummary>> {
+async fn list_apps(
+    _auth: Authentifie,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> ApiResult<Vec<AppSummary>> {
     let mut out = Vec::new();
     for (name, status) in s.state.installed_apps().await? {
         out.push(summarise(&s, &name, status).await?);
@@ -189,6 +240,7 @@ async fn list_apps(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<AppS
 }
 
 async fn get_app(
+    _auth: Authentifie,
     AxumState(s): AxumState<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<AppSummary>, Response> {
@@ -212,7 +264,10 @@ async fn get_app(
         .map_err(|e| e.into_response())
 }
 
-async fn list_todo(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<GuideItem>> {
+async fn list_todo(
+    _auth: Authentifie,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> ApiResult<Vec<GuideItem>> {
     Ok(Json(
         s.state
             .pending_guides()
@@ -228,7 +283,10 @@ async fn list_todo(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<Guid
     ))
 }
 
-async fn list_audit(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<AuditItem>> {
+async fn list_audit(
+    _auth: Authentifie,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> ApiResult<Vec<AuditItem>> {
     Ok(Json(
         s.state
             .audit_trail(100)
@@ -248,29 +306,7 @@ async fn list_audit(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<Aud
 /// Exposition Prometheus (§8bis).
 ///
 /// Texte brut, pas JSON : c'est le format d'exposition attendu par les collecteurs.
-async fn prometheus(
-    AxumState(s): AxumState<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    if let Some(attendu) = &s.metrics_token {
-        let fourni = headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("");
-
-        if !constant_eq(fourni, attendu) {
-            // 401 avec `WWW-Authenticate` : un collecteur mal configuré doit
-            // comprendre qu'il lui manque un jeton, pas croire à une panne.
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
-                "jeton requis\n",
-            )
-                .into_response();
-        }
-    }
-
+async fn prometheus(_auth: Authentifie, AxumState(s): AxumState<Arc<AppState>>) -> Response {
     let mut apps = Vec::new();
 
     let installees = match s.state.installed_apps().await {
@@ -307,7 +343,10 @@ async fn prometheus(
         .into_response()
 }
 
-async fn list_secrets(AxumState(s): AxumState<Arc<AppState>>) -> ApiResult<Vec<SecretItem>> {
+async fn list_secrets(
+    _auth: Authentifie,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> ApiResult<Vec<SecretItem>> {
     Ok(Json(
         s.state
             .secret_names()
@@ -348,8 +387,8 @@ mod tests {
             started_at: std::time::Instant::now(),
             version: "test",
             last_poll: Default::default(),
-            metrics_token: None,
             ui_dir: None,
+            no_auth: true,
         }))
     }
 
@@ -453,21 +492,28 @@ mod tests {
         assert!(!body.to_lowercase().contains("password"), "{body}");
     }
 
-    async fn app_protegee() -> Router {
+    /// Une API protégée, et la valeur du jeton qui l'ouvre.
+    async fn app_protegee() -> (Router, String) {
         let st = State::in_memory().await.expect("base");
         st.upsert_app("gitea", &manifest("gitea"), None).await.expect("upsert");
-        router(Arc::new(AppState {
+
+        let (valeur, stocke) =
+            hlb_types::generate_token("test", hlb_types::Role::Viewer, [42u8; 32]);
+        st.store_token(&stocke).await.expect("jeton");
+
+        let r = router(Arc::new(AppState {
             state: Arc::new(st),
             started_at: std::time::Instant::now(),
             version: "test",
             last_poll: Default::default(),
-            metrics_token: Some("jeton-secret-de-test".into()),
             ui_dir: None,
-        }))
+            no_auth: false,
+        }));
+        (r, valeur)
     }
 
-    async fn get_avec_jeton(r: Router, jeton: Option<&str>) -> StatusCode {
-        let mut req = Request::builder().uri("/metrics");
+    async fn get_route_avec_jeton(r: Router, route: &str, jeton: Option<&str>) -> StatusCode {
+        let mut req = Request::builder().uri(route);
         if let Some(j) = jeton {
             req = req.header("Authorization", format!("Bearer {j}"));
         }
@@ -478,35 +524,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metrics_can_be_protected_by_a_token() {
-        // 🔴 `/metrics` est une carte de ce qui est fragile : quelles apps ne sont
-        // plus sauvegardées, quels nœuds saturent. De quoi choisir son moment.
-        assert_eq!(get_avec_jeton(app_protegee().await, None).await, StatusCode::UNAUTHORIZED);
+    async fn every_route_refuses_an_anonymous_caller() {
+        // 🔴 L'API expose l'état du parc, le journal d'audit et les NOMS des secrets.
+        // Une seule route oubliée suffit à tout donner.
+        for route in ["/api/apps", "/api/todo", "/api/audit", "/api/secrets", "/metrics"] {
+            let (r, _) = app_protegee().await;
+            let s = get_route_avec_jeton(r, route, None).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{route} accepte un anonyme");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wrong_token_is_refused_like_no_token() {
+        // ⚠️ Réponse identique : les distinguer dirait à un attaquant si une valeur
+        // essayée existe.
+        let (r, _) = app_protegee().await;
         assert_eq!(
-            get_avec_jeton(app_protegee().await, Some("mauvais")).await,
+            get_route_avec_jeton(r, "/api/apps", Some("FAUXJETON")).await,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn a_valid_token_gets_through() {
+        let (r, jeton) = app_protegee().await;
         assert_eq!(
-            get_avec_jeton(app_protegee().await, Some("jeton-secret-de-test")).await,
+            get_route_avec_jeton(r, "/api/apps", Some(&jeton)).await,
             StatusCode::OK
         );
     }
 
     #[tokio::test]
-    async fn without_a_token_configured_metrics_stay_open() {
-        // Rétrocompatible : un déploiement existant ne casse pas du jour au lendemain.
-        assert_eq!(get_avec_jeton(app().await, None).await, StatusCode::OK);
+    async fn health_stays_open_for_probes() {
+        // Une sonde de vivacité ne peut pas porter de jeton : Swarm ne lui en donne
+        // pas. Fermer /healthz ferait redémarrer le controller en boucle.
+        let (r, _) = app_protegee().await;
+        assert_eq!(
+            get_route_avec_jeton(r, "/healthz", None).await,
+            StatusCode::OK
+        );
     }
 
-    #[test]
-    fn token_comparison_does_not_leak_its_length_by_timing() {
-        // Un `==` s'arrête au premier octet différent : le temps de réponse dirait
-        // combien de caractères sont bons, et le jeton se devinerait octet par octet.
-        assert!(constant_eq("abc", "abc"));
-        assert!(!constant_eq("abc", "abd"));
-        assert!(!constant_eq("abc", "abcd"));
-        assert!(!constant_eq("", "x"));
-        assert!(constant_eq("", ""));
+    #[tokio::test]
+    async fn the_open_mode_is_explicit_not_a_default() {
+        // 🔴 `no_auth` n'existe que pour ne pas casser un déploiement existant, et le
+        // controller refuse de démarrer dans cet état sans drapeau explicite.
+        let (s, _) = get(app().await, "/api/apps").await;
+        assert_eq!(s, StatusCode::OK, "le mode ouvert doit rester ouvert");
     }
 
     #[test]

@@ -81,7 +81,7 @@ bien plus expressif que `text/template`.
 | CLI | `clap` (derive) |
 | Secrets | `age` (implémentation Rust native) |
 | Registry OCI | `oci-client` |
-| SSH (cible mailcow) | `russh` |
+| SSH (accès aux nœuds) | `russh` |
 | Logs / traces | `tracing` + `tracing-subscriber` |
 | Planification | `tokio-cron-scheduler` |
 | OpenAPI | `utoipa` (génère la spec depuis les handlers axum) |
@@ -3141,9 +3141,22 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 - ✅ **Livrable** : installation d'une app en 3 clics
 
 ### Phase 7 — Cas particuliers
-- Runtime `compose` pour mailcow (hôte dédié)
 - HA Postgres phase 2 (standby + bascule assistée)
 - Exercices de reprise après sinistre automatisés
+
+> **~~Runtime `compose` pour mailcow~~ — ABANDONNÉ (décision du 17/08/2026).**
+>
+> Mailcow n'est pas intégré et ne le sera pas. Stalwart le remplace entièrement
+> (§5.9), et il est déjà au catalogue avec son client de provisionnement
+> (`hlb-mail`).
+>
+> Les mentions de mailcow qui subsistent dans ce document sont **historiques** :
+> elles expliquent pourquoi Stalwart a été retenu, ce qui reste utile à qui
+> reprendrait la décision. Elles ne décrivent aucun travail à faire.
+>
+> Conséquence directe : le runtime `compose` n'a plus de raison d'être. Il
+> n'existait que pour mailcow, qui refuse de tourner autrement qu'en pile
+> Docker Compose sur un hôte dédié. Tout le reste du catalogue est en Swarm natif.
 
 ---
 

@@ -191,6 +191,10 @@ enum Command {
         force: bool,
     },
 
+    /// Jetons d'accès à l'API et à l'UI (§9ter).
+    #[command(subcommand)]
+    Token(TokenCmd),
+
     /// Instantanés ZFS/btrfs : retour arrière en minutes (§8).
     #[command(subcommand)]
     Snapshot(SnapshotCmd),
@@ -405,6 +409,24 @@ enum UpdateCmd {
         #[arg(long, env = "HLB_COSIGN_ISSUER")]
         issuer: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Créer un jeton. Sa valeur n'est affichée QU'UNE FOIS.
+    Create {
+        /// Nom, pour savoir lequel révoquer plus tard.
+        name: String,
+        /// viewer (tout voir), operator (installer, sauvegarder), admin (tout).
+        #[arg(long, default_value = "viewer")]
+        role: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Les jetons : noms, rôles, dernier usage. Jamais les valeurs.
+    List,
+    /// Révoquer un jeton. Effet immédiat.
+    Revoke { name: String },
 }
 
 #[derive(Subcommand)]
@@ -2108,6 +2130,108 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Token(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = State::open(&cli.state).await?;
+
+                match cmd {
+                    TokenCmd::List => {
+                        let v = state.list_tokens().await?;
+                        if v.is_empty() {
+                            println!("Aucun jeton — l'API n'accepterait personne.");
+                            println!("  hlb token create <nom> --role admin --apply");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                        }
+
+                        println!("{:<20} {:<10} DERNIER USAGE", "NOM", "RÔLE");
+                        for (nom, role, usage) in &v {
+                            println!(
+                                "{nom:<20} {role:<10} {}",
+                                usage.as_deref().unwrap_or("jamais")
+                            );
+                        }
+
+                        // Un jeton jamais utilisé est soit oublié, soit compromis
+                        // sans qu'on le sache : dans les deux cas il vaut mieux le
+                        // révoquer que le laisser traîner.
+                        let inutilises = v.iter().filter(|(_, _, u)| u.is_none()).count();
+                        if inutilises > 0 {
+                            println!();
+                            println!("⚠️  {inutilises} jeton(s) jamais utilisé(s) : oubliés, ou");
+                            println!("   distribués sans qu'on s'en serve. Révoque-les.");
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    TokenCmd::Revoke { name } => {
+                        if state.revoke_token(name).await? {
+                            state
+                                .audit("cli", ACTEUR_ROLE, "token-revoke", name, "ok", None)
+                                .await?;
+                            println!("✓ « {name} » révoqué — effet immédiat.");
+
+                            if !state.has_tokens().await? {
+                                println!();
+                                println!("🔴 C'était le DERNIER jeton. Au prochain démarrage,");
+                                println!("   le controller refusera de se lancer sans");
+                                println!("   --insecure-no-auth. Crée-en un autre avant.");
+                            }
+                            Ok(ExitCode::SUCCESS)
+                        } else {
+                            eprintln!("Aucun jeton nommé « {name} ».");
+                            Ok(ExitCode::FAILURE)
+                        }
+                    }
+
+                    TokenCmd::Create { name, role, apply } => {
+                        let Some(r) = hlb_types::Role::parse(role) else {
+                            eprintln!("Rôle « {role} » inconnu.");
+                            eprintln!("  viewer   : tout voir, ne rien modifier");
+                            eprintln!("  operator : installer, mettre à jour, sauvegarder");
+                            eprintln!("  admin    : tout, y compris ce qui détruit");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        if !apply {
+                            println!("Créerait le jeton « {name} » en rôle {}.", r.as_str());
+                            println!();
+                            println!("  🔴 Sa valeur sera affichée UNE SEULE FOIS : seule une");
+                            println!("     empreinte est conservée. Un jeton perdu ne se");
+                            println!("     retrouve pas, il se remplace.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        // L'entropie vient du même générateur que les mots de passe
+                        // du coffre : un jeton faible serait le maillon le plus court.
+                        let mut alea = [0u8; hlb_types::token::TOKEN_BYTES];
+                        hlb_secrets::fill_random(&mut alea);
+
+                        let (valeur, stocke) = hlb_types::generate_token(name, r, alea);
+                        state.store_token(&stocke).await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "token-create", name, "ok", Some(r.as_str()))
+                            .await?;
+
+                        println!("✓ jeton « {name} » créé en rôle {}.", r.as_str());
+                        println!();
+                        println!("🔴 NOTE-LE MAINTENANT — il ne sera plus jamais affiché :");
+                        println!();
+                        println!("    {valeur}");
+                        println!();
+                        println!("Usage :");
+                        println!("    curl -H \"Authorization: Bearer {valeur}\" \\");
+                        println!("         http://<controller>:8420/api/apps");
+                        println!();
+                        println!("    hlb-ui --token {valeur}");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Snapshot(cmd) => {

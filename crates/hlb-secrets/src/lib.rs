@@ -198,6 +198,16 @@ pub fn generate_password(len: usize) -> String {
         .collect()
 }
 
+/// Remplit un tampon avec le générateur cryptographique du système.
+///
+/// 🔴 `rand::rng()` et non un générateur ensemencé sur l'horloge : un jeton d'accès
+/// prédictible serait le maillon le plus court de toute la chaîne, et l'erreur ne se
+/// verrait jamais — les valeurs paraissent aléatoires dans les deux cas.
+pub fn fill_random(buf: &mut [u8]) {
+    use rand::RngCore as _;
+    rand::rng().fill_bytes(buf);
+}
+
 fn write_private(path: &Path, contents: &str) -> Result<()> {
     let body = format!(
         "# Clé maîtresse HomelabUS — NE PAS PARTAGER, NE PAS COMMITER.\n\
