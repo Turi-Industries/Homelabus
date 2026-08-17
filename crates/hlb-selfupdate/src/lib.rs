@@ -12,7 +12,11 @@
 //! t'empêche de réparer les autres. Notification, puis validation manuelle.
 
 pub mod plan;
+pub mod signature;
+pub mod swap;
 pub mod version;
 
 pub use plan::{plan, AgentNode, Blocker, Migration, Preflight, Rollback, UpdatePlan};
+pub use signature::{verify as verify_release, Manifest as ReleaseManifest, Rejected};
+pub use swap::{swap, Paths as SwapPaths, SwapError};
 pub use version::{compatible, Compatibility, Jump, Version, PROTOCOL};

@@ -451,8 +451,11 @@ enum SelfCmd {
     Status,
     /// 🔴 Revenir au schéma d'une version antérieure (§7bis). DESTRUCTEUR.
     Rollback {
-        /// Numéro de la dernière migration à CONSERVER, ex. 4
+        /// Restaurer le binaire précédent au lieu du schéma.
         #[arg(long)]
+        binary: bool,
+        /// Numéro de la dernière migration à CONSERVER, ex. 4
+        #[arg(long, default_value = "0")]
         to_migration: i64,
         /// Confirmation explicite : des données seront perdues.
         #[arg(long)]
@@ -464,6 +467,15 @@ enum SelfCmd {
     Update {
         /// Version cible, ex. 0.2.0
         version: String,
+        /// Base des téléchargements. Le binaire et son manifeste y sont attendus.
+        #[arg(long, env = "HLB_RELEASE_URL")]
+        from: Option<String>,
+        /// 🔴 Clé publique Ed25519 de publication, en hexadécimal.
+        ///
+        /// Sans elle, aucun binaire n'est installé : une mise à jour non vérifiée
+        /// serait le meilleur vecteur de compromission du système.
+        #[arg(long, env = "HLB_RELEASE_KEY")]
+        key: Option<String>,
         /// 🔴 Nécessaire pour une version MAJEURE ou un retour arrière.
         #[arg(long)]
         confirm: bool,
@@ -642,6 +654,70 @@ fn consequence_migration(nom: &str) -> Vec<String> {
     let mut out = vec![nom.to_string()];
     out.extend(detail.iter().map(|l| format!("      {l}")));
     out
+}
+
+/// Télécharge un binaire et son manifeste.
+///
+/// ⚠️ Le manifeste d'abord : s'il est absent, inutile de tirer plusieurs mégaoctets
+/// pour découvrir ensuite qu'on ne pourra rien vérifier.
+async fn telecharger_version(
+    base_url: &str,
+    version: &hlb_selfupdate::Version,
+) -> Result<(Vec<u8>, hlb_selfupdate::ReleaseManifest), String> {
+    let base = base_url.trim_end_matches('/');
+    let cible = format!("hlb-{version}-{}", std::env::consts::ARCH);
+
+    let manifeste_brut = recuperer(&format!("{base}/{cible}.manifest")).await?;
+    let manifeste = analyser_manifeste(&String::from_utf8_lossy(&manifeste_brut))?;
+
+    let binaire = recuperer(&format!("{base}/{cible}")).await?;
+    Ok((binaire, manifeste))
+}
+
+async fn recuperer(url: &str) -> Result<Vec<u8>, String> {
+    let r = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("{url} : {e}"))?;
+
+    if !r.status().is_success() {
+        return Err(format!("{url} : HTTP {}", r.status().as_u16()));
+    }
+    Ok(r.bytes().await.map_err(|e| e.to_string())?.to_vec())
+}
+
+/// Analyse un manifeste de publication.
+///
+/// Format volontairement trivial — `clé=valeur` par ligne — pour qu'il puisse être
+/// produit par trois lignes de shell dans une chaîne de publication, et relu à l'œil.
+fn analyser_manifeste(
+    texte: &str,
+) -> Result<hlb_selfupdate::ReleaseManifest, String> {
+    let mut version = None;
+    let mut sha256 = None;
+    let mut signature = None;
+
+    for l in texte.lines() {
+        let Some((k, v)) = l.split_once('=') else { continue };
+        match k.trim() {
+            "version" => version = hlb_selfupdate::Version::parse(v.trim()),
+            "sha256" => sha256 = Some(v.trim().to_string()),
+            "signature" => signature = Some(v.trim().to_string()),
+            _ => {}
+        }
+    }
+
+    Ok(hlb_selfupdate::ReleaseManifest {
+        version: version.ok_or("manifeste sans version")?,
+        sha256: sha256.ok_or("manifeste sans empreinte")?,
+        // Une signature absente n'est PAS une erreur d'analyse : c'est un manifeste
+        // non signé, et c'est `verify` qui doit le refuser, avec son message.
+        signature: signature.unwrap_or_default(),
+    })
 }
 
 /// Les migrations livrées avec ce binaire, et leur réversibilité.
@@ -2400,7 +2476,46 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    SelfCmd::Rollback { to_migration, confirm, apply } => {
+                    SelfCmd::Rollback { binary, to_migration, confirm, apply } => {
+                        if *binary {
+                            let chemins = su::SwapPaths::new(std::env::current_exe()?);
+                            if !apply {
+                                println!("Restaurerait {}", chemins.previous().display());
+                                println!();
+                                println!("  ⚠️  Le SCHÉMA n'est pas touché. Si la version qu'on");
+                                println!("     quitte l'avait migré, l'ancien binaire lira un");
+                                println!("     schéma qu'il ne comprend pas :");
+                                println!("       hlb self rollback --to-migration <n> --apply --confirm");
+                                println!();
+                                println!("  Relance avec --apply.");
+                                return Ok(ExitCode::SUCCESS);
+                            }
+
+                            match su::swap::rollback(&chemins) {
+                                Ok(()) => {
+                                    state
+                                        .audit("cli", ACTEUR_ROLE, "self-rollback-binary",
+                                               "binaire", "ok", None)
+                                        .await?;
+                                    println!("✓ binaire précédent restauré.");
+                                    println!();
+                                    println!("⚠️  Redémarre le controller pour qu'il prenne effet.");
+                                    return Ok(ExitCode::SUCCESS);
+                                }
+                                Err(e) => {
+                                    eprintln!("{}", e.describe());
+                                    return Ok(ExitCode::FAILURE);
+                                }
+                            }
+                        }
+
+                        if *to_migration == 0 {
+                            eprintln!("Précise ce qu'il faut défaire :");
+                            eprintln!("  --binary                  restaurer le binaire précédent");
+                            eprintln!("  --to-migration <n>        revenir au schéma n");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
                         let actuelle = state.schema_version().await?;
                         let Some(actuelle) = actuelle else {
                             eprintln!("Base non migrée — rien à défaire.");
@@ -2453,7 +2568,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    SelfCmd::Update { version, confirm, apply } => {
+                    SelfCmd::Update { version, from, key, confirm, apply } => {
                         let Some(cible) = su::Version::parse(version) else {
                             eprintln!("Version illisible : « {version} » (attendu : 0.2.0)");
                             return Ok(ExitCode::FAILURE);
@@ -2507,25 +2622,87 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             return Ok(ExitCode::SUCCESS);
                         }
 
-                        // 🔴 On s'arrête ici volontairement. Le téléchargement et la
-                        // bascule des binaires demandent une source de distribution
-                        // signée (§7bis) qui n'existe pas encore : les faire sans
-                        // vérification de signature ferait de la mise à jour le
-                        // meilleur vecteur de compromission du système.
+                        // 🔴 Sans source ET sans clé, on ne télécharge rien. Une mise
+                        // à jour non vérifiée remplacerait le binaire qui détient la
+                        // clé du coffre et pilote Docker.
+                        let (Some(base_url), Some(cle_hex)) = (from, key) else {
+                            println!();
+                            println!("🔴 Bascule impossible : il manque la source ou la clé.");
+                            println!();
+                            println!("   --from <url>  où trouver le binaire et son manifeste");
+                            println!("   --key <hex>   clé publique Ed25519 de publication");
+                            println!();
+                            println!("   Sans vérification de signature, la mise à jour serait");
+                            println!("   le meilleur vecteur de compromission du système : elle");
+                            println!("   remplace le binaire qui détient la clé du coffre.");
+                            println!();
+                            println!("   Le reste est déjà garanti : parc compatible, migrations");
+                            println!("   réversibles, ordre des opérations établi.");
+                            state
+                                .audit("cli", ACTEUR_ROLE, "self-update-plan", version, "ok", None)
+                                .await?;
+                            return Ok(ExitCode::SUCCESS);
+                        };
+
+                        let cle = match su::signature::parse_key(cle_hex) {
+                            Ok(k) => k,
+                            Err(e) => {
+                                eprintln!("{}", e.describe());
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        };
+
+                        // La bascule doit être possible AVANT de télécharger : la
+                        // découvrir impossible après aurait fait perdre du temps, et
+                        // la découvrir après avoir écarté l'ancien binaire laisserait
+                        // la machine sans outil.
+                        let chemins = su::SwapPaths::new(std::env::current_exe()?);
+                        if let Err(e) = su::swap::preflight(&chemins) {
+                            eprintln!("{}", e.describe());
+                            return Ok(ExitCode::FAILURE);
+                        }
+
                         println!();
-                        println!("🔴 La BASCULE des binaires n'est pas implémentée.");
-                        println!();
-                        println!("   Il y manque une source de distribution signée : sans");
-                        println!("   vérification de signature, la mise à jour serait le");
-                        println!("   meilleur vecteur de compromission du système.");
-                        println!();
-                        println!("   Ce que cette commande garantit déjà : le parc est");
-                        println!("   compatible, les migrations sont réversibles, et l'ordre");
-                        println!("   des opérations est établi. La bascule reste manuelle.");
+                        println!("Téléchargement depuis {base_url}…");
+                        let (binaire, manifeste) =
+                            match telecharger_version(base_url, &cible).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    eprintln!("🔴 {e}");
+                                    return Ok(ExitCode::FAILURE);
+                                }
+                            };
+
+                        if let Err(r) = su::verify_release(&cle, &manifeste, cible, &binaire) {
+                            eprintln!("{}", r.describe());
+                            state
+                                .audit("cli", ACTEUR_ROLE, "self-update", version, "refused",
+                                       Some(&r.describe()))
+                                .await?;
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        println!("✓ signature vérifiée ({} octets)", binaire.len());
+
+                        let garde = match su::swap(&chemins, &binaire) {
+                            Ok(g) => g,
+                            Err(e) => {
+                                eprintln!("{}", e.describe());
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        };
 
                         state
-                            .audit("cli", ACTEUR_ROLE, "self-update-plan", version, "ok", None)
+                            .audit("cli", ACTEUR_ROLE, "self-update", version, "ok", None)
                             .await?;
+
+                        println!("✓ binaire remplacé.");
+                        println!();
+                        println!("  Ancien conservé : {}", garde.display());
+                        println!("  Retour arrière  : hlb self rollback --binary");
+                        println!();
+                        println!("⚠️  Le processus EN COURS tourne toujours sur l'ancien code :");
+                        println!("   sous Unix, son inode reste vivant. Redémarre le controller");
+                        println!("   pour que la nouvelle version prenne effet.");
                         Ok(ExitCode::SUCCESS)
                     }
                 }

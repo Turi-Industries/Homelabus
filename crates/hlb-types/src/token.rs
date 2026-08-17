@@ -71,6 +71,14 @@ pub fn fingerprint_of(token: &str) -> String {
     fingerprint(token)
 }
 
+/// L'empreinte SHA-256 d'un binaire ou d'un fichier, en hexadécimal.
+///
+/// Même implémentation que pour les jetons, vérifiée contre les vecteurs du NIST :
+/// un second SHA-256 dans le projet serait un second endroit où se tromper.
+pub fn sha256_hex(data: &[u8]) -> String {
+    sha256(data).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn fingerprint(token: &str) -> String {
     // SHA-256 en implémentation directe : pas de dépendance nouvelle pour trente
     // lignes, et l'algorithme est figé depuis vingt ans.
