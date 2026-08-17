@@ -323,6 +323,132 @@ impl Stalwart {
         Ok(id)
     }
 
+    /// Les aliases actuellement posés sur un compte.
+    ///
+    /// ⚠️ Nécessaire avant toute modification : JMAP `update` **remplace** la propriété
+    /// entière. Écrire un seul alias effacerait tous les autres — et l'utilisateur
+    /// perdrait d'un coup toutes les adresses qu'il avait données à des tiers, sans
+    /// qu'aucune erreur ne soit levée.
+    pub async fn aliases_of(&self, account_id: &str) -> Result<Vec<String>> {
+        let args = self
+            .call(
+                "x:Account/get",
+                serde_json::json!({
+                    "ids": [account_id],
+                    "properties": ["aliases"]
+                }),
+            )
+            .await?;
+
+        Ok(args
+            .get("list")
+            .and_then(|l| l.as_array())
+            .and_then(|l| l.first())
+            .and_then(|c| c.get("aliases"))
+            .and_then(|a| a.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Remplace la liste d'aliases d'un compte.
+    ///
+    /// 🔴 **Lecture-modification-écriture.** JMAP n'a pas d'opération « ajouter un
+    /// alias » : `update` écrase la propriété. On lit donc l'existant, on modifie, on
+    /// réécrit — et deux modifications simultanées feraient perdre la première. Sur un
+    /// homelab piloté par une seule commande à la fois, c'est acceptable ; le noter
+    /// évite de le redécouvrir le jour où le controller le fera en parallèle.
+    async fn set_aliases(&self, account_id: &str, domain_id: &str, aliases: &[String]) -> Result<()> {
+        let liste: Vec<serde_json::Value> = aliases
+            .iter()
+            .filter_map(|a| {
+                let local = a.split('@').next()?;
+                (!local.is_empty()).then(|| {
+                    serde_json::json!({
+                        "enabled": true,
+                        "name": local,
+                        "domainId": domain_id
+                    })
+                })
+            })
+            .collect();
+
+        let args = self
+            .call(
+                "x:Account/set",
+                serde_json::json!({
+                    "update": { account_id: { "aliases": liste } }
+                }),
+            )
+            .await?;
+
+        // 🔴 Comme pour la création : HTTP 200 ne veut pas dire modifié. L'échec vit
+        // dans `notUpdated`, et le manquer ferait croire l'alias posé alors qu'aucun
+        // courrier n'arriverait jamais.
+        if let Some(err) = args.get("notUpdated").and_then(|v| v.get(account_id)) {
+            return Err(Error::NotCreated {
+                object: format!("les aliases du compte « {account_id} »"),
+                reason: describe_set_error(err),
+            });
+        }
+        Ok(())
+    }
+
+    /// Ajoute un alias à un compte existant, sans toucher aux autres.
+    ///
+    /// Renvoie `false` si l'alias y était déjà — l'opération est idempotente, ce qui
+    /// permet de relancer une pose interrompue.
+    pub async fn add_alias(&self, address: &str, alias_local: &str) -> Result<bool> {
+        let (local, domain) = address
+            .split_once('@')
+            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+        let domain_id = self.domain_id(domain).await?;
+        let account_id = self
+            .find_account(local, &domain_id)
+            .await?
+            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+
+        let mut actuels = self.aliases_of(&account_id).await?;
+        if actuels.iter().any(|a| a == alias_local) {
+            return Ok(false);
+        }
+        actuels.push(alias_local.to_string());
+        self.set_aliases(&account_id, &domain_id, &actuels).await?;
+
+        tracing::info!(compte = %address, alias = alias_local, "alias posé");
+        Ok(true)
+    }
+
+    /// Retire un alias d'un compte, sans toucher aux autres.
+    ///
+    /// Renvoie `false` s'il n'y était pas. 🔴 C'est ce qui rend l'expiration RÉELLE :
+    /// sans cet appel, un alias « temporaire » reste vivant pour toujours, Stalwart
+    /// n'ayant aucune notion de date.
+    pub async fn remove_alias(&self, address: &str, alias_local: &str) -> Result<bool> {
+        let (local, domain) = address
+            .split_once('@')
+            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+        let domain_id = self.domain_id(domain).await?;
+        let account_id = self
+            .find_account(local, &domain_id)
+            .await?
+            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+
+        let actuels = self.aliases_of(&account_id).await?;
+        if !actuels.iter().any(|a| a == alias_local) {
+            return Ok(false);
+        }
+        let restants: Vec<String> =
+            actuels.into_iter().filter(|a| a != alias_local).collect();
+        self.set_aliases(&account_id, &domain_id, &restants).await?;
+
+        tracing::info!(compte = %address, alias = alias_local, "alias retiré");
+        Ok(true)
+    }
+
     /// Provisionnement idempotent d'une adresse complète.
     ///
     /// 🔴 **Ne change jamais le mot de passe d'un compte existant.** Le remplacer

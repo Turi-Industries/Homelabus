@@ -130,6 +130,134 @@ impl BackupLoop {
     }
 }
 
+/// Purge des aliases temporaires expirés (§5bis.3).
+///
+/// 🔴 **Sans cette boucle, « temporaire » est un mensonge.** Stalwart n'a aucune
+/// notion d'expiration : la liste d'aliases d'un compte est une simple liste, et ce
+/// qui y est écrit y reste. Une adresse donnée à un marchand « pour trente jours »
+/// continue de recevoir indéfiniment si personne ne vient la retirer.
+///
+/// ## 🔴 Un échec de purge doit se VOIR
+///
+/// C'est la propriété qui distingue cette boucle des autres. Une réconciliation qui
+/// échoue laisse le cluster tel quel — c'est ennuyeux mais honnête. Une purge qui
+/// échoue laisse des portes **ouvertes que leur propriétaire croit fermées**, et le
+/// silence entretient la croyance. Le compte rendu remonte donc le nombre d'adresses
+/// encore ouvertes, et non seulement le nombre d'erreurs.
+pub struct AliasPurgeLoop {
+    state: Arc<State>,
+    mail: Option<Arc<hlb_mail::Stalwart>>,
+    domaine_defaut: String,
+}
+
+/// Ce qu'un passage de purge a donné.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PurgeReport {
+    /// Aliases expirés trouvés encore actifs.
+    pub dus: usize,
+    /// Effectivement retirés du serveur.
+    pub retires: usize,
+    pub errors: Vec<String>,
+}
+
+impl PurgeReport {
+    /// Combien d'adresses restent ouvertes alors qu'on les croit fermées.
+    ///
+    /// 🔴 C'est LE chiffre à surveiller — pas le nombre d'erreurs. Une purge sans
+    /// erreur mais qui n'a rien retiré laisse autant de portes ouvertes qu'une purge
+    /// qui a échoué bruyamment.
+    pub fn encore_ouvertes(&self) -> usize {
+        self.dus.saturating_sub(self.retires)
+    }
+
+    pub fn is_clean(&self) -> bool {
+        self.encore_ouvertes() == 0
+    }
+}
+
+impl AliasPurgeLoop {
+    pub fn new(
+        state: Arc<State>,
+        mail: Option<Arc<hlb_mail::Stalwart>>,
+        domaine_defaut: impl Into<String>,
+    ) -> Self {
+        Self {
+            state,
+            mail,
+            domaine_defaut: domaine_defaut.into(),
+        }
+    }
+
+    pub async fn tick(&self) -> PurgeReport {
+        let mut r = PurgeReport::default();
+
+        let maintenant = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let dus = match self.state.aliases_to_purge(maintenant).await {
+            Ok(v) => v,
+            Err(e) => {
+                r.errors.push(e.to_string());
+                return r;
+            }
+        };
+        r.dus = dus.len();
+
+        let Some(mail) = &self.mail else {
+            if r.dus > 0 {
+                // 🔴 On ne marque RIEN comme purgé. Le faire sans retirer l'alias
+                // serait le pire des deux mondes : l'adresse recevrait encore, et
+                // plus rien ne le signalerait.
+                tracing::error!(
+                    ouvertes = r.dus,
+                    "purge impossible (Stalwart non configuré) : ces adresses expirées \
+                     RECOIVENT encore, et leur propriétaire les croit fermées"
+                );
+                r.errors.push("Stalwart non configuré".into());
+            }
+            return r;
+        };
+
+        for (user, boite, local) in dus {
+            let dom = self
+                .state
+                .mailboxes(&user)
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.into_iter()
+                        .find(|(l, ..)| l == &boite)
+                        .map(|(_, d, _)| d)
+                })
+                .unwrap_or_else(|| self.domaine_defaut.clone());
+
+            // L'état n'est marqué qu'APRÈS le retrait effectif.
+            match mail.remove_alias(&format!("{boite}@{dom}"), &local).await {
+                Ok(_) => match self.state.deactivate_alias(&user, &local).await {
+                    Ok(()) => {
+                        r.retires += 1;
+                        tracing::info!(user, alias = %local, "alias expiré retiré");
+                    }
+                    Err(e) => r.errors.push(format!("{local} : {e}")),
+                },
+                // Un échec ne bloque pas les suivants : chaque porte refermée est un
+                // gain, même si la suivante résiste.
+                Err(e) => r.errors.push(format!("{local} : {e}")),
+            }
+        }
+
+        if !r.is_clean() {
+            tracing::error!(
+                ouvertes = r.encore_ouvertes(),
+                "🔴 adresses expirées TOUJOURS actives après la purge"
+            );
+        }
+        r
+    }
+}
+
 /// Le battement de cœur du §8bis : « qui surveille le surveillant ? ».
 ///
 /// Le controller écrit un horodatage **hors du cluster**. Un `cron` trivial sur le NAS
@@ -304,6 +432,66 @@ mod tests {
         // Un second battement écrase proprement.
         h.beat().await.expect("second battement");
         assert!(tokio::fs::read_to_string(&p).await.expect("lecture").trim().parse::<u64>().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_purge_without_stalwart_marks_nothing() {
+        // 🔴 Marquer un alias « purgé » sans l'avoir retiré du serveur serait le pire
+        // des deux mondes : l'adresse recevrait encore, ET plus rien ne le
+        // signalerait. Le silence entretiendrait la croyance que la porte est fermée.
+        let s = Arc::new(State::in_memory().await.expect("état"));
+        s.upsert_user("remy", "standard", None).await.expect("compte");
+        s.add_mailbox("remy", "remy", "example.fr", true).await.expect("boîte");
+        s.add_alias("remy", "remy", "vieux", Some(1), None, None)
+            .await
+            .expect("alias expiré");
+
+        let l = AliasPurgeLoop::new(s.clone(), None, "example.fr");
+        let r = l.tick().await;
+
+        assert_eq!(r.dus, 1);
+        assert_eq!(r.retires, 0);
+        assert_eq!(r.encore_ouvertes(), 1, "l'adresse reçoit toujours");
+        assert!(!r.is_clean());
+
+        // Et l'état n'a PAS été touché : l'alias reste signalé comme actif.
+        let restants = s.aliases_to_purge(9_999_999_999).await.expect("relecture");
+        assert_eq!(restants.len(), 1, "rien n'a été marqué purgé");
+    }
+
+    #[tokio::test]
+    async fn a_clean_purge_has_nothing_left_open() {
+        // Aucun alias expiré : rien à faire, et le compte rendu doit le dire sans
+        // fabriquer une alerte.
+        let s = Arc::new(State::in_memory().await.expect("état"));
+        s.upsert_user("remy", "standard", None).await.expect("compte");
+        s.add_mailbox("remy", "remy", "example.fr", true).await.expect("boîte");
+        // Permanent : jamais dû.
+        s.add_alias("remy", "remy", "contact", None, None, None)
+            .await
+            .expect("alias permanent");
+
+        let r = AliasPurgeLoop::new(s, None, "example.fr").tick().await;
+        assert_eq!(r.dus, 0);
+        assert!(r.is_clean());
+        assert!(r.errors.is_empty(), "aucune alerte pour un permanent : {:?}", r.errors);
+    }
+
+    #[test]
+    fn what_matters_is_what_stays_open_not_the_error_count() {
+        // 🔴 Une purge SANS erreur qui n'a rien retiré laisse autant de portes
+        // ouvertes qu'une purge qui a échoué bruyamment. C'est le premier chiffre
+        // qu'on regarde.
+        let muette = PurgeReport { dus: 5, retires: 0, errors: vec![] };
+        assert_eq!(muette.encore_ouvertes(), 5);
+        assert!(!muette.is_clean(), "aucune erreur, et pourtant cinq portes ouvertes");
+
+        let bruyante = PurgeReport {
+            dus: 5,
+            retires: 5,
+            errors: vec!["avertissement".into()],
+        };
+        assert!(bruyante.is_clean(), "tout est refermé : le bruit ne change rien");
     }
 
     #[tokio::test]

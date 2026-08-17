@@ -24,6 +24,7 @@ hlb-backup.workspace = true
 hlb-secrets.workspace = true
 hlb-gitops.workspace = true
 hlb-agent.workspace = true
+hlb-mail.workspace = true
 hlb-metrics.workspace = true
 hlb-notify.workspace = true
 futures.workspace = true

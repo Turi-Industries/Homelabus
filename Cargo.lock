@@ -1795,6 +1795,7 @@ dependencies = [
  "hlb-backup",
  "hlb-engine",
  "hlb-gitops",
+ "hlb-mail",
  "hlb-metrics",
  "hlb-notify",
  "hlb-orchestrator",

@@ -1515,6 +1515,7 @@ async fn destinations_effectives(
 async fn gerer_alias(
     state: &State,
     domaine: &str,
+    mail: Option<&hlb_mail::Stalwart>,
     cmd: &AliasCmd,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
     use hlb_users::{generation::Genere, Demande, Profil};
@@ -1571,6 +1572,28 @@ async fn gerer_alias(
                     (g.local, ind)
                 }
             };
+
+            let dom_cible = c
+                .boites
+                .iter()
+                .find(|b| b.local == cible)
+                .map(|b| b.domaine.clone())
+                .unwrap_or_else(|| domaine.to_string());
+
+            // 🔴 Chez Stalwart D'ABORD, dans l'état ENSUITE. L'inverse enregistrerait
+            // un alias que rien ne reçoit : l'utilisateur le donnerait à un marchand,
+            // et le courrier rebondirait chez l'expéditeur — donc personne de ce côté
+            // ne saurait que l'adresse ne marche pas.
+            match mail {
+                Some(m) => {
+                    m.add_alias(&format!("{cible}@{dom_cible}"), &local).await?;
+                }
+                None => {
+                    eprintln!("🔴 Stalwart non configuré : l'alias est ENREGISTRÉ mais");
+                    eprintln!("   ne recevra RIEN. Relance la commande une fois");
+                    eprintln!("   --stalwart-url renseigné.");
+                }
+            }
 
             state
                 .add_alias(nom, &cible, &local, expire_le, indice.as_deref(), note.as_deref())
@@ -1674,9 +1697,50 @@ async fn gerer_alias(
             // ⚠️ L'état est marqué APRÈS le retrait chez Stalwart. L'inverse
             // prétendrait l'adresse fermée alors qu'elle recevrait encore — c'est
             // exactement le mensonge que ce module existe pour empêcher.
-            for (u, _b, l) in &a_purger {
-                state.deactivate_alias(u, l).await?;
-                println!("✓ {l} retiré");
+            let Some(m) = mail else {
+                eprintln!();
+                eprintln!("🔴 Stalwart non configuré : RIEN n'a été retiré.");
+                eprintln!("   Marquer ces aliases comme purgés sans les retirer du");
+                eprintln!("   serveur serait le pire des deux mondes : ils recevraient");
+                eprintln!("   encore, et plus rien ne le signalerait.");
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let mut retires = 0;
+            for (u, b, l) in &a_purger {
+                let dom = state
+                    .mailboxes(u)
+                    .await?
+                    .into_iter()
+                    .find(|(loc, ..)| loc == b)
+                    .map(|(_, d, _)| d)
+                    .unwrap_or_else(|| domaine.to_string());
+
+                // 🔴 L'état n'est marqué QU'APRÈS le retrait effectif. L'inverse
+                // prétendrait l'adresse fermée alors qu'elle recevrait encore —
+                // exactement le mensonge que tout ce module existe pour empêcher.
+                match m.remove_alias(&format!("{b}@{dom}"), l).await {
+                    Ok(_) => {
+                        state.deactivate_alias(u, l).await?;
+                        println!("✓ {l} retiré");
+                        retires += 1;
+                    }
+                    Err(e) => {
+                        // Un échec ne bloque pas les autres : chaque adresse encore
+                        // ouverte refermée est un gain, même si la suivante résiste.
+                        println!("✗ {l} : {e}");
+                    }
+                }
+            }
+
+            if retires < a_purger.len() {
+                println!();
+                println!(
+                    "⚠️ {} adresse(s) sur {} REÇOIVENT encore.",
+                    a_purger.len() - retires,
+                    a_purger.len()
+                );
+                return Ok(ExitCode::FAILURE);
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -3778,7 +3842,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     },
 
                     UserCmd::Alias(sous) => {
-                        gerer_alias(&state, &domaine, sous).await
+                        let mail = match (
+                            &cli.stalwart_url,
+                            &cli.stalwart_admin,
+                            &cli.stalwart_password,
+                        ) {
+                            (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
+                                u,
+                                hlb_mail::Auth::Basic {
+                                    user: a.clone(),
+                                    password: p.clone(),
+                                },
+                            )),
+                            _ => None,
+                        };
+                        gerer_alias(&state, &domaine, mail.as_ref(), sous).await
                     }
                 }
             })

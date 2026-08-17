@@ -323,6 +323,17 @@ qui a tort, pas le test.
 - **PocketID n'a pas de mot de passe** : authentification par clé d'accès. On ne
   transmet donc pas un secret initial mais un **jeton à usage unique**, affiché une
   fois et jamais enregistré.
+- **JMAP `update` REMPLACE la propriété entière.** Il n'y a pas d'opération « ajouter
+  un alias » : écrire un seul alias effacerait tous les autres, sans lever d'erreur.
+  D'où lecture-modification-écriture — et deux modifications simultanées feraient
+  perdre la première.
+- **Marquer un alias « purgé » sans l'avoir retiré du serveur est pire que ne rien
+  faire.** L'adresse recevrait encore ET plus rien ne le signalerait : le silence
+  entretiendrait la croyance que la porte est fermée. L'état n'est marqué qu'APRÈS le
+  retrait effectif, et la purge sans Stalwart refuse au lieu de mentir.
+- **Ce qui compte dans une purge, c'est ce qui reste OUVERT, pas le nombre d'erreurs.**
+  Une purge sans erreur qui n'a rien retiré laisse autant de portes ouvertes qu'une
+  purge qui a échoué bruyamment.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -457,7 +468,8 @@ personnes. Un compte se crée maintenant en une commande : identité PocketID + 
 mail, avec un lien d'inscription à usage unique. Les aliases couvrent **trois axes
 indépendants** — permanent ou temporaire, généré ou choisi, avec ou sans indice de
 site — et `hlb user alias purge` est ce qui rend l'expiration vraie, Stalwart n'en
-ayant aucune notion.
+ayant aucune notion — et le controller la fait tourner toutes les heures, sinon la
+promesse ne tiendrait que si quelqu'un pensait à lancer la commande.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

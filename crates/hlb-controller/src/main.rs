@@ -107,6 +107,27 @@ struct Cli {
     /// Fréquence d'examen des échéances de sauvegarde.
     #[arg(long, default_value = "600", env = "HLB_BACKUP_CHECK_SECS")]
     backup_check_secs: u64,
+
+    /// Fréquence de purge des aliases temporaires expirés (§5bis.3).
+    ///
+    /// ⚠️ Une heure : un alias survit donc au plus une heure de trop. Descendre plus
+    /// bas n'apporterait rien — l'expiration est de l'ordre du jour — et multiplierait
+    /// les appels à Stalwart.
+    #[arg(long, default_value = "3600", env = "HLB_ALIAS_PURGE_SECS")]
+    alias_purge_secs: u64,
+
+    /// Domaine mail par défaut, pour les boîtes qui n'en portent pas.
+    #[arg(long, env = "HLB_MAIL_DOMAIN")]
+    mail_domain: Option<String>,
+
+    #[arg(long, env = "HLB_STALWART_URL")]
+    stalwart_url: Option<String>,
+
+    #[arg(long, env = "HLB_STALWART_ADMIN")]
+    stalwart_admin: Option<String>,
+
+    #[arg(long, env = "HLB_STALWART_PASSWORD")]
+    stalwart_password: Option<String>,
 }
 
 #[tokio::main]
@@ -185,6 +206,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 tracing::warn!("miroir Git non mis à jour : {e}");
                             }
                         }
+                    }
+                }
+            },
+        )));
+    }
+
+    // 🔴 La purge des aliases temporaires. Sans elle, « temporaire » est un mensonge :
+    // Stalwart n'a aucune notion d'expiration, et une adresse donnée « pour trente
+    // jours » reçoit indéfiniment.
+    {
+        let mail = match (&cli.stalwart_url, &cli.stalwart_admin, &cli.stalwart_password) {
+            (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
+                u,
+                hlb_mail::Auth::Basic { user: a.clone(), password: p.clone() },
+            ))),
+            _ => None,
+        };
+        if mail.is_none() {
+            tracing::warn!(
+                "Stalwart non configuré : les aliases temporaires expirés ne seront PAS \
+                 retirés, et continueront de recevoir"
+            );
+        }
+
+        let purge = Arc::new(loops::AliasPurgeLoop::new(
+            state.clone(),
+            mail,
+            cli.mail_domain.clone().unwrap_or_else(|| "local".into()),
+        ));
+        let rx = shutdown_rx.clone();
+        taches.push(tokio::spawn(loops::every(
+            Duration::from_secs(cli.alias_purge_secs),
+            rx,
+            move || {
+                let purge = purge.clone();
+                async move {
+                    let r = purge.tick().await;
+                    if r.retires > 0 {
+                        tracing::info!(retires = r.retires, "aliases expirés retirés");
+                    }
+                    // 🔴 On journalise sur ce qui reste OUVERT, pas sur le nombre
+                    // d'erreurs : une purge sans erreur qui n'a rien retiré laisse
+                    // autant de portes ouvertes qu'une purge qui a échoué bruyamment.
+                    if !r.is_clean() {
+                        tracing::error!(
+                            ouvertes = r.encore_ouvertes(),
+                            erreurs = r.errors.len(),
+                            "adresses expirées toujours actives"
+                        );
                     }
                 }
             },
