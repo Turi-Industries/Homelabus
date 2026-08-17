@@ -235,7 +235,13 @@ qui a tort, pas le test.
   divergence donne un bundle qui se charge et plante à la première fonction.
 - **Une donnée périmée ne doit jamais ressembler à une donnée fraîche.** Si le
   controller tombe, l'UI garderait son dernier état connu : toutes les apps vertes
-  pendant que le cluster brûle. D'où `Freshness`, que le type oblige à regarder.
+  pendant que le cluster brûle. D'où `Freshness`, que le type oblige à regarder — avec
+  `NeverSucceeded` distinct de `Stale`, sans quoi un échec de la PREMIÈRE requête
+  laisse l'écran sur « connexion en cours… » indéfiniment.
+- **Un jeton d'API n'est jamais stocké en clair**, même dans le coffre : on garde une
+  empreinte SHA-256. Une fuite révèle qu'un jeton existe, pas sa valeur.
+- **Le jeton web passe par le FRAGMENT d'URL**, jamais la chaîne de requête : un
+  `?token=` part dans les journaux d'accès, les en-têtes `Referer` et tout proxy.
 
 ## État d'avancement
 

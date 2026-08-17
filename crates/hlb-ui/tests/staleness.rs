@@ -29,17 +29,30 @@ impl Drop for Controller {
     }
 }
 
-fn demarrer(port: u16, base: &std::path::Path) -> Controller {
+/// Démarre un controller.
+///
+/// ⚠️ `ouvert` : le controller REFUSE de démarrer sans jeton (§9ter). Les tests qui
+/// portent sur la péremption des données, pas sur l'authentification, passent donc en
+/// mode ouvert — sinon ils échoueraient pour une raison qui n'est pas la leur.
+fn demarrer_avec(port: u16, base: &std::path::Path, ouvert: bool) -> Controller {
     let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug/hlb-controller");
     assert!(bin.exists(), "lance `cargo build` d'abord ({})", bin.display());
 
+    let mut args = vec![
+        "--listen".to_string(),
+        format!("127.0.0.1:{port}"),
+        "--state".to_string(),
+        base.to_string_lossy().to_string(),
+        "--master-key".to_string(),
+        base.with_extension("key").to_string_lossy().to_string(),
+    ];
+    if ouvert {
+        args.push("--insecure-no-auth".into());
+    }
+
     let child = std::process::Command::new(&bin)
-        .args([
-            "--listen", &format!("127.0.0.1:{port}"),
-            "--state", &base.to_string_lossy(),
-            "--master-key", &base.with_extension("key").to_string_lossy(),
-        ])
+        .args(&args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -63,7 +76,7 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
     let base = d.path().join("hlb.db");
     let port = 8433u16;
 
-    let mut ctrl = demarrer(port, &base);
+    let mut ctrl = demarrer_avec(port, &base, true);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
     let mut poller =
@@ -122,7 +135,7 @@ fn the_last_known_state_is_kept_but_marked() {
     let base = d.path().join("hlb.db");
     let port = 8434u16;
 
-    let mut ctrl = demarrer(port, &base);
+    let mut ctrl = demarrer_avec(port, &base, true);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
     let mut poller =
@@ -160,4 +173,62 @@ fn the_last_known_state_is_kept_but_marked() {
         }
     }
     panic!("la péremption n'a jamais été détectée");
+}
+
+/// Sans jeton, l'écran dit-il quoi faire ? (§9ter)
+///
+/// 🔴 Le cas le plus fréquent après un déploiement : l'API est protégée, l'UI n'a pas
+/// de jeton, et l'utilisateur voit… quoi ? Un écran vide le laisserait conclure à une
+/// panne du controller, et il irait chercher au mauvais endroit.
+#[test]
+#[ignore = "démarre un vrai controller"]
+fn without_a_token_the_screen_says_how_to_get_one() {
+    let d = tempfile::tempdir().expect("répertoire");
+    let base = d.path().join("hlb.db");
+    let port = 8435u16;
+
+    // Un controller protégé : on lui dépose un jeton pour qu'il accepte de démarrer,
+    // mais l'UI ne l'aura pas.
+    {
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        rt.block_on(async {
+            let st = hlb_state::State::open(&base).await.expect("base");
+            let (_, jeton) =
+                hlb_types::generate_token("autre", hlb_types::Role::Viewer, [7u8; 32]);
+            st.store_token(&jeton).await.expect("jeton");
+        });
+    }
+
+    let mut ctrl = demarrer_avec(port, &base, false);
+
+    let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
+    let mut poller =
+        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+
+    let mut horloge = 0.0_f64;
+    for _ in 0..60 {
+        horloge += 0.1;
+        poller.tick(horloge, || {});
+        std::thread::sleep(Duration::from_millis(100));
+
+        let (_, f) = shared.read(horloge);
+        // ⚠️ `NeverSucceeded` et non `Stale` : il n'y a jamais eu de réussite, donc
+        // pas d'« âge » des données. Les confondre laissait l'écran sur
+        // « connexion en cours… » — le bug que ce test a trouvé.
+        if let hlb_ui::client::Freshness::NeverSucceeded { error } = &f {
+            // Le message doit porter l'ACTION, pas seulement le constat.
+            assert!(
+                error.contains("hlb token create"),
+                "🔴 l'écran doit dire comment obtenir un jeton : « {error} »"
+            );
+            assert!(
+                error.contains("#token="),
+                "et comment le donner à l'UI web : « {error} »"
+            );
+            ctrl.stop();
+            return;
+        }
+    }
+    ctrl.stop();
+    panic!("l'absence de jeton n'a jamais été signalée");
 }

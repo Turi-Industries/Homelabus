@@ -35,8 +35,15 @@ use hlb_api::{AppSummary, AuditItem, GuideItem, Health, SecretItem};
 /// De quand datent les données affichées.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Freshness {
-    /// Jamais interrogé : au démarrage.
+    /// Jamais interrogé : au démarrage, l'espace de quelques instants.
     Never,
+    /// 🔴 Jamais RÉUSSI, et on sait pourquoi.
+    ///
+    /// Distinct de [`Self::Stale`], qui suppose une réussite antérieure. Sans cette
+    /// variante, un controller qui refuse la toute première requête — jeton absent,
+    /// adresse erronée — laisse l'écran sur « connexion en cours… » indéfiniment :
+    /// un chargement perpétuel, sans la moindre explication.
+    NeverSucceeded { error: String },
     /// Réponse obtenue il y a `secs` secondes.
     Fresh { secs: u64 },
     /// 🔴 Le controller ne répond plus. `secs` dit depuis quand les données datent.
@@ -52,6 +59,9 @@ impl Freshness {
     pub fn describe(&self) -> String {
         match self {
             Self::Never => "connexion en cours…".to_string(),
+            Self::NeverSucceeded { error } => {
+                format!("CONNEXION IMPOSSIBLE — {error}")
+            }
             Self::Fresh { secs } if *secs < 2 => "à l'instant".to_string(),
             Self::Fresh { secs } => format!("il y a {secs} s"),
             Self::Stale { secs, error } => format!(
@@ -95,7 +105,10 @@ impl Shared {
         let err = self.last_error.lock().ok().and_then(|e| e.clone());
 
         let fraicheur = match (ok, err) {
-            (None, _) => Freshness::Never,
+            // 🔴 Jamais réussi ET une erreur connue : on la dit, au lieu de laisser
+            // croire que la connexion est encore en cours.
+            (None, Some(e)) => Freshness::NeverSucceeded { error: e },
+            (None, None) => Freshness::Never,
             (Some(t), None) => Freshness::Fresh {
                 secs: (now - t).max(0.0) as u64,
             },
@@ -332,6 +345,24 @@ mod tests {
         let (_, f) = s.read(0.0);
         assert_eq!(f, Freshness::Never);
         assert!(!f.is_trustworthy());
+    }
+
+    #[test]
+    fn a_first_request_that_fails_is_never_a_loading_state() {
+        // 🔴 Le bug qu'un test d'intégration a trouvé : sans réussite antérieure,
+        // l'échec retombait sur « connexion en cours… » — un chargement perpétuel
+        // sans explication, exactement ce que cette UI existe pour éviter.
+        let s = Shared::default();
+        s.echec("jeton absent ou refusé".into());
+
+        let (_, f) = s.read(10.0);
+        assert!(!f.is_trustworthy());
+        assert!(
+            !f.describe().contains("en cours"),
+            "un échec ne doit pas ressembler à un chargement : {}",
+            f.describe()
+        );
+        assert!(f.describe().contains("jeton"), "{}", f.describe());
     }
 
     #[test]

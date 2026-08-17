@@ -39,7 +39,10 @@ serde_json.workspace = true
 ehttp = "0.5"
 
 [dev-dependencies]
+hlb-state.workspace = true
+hlb-types.workspace = true
 tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
