@@ -61,7 +61,7 @@ pub struct Spec {
     #[serde(default)]
     pub update: UpdatePolicy,
 
-    /// Conteneurs compagnons, déployés **avec** l'app et pour elle seule (§4.8).
+    /// Conteneurs compagnons, déployés **avec** l'app et pour elle seule (§4.7bis).
     ///
     /// Certaines apps ne tiennent pas dans un conteneur : Immich a besoin d'un service
     /// d'apprentissage automatique séparé, Seafile d'un cache mémoire. Ce ne sont pas
@@ -184,7 +184,7 @@ impl Default for SwarmSpec {
     }
 }
 
-/// Un conteneur compagnon (§4.8).
+/// Un conteneur compagnon (§4.7bis).
 ///
 /// Déployé sous le nom `<app>-<name>`, sur le même réseau que l'app, qui le joint donc
 /// par ce nom. Il partage son cycle de vie : installé avec elle, arrêté avec elle.

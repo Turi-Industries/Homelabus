@@ -2,10 +2,12 @@
 //!
 //! Ce crate est volontairement le seul endroit où le schéma est défini. Il alimente :
 //!   - le controller et le CLI (Rust, directement) ;
-//!   - l'autocomplétion YAML dans l'éditeur (via `schemars` → JSON Schema) ;
-//!   - le client TypeScript de l'UI (via l'OpenAPI du controller).
+//!   - l'autocomplétion YAML dans l'éditeur (via `schemars` → JSON Schema).
 //!
-//! Une seule définition, trois consommateurs.
+//! ⚠️ L'UI ne passe PAS par un client généré : depuis le choix d'egui, elle est en
+//! Rust et consomme `hlb-api` directement. L'OpenAPI `utoipa` + la génération
+//! TypeScript prévus au §11bis sont sans objet — c'est le principal bénéfice
+//! d'architecture de ce choix, et il vaut mieux qu'il soit dit ici.
 
 pub mod capability;
 pub mod guide;
@@ -100,7 +102,7 @@ pub fn validate(m: &Manifest) -> Result<()> {
         }
     }
 
-    // §4.8 — un compagnon devient un nom DNS dans le réseau Swarm.
+    // §4.7bis — un compagnon devient un nom DNS dans le réseau Swarm.
     //
     // ⚠️ Une majuscule ou un point produit un service que Swarm crée sans broncher et
     // que l'app ne résout pas : la panne apparaît à la première requête, sur un

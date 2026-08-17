@@ -53,10 +53,26 @@ d'intégration et `hlb ps` / `hlb install` échouent avec `SocketNotFoundError`.
 ./target/debug/hlb plan gitea --domain git.example.fr
 ./target/debug/hlb install valkey            # aperçu
 ./target/debug/hlb install valkey --apply    # exécution réelle
+
+# Les commandes récentes, toutes en aperçu par défaut
+./target/debug/hlb backup dest list
+./target/debug/hlb backup status             # fraîcheur PAR destination
+./target/debug/hlb metrics rules
+./target/debug/hlb metrics deadman --ntfy https://ntfy.sh/veilleur
+./target/debug/hlb replication config nas-01
+./target/debug/hlb user list
+./target/debug/hlb user alias sieve remy     # --apply pour poser chez Stalwart
 ```
 
-⚠️ Les tiers de nœuds sont de vraies contraintes de placement Swarm. Tant que
-`hlb node add` n'existe pas, il faut poser le label à la main, sinon rien ne se
+⚠️ **Beaucoup de commandes ont besoin d'un état et d'un coffre.** Pour essayer sans
+toucher à une installation réelle :
+
+```sh
+export HLB_STATE=/tmp/essai.db HLB_MASTER_KEY=/tmp/essai.key
+```
+
+⚠️ Les tiers de nœuds sont de vraies contraintes de placement Swarm. `hlb node add` les
+pose ; sur un nœud rattaché à la main, il faut le faire soi-même, sinon rien ne se
 planifie et `wait_healthy` expire :
 
 ```sh
@@ -104,16 +120,25 @@ hlb-orchestrator      trait Orchestrator → bollard → Docker Swarm
 ### Dépendances entre crates
 
 `hlb-types` est le socle : **la seule définition du schéma**, consommée par le code
-Rust, par `schemars` (JSON Schema pour l'autocomplétion YAML) et à terme par
-l'OpenAPI du controller. Aucun autre crate ne redéfinit ces types.
+Rust et par `schemars` (JSON Schema pour l'autocomplétion YAML). Aucun autre crate ne
+redéfinit ces types.
+
+⚠️ L'OpenAPI n'existe pas et n'existera pas : depuis le choix d'egui, `hlb-api` définit
+les types de l'API **une seule fois** pour le serveur et l'interface, tous deux en
+Rust. Le §11bis prévoyait `utoipa` + génération TypeScript ; c'est sans objet.
 
 ```
 hlb-types  ←  hlb-resolver  ←  hlb-engine  →  hlb-orchestrator
      ↑              ↑              ↓
 hlb-catalog    hlb-state    ←──────┘
-                    ↑
-                 hlb-cli (assemble tout)
+     ↑              ↑
+hlb-users      hlb-cli (assemble tout)   hlb-api  →  hlb-ui
 ```
+
+Les crates « métier » ne dépendent que de `hlb-types` et ne parlent jamais réseau :
+`hlb-users` (comptes, aliases, quotas, Sieve), `hlb-metrics` (règles, deadman). Les
+clients réseau sont à côté — `hlb-mail`, `hlb-identity`, `hlb-objstore` — ce qui rend
+la logique testable sans serveur.
 
 ### Ordonnancement des dépendances
 
@@ -472,7 +497,7 @@ au catalogue, règles d'alerte évaluées par HomelabUS et routées vers `hlb-no
 **deadman switch** du §8bis avec son veilleur pour le NAS. `hlb metrics rules / scrape /
 check / deadman`.
 
-Fait : le **multi-conteneur** (`spec.companions`, §4.8) — un compagnon est déployé
+Fait : le **multi-conteneur** (`spec.companions`, §4.7bis) — un compagnon est déployé
 avant l'app et attendu sain, n'a jamais d'ingress ni de capacités propres, et se joint
 par `{{ companion.<nom>.host }}`. Et le **stockage objet** (`Capability::ObjectStorage`
 + `hlb-objstore` + Garage au catalogue), avec compartiment et clé isolés par app.
@@ -512,6 +537,31 @@ Bitwarden** (`POST /api/v1/aliases`) : Vaultwarden génère l'alias au moment de
 compte sur un site, comme avec idmail — qu'on n'intègre PAS, puisqu'il remplacerait
 l'annuaire de Stalwart.
 
-Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
-réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de
-distribution (la vérification Ed25519 et la bascule du binaire sont faites).
+## Ce qui reste
+
+La feuille de route du §12 est couverte. Ce qui suit est identifié, par ordre
+d'utilité — et énuméré ici pour qu'aucun de ces points ne se redécouvre en panne.
+
+🔴 **Rien de la partie mail n'est vérifié contre un vrai Stalwart.** `hlb-mail` est
+écrit à partir du code source amont, jamais exécuté contre une instance : pas d'image
+en local. À éprouver le jour où on en aura une — le chemin `/jmap/upload/{accountId}/`,
+la forme d'`onSuccessActivateScript`, le format de `/jmap/download/`, et `x:Account/get`
+sur `aliases`. Les **dumps MariaDB** sont dans le même cas (runner simulé).
+
+Le reste, par ordre décroissant d'intérêt :
+
+- **L'UI egui** : écran d'aliases en libre-service. L'API et les rôles sont en place ;
+  c'est l'interface qui manque, et c'est ce qui rendrait les aliases utilisables par
+  quelqu'un d'autre que l'administrateur.
+- **`hlb user mailbox add` n'ouvre pas le compte Stalwart** — il l'enregistre
+  seulement. Et les **ACL IMAP** (que Stalwart implémente) permettraient de voir
+  plusieurs boîtes sous UNE seule connexion, au lieu d'en configurer trois.
+- **`hlb db failover`** : la bascule assistée du §3.2 phase 2. La réplication marche et
+  est vérifiée contre un vrai couple ; il manque la commande, et un second nœud `heavy`
+  réel pour l'éprouver.
+- **`hlb self update`** attend une URL de distribution. La vérification Ed25519 et la
+  bascule du binaire sont faites et testées.
+- **Le catalogue** : ~30 apps candidates dans `catalog/CATALOGUE.md`, toutes
+  réalisables sans nouveau mécanisme depuis le multi-conteneur et le stockage objet.
+- **Le multi-nœuds de Garage** passe par `garage layout`, pas par `replicas` : une
+  seule instance tant qu'il n'y a qu'un nœud de stockage.

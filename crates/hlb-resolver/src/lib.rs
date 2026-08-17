@@ -158,7 +158,7 @@ pub fn resolve_with_guide(
         })
         .collect();
 
-    // 4bis. Les compagnons, AVANT l'app (§4.8).
+    // 4bis. Les compagnons, AVANT l'app (§4.7bis).
     //
     // 🔴 L'ordre est le mécanisme, comme pour le graphe de dépendances (§4.7) : Swarm
     // n'a pas de `depends_on`, et une app qui démarre avant son compagnon boucle en

@@ -16,24 +16,24 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
 | `hlb-resolver` — résolution + graphe + plan | ✅ 25 tests |
 | `hlb-catalog` — chargement et validation | ✅ 9 tests |
-| `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 27 tests |
+| `hlb-state` — état persistant, reprise, secrets, **comptes** (sqlx/SQLite) | ✅ 40 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
 | `hlb-platform` — provisionnement isolé **PostgreSQL + MariaDB** | ✅ 14 + 11 tests |
 | `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 25 tests |
 | `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 33 + 7 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, rollback, **Trivy + cosign** | ✅ 30 tests |
-| `hlb-backup` — restic, PITR, SQLite, Litestream, DR, **exercices**, **réplication**, **MariaDB** | ✅ 177 + 18 tests |
+| `hlb-backup` — restic, PITR, SQLite, DR, réplication, MariaDB, **destinations** | ✅ 192 + 18 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-mail` — client Stalwart (JMAP) : boîtes et aliases | ✅ 16 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
 | `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
 | `hlb-bootstrap` — distributions, préchecks, **accès SSH gérés** | ✅ 72 + 6 tests |
 | `hlb-agent` — état du nœud, seuils disque, **PKI + mTLS** | ✅ 37 + 10 tests |
-| `hlb-controller` — daemon : API de lecture, `/metrics`, boucles de fond | ✅ 45 + 3 tests |
+| `hlb-controller` — daemon : API, `/metrics`, boucles, **purge des aliases** | ✅ 48 + 3 tests |
 | `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 23 tests |
 | `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
-| `hlb-cli` — `install`, `node add`, `access`, `backup`, `dr`, `pki`, `mesh`, `crowdsec`… | ✅ utilisable |
+| `hlb-cli` — 27 commandes : `install`, `backup`, `user`, `metrics`, `replication`… | ✅ utilisable |
 | `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 11 tests |
 | `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 22 tests |
 | `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
@@ -134,12 +134,73 @@ export HLB_POSTGRES_ADMIN=postgres://postgres:motdepasse@hote:5432/postgres
 tous les secrets et toutes les sauvegardes irrécupérables** — garde deux copies
 hors ligne.
 
-⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. En attendant
-`hlb node add`, il faut poser le label à la main :
+⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. `hlb node add` les
+pose ; sur un nœud rattaché à la main, il faut le faire soi-même — sinon rien ne se
+planifie et `wait_healthy` expire :
 
 ```sh
 docker node update --label-add tier=heavy $(docker node ls -q)
 ```
+
+## Sauvegardes — le 3-2-1 du §8.1
+
+Le routage se fait par **classe de volume**, pas par importance : tout est important,
+mais tout ne passe pas dans une connexion domestique.
+
+```sh
+hlb backup dest add nas     --location /mnt/nas/restic --classes critique,volumineux
+hlb backup dest add garage  --location s3:http://garage:3900/hlb --classes critique
+hlb backup dest add offsite --location s3:https://s3.exemple.com/depot \
+  --classes critique,volumineux --access-key <clé>   # le secret est lu sur STDIN
+
+# Les bases partout, les photos seulement où la connexion suit
+hlb backup route immich  --critique nas,garage,offsite --volumineux nas,offsite
+hlb backup route seafile --critique nas,garage,offsite --volumineux nas
+
+hlb backup status        # par destination, jamais agrégé
+hlb backup run --force
+```
+
+🔴 `backup status` mesure la fraîcheur **par destination**. Une agrégation ferait
+passer un hors-site mort depuis trois semaines pour une sauvegarde de 2 h, parce que le
+NAS, lui, tourne — et l'on croirait le 3-2-1 tenu alors qu'il ne reste qu'une copie.
+
+## Comptes et aliases (§5bis.3)
+
+```sh
+hlb user add remy --email remy@exemple.fr    # identité PocketID + boîte, en une fois
+hlb user mailbox add remy photo              # une boîte de plus (quota par profil)
+
+# Trois axes INDÉPENDANTS : durée, nom généré ou choisi, indice de site
+hlb user alias add remy                            # aléatoire, permanent
+hlb user alias add remy --pour amazon              # aléatoire lié à un site
+hlb user alias add remy --pour fnac --pendant 30j  # jetable et attribuable
+hlb user alias add remy --nom-alias contact        # choisi, permanent
+
+hlb user alias list remy --problemes   # les expirés TOUJOURS actifs
+hlb user alias purge --apply           # ce qui rend l'expiration vraie
+hlb user alias sieve remy --apply      # pose les règles de tri chez Stalwart
+```
+
+🔴 Stalwart n'a **aucune notion d'expiration** : sa liste d'aliases n'a pas de date. Un
+alias « temporaire » ne l'est que si la purge le supprime réellement — le controller la
+fait tourner toutes les heures. D'où trois états et non deux : valide, expiré-et-
+supprimé, et **expiré-mais-toujours-actif**.
+
+### Génération depuis Vaultwarden
+
+HomelabUS parle le protocole d'addy.io, celui que Bitwarden sait appeler :
+
+```sh
+hlb token create bw-perso --user remy                  # → boîte par défaut
+hlb token create bw-photo --user remy --mailbox photo  # → boîte « photo »
+```
+
+Le jeton se colle dans les réglages du générateur de Bitwarden. Le protocole n'ayant
+aucun champ pour choisir la boîte, c'est le **jeton** qui la porte : un jeton par boîte.
+
+⚠️ Un jeton sans `--user` est un jeton de **service** : il ne peut pas créer d'alias au
+nom de quelqu'un, même en rôle `admin`. Le privilège ne remplace pas l'identité.
 
 ## Le daemon
 
@@ -234,42 +295,44 @@ AGPL-3.0-or-later.
 
 ## Limites assumées
 
-Ces manques sont **explicites dans le code**, jamais masqués :
+Ces manques sont **explicites dans le code**, jamais masqués. Une absence qui
+ressemblerait à un succès est traitée comme un défaut, pas comme un raccourci.
 
-- **Pas d'archivage WAL.** Le PITR du §8.1 n'existe pas : on ne peut restaurer
-  qu'aux instants où un dump a été pris, pas à une seconde arbitraire.
-- **Les dumps SQL ne sont pas encore chaînés** à l'ordonnanceur : `backup run`
-  ne sauvegarde que les volumes.
-- **`ProvisionMailAccount`** reste la seule action non implémentée : elle attend
-  un client Stalwart.
-- **`Verify::Exec`** (commande dans le conteneur) est rapporté comme non vérifié,
-  jamais comme réussi : il demande un accès conteneur qui appartient à l'exécuteur.
-- **La vérification par restauration n'est pas câblée au CLI.** Elle existe en
-  bibliothèque (`hlb_backup::verify_by_restore`) et est couverte par les tests
-  d'intégration, mais `hlb backup verify` le dit franchement au lieu de faire
-  semblant.
-- **L'API du controller est en lecture seule**, délibérément (§11bis) : aucune
-  route POST/PUT/DELETE, et un test le vérifie.
-- **L'agent n'est pas encore déployé automatiquement.** Le controller sait
-  l'interroger (`tasks.hlb-agent` → un rapport par nœud), et le mode `global` est
-  supporté par l'orchestrateur, mais la création du service reste à écrire — elle
-  suppose une image de l'agent, qu'il faut construire.
-- **L'API de l'agent est en HTTP clair.** Elle n'écoute que sur l'overlay,
-  chiffré par IPsec avec `--opt encrypted` (§6.3), mais le mTLS du §2 n'est pas
-  en place — c'est dit plutôt que sous-entendu.
-- **Le rattachement d'un nœud reste manuel** : `hlb cluster join-command` produit
-  la commande, mais ne l'exécute pas à distance. Le mesh WireGuard et l'agent
-  n'existent pas encore.
-- **Le RBAC n'est pas encore appliqué** : les rôles et leurs permissions sont
-  définis et testés, mais l'API étant en lecture seule il n'y a rien à protéger
-  pour l'instant. Le CLI s'exécute localement — qui le lance a déjà la clé
-  maîtresse.
-- **La réconciliation ne corrige pas par défaut** : `--reconcile-apply` doit
-  être demandé explicitement.
-- **Sans `--backup-repo`, toute mise à jour exigeant une sauvegarde est
-  refusée.** De même si l'app n'a aucun volume connu : « rien à sauvegarder »
-  ne vaut jamais « sauvegarde réussie ».
-- **Client PocketID et création de volume** restent `Unimplemented` dans
-  l'exécuteur — enregistrés comme tels, jamais comptés comme réussis.
-- `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur
-  Rust. Dépendance transitive, sans action possible de notre côté pour l'instant.
+### Non vérifié contre un vrai serveur
+
+- 🔴 **Toute la partie mail.** `hlb-mail` est écrit à partir du code source de
+  Stalwart, mais **jamais exécuté contre une instance réelle** : pas d'image en local.
+  Restent à éprouver le chemin `/jmap/upload/`, la forme d'`onSuccessActivateScript`,
+  le format de `/jmap/download/` et `x:Account/get` sur `aliases`. C'est plus faible
+  que la réplication PostgreSQL, elle vérifiée contre un vrai couple.
+- **Les dumps MariaDB** passent par un runner simulé, pour la même raison.
+
+### Fonctionnalités absentes
+
+- **Pas de libre-service pour les aliases.** Un utilisateur passe par la ligne de
+  commande ou par l'API addy.io ; l'écran dans l'UI reste à écrire.
+- **`hlb user mailbox add` n'ouvre pas le compte Stalwart**, il l'enregistre seulement.
+  Les ACL IMAP — plusieurs boîtes sous une seule connexion — ne sont pas câblées.
+- **`hlb db failover`** n'existe pas : la réplication fonctionne et est vérifiée, mais
+  la bascule reste manuelle. Elle demande un second nœud `heavy` réel.
+- **Le déploiement multi-nœuds de Garage** passe par `garage layout`, pas par
+  `replicas` : une seule instance tant qu'il n'y a qu'un nœud de stockage.
+- **Pas d'import `docker-compose.yml`** — écarté d'entrée, contexte greenfield (§12).
+- **Pas d'assistant TUI** pour `hlb cluster init` : la commande existe et est
+  idempotente, sans l'accompagnement `ratatui` prévu au §12.
+
+### Choix assumés
+
+- **La réconciliation ne corrige pas par défaut** : `--reconcile-apply` doit être
+  demandé. Un système qui corrige trop est plus dangereux qu'un système qui ne corrige
+  rien.
+- **`Verify::Exec`** est rapporté comme non vérifié, jamais comme réussi.
+- **Sans dépôt configuré, toute mise à jour exigeant une sauvegarde est refusée.** De
+  même si l'app n'a aucun volume connu : « rien à sauvegarder » ne vaut jamais
+  « sauvegarde réussie ».
+- **`Unimplemented` n'est jamais `Done`.** Sans coffre, sans PostgreSQL ou sans
+  Stalwart, l'action est enregistrée non implémentée — jamais simulée.
+- **Bulwark est en `channel: pin`** : aucune release Git, aucune licence déclarée,
+  seules les images existent. Roundcube l'accompagne comme filet de sécurité.
+- `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur Rust.
+  Dépendance transitive, sans action possible de notre côté.

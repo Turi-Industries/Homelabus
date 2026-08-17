@@ -10,8 +10,8 @@ derrière un fichier YAML.
 | | Signification |
 |---|---|
 | ✅ | Rentre dans les capacités actuelles : un conteneur, PostgreSQL / MariaDB / Valkey / SSO / SMTP / stockage |
-| 🔶 | Demande le **multi-conteneur** (compagnon ML, agent, courtier de messages) |
-| 🔷 | Demande le **stockage objet** (S3 : MinIO ou Garage) |
+| 🔶 | Utilise le **multi-conteneur** (`spec.companions`) — mécanisme en place |
+| 🔷 | Utilise le **stockage objet** (Garage) — mécanisme en place |
 | ⛔ | Mauvais candidat pour Swarm, et il vaut mieux le savoir avant |
 | 🟢 | Déjà au catalogue |
 
@@ -28,9 +28,13 @@ derrière un fichier YAML.
 | 🟢 Jellyfin | Serveur multimédia — films, séries, musique |
 | 🟢 LibreSpeed | Test de débit, hébergé chez soi |
 | 🟢 Termix | Terminal SSH dans le navigateur |
+| 🟢 Immich | Galerie photo : reconnaissance de visages, recherche par description, applications mobiles |
+| 🟢 Seafile CE | Synchronisation de fichiers — trois bases, un seul rôle |
+| 🟢 Bulwark | Webmail JMAP natif pour Stalwart |
+| 🟢 Roundcube | Webmail IMAP mature — le filet de sécurité, délibérément sans SSO |
 
 Services de plateforme : PostgreSQL, MariaDB, Valkey, PocketID, Stalwart, Caddy,
-CrowdSec, oauth2-proxy, ntfy, VictoriaMetrics, Grafana.
+CrowdSec, oauth2-proxy, ntfy, VictoriaMetrics, Grafana, **Garage**.
 
 ---
 
@@ -112,28 +116,29 @@ Chacun est un conteneur indépendant, tous partagent le même NFS.
 
 ---
 
-## 🔶 Demandent le multi-conteneur
+## 🔶 Demandent plusieurs conteneurs
 
-Le format de manifest décrit **un** conteneur. Ces apps en veulent plusieurs qui
-partagent leur cycle de vie.
+✅ **Le multi-conteneur existe désormais** (`spec.companions`, §4.7bis) : Immich et
+Seafile sont au catalogue. Ce qui suit reste à écrire, mais plus rien ne le bloque —
+c'est du manifest, pas du mécanisme.
 
-| App | Ce que c'est | Ce qui manque |
+| App | Ce que c'est | Compagnons |
 |---|---|---|
-| **Immich** | Galerie photo façon Google Photos : reconnaissance de visages, recherche par description, applications mobiles avec sauvegarde automatique. **La plus demandée du lot.** | Un conteneur d'apprentissage automatique séparé, **et** un PostgreSQL avec extension vectorielle — deux blocages, pas un |
 | **Woodpecker CI** | Intégration continue branchée sur Gitea. | Serveur + agent |
 | **Karakeep** | Marque-pages avec résumé automatique et recherche en texte intégral. | Meilisearch + navigateur sans tête |
-| **Seafile** | Synchronisation de fichiers, plus rapide que Nextcloud sur les gros volumes. | Plusieurs services |
 | **Zigbee2MQTT** | Passerelle Zigbee vers MQTT pour la domotique. | Courtier MQTT séparé |
 | **Beszel** | Supervision légère de serveurs. | Hub + agents |
 
 ---
 
-## 🔷 Demandent le stockage objet
+## 🔷 Utilisent le stockage objet
 
-Une capacité `object-storage` plus MinIO ou Garage en service de plateforme.
+✅ **`Capability::ObjectStorage` et Garage existent** (§3.5). Ces apps restent à
+écrire, mais le mécanisme est là.
 
-**Double usage** : ce même service ferait cible pour restic, ce qui remplacerait le S3
-externe du 3-2-1 (§8.1) par un troisième site à soi.
+⚠️ Garage vit sur les **disques du cluster** : y mettre des photos double leur
+occupation chez soi. C'est une seconde copie contre la panne de disque, pas une copie
+hors site — voir le routage par classe au §8.1.
 
 | App | Ce que c'est |
 |---|---|
@@ -161,6 +166,8 @@ Le catalogue « ✅ » représente une trentaine d'apps déjà atteignables — 
 homelab complet. Mais l'app la plus demandée du lot (Immich) est en 🔶, et le stockage
 objet (🔷) rendrait service **deux fois**, aux apps comme aux sauvegardes.
 
-🔴 **Et rien de tout cela ne fonctionnera tant que les identifiants de base
-n'atteindront pas le conteneur** — voir la section correspondante de CLAUDE.md. Une
-app à base de données démarre aujourd'hui sans savoir s'y connecter.
+✅ **Les liaisons sont faites** (`spec.env`, §4.3) : une app reçoit désormais les
+coordonnées de ce qui a été provisionné pour elle. C'était le blocage précédent.
+
+Il ne reste donc que du manifest à écrire — chaque app coûte peu maintenant que le
+résolveur, le multi-conteneur, le stockage objet et les liaisons existent.

@@ -791,6 +791,37 @@ Vaultwarden (par défaut), PocketID et pas mal d'autres utilisent SQLite. Il ne 
 Le manifest déclare `storage[].sqlite: true` et HomelabUS applique la bonne méthode
 automatiquement.
 
+### 3.5 Stockage objet — fait (`Capability::ObjectStorage`, Garage)
+
+Certaines apps ne veulent pas un volume mais un **compartiment S3** : Outline l'exige,
+Matrix y déporte ses médias, Nextcloud peut y mettre son stockage primaire. Un volume
+se monte dans un chemin et impose une contrainte de placement ; un compartiment se
+parle en HTTP, et l'app cesse d'avoir à tourner près de sa donnée — ce qui compte sur
+un cluster hétérogène.
+
+**Garage plutôt que MinIO** : conçu pour des nœuds inégaux reliés par un réseau
+ordinaire, quelques dizaines de mégaoctets de RAM, et pas de console web à protéger —
+l'administration passe par son API. ⚠️ Sa compatibilité S3 n'est pas totale : pas de
+versionnement d'objets. Sans conséquence pour restic, Outline et Matrix ; à signaler à
+l'ajout d'un manifest qui l'exigerait.
+
+**🔴 Isolation par compartiment ET par clé**, comme les bases du §3.1. Une clé
+d'administration partagée donnerait à chaque app la lecture des compartiments de toutes
+les autres — les photos d'Immich lisibles depuis le wiki, et réciproquement.
+
+**🔴 Garage ne redonne JAMAIS une clé secrète.** `CreateKey` la donne une fois ;
+`GetKeyInfo` la rend nulle ensuite. L'idempotence ne peut donc pas reposer sur « la clé
+existe-t-elle ? » : une reprise repartirait sans secret, et l'app échouerait sur une
+« signature invalide » qui n'oriente vers rien. C'est le **coffre** qui fait autorité.
+
+**🔴 Une app n'est jamais `owner` de son compartiment** — `read` + `write` seulement.
+Propriétaire, une app compromise pourrait supprimer son propre compartiment, effaçant
+d'un coup ce que les sauvegardes protégeaient.
+
+⚠️ **Garage vit sur les disques du cluster.** Y sauvegarder des photos double leur
+occupation chez soi : c'est une seconde copie contre la panne de disque, pas une copie
+hors site. Voir le routage par classe au §8.1.
+
 ---
 
 ## 4. Le système de modules (ajouter une app)
@@ -1303,6 +1334,31 @@ for app in order {
 Le même graphe sert à **l'arrêt en ordre inverse** (on ne coupe pas Postgres avant les
 apps qui l'utilisent) et à la **restauration** (§8.3).
 
+### 4.7bis Conteneurs compagnons — fait (`spec.companions`)
+
+Certaines apps ne tiennent pas dans un conteneur : Immich a besoin d'un service
+d'apprentissage automatique séparé. Ce ne sont pas des services de plateforme — ils ne
+sont partagés avec personne et meurent avec leur app.
+
+Trois choses qu'un compagnon **n'a pas**, inscrites dans le type plutôt que dans une
+consigne :
+
+- **Pas d'`ingress`.** Une aide interne exposée publiquement, c'est un composant sans
+  authentification face à Internet.
+- **Pas de `requires`.** Un compagnon qui réclamerait sa propre base serait une app
+  déguisée, et devrait en être une.
+- **Pas de `replicas`.** Répartir un cache ou un modèle demande une coordination que
+  rien ici ne fournit.
+
+Il est déployé **avant** l'app et attendu sain. Sans cette attente, l'ordre du plan ne
+garantirait que l'ordre des *appels* à Swarm, pas celui des démarrages — même problème
+que l'absence de `depends_on` au §4.7.
+
+🔴 **Un compagnon absent ne se voit pas.** Immich sans son service d'apprentissage
+importe et affiche les photos parfaitement, et ne reconnaît jamais personne. Rien à
+l'écran ne dit que la moitié de la fonctionnalité manque — d'où une étape de guide qui
+fait *vérifier* que ça marche, pas seulement que le service tourne.
+
 ### 4.8 Versionnement du catalogue — trou identifié
 
 Le catalogue évolue indépendamment des apps installées. Trois questions restaient sans
@@ -1620,28 +1676,29 @@ PocketID ne pouvant pas servir d'annuaire LDAP à Stalwart, il reste trois voies
 
 | Voie | Architecture | Verdict |
 |---|---|---|
-| **A — HomelabUS synchronise** ⭐ | PocketID = identités. idmail = comptes mail + aliases. **HomelabUS réconcilie les deux via leurs API.** | ✅ **Recommandé** — c'est littéralement la raison d'être de ton produit |
+| **A — HomelabUS synchronise** ⭐ | PocketID = identités. Stalwart = boîtes et aliases. **HomelabUS réconcilie les deux via leurs API.** | ✅ **Retenu et fait** — c'est littéralement la raison d'être de ton produit |
 | **B — LLDAP en source de vérité** | LLDAP porte les utilisateurs. PocketID synchronise depuis LLDAP. Stalwart lit LLDAP directement. | Solide et éprouvé, mais **une brique de plus** et la gestion des comptes se fait dans LLDAP |
 | **C — Migrer vers Kanidm** | Un seul composant : OIDC + LDAP + passkeys + attestation | Le plus élégant sur le papier, mais **tu perds PocketID** et sa simplicité |
 
-**La voie A est la bonne pour ce projet.** Créer un utilisateur dans PocketID
-déclenche le provisionnement de la mailbox dans idmail — c'est exactement le motif
-« résolveur de capacités » du §4.3, appliqué à l'identité :
-
-```rust
-enum Capability {
-    // …
-    MailAccount { quota: u64, aliases: bool },   // ← nouvelle capacité
-}
-```
+**La voie A est celle qui a été construite** — mais sans idmail, qui remplacerait
+l'annuaire de Stalwart et ne peut donc pas coexister avec le client JMAP (voir la
+décision au §5bis.3). HomelabUS parle directement aux deux :
 
 ```bash
-hlb identity sync              # réconcilie PocketID ↔ idmail ↔ Stalwart
-hlb identity status            # qui existe où, quels écarts
+hlb user add remy --email remy@example.fr   # identité PocketID + boîte Stalwart
+hlb user list                                # qui existe où, et ce qui manque
 ```
 
-Tu évites une brique, tu gardes PocketID, et tu ajoutes une fonction qui a de la
-valeur en soi.
+🔴 **Le point dur n'était pas la synchronisation, c'était l'échec partiel.** Créer un
+utilisateur touche DEUX systèmes ; si le second échoue, on obtient quelqu'un qui se
+connecte partout et dont l'adresse ne reçoit rien. Cet état paraît fonctionnel jusqu'au
+premier courriel perdu — souvent une réinitialisation de mot de passe, c'est-à-dire au
+pire moment. Il est donc **nommé** (`Coherence::SansBoite`) et la création est
+reprenable : relancer termine ce qui manque, sans recréer ce qui existe.
+
+⚠️ `Capability::MailAccount` existe bien, mais elle sert aux **applications** qui ont
+besoin de leur propre adresse. Les comptes humains passent par `hlb-users` : ce ne sont
+pas les mêmes objets, et les confondre donnerait des quotas d'app à des personnes.
 
 #### Quand reconsidérer
 
@@ -1799,18 +1856,24 @@ fine par alias.
                     │  │  Bulwark (JMAP)          │  │
                     │  │  mail+agenda+contacts    │  │
                     │  ├──────────────────────────┤  │
-                    │  │  idmail (aliases)        │  │
-                    │  │  libre-service + API     │  │
+                    │  │  Roundcube (IMAP)        │  │
+                    │  │  filet de secours, sans  │  │
+                    │  │  SSO — voir §5bis.2ter   │  │
                     │  └──────────────────────────┘  │
                     └────────────────────────────────┘
                                     │ HTTPS uniquement
                     ┌───────────────▼────────────────┐
                     │  Caddy frontend (cluster Swarm)│
-                    │  mail.domaine.fr   → Bulwark   │
-                    │  alias.domaine.fr  → idmail    │
-                    │  admin.domaine.fr  → Stalwart  │
+                    │  mail.domaine.fr    → Bulwark  │
+                    │  webmail.domaine.fr → Roundcube│
+                    │  admin.domaine.fr   → Stalwart │
                     └────────────────────────────────┘
 ```
+
+⚠️ Les aliases ne sont **pas** un service : ils sont portés par HomelabUS lui-même
+(`hlb user alias`, API addy.io sur le controller). idmail figurait ici dans une version
+antérieure du plan — il remplacerait l'annuaire de Stalwart, ce qui est incompatible
+avec le client JMAP. Voir la décision au §5bis.3.
 
 **Quatre conteneurs au lieu des ~15 de mailcow**, tous sur ta machine. Sans ClamAV,
 l'ensemble tient sous 1 Go de RAM (mailcow en recommande 6).
@@ -1965,7 +2028,12 @@ Les aliases se créent depuis la console d'admin ou l'API. Un utilisateur lambda
 peut pas créer les siens. **C'est la vraie régression face au panneau utilisateur de
 mailcow.**
 
-#### La pièce manquante : idmail
+#### La pièce manquante : idmail — ⛔ finalement écarté
+
+> 🔴 **Décision du 18/08/2026 : idmail n'est PAS intégré.** Ce qui suit décrit ce qu'il
+> apporte, parce que ça reste le bon inventaire du besoin — mais la voie retenue est
+> que HomelabUS porte le modèle lui-même. La raison est structurelle et se trouve
+> juste après le tableau.
 
 **idmail** (MIT) est une interface de gestion de comptes et d'aliases conçue
 précisément pour les serveurs mail auto-hébergés comme Stalwart.
@@ -2032,14 +2100,56 @@ mailcow, en mieux (durée choisie plutôt que figée).
 lui-même : le modèle de données est trivial, et tu gagnes l'intégration PocketID
 native. À garder en phase 7, pas au démarrage.
 
+#### 🔴 Décision : idmail n'est PAS intégré — HomelabUS porte le modèle
+
+Vérification faite, **idmail et `hlb-mail` ne peuvent pas coexister**, et ce n'est pas
+une question de redondance.
+
+idmail ne *parle* pas à Stalwart : il **remplace son annuaire**. On configure Stalwart
+avec un `directory` externe de type `sqlite` pointant sur la base d'idmail, qui devient
+alors la source de vérité des comptes et des aliases. Or `hlb-mail` écrit dans
+l'annuaire **interne** de Stalwart, en JMAP.
+
+Les deux ensemble donneraient : alias créé en JMAP → dans un annuaire que Stalwart ne
+consulte plus → l'adresse ne reçoit rien, **et rien ne le signale**. C'est exactement
+le mode de panne silencieux que tout ce document cherche à éliminer.
+
+Ce qu'idmail apportait de vraiment distinctif, c'était son **API pour gestionnaires de
+mots de passe**. HomelabUS la parle désormais (`POST /api/v1/aliases`, format addy.io
+relevé dans le code de Bitwarden), sans le service ni le conflit d'annuaire.
+
 #### Récapitulatif : tes trois besoins
 
 | Ton besoin | Réponse |
 |---|---|
-| « Plusieurs mails pour ma boîte » | ✅ **Aliases Stalwart** — natif, illimité |
-| « Chaque utilisateur crée les siens » | ✅ **idmail** en libre-service |
-| « Temporaires ou permanents, au choix » | ⚠️ permanents via idmail, **expiration ajoutée par HomelabUS** |
-| Bonus non demandé | ⭐ génération d'alias depuis l'extension Vaultwarden |
+| « Plusieurs mails pour ma boîte » | ✅ **Aliases** — `hlb user alias add` |
+| « Plusieurs boîtes séparées » | ✅ `hlb user mailbox add`, quota par profil |
+| « Temporaires ou permanents, au choix » | ✅ trois axes **indépendants** : durée, nom généré ou choisi, indice de site |
+| « Chaque utilisateur crée les siens » | ⚠️ par l'API addy.io ; l'**écran UI reste à écrire** |
+| Bonus non demandé | ⭐ génération depuis Vaultwarden, avec choix de la boîte par le jeton |
+
+#### État : fait (`hlb-users`, `hlb user`)
+
+Trois pièges méritent d'être retenus, parce qu'ils sont invisibles à l'usage :
+
+**🔴 Un serveur de messagerie ne sait pas expirer un alias.** La liste `aliases` d'un
+compte Stalwart n'a pas de date : ce qui y est écrit y reste. Un alias « temporaire »
+ne l'est donc que si une purge vient réellement le supprimer — sinon l'adresse qu'on
+croit fermée reçoit pour toujours. D'où **trois** états et non deux : valide,
+expiré-et-supprimé, et 🔴 expiré-mais-**toujours actif**. Le controller purge toutes
+les heures ; sans cette boucle, la promesse ne tiendrait que si quelqu'un pensait à
+lancer la commande.
+
+**🔴 Un alias devinable annule le compartimentage.** Si celui d'Amazon est
+`amazon@example.fr`, alors `paypal@`, `banque@` et `impots@` existent probablement
+aussi — un expéditeur de masse les essaie toutes pour le prix d'une. On aurait
+construit une passoire en croyant construire des cloisons. L'indice ne fait donc jamais
+l'adresse : il est suivi d'un suffixe aléatoire de six caractères.
+
+**L'intérêt d'un alias jetable n'est pas de le jeter, c'est l'attribution.** Une adresse
+par destinataire dit *qui* a laissé fuiter. C'est pourquoi l'indice lisible est
+conservé — cinquante adresses purement aléatoires feraient perdre le seul vrai
+bénéfice — et pourquoi les règles Sieve rangent chaque alias dans son dossier.
 
 ### 5bis.3bis Plusieurs adresses par compte SSO
 
@@ -3216,6 +3326,21 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 ### Phase 7 — Cas particuliers
 - HA Postgres phase 2 (standby + bascule assistée)
 - Exercices de reprise après sinistre automatisés
+
+> **État au 18/08/2026 : la feuille de route est couverte.**
+>
+> La réplication streaming est faite et **vérifiée contre un vrai couple
+> primaire/standby** (§3.2) ; il ne manque que `hlb db failover`, la bascule assistée,
+> qui demande un second nœud `heavy` réel pour être éprouvée. Les exercices de reprise
+> sont faits (`hlb dr exercise`, §8.3).
+>
+> Ce qui a été ajouté au-delà du plan initial, parce que le besoin est apparu en
+> construisant : les **destinations de sauvegarde multiples** (§8.1 rendu réel), les
+> **comptes humains et aliases** (§5bis.3), le **multi-conteneur** (§4.8) et le
+> **stockage objet** (§3.5).
+>
+> 🔴 **Le vrai reste à faire n'est pas dans cette liste** : rien de la partie mail n'a
+> été exécuté contre un vrai Stalwart. Voir « Ce qui reste » dans CLAUDE.md.
 
 > **~~Runtime `compose` pour mailcow~~ — ABANDONNÉ (décision du 17/08/2026).**
 >
