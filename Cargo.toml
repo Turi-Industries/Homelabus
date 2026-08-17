@@ -20,6 +20,7 @@ members = [
     "crates/hlb-mail",
     "crates/hlb-api",
     "crates/hlb-ui",
+    "crates/hlb-selfupdate",
     "crates/hlb-controller",
     "crates/hlb-secrets",
     "crates/hlb-state",
@@ -54,6 +55,7 @@ hlb-mesh = { path = "crates/hlb-mesh" }
 hlb-notify = { path = "crates/hlb-notify" }
 hlb-mail = { path = "crates/hlb-mail" }
 hlb-api = { path = "crates/hlb-api" }
+hlb-selfupdate = { path = "crates/hlb-selfupdate" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
 hlb-engine = { path = "crates/hlb-engine" }

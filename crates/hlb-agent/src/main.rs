@@ -196,6 +196,7 @@ async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
         memory_total_mb: total,
         memory_available_mb: available,
         agent_version: s.version.to_string(),
+        protocol: hlb_agent::PROTOCOL,
     })
 }
 

@@ -32,3 +32,10 @@ pub enum Error {
     Pki(String),
 }
 pub use report::NodeReport;
+
+/// Version du dialogue agent ↔ controller (§7bis).
+///
+/// 🔴 À incrémenter **uniquement** quand le format des échanges change de façon
+/// incompatible — pas à chaque version du binaire. Les confondre ferait refuser des
+/// agents parfaitement fonctionnels à chaque correctif.
+pub const PROTOCOL: u32 = 1;

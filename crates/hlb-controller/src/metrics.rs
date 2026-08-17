@@ -227,6 +227,7 @@ mod tests {
             memory_total_mb: None,
             memory_available_mb: None,
             agent_version: "test".into(),
+                protocol: hlb_agent::PROTOCOL,
         }))
     }
 

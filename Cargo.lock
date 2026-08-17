@@ -1722,6 +1722,7 @@ dependencies = [
  "hlb-registry",
  "hlb-resolver",
  "hlb-secrets",
+ "hlb-selfupdate",
  "hlb-state",
  "hlb-types",
  "hlb-updater",
@@ -1923,6 +1924,15 @@ dependencies = [
  "rand 0.9.5",
  "secrecy",
  "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
+name = "hlb-selfupdate"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "thiserror 2.0.19",
  "tracing",
 ]

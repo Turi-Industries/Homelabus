@@ -19,6 +19,13 @@ pub struct NodeReport {
     /// Version de l'agent : un cluster avec des agents dépareillés est un piège
     /// (§7bis, compatibilité N/N+1).
     pub agent_version: String,
+    /// Version du DIALOGUE, distincte de celle du binaire (§7bis).
+    ///
+    /// ⚠️ `serde(default)` : un agent antérieur à ce champ ne l'envoie pas, et sa
+    /// réponse doit rester lisible. Sans ça, la première mise à jour rendrait tous
+    /// les agents « injoignables » — exactement au moment où on en a besoin.
+    #[serde(default)]
+    pub protocol: u32,
 }
 
 impl NodeReport {
@@ -82,6 +89,7 @@ mod tests {
             memory_total_mb: Some(16384),
             memory_available_mb: Some(8192),
             agent_version: "0.1.0".into(),
+            protocol: 1,
         }
     }
 

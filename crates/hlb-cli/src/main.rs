@@ -191,6 +191,11 @@ enum Command {
         force: bool,
     },
 
+    /// Mise à jour de HomelabUS lui-même (§7bis).
+    #[command(subcommand)]
+    #[command(name = "self")]
+    Selfy(SelfCmd),
+
     /// 🔴 Reprise après sinistre : basculer PostgreSQL sur un autre nœud (§2bis.5).
     #[command(subcommand)]
     Dr(DrCmd),
@@ -399,6 +404,33 @@ enum UpdateCmd {
 }
 
 #[derive(Subcommand)]
+enum SelfCmd {
+    /// Version installée, compatibilité du parc. Ne modifie rien.
+    Status,
+    /// 🔴 Revenir au schéma d'une version antérieure (§7bis). DESTRUCTEUR.
+    Rollback {
+        /// Numéro de la dernière migration à CONSERVER, ex. 4
+        #[arg(long)]
+        to_migration: i64,
+        /// Confirmation explicite : des données seront perdues.
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Ce que la mise à jour ferait, et ce qui l'empêche. Aperçu par défaut.
+    Update {
+        /// Version cible, ex. 0.2.0
+        version: String,
+        /// 🔴 Nécessaire pour une version MAJEURE ou un retour arrière.
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DrCmd {
     /// Promouvoir PostgreSQL sur un nœud de secours. Aperçu par défaut.
     Promote {
@@ -527,6 +559,56 @@ enum CatalogCmd {
     List,
     /// Valider tous les manifests et le graphe de dépendances.
     Validate,
+}
+
+/// Ce que défaire une migration fait perdre, en clair.
+///
+/// 🔴 « Des données seront perdues » n'aide personne à décider. La correspondance est
+/// EXACTE et non par mot-clé : « 0006_volumes_sqlite » n'efface qu'une colonne, alors
+/// que « 0003_volumes » efface tout l'inventaire. Les confondre annoncerait une perte
+/// qui n'a pas lieu — ou pire, tairait celle qui a lieu.
+fn consequence_migration(nom: &str) -> Vec<String> {
+    let detail: &[&str] = match nom {
+        "0005_audit" => &["le JOURNAL D'AUDIT est effacé (§9 : il est append-only,",
+                          "c'est le seul chemin qui l'efface)"],
+        "0004_backup_runs" => &["l'historique des sauvegardes est effacé — toutes les apps",
+                                "repasseront en « jamais sauvegardée » et seront dues"],
+        "0003_volumes" => &["l'inventaire des volumes est effacé ; les données Docker",
+                            "survivent, mais la sauvegarde ne saura plus quoi sauvegarder"],
+        "0002_secrets" => &["les secrets chiffrés sont effacés, dont ceux déposés à la",
+                            "main : jeton DNS, clé du videur CrowdSec"],
+        "0006_volumes_sqlite" => &["le drapeau « base SQLite » des volumes est perdu — leurs",
+                                   "bases repasseraient en copie à chaud, donc corrompues"],
+        "0001_initial" => &["TOUT l'état : apps, plans, guides"],
+        _ => &[],
+    };
+
+    let mut out = vec![nom.to_string()];
+    out.extend(detail.iter().map(|l| format!("      {l}")));
+    out
+}
+
+/// Les migrations livrées avec ce binaire, et leur réversibilité.
+///
+/// 🔴 Lue depuis le répertoire de migrations à la compilation : une migration ajoutée
+/// sans son `down` apparaît ici comme irréversible, et bloque la mise à jour. C'est
+/// exactement le but — le test `every_migration_can_be_undone` l'attrape plus tôt,
+/// celui-ci est le filet.
+fn migrations_connues() -> Vec<hlb_selfupdate::Migration> {
+    const NOMS: &[(&str, bool)] = &[
+        ("0001_initial", true),
+        ("0002_secrets", true),
+        ("0003_volumes", true),
+        ("0004_backup_runs", true),
+        ("0005_audit", true),
+        ("0006_volumes_sqlite", true),
+    ];
+    NOMS.iter()
+        .map(|(n, r)| hlb_selfupdate::Migration {
+            name: (*n).to_string(),
+            reversible: *r,
+        })
+        .collect()
 }
 
 /// L'instant présent, en secondes depuis l'époque.
@@ -2006,6 +2088,188 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Selfy(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_selfupdate as su;
+
+                let state = State::open(&cli.state).await?;
+                let courante = su::Version::current();
+
+                // ⚠️ Le CLI ne peut PAS interroger les agents : ils n'écoutent que
+                // sur l'overlay Swarm, où seul le controller est présent. Passer par
+                // lui créerait une inversion de couches, et le simuler ferait pire —
+                // un parc supposé à jour est exactement ce qui casse le dialogue.
+                //
+                // On raisonne donc sur ce qu'on sait vraiment, et `self status` dit
+                // où regarder pour le reste.
+                let agents: Vec<su::AgentNode> = Vec::new();
+
+                // Les migrations livrées avec ce binaire, et leur réversibilité.
+                let migrations = migrations_connues();
+
+                match cmd {
+                    SelfCmd::Status => {
+                        println!("HomelabUS {courante}  (protocole {})", su::PROTOCOL);
+                        println!();
+
+                        println!("Compatibilité du parc : à vérifier depuis le controller,");
+                        println!("  qui est le seul à voir les agents sur l'overlay :");
+                        println!("    curl -s http://<controller>:8420/metrics | grep hlb_node");
+                        println!();
+                        let irreversibles: Vec<_> =
+                            migrations.iter().filter(|m| !m.reversible).collect();
+                        if irreversibles.is_empty() {
+                            println!("✓ {} migration(s), toutes réversibles.", migrations.len());
+                        } else {
+                            println!("🔴 {} migration(s) SANS retour arrière :", irreversibles.len());
+                            for m in irreversibles {
+                                println!("    {}", m.name);
+                            }
+                            println!("   Aucune mise à jour ne sera possible tant qu'elles");
+                            println!("   n'auront pas leur `down`.");
+                            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                        }
+
+                        println!();
+                        println!("⚠️  La mise à jour du controller n'est JAMAIS automatique :");
+                        println!("   c'est le seul composant dont la panne t'empêche de");
+                        println!("   réparer les autres.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    SelfCmd::Rollback { to_migration, confirm, apply } => {
+                        let actuelle = state.schema_version().await?;
+                        let Some(actuelle) = actuelle else {
+                            eprintln!("Base non migrée — rien à défaire.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        if *to_migration >= actuelle {
+                            println!(
+                                "Le schéma est en {actuelle} : revenir à {to_migration} \
+                                 ne défait rien."
+                            );
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        // 🔴 On DIT ce qui sera perdu, migration par migration.
+                        // « des données seront perdues » n'aide personne à décider.
+                        let perdu: Vec<&str> = migrations
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| (*i as i64) + 1 > *to_migration)
+                            .map(|(_, m)| m.name.as_str())
+                            .collect();
+
+                        println!("Retour du schéma {actuelle} → {to_migration}");
+                        println!();
+                        println!("🔴 {} migration(s) défaite(s) :", perdu.len());
+                        for m in &perdu {
+                            for l in consequence_migration(m) {
+                                println!("    {l}");
+                            }
+                        }
+
+                        if !apply {
+                            println!();
+                            println!("  Rien n'a été modifié. Relance avec --apply --confirm.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        if !confirm {
+                            eprintln!();
+                            eprintln!("🔴 --confirm est requis : ces pertes sont définitives.");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        state.undo_migrations(*to_migration).await?;
+                        println!();
+                        println!("✓ schéma en {to_migration}.");
+                        println!();
+                        println!("⚠️  Le BINAIRE n'a pas changé. Remplace-le par la version");
+                        println!("   correspondante, sinon il remigrera au prochain démarrage.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    SelfCmd::Update { version, confirm, apply } => {
+                        let Some(cible) = su::Version::parse(version) else {
+                            eprintln!("Version illisible : « {version} » (attendu : 0.2.0)");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        // Une sauvegarde récente de l'état : sans elle, un échec en
+                        // cours de migration est définitif.
+                        let sauvegarde = state
+                            .seconds_since_last_success("postgres")
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some()
+                            || !migrations.is_empty() && state.installed_apps().await?.is_empty();
+
+                        let pre = su::Preflight {
+                            from: courante,
+                            to: cible,
+                            agents,
+                            migrations,
+                            state_backed_up: sauvegarde,
+                        };
+
+                        let plan = match su::plan(&pre) {
+                            Ok(p) => p,
+                            Err(b) => {
+                                println!("{}", b.describe());
+                                return Ok(if b.is_refusal() {
+                                    ExitCode::FAILURE
+                                } else {
+                                    // « Déjà à jour » n'est pas un échec : un code
+                                    // d'erreur ferait croire à un problème dans un
+                                    // script de mise à jour.
+                                    ExitCode::SUCCESS
+                                });
+                            }
+                        };
+
+                        println!("{}", plan.describe());
+
+                        if plan.jump.needs_confirmation() && !confirm {
+                            eprintln!();
+                            eprintln!("🔴 {} : validation explicite requise.", plan.jump.describe());
+                            eprintln!("   Relis les notes de version, puis --confirm.");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        if !apply {
+                            println!();
+                            println!("  Rien n'a été modifié. Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        // 🔴 On s'arrête ici volontairement. Le téléchargement et la
+                        // bascule des binaires demandent une source de distribution
+                        // signée (§7bis) qui n'existe pas encore : les faire sans
+                        // vérification de signature ferait de la mise à jour le
+                        // meilleur vecteur de compromission du système.
+                        println!();
+                        println!("🔴 La BASCULE des binaires n'est pas implémentée.");
+                        println!();
+                        println!("   Il y manque une source de distribution signée : sans");
+                        println!("   vérification de signature, la mise à jour serait le");
+                        println!("   meilleur vecteur de compromission du système.");
+                        println!();
+                        println!("   Ce que cette commande garantit déjà : le parc est");
+                        println!("   compatible, les migrations sont réversibles, et l'ordre");
+                        println!("   des opérations est établi. La bascule reste manuelle.");
+
+                        state
+                            .audit("cli", ACTEUR_ROLE, "self-update-plan", version, "ok", None)
+                            .await?;
+                        Ok(ExitCode::SUCCESS)
+                    }
+                }
+            })
         }
 
         Command::Dr(cmd) => {

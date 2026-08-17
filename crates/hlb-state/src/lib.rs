@@ -333,6 +333,32 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Défait les migrations jusqu'à la version `cible` incluse (§7bis).
+    ///
+    /// 🔴 **Opération destructrice.** Chaque `down` supprime les tables que sa
+    /// migration avait créées : revenir avant `0005` efface le journal d'audit,
+    /// avant `0004` l'historique des sauvegardes. Le `down` de chaque migration
+    /// documente ce qui est perdu.
+    ///
+    /// ⚠️ `cible` est le numéro de la dernière migration **conservée**. Passer `4`
+    /// défait `0005` et `0006`, et garde `0001` à `0004`.
+    ///
+    /// N'existe que pour le retour arrière d'une version : un binaire N ne sait pas
+    /// lire un schéma N+1, et sans ce chemin il n'y aurait aucune sortie.
+    pub async fn undo_migrations(&self, cible: i64) -> Result<()> {
+        tracing::warn!(cible, "🔴 retour arrière du schéma — opération destructrice");
+        sqlx::migrate!("./migrations").undo(&self.pool, cible).await?;
+        Ok(())
+    }
+
+    /// La dernière migration appliquée.
+    pub async fn schema_version(&self) -> Result<Option<i64>> {
+        let row = sqlx::query("SELECT MAX(version) AS v FROM _sqlx_migrations")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("v").ok().flatten()))
+    }
+
     /// Les bases de données de chaque app, telles que son manifest FIGÉ les déclare.
     ///
     /// 🔴 On lit le manifest figé (§4.8), pas le catalogue courant : une app installée
@@ -825,6 +851,80 @@ mod tests {
         assert_eq!(
             b.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(),
             ["b1", "b2", "b3"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_schema_can_actually_go_back() {
+        // 🔴 Écrire un `down` ne prouve rien : c'est de l'exécuter qui prouve que le
+        // retour arrière fonctionne. Sans ce test, on découvrirait qu'un `down` est
+        // cassé au pire moment — pendant un rollback, après un échec de mise à jour.
+        let s = st().await;
+        let avant = s.schema_version().await.expect("version").expect("migrée");
+        assert!(avant >= 6, "toutes les migrations doivent être appliquées : {avant}");
+
+        // On revient avant la migration du journal d'audit.
+        s.undo_migrations(4).await.expect("retour arrière");
+        assert_eq!(s.schema_version().await.expect("version"), Some(4));
+
+        // Et la table concernée a bien disparu : le `down` a fait son travail.
+        let existe: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_log'",
+        )
+        .fetch_optional(&s.pool)
+        .await
+        .expect("lecture");
+        assert!(existe.is_none(), "audit_log aurait dû être supprimée");
+    }
+
+    #[tokio::test]
+    async fn going_back_then_forward_works() {
+        // Le cycle complet : c'est ce qui se passe si un rollback est suivi d'une
+        // nouvelle tentative de mise à jour.
+        let s = st().await;
+        s.undo_migrations(3).await.expect("retour");
+        assert_eq!(s.schema_version().await.expect("v"), Some(3));
+
+        sqlx::migrate!("./migrations")
+            .run(&s.pool)
+            .await
+            .expect("réapplication");
+        assert!(s.schema_version().await.expect("v").expect("v") >= 6);
+
+        // Et l'état reste utilisable après l'aller-retour.
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("la base doit rester fonctionnelle");
+    }
+
+    #[test]
+    fn every_migration_can_be_undone() {
+        // 🔴 La condition qui débloque toute mise à jour (§7bis). Sans `down`, un
+        // échec de la version N+1 laisse la base dans un état que le binaire N ne
+        // comprend pas — et il n'y a plus de sortie. `hlb self update` REFUSE de
+        // démarrer si cette règle est violée ; ce test l'attrape avant.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut ups = Vec::new();
+        let mut downs = Vec::new();
+
+        for e in std::fs::read_dir(&dir).expect("répertoire de migrations") {
+            let nom = e.expect("entrée").file_name().to_string_lossy().to_string();
+            if let Some(base) = nom.strip_suffix(".up.sql") {
+                ups.push(base.to_string());
+            } else if let Some(base) = nom.strip_suffix(".down.sql") {
+                downs.push(base.to_string());
+            } else {
+                panic!("« {nom} » : une migration doit être .up.sql ou .down.sql");
+            }
+        }
+
+        ups.sort();
+        downs.sort();
+        assert!(!ups.is_empty(), "aucune migration trouvée");
+        assert_eq!(
+            ups, downs,
+            "chaque migration doit avoir son inverse — sinon plus aucune mise à jour \
+             n'est possible"
         );
     }
 
