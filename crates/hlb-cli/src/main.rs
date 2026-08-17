@@ -359,6 +359,45 @@ enum BackupCmd {
     /// Archivage WAL et restauration à un instant précis (§8.1).
     #[command(subcommand)]
     Pitr(PitrCmd),
+
+    /// Destinations de sauvegarde : NAS, Garage, S3 hors site (§8.1).
+    #[command(subcommand)]
+    Dest(DestCmd),
+
+    /// Où vont les données d'une app, classe par classe.
+    Route {
+        app: String,
+        /// Destinations pour les données CRITIQUES : dumps SQL, état, secrets.
+        /// Quelques Go — ça passe sur n'importe quelle connexion.
+        #[arg(long, value_delimiter = ',')]
+        critique: Option<Vec<String>>,
+        /// Destinations pour les données VOLUMINEUSES : photos, fichiers, médias.
+        /// ⚠️ Des centaines de Go : vérifie que la connexion suit.
+        #[arg(long, value_delimiter = ',')]
+        volumineux: Option<Vec<String>>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DestCmd {
+    /// Déclarer une destination.
+    Add {
+        /// Nom court : nas, garage, offsite.
+        name: String,
+        /// Chemin local, ou URL restic `s3:https://hôte/seau`.
+        #[arg(long)]
+        location: String,
+        /// Classes acceptées par défaut : critique, volumineux.
+        #[arg(long, value_delimiter = ',', default_value = "critique")]
+        classes: Vec<String>,
+        /// Clé d'accès S3. La clé SECRÈTE est lue sur l'ENTRÉE STANDARD.
+        #[arg(long)]
+        access_key: Option<String>,
+    },
+    /// Les destinations déclarées et ce qu'elles acceptent.
+    List,
+    /// Retirer une destination. Les sauvegardes déjà envoyées restent là-bas.
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -1170,6 +1209,78 @@ async fn build_backup_provider(
             paths,
         ))
     })))
+}
+
+/// Charge les destinations déclarées.
+async fn charger_destinations(
+    state: &State,
+) -> Result<Vec<hlb_backup::Destination>, Box<dyn std::error::Error>> {
+    use hlb_backup::{Classe, Destination};
+
+    Ok(state
+        .destinations()
+        .await?
+        .into_iter()
+        .map(|(nom, location, classes, credentials_secret)| Destination {
+            nom,
+            location,
+            classes: classes.split(',').filter_map(Classe::parse).collect(),
+            credentials_secret,
+        })
+        .collect())
+}
+
+/// Les destinations qui doivent recevoir cette classe pour cette app.
+///
+/// Une route explicite l'emporte ; sinon on retombe sur ce que chaque destination
+/// accepte globalement. C'est ce qui permet de dire « le volumineux d'Immich part
+/// hors site » sans y envoyer celui de toutes les autres apps.
+async fn destinations_pour(
+    state: &State,
+    app: &str,
+    classe: hlb_backup::Classe,
+) -> Result<Vec<hlb_backup::Destination>, Box<dyn std::error::Error>> {
+    let toutes = charger_destinations(state).await?;
+    let explicites = state.route(app, classe.nom()).await?;
+
+    if explicites.is_empty() {
+        return Ok(toutes.into_iter().filter(|d| d.accepte(classe)).collect());
+    }
+    Ok(toutes
+        .into_iter()
+        .filter(|d| explicites.contains(&d.nom))
+        .collect())
+}
+
+/// La couverture d'une app : son état sur CHAQUE destination routée.
+async fn couverture_de(
+    state: &State,
+    app: &str,
+    seuil_s: i64,
+) -> Result<hlb_backup::Couverture, Box<dyn std::error::Error>> {
+    use hlb_backup::{Classe, EtatDestination};
+
+    // Une destination peut recevoir les deux classes : on la compte une seule fois.
+    let mut noms: Vec<String> = Vec::new();
+    for c in [Classe::Critique, Classe::Volumineux] {
+        for d in destinations_pour(state, app, c).await? {
+            if !noms.contains(&d.nom) {
+                noms.push(d.nom);
+            }
+        }
+    }
+    noms.sort();
+
+    let mut par_destination = Vec::new();
+    for n in noms {
+        let age = state.seconds_since_last_success_on(app, &n).await?;
+        par_destination.push((n, EtatDestination::juger(age, seuil_s)));
+    }
+
+    Ok(hlb_backup::Couverture {
+        app: app.to_string(),
+        par_destination,
+    })
 }
 
 /// Âge lisible : « 3 h », « 2 j ».
@@ -4104,12 +4215,33 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 .map(|s| std::time::Duration::from_secs(s as u64));
                             let verif = state.seconds_since_last_verification(app).await?;
 
-                            let etat = if sched.is_overdue(age) {
-                                "🔴 en retard"
-                            } else if sched.is_due(age) {
-                                "🟠 due"
-                            } else {
-                                "✓ à jour"
+                            // 🔴 La couverture d'abord : c'est elle qui décide de la
+                            // ligne de résumé. Juger sur l'âge AGRÉGÉ afficherait
+                            // « ✓ à jour » pour une app dont le hors-site est mort
+                            // depuis trois semaines — le résumé contredirait le détail
+                            // juste en dessous, et c'est le résumé qu'on lit.
+                            let couverture =
+                                couverture_de(&state, app, sched.overdue_after().as_secs() as i64)
+                                    .await?;
+
+                            let etat = match couverture.pire() {
+                                Some(hlb_backup::EtatDestination::Jamais) => {
+                                    "🔴 une destination JAMAIS servie"
+                                }
+                                Some(hlb_backup::EtatDestination::Perime { .. }) => {
+                                    "🔴 une destination en retard"
+                                }
+                                // Aucune destination routée : on retombe sur le
+                                // jugement global, qui reste juste dans ce cas.
+                                None | Some(hlb_backup::EtatDestination::Frais { .. }) => {
+                                    if sched.is_overdue(age) {
+                                        "🔴 en retard"
+                                    } else if sched.is_due(age) {
+                                        "🟠 due"
+                                    } else {
+                                        "✓ à jour"
+                                    }
+                                }
                             };
                             println!(
                                 "{app:<14} {:<18} {:<18} {etat}",
@@ -4117,6 +4249,41 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 verif.map(|s| fmt_age(std::time::Duration::from_secs(s as u64)))
                                     .unwrap_or_else(|| "jamais".into()),
                             );
+
+                            // Le détail par destination, sous le résumé.
+                            if !couverture.par_destination.is_empty() {
+                                for (nom, e) in &couverture.par_destination {
+                                    let (marque, quand) = match e {
+                                        hlb_backup::EtatDestination::Frais { age_s } => (
+                                            "✓",
+                                            fmt_age(std::time::Duration::from_secs(*age_s as u64)),
+                                        ),
+                                        hlb_backup::EtatDestination::Perime { age_s } => (
+                                            "🔴",
+                                            fmt_age(std::time::Duration::from_secs(*age_s as u64)),
+                                        ),
+                                        // 🔴 Distinct d'un retard : cette destination
+                                        // n'a JAMAIS rien reçu, donc n'a jamais rien
+                                        // protégé. La cause est ailleurs — routage
+                                        // jamais branché, identifiants absents.
+                                        hlb_backup::EtatDestination::Jamais => {
+                                            ("🔴", "JAMAIS reçu".to_string())
+                                        }
+                                    };
+                                    println!("               └ {marque} {nom:<10} {quand}");
+                                }
+
+                                let a_jour = couverture.copies_a_jour();
+                                if a_jour < 2 {
+                                    // 🔴 Le nombre de destinations CONFIGURÉES ne dit
+                                    // rien du nombre de copies. Deux destinations dont
+                                    // une en échec, ce n'est pas du 3-2-1.
+                                    println!(
+                                        "               ⚠️ {a_jour} copie(s) réellement à jour sur {}",
+                                        couverture.par_destination.len()
+                                    );
+                                }
+                            }
                         }
                         Ok(ExitCode::SUCCESS)
                     }
@@ -4319,6 +4486,135 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                  ne restaurent pas ce qu'elles annoncent."
                             );
                             return Ok(ExitCode::FAILURE);
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    BackupCmd::Dest(sous) => match sous {
+                        DestCmd::Add { name, location, classes, access_key } => {
+                            use hlb_backup::Classe;
+
+                            // Une classe mal orthographiée est refusée : l'accepter
+                            // silencieusement produirait une destination qui n'accepte
+                            // rien, et qu'on croirait configurée.
+                            let mut retenues = Vec::new();
+                            for c in classes {
+                                match Classe::parse(c) {
+                                    Some(k) => retenues.push(k.nom().to_string()),
+                                    None => {
+                                        eprintln!("classe inconnue « {c} » — attendu : critique, volumineux");
+                                        return Ok(ExitCode::FAILURE);
+                                    }
+                                }
+                            }
+
+                            let secret = match access_key {
+                                Some(cle) => {
+                                    // 🔴 La clé secrète est lue sur l'ENTRÉE STANDARD.
+                                    // En argument, elle serait lisible par `ps` pour
+                                    // tout utilisateur de la machine, puis conservée
+                                    // dans l'historique du shell.
+                                    eprintln!("Clé secrète S3 (entrée standard, non affichée) :");
+                                    let mut buf = String::new();
+                                    std::io::stdin().read_line(&mut buf)?;
+                                    let secrete = buf.trim();
+                                    if secrete.is_empty() {
+                                        eprintln!("🔴 clé secrète vide — rien n'a été enregistré.");
+                                        return Ok(ExitCode::FAILURE);
+                                    }
+
+                                    let nom_secret = format!("backup-dest-{name}");
+                                    let ct = vault.encrypt(&format!("{cle}:{secrete}"))?;
+                                    if !state
+                                        .store_secret_if_absent(&nom_secret, &ct, "identifiants S3 de sauvegarde")
+                                        .await?
+                                    {
+                                        state.rotate_secret(&nom_secret, &ct).await?;
+                                    }
+                                    Some(nom_secret)
+                                }
+                                None => None,
+                            };
+
+                            state
+                                .upsert_destination(name, location, &retenues.join(","), secret.as_deref())
+                                .await?;
+
+                            println!("✓ destination « {name} » enregistrée.");
+
+                            // ⚠️ Une destination S3 sans identifiants échouera à la
+                            // première sauvegarde, sur une erreur d'autorisation qui
+                            // ne dit pas que le secret n'a jamais été déposé.
+                            if location.trim_start().starts_with("s3:") && secret.is_none() {
+                                println!();
+                                println!("⚠️ Dépôt S3 sans identifiants : les sauvegardes échoueront.");
+                                println!("   Relance avec --access-key <clé>.");
+                            }
+                            Ok(ExitCode::SUCCESS)
+                        }
+
+                        DestCmd::List => {
+                            let destinations = charger_destinations(&state).await?;
+                            if destinations.is_empty() {
+                                println!("Aucune destination déclarée.");
+                                println!();
+                                println!("⚠️ Sans destination, `hlb backup run` n'a nulle part où écrire.");
+                                println!("   hlb backup dest add nas --location /mnt/nas/restic \\");
+                                println!("     --classes critique,volumineux");
+                                return Ok(ExitCode::SUCCESS);
+                            }
+                            for d in &destinations {
+                                println!("  {}", d.describe());
+                            }
+                            Ok(ExitCode::SUCCESS)
+                        }
+
+                        DestCmd::Remove { name } => {
+                            state.remove_destination(name).await?;
+                            println!("✓ destination « {name} » retirée du routage.");
+                            // 🔴 On ne supprime RIEN à distance : les instantanés
+                            // restent là-bas. Les effacer d'un `dest remove` serait une
+                            // destruction de sauvegardes sur un geste de configuration.
+                            println!("⚠️ Les instantanés déjà envoyés n'ont pas été touchés.");
+                            Ok(ExitCode::SUCCESS)
+                        }
+                    },
+
+                    BackupCmd::Route { app, critique, volumineux } => {
+                        let connues: Vec<String> = state
+                            .destinations()
+                            .await?
+                            .into_iter()
+                            .map(|(n, _, _, _)| n)
+                            .collect();
+
+                        for (classe, choix) in
+                            [("critique", critique), ("volumineux", volumineux)]
+                        {
+                            let Some(dests) = choix else { continue };
+
+                            // Router vers une destination inexistante ne produirait
+                            // aucune erreur au moment de la sauvegarde : elle serait
+                            // simplement ignorée, et l'app paraîtrait couverte.
+                            for d in dests {
+                                if !connues.contains(d) {
+                                    eprintln!("🔴 destination « {d} » inconnue — rien n'a été routé.");
+                                    eprintln!("   hlb backup dest list");
+                                    return Ok(ExitCode::FAILURE);
+                                }
+                            }
+                            state.set_route(app, classe, dests).await?;
+                            println!("✓ {app} / {classe} → {}", dests.join(", "));
+                        }
+
+                        println!();
+                        for classe in ["critique", "volumineux"] {
+                            let r = state.route(app, classe).await?;
+                            if r.is_empty() {
+                                println!("  {classe:<11} : (défaut des destinations)");
+                            } else {
+                                println!("  {classe:<11} : {}", r.join(", "));
+                            }
                         }
                         Ok(ExitCode::SUCCESS)
                     }

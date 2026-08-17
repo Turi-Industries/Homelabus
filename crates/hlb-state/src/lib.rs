@@ -333,6 +333,151 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Enregistre une sauvegarde en nommant sa DESTINATION.
+    ///
+    /// 🔴 C'est la destination qui rend la mesure honnête. `record_backup` sans elle
+    /// agrège tout : un NAS sauvegardé toutes les 4 h ferait passer un hors-site mort
+    /// depuis trois semaines pour une sauvegarde de 2 h, et l'on croirait la règle
+    /// 3-2-1 tenue alors qu'il ne resterait qu'une copie.
+    pub async fn record_backup_to(
+        &self,
+        app: &str,
+        kind: &str,
+        destination: &str,
+        snapshot_id: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO backup_runs (app, kind, destination, snapshot_id, status, error, finished_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+        )
+        .bind(app)
+        .bind(kind)
+        .bind(destination)
+        .bind(snapshot_id)
+        .bind(if error.is_some() { "failed" } else { "ok" })
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Âge de la dernière réussite **sur une destination précise**.
+    ///
+    /// ⚠️ `None` veut dire « rien n'y est JAMAIS arrivé », ce qui n'est pas « en
+    /// retard » : la cause est différente et souvent plus grave — le routage n'a
+    /// peut-être jamais été branché.
+    pub async fn seconds_since_last_success_on(
+        &self,
+        app: &str,
+        destination: &str,
+    ) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT CAST(strftime('%s','now') AS INTEGER)
+                    - CAST(strftime('%s', MAX(finished_at)) AS INTEGER) AS age
+             FROM backup_runs
+             WHERE app = ?1 AND destination = ?2 AND status = 'ok'",
+        )
+        .bind(app)
+        .bind(destination)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
+    }
+
+    /// Déclare ou met à jour une destination.
+    pub async fn upsert_destination(
+        &self,
+        name: &str,
+        location: &str,
+        classes: &str,
+        credentials_secret: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO backup_destinations (name, location, classes, credentials_secret)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name) DO UPDATE SET
+               location = ?2, classes = ?3, credentials_secret = ?4",
+        )
+        .bind(name)
+        .bind(location)
+        .bind(classes)
+        .bind(credentials_secret)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Les destinations déclarées : `(nom, emplacement, classes, secret)`.
+    pub async fn destinations(&self) -> Result<Vec<(String, String, String, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT name, location, classes, credentials_secret
+             FROM backup_destinations ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("name")?,
+                    r.try_get("location")?,
+                    r.try_get("classes")?,
+                    r.try_get("credentials_secret")?,
+                ))
+            })
+            .collect()
+    }
+
+    pub async fn remove_destination(&self, name: &str) -> Result<()> {
+        sqlx::query("DELETE FROM backup_destinations WHERE name = ?1")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Route une classe de données d'une app vers un ensemble de destinations.
+    ///
+    /// Remplace la route existante pour cette app et cette classe : additionner
+    /// silencieusement ferait grossir le routage à chaque appel, et l'on finirait par
+    /// envoyer des téraoctets à une destination qu'on croyait avoir retirée.
+    pub async fn set_route(&self, app: &str, class: &str, destinations: &[String]) -> Result<()> {
+        sqlx::query("DELETE FROM backup_routes WHERE app = ?1 AND class = ?2")
+            .bind(app)
+            .bind(class)
+            .execute(&self.pool)
+            .await?;
+
+        for d in destinations {
+            sqlx::query(
+                "INSERT INTO backup_routes (app, class, destination) VALUES (?1, ?2, ?3)",
+            )
+            .bind(app)
+            .bind(class)
+            .bind(d)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Les destinations explicitement routées pour cette app et cette classe.
+    ///
+    /// Vide = aucune route explicite ; l'appelant retombe alors sur les classes que
+    /// chaque destination accepte globalement.
+    pub async fn route(&self, app: &str, class: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT destination FROM backup_routes
+             WHERE app = ?1 AND class = ?2 ORDER BY destination",
+        )
+        .bind(app)
+        .bind(class)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(|r| Ok(r.try_get("destination")?)).collect()
+    }
+
     /// Consigne un exercice de reprise (§8.3).
     ///
     /// 🔴 Les échecs sont enregistrés comme les réussites. Ne garder que les
@@ -904,6 +1049,86 @@ mod tests {
 
     async fn st() -> State {
         State::in_memory().await.expect("base en mémoire")
+    }
+
+    #[tokio::test]
+    async fn a_fresh_destination_never_masks_a_stale_one() {
+        // 🔴 Le piège que la colonne `destination` supprime. Sans elle,
+        // `seconds_since_last_success` agrège TOUTES les destinations : un NAS
+        // sauvegardé toutes les 4 h ferait passer un hors-site mort depuis trois
+        // semaines pour une sauvegarde de 2 h. On croirait la règle 3-2-1 tenue alors
+        // qu'il ne reste qu'une copie, sur les mêmes machines.
+        let s = State::in_memory().await.expect("état");
+
+        s.record_backup_to("immich", "volume", "nas", Some("frais"), None)
+            .await
+            .expect("nas");
+
+        // L'agrégat voit une sauvegarde récente…
+        let global = s
+            .seconds_since_last_success("immich")
+            .await
+            .expect("agrégat");
+        assert!(global.is_some(), "l'agrégat voit bien quelque chose");
+
+        // …mais le hors-site n'a JAMAIS rien reçu, et ça doit se voir.
+        assert_eq!(
+            s.seconds_since_last_success_on("immich", "offsite")
+                .await
+                .expect("par destination"),
+            None,
+            "une destination jamais servie ne doit pas hériter de la fraîcheur d'une autre"
+        );
+
+        assert!(s
+            .seconds_since_last_success_on("immich", "nas")
+            .await
+            .expect("par destination")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_never_counts_as_a_copy() {
+        // Une destination en échec est une destination configurée qui ne protège de
+        // rien : elle ne doit pas rajeunir la mesure.
+        let s = State::in_memory().await.expect("état");
+        s.record_backup_to("immich", "volume", "offsite", None, Some("réseau coupé"))
+            .await
+            .expect("échec enregistré");
+
+        assert_eq!(
+            s.seconds_since_last_success_on("immich", "offsite")
+                .await
+                .expect("par destination"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_route_replaces_instead_of_accumulating() {
+        // Additionner ferait grossir le routage à chaque appel, et l'on finirait par
+        // envoyer des téraoctets vers une destination qu'on croyait avoir retirée.
+        let s = State::in_memory().await.expect("état");
+        s.upsert_destination("nas", "/mnt/nas", "critique,volumineux", None)
+            .await
+            .expect("nas");
+        s.upsert_destination("offsite", "s3:https://x/y", "critique", None)
+            .await
+            .expect("offsite");
+
+        s.set_route("immich", "volumineux", &["nas".into(), "offsite".into()])
+            .await
+            .expect("route");
+        assert_eq!(s.route("immich", "volumineux").await.unwrap().len(), 2);
+
+        s.set_route("immich", "volumineux", &["nas".into()])
+            .await
+            .expect("route réduite");
+        assert_eq!(
+            s.route("immich", "volumineux").await.unwrap(),
+            vec!["nas".to_string()],
+            "la nouvelle route REMPLACE, elle ne s'ajoute pas"
+        );
     }
 
     #[tokio::test]

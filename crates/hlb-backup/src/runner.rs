@@ -60,6 +60,12 @@ pub struct ContainerRunner {
     image: String,
     /// Montages `hôte:conteneur` — le dépôt et les données à sauvegarder.
     mounts: Vec<(String, String)>,
+    /// Réseau Docker à rejoindre.
+    ///
+    /// ⚠️ Indispensable pour un dépôt S3 servi DANS le cluster (Garage) : sans lui, le
+    /// conteneur restic ne résout pas `garage` et échoue sur un « no such host » qui
+    /// ressemble à une panne du service alors que c'est le réseau qui manque.
+    network: Option<String>,
 }
 
 impl ContainerRunner {
@@ -67,7 +73,13 @@ impl ContainerRunner {
         Self {
             image: image.into(),
             mounts: Vec::new(),
+            network: None,
         }
+    }
+
+    pub fn network(mut self, net: impl Into<String>) -> Self {
+        self.network = Some(net.into());
+        self
     }
 
     pub fn mount(mut self, host: impl Into<String>, container: impl Into<String>) -> Self {
@@ -95,6 +107,10 @@ impl Runner for ContainerRunner {
         for (h, c) in &self.mounts {
             cmd.arg("-v");
             cmd.arg(format!("{h}:{c}"));
+        }
+        if let Some(n) = &self.network {
+            cmd.arg("--network");
+            cmd.arg(n);
         }
 
         cmd.arg(&self.image);

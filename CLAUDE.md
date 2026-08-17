@@ -273,6 +273,18 @@ qui a tort, pas le test.
   importe et affiche les photos parfaitement, et ne reconnaît jamais personne. D'où le
   déploiement du compagnon AVANT l'app, avec attente de sa mise en santé, et une étape
   de guide qui fait vérifier que ça marche vraiment.
+- **Une destination de sauvegarde fraîche en masque une périmée.** `MAX(finished_at)`
+  sur toutes les destinations faisait passer un hors-site mort depuis trois semaines
+  pour une sauvegarde de 2 h, parce que le NAS, lui, tournait. On croyait le 3-2-1 tenu
+  alors qu'il ne restait qu'une copie, sur les mêmes machines. La fraîcheur se mesure
+  PAR destination, et le résumé affiche le pire cas — sinon il contredit le détail
+  juste en dessous, et c'est le résumé qu'on lit.
+- **Configuré n'est pas protégé.** Le nombre de destinations déclarées ne dit rien du
+  nombre de copies : une destination en échec est une destination qui ne protège de
+  rien. D'où `copies_a_jour()` et la règle d'alerte `copie-unique`.
+- **Un dépôt restic S3 ne se MONTE pas.** Le monter crée un répertoire vide, et restic
+  répond « repository does not exist » en désignant un chemin local sans rapport avec la
+  vraie destination. Et il faut un `--network` pour joindre un Garage interne.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -391,6 +403,13 @@ rôle). Voir `catalog/CATALOGUE.md` pour les candidats suivants.
 ⚠️ L'image du service `postgres` est passée à `ghcr.io/immich-app/postgres:17-…`, qui
 porte `pgvector` et `vchord`. Même version majeure, mais **libc différente** : lire le
 guide `reindex-collation` d'Immich avant de basculer une installation existante.
+
+Fait : les **destinations de sauvegarde multiples** (`hlb backup dest` / `route`) — le
+3-2-1 du §8.1 rendu réel. restic sait désormais écrire en S3 (identifiants par
+l'environnement, jamais dans l'URL ni la ligne de commande), et le routage se fait par
+**classe de volume** : `critique` (dumps, état, secrets — quelques Go, ça part hors
+site) et `volumineux` (photos, fichiers — des centaines de Go, ça reste où la connexion
+le permet), avec un réglage par app.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

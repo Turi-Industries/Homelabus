@@ -64,6 +64,12 @@ pub struct Repository<R: Runner> {
     password: String,
     /// 🔴 Identité stable des instantanés — voir [`Repository::host`].
     host: String,
+    /// Variables supplémentaires : identifiants S3, notamment.
+    ///
+    /// 🔴 Par l'environnement, jamais par la ligne de commande ni par l'URL du dépôt.
+    /// Une URL `s3:https://clé:secret@hôte/seau` fonctionnerait — et publierait la clé
+    /// dans `ps`, dans les journaux de restic et dans tout affichage du dépôt.
+    extra_env: Vec<(String, String)>,
 }
 
 impl<R: Runner> Repository<R> {
@@ -73,7 +79,15 @@ impl<R: Runner> Repository<R> {
             location: location.into(),
             password: password.into(),
             host: DEFAULT_HOST.to_string(),
+            extra_env: Vec::new(),
         }
+    }
+
+    /// Ajoute des variables d'environnement — typiquement `AWS_ACCESS_KEY_ID` et
+    /// `AWS_SECRET_ACCESS_KEY` pour un dépôt S3.
+    pub fn extra_env(mut self, vars: Vec<(String, String)>) -> Self {
+        self.extra_env = vars;
+        self
     }
 
     /// Fixe l'identité portée par les instantanés.
@@ -101,10 +115,12 @@ impl<R: Runner> Repository<R> {
     /// Le mot de passe passe par l'environnement, jamais en argument : la ligne de
     /// commande d'un processus est lisible par tout le monde sur la machine.
     fn env(&self) -> Vec<(String, String)> {
-        vec![
+        let mut v = vec![
             ("RESTIC_REPOSITORY".into(), self.location.clone()),
             ("RESTIC_PASSWORD".into(), self.password.clone()),
-        ]
+        ];
+        v.extend(self.extra_env.iter().cloned());
+        v
     }
 
     async fn exec(&self, args: &[&str]) -> Result<Output> {

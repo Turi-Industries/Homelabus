@@ -68,6 +68,14 @@ impl Schedule {
             Some(age) => age >= self.every * 3,
         }
     }
+
+    /// Le seuil de péremption : trois intervalles manqués.
+    ///
+    /// Un seul intervalle raté est le fonctionnement normal d'un homelab — nœud qui
+    /// redémarre, NAS momentanément absent. Trois, c'est une panne.
+    pub fn overdue_after(&self) -> Duration {
+        self.every * 3
+    }
 }
 
 /// Sérialise les durées en « 4h », « 30m », « 7d » plutôt qu'en secondes.

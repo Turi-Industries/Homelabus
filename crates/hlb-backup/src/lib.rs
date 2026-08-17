@@ -10,6 +10,7 @@
 
 pub mod mariadump;
 pub mod pgdump;
+pub mod destination;
 pub mod dr;
 pub mod drill;
 pub mod pitr;
@@ -32,6 +33,7 @@ pub use retention::RetentionPolicy;
 pub use schedule::Schedule;
 pub use verify::{verify_by_restore, verify_snapshot, Verification};
 pub use pitr::{parse_maria_url, parse_pg_url, scan_archive, wal_coverage, Segment};
+pub use destination::{Classe, Couverture, Destination, Etat as EtatDestination};
 pub use dr::{plan_promotion, Profile as DrProfile};
 pub use drill::{Readiness, Scope as DrillScope, Target as DrillTarget};
 pub use replication::{Health as StandbyHealth, StandbyStatus};

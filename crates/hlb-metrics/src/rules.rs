@@ -167,6 +167,20 @@ pub fn regles_par_defaut() -> Vec<Regle> {
             absence_alarmante: false,
         },
         Regle {
+            nom: "copie-unique",
+            // 🔴 Le nombre de destinations CONFIGURÉES ne dit rien du nombre de copies.
+            // Trois destinations dont deux en échec, ce n'est pas du 3-2-1 — et c'est
+            // exactement l'état qu'un tableau de bord agrégé ferait passer pour sain.
+            requete: "min(hlb_backup_copies)",
+            comparaison: Comparaison::TombeSous,
+            seuil: 2.0,
+            niveau: Level::Important,
+            explication: "Une app n'a plus qu'UNE copie à jour. Les autres \
+                          destinations sont configurées mais en échec — configuré \
+                          n'est pas protégé.",
+            absence_alarmante: false,
+        },
+        Regle {
             nom: "verification-perimee",
             // 🔴 Une sauvegarde jamais restaurée n'est pas une sauvegarde, c'est une
             // hypothèse. §8.3.
