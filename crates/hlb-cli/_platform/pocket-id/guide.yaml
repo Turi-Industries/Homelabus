@@ -1,0 +1,36 @@
+steps:
+  - id: recovery-codes
+    title: Imprimer les codes de récupération
+    phase: post-install
+    severity: blocking
+    body: |
+      PocketID fonctionne uniquement par passkey. Si tu perds ton appareil sans
+      ces codes, tu perds l'accès à TOUT le cluster.
+
+      Imprime-les et range-les physiquement, hors du cluster.
+    verify:
+      type: attest
+
+  - id: second-passkey
+    title: Enregistrer une seconde passkey
+    phase: post-install
+    severity: required
+    after: [recovery-codes]
+    body: |
+      Sur un support différent — idéalement une clé matérielle. Une seule
+      passkey, c'est un seul point de perte.
+    deeplink: "https://{{ domain }}/settings/passkeys"
+    verify:
+      type: attest
+
+  - id: api-key
+    title: Créer une clé d'API pour HomelabUS
+    phase: post-install
+    severity: blocking
+    after: [second-passkey]
+    body: |
+      Sans elle, HomelabUS ne peut pas provisionner les clients OIDC des apps.
+      Passe-la ensuite via --pocketid-key ou HLB_POCKETID_KEY.
+    deeplink: "https://{{ domain }}/settings/api-keys"
+    verify:
+      type: attest

@@ -1,0 +1,46 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: crowdsec
+  displayName: CrowdSec
+  category: platform
+  homepage: https://crowdsec.net
+spec:
+  image: { repo: crowdsecurity/crowdsec, tag: "v1.7" }
+  requires:
+    # La base de décisions et les identifiants machines. Sauvegardée : la reperdre
+    # signifie réenrôler tous les videurs à la main.
+    - kind: storage
+      name: data
+      path: /var/lib/crowdsec/data
+      tier: local
+      backup: true
+    - kind: storage
+      name: config
+      path: /etc/crowdsec
+      tier: local
+      backup: true
+    # 🔴 CrowdSec analyse les journaux de Caddy. Sans ce montage, il démarre
+    # normalement, ne voit RIEN, et ne bannit jamais personne — une panne
+    # parfaitement silencieuse.
+    - kind: storage
+      name: logs-caddy
+      path: /var/log/caddy
+      tier: local
+      backup: false
+  security:
+    # Écrit ses acquisitions et sa base SQLite dans /etc/crowdsec et /var/lib.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE]
+  swarm:
+    # 🔴 Une seule instance. Deux moteurs de décision partageant la même base
+    # SQLite la corrompraient, et deux bases séparées donneraient des décisions
+    # divergentes selon le nœud qui répond au videur.
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+  update:
+    # Les scénarios de détection évoluent vite ; rester sur une version ancienne
+    # revient à ne plus détecter les attaques récentes.
+    channel: minor

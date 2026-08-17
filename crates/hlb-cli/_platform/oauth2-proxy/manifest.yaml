@@ -1,0 +1,33 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: oauth2-proxy
+  displayName: OAuth2 Proxy
+  category: platform
+  homepage: https://oauth2-proxy.github.io/oauth2-proxy/
+spec:
+  # Version exacte : le projet ne publie AUCUN tag mineur roulant (pas de « v7.15 »),
+  # seulement des patchs. Épingler une version inexistante passerait la validation du
+  # catalogue et n'échouerait qu'à l'installation, sur une erreur de registre.
+  image: { repo: quay.io/oauth2-proxy/oauth2-proxy, tag: "v7.15.3" }
+  requires:
+    # Il ne stocke rien : les sessions vivent dans un cookie signé. C'est ce qui
+    # permet de le redémarrer sans déconnecter personne.
+    - kind: sso
+      mode: native
+      redirectPaths: ["/oauth2/callback"]
+  security:
+    # Un binaire Go statique qui n'écrit rien : il tient le durcissement complet.
+    readOnlyRootfs: true
+    capDrop: [ALL]
+  swarm:
+    # 🔴 Plusieurs réplicas exigent que TOUTES les instances partagent le même
+    # `--cookie-secret`, sinon un utilisateur authentifié par l'une est rejeté par
+    # l'autre — une session sur deux, au hasard. Le secret vient du coffre, donc
+    # c'est possible ; on reste à 1 tant que ce n'est pas vérifié en vrai.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4180/ping"]
+  update:
+    channel: minor

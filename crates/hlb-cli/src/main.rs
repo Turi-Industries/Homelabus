@@ -191,6 +191,10 @@ enum Command {
         force: bool,
     },
 
+    /// Instantanés ZFS/btrfs : retour arrière en minutes (§8).
+    #[command(subcommand)]
+    Snapshot(SnapshotCmd),
+
     /// Mise à jour de HomelabUS lui-même (§7bis).
     #[command(subcommand)]
     #[command(name = "self")]
@@ -401,6 +405,22 @@ enum UpdateCmd {
         #[arg(long, env = "HLB_COSIGN_ISSUER")]
         issuer: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum SnapshotCmd {
+    /// Figer l'état d'un dataset avant une opération risquée.
+    Create {
+        /// Dataset ZFS ou sous-volume btrfs, ex. tank/hlb
+        dataset: String,
+        /// À quoi sert cet instantané, ex. avant-maj-gitea
+        #[arg(long, default_value = "manuel")]
+        motif: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Les instantanés créés par HomelabUS sur ce dataset.
+    List { dataset: String },
 }
 
 #[derive(Subcommand)]
@@ -2088,6 +2108,108 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
             Ok(ExitCode::SUCCESS)
+        }
+
+        Command::Snapshot(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                use hlb_backup::snapshot as snap;
+
+                let dataset = match cmd {
+                    SnapshotCmd::Create { dataset, .. } | SnapshotCmd::List { dataset } => dataset,
+                };
+
+                let Some(fs) = snap::detect(dataset).await else {
+                    eprintln!("« {dataset} » n'est ni un dataset ZFS ni un sous-volume btrfs.");
+                    eprintln!();
+                    eprintln!("  Un instantané ne peut porter que sur l'un des deux — pas");
+                    eprintln!("  sur un répertoire ordinaire. Vérifie :");
+                    eprintln!("    zfs list {dataset}");
+                    eprintln!("    btrfs subvolume show {dataset}");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                };
+
+                match cmd {
+                    SnapshotCmd::List { .. } => {
+                        let c = snap::list_command(fs, dataset);
+                        let out = tokio::process::Command::new(&c[0])
+                            .args(&c[1..])
+                            .output()
+                            .await?;
+
+                        let v = snap::parse_list(fs, &String::from_utf8_lossy(&out.stdout));
+                        if v.is_empty() {
+                            println!("Aucun instantané HomelabUS sur {dataset} ({}).", fs.as_str());
+                            println!("  hlb snapshot create {dataset} --apply");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        println!("{} instantané(s) sur {dataset} ({}) :", v.len(), fs.as_str());
+                        for s in &v {
+                            println!("  {}", s.label);
+                        }
+                        println!();
+                        println!("⚠️  Ils vivent sur le MÊME pool que les données : un disque");
+                        println!("   mort les emporte. Ce ne sont pas des sauvegardes.");
+                        println!();
+                        println!("   La suppression reste manuelle et volontaire :");
+                        match fs {
+                            hlb_backup::Filesystem::Zfs => {
+                                println!("     zfs destroy {dataset}@<nom>")
+                            }
+                            hlb_backup::Filesystem::Btrfs => {
+                                println!("     btrfs subvolume delete {dataset}/.snapshots/<nom>")
+                            }
+                        }
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    SnapshotCmd::Create { motif, apply, .. } => {
+                        let label = snap::snapshot_label(motif, maintenant())?;
+
+                        if !apply {
+                            println!("Créerait sur {dataset} ({}) :", fs.as_str());
+                            println!("  {label}");
+                            println!();
+                            println!("  Commande : {}", snap::create_command(fs, dataset, &label).join(" "));
+                            println!();
+                            println!("  🔴 Un instantané n'est PAS une sauvegarde : il vit sur le");
+                            println!("     même pool que les données. Il protège de l'erreur");
+                            println!("     logique, pas de la perte du disque.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        match snap::create(fs, dataset, &label).await {
+                            Ok(_) => {
+                                let state = State::open(&cli.state).await?;
+                                state
+                                    .audit("cli", ACTEUR_ROLE, "snapshot-create", dataset, "ok",
+                                           Some(&label))
+                                    .await?;
+                                println!("✓ {label}");
+                                println!();
+                                println!("  Retour arrière :");
+                                match fs {
+                                    hlb_backup::Filesystem::Zfs => {
+                                        println!("    zfs rollback {dataset}@{label}")
+                                    }
+                                    hlb_backup::Filesystem::Btrfs => {
+                                        println!("    (btrfs : remplacer le sous-volume par");
+                                        println!("     {dataset}/.snapshots/{label})")
+                                    }
+                                }
+                                Ok(ExitCode::SUCCESS)
+                            }
+                            Err(e) => {
+                                eprintln!("{e}");
+                                Ok(ExitCode::FAILURE)
+                            }
+                        }
+                    }
+                }
+            })
         }
 
         Command::Selfy(cmd) => {

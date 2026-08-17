@@ -11,6 +11,7 @@
 pub mod pgdump;
 pub mod dr;
 pub mod pitr;
+pub mod snapshot;
 pub mod sqlite;
 pub mod pgrunner;
 pub mod provider;
@@ -29,6 +30,10 @@ pub use schedule::Schedule;
 pub use verify::{verify_by_restore, verify_snapshot, Verification};
 pub use pitr::{parse_pg_url, scan_archive, wal_coverage, Segment};
 pub use dr::{plan_promotion, Profile as DrProfile};
+// ⚠️ `Snapshot` existe déjà pour restic : renommé ici, sinon les deux notions —
+// « instantané restic » et « instantané de système de fichiers » — se confondraient
+// à l'usage alors qu'elles ne protègent PAS des mêmes pannes.
+pub use snapshot::{detect as detect_filesystem, Filesystem, Snapshot as FsSnapshot};
 pub use sqlite::{snapshot as sqlite_snapshot, snapshot_all as sqlite_snapshot_all};
 pub use runner::{ContainerRunner, HostRunner};
 
