@@ -1,0 +1,55 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: termix
+  displayName: Termix
+  category: security
+  homepage: https://github.com/LukeGus/Termix
+spec:
+  image: { repo: ghcr.io/lukegus/termix, tag: "2.6.1" }
+  requires:
+    # 🔴 SSO OBLIGATOIRE, et en natif. Termix détient les clés SSH de TOUTES les
+    # machines : le compromettre revient à compromettre le parc entier, y compris
+    # le nœud qui porte les sauvegardes. C'est la seule app du catalogue dont la
+    # perte est pire que celle de Vaultwarden — un coffre volé sans mot de passe
+    # maître reste chiffré, un terminal ouvert ne protège rien.
+    #
+    # Termix annonce OIDC/LDAP/SSO avec contrôle d'accès.
+    - kind: sso
+      mode: native
+      redirectPaths: ["/api/auth/oidc/callback"]
+
+    # Base SQLite chiffrée : hôtes, identifiants, clés SSH.
+    #
+    # 🔴 `backup: true` est indispensable ET insuffisant : la sauvegarde contient
+    # les accès au parc. Elle est chiffrée par le coffre `age` comme le reste,
+    # et c'est précisément pour ce genre de contenu que cette règle existe.
+    - kind: storage
+      name: data
+      path: /app/data
+      tier: local
+      backup: true
+      sqlite: true
+  ingress:
+    - host: "{{ domain }}"
+      port: 8080
+      # 🔴 PRIVÉ, non négociable. Un client SSH web accessible depuis Internet est
+      # une porte d'entrée sur toutes les machines, protégée par un seul mot de
+      # passe. `after-guide` ne suffirait pas : ce n'est pas la fenêtre du premier
+      # inscrit qui est en jeu, c'est l'exposition elle-même.
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # Une seule instance : base SQLite locale (§3.4).
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+  update:
+    # 🔴 `pin` comme Vaultwarden, et pour une raison plus forte encore : une mise
+    # à jour automatique d'un outil qui détient les accès au parc se valide à la
+    # main. Le rollback d'image ne rendrait pas un secret qui aurait fuité.
+    channel: pin

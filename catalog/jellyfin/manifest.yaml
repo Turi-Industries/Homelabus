@@ -1,0 +1,73 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: jellyfin
+  displayName: Jellyfin
+  category: media
+  homepage: https://jellyfin.org
+spec:
+  image: { repo: jellyfin/jellyfin, tag: "10.11.11" }
+  requires:
+    # 🔴 PAS de SSO. Jellyfin parle OIDC, mais ses clients — Android TV, Apple TV,
+    # Kodi, l'app mobile — ne savent pas suivre une redirection d'authentification.
+    # Poser un portail devant coupe tout ce qui n'est pas un navigateur, et la
+    # panne se découvre depuis le canapé. Jellyfin garde donc ses propres comptes,
+    # et l'exposition privée compense (§5).
+    #
+    # C'est une exclusion VOLONTAIRE, pas un oubli : `mode: none` l'enregistre
+    # comme une décision, là où omettre la capacité laisserait croire à un trou.
+    - kind: sso
+      mode: none
+
+    # Configuration et base interne. SQLite : le drapeau impose la méthode de
+    # sauvegarde du §3.4 — un fichier SQLite copié à chaud ne restaure pas.
+    - kind: storage
+      name: config
+      path: /config
+      tier: local
+      backup: true
+      sqlite: true
+
+    # ⚠️ Cache de transcodage : NON sauvegardé, délibérément. Il se reconstitue
+    # tout seul, il peut peser des dizaines de gigaoctets, et l'inclure noierait
+    # le dépôt restic sous des données jetables au détriment de l'irremplaçable.
+    - kind: storage
+      name: cache
+      path: /cache
+      tier: local
+      backup: false
+
+    # 🔴 La médiathèque va sur le NAS, pas sur un volume local. C'est le seul
+    # stockage du catalogue qui le justifie : le volume dépasse ce que tient un
+    # SSD de nœud, et les fichiers sont déjà sauvegardés côté NAS.
+    #
+    # ⚠️ NFS est interdit aux bases (§10.2) — ici il n'y a que des fichiers lus
+    # séquentiellement, ce qui est exactement son bon usage.
+    - kind: storage
+      name: media
+      path: /media
+      tier: nfs
+      backup: false
+  ingress:
+    - host: "{{ domain }}"
+      port: 8096
+      # Pas d'Anubis : un proof-of-work casserait tous les clients non-navigateur.
+      chain: [caddy-front, caddy-back]
+      # 🔴 Privé. Sans SSO devant, une exposition publique laisserait le formulaire
+      # de connexion de Jellyfin face à Internet — et ses comptes ne sont pas
+      # protégés par le fournisseur d'identité.
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # 🔴 Une seule instance : la base est un SQLite local. Deux réplicas
+    # tiendraient deux bibliothèques divergentes et la progression de lecture
+    # sauterait d'un épisode à l'autre selon le nœud qui répond.
+    replicas: 1
+    # Le transcodage est la charge la plus lourde du catalogue.
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
+  update:
+    channel: minor

@@ -1,0 +1,63 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: comprendre-le-risque
+    title: Ce que cette app concentre
+    phase: pre-install
+    severity: blocking
+    body: |
+      🔴 Termix détient les clés SSH de toutes tes machines.
+
+      Le compromettre, c'est perdre le parc entier — y compris le nœud qui porte
+      les sauvegardes, donc y compris le moyen de s'en remettre. C'est la seule
+      app du catalogue dont la perte est pire que celle de Vaultwarden : un
+      coffre volé sans son mot de passe maître reste chiffré, un terminal déjà
+      ouvert ne protège rien.
+
+      Deux conséquences, appliquées par le manifest :
+        - exposition PRIVÉE, jamais publique, même après validation du guide ;
+        - `channel: pin` — aucune mise à jour automatique.
+
+      Si tu n'as pas besoin d'un terminal dans le navigateur, la bonne décision
+      est de ne pas l'installer. `hlb access grant` couvre déjà l'accès SSH.
+
+  - id: cle-dediee
+    title: Donner à Termix sa PROPRE clé SSH
+    phase: post-install
+    severity: blocking
+    body: |
+      🔴 N'y mets JAMAIS la clé de HomelabUS.
+
+      Elle sert au provisionnement des nœuds et sa révocation couperait le
+      cluster de lui-même. Termix doit avoir une clé à lui, révocable seule :
+
+        hlb access grant termix --key <sa clé publique>
+
+      Le jour où cette app pose un problème, `hlb access revoke termix` ferme
+      la porte sans rien casser d'autre. C'est toute la raison d'être des accès
+      gérés (§2ter phase 0bis).
+
+  - id: sso-obligatoire
+    title: Vérifier que le SSO est bien actif
+    phase: post-install
+    severity: blocking
+    after: [cle-dediee]
+    body: |
+      Ouvre {{ domain }} en navigation privée.
+
+      Tu dois être renvoyé vers PocketID **avant** de voir le moindre terminal.
+      Si un formulaire de connexion local apparaît, l'OIDC n'est pas pris et
+      l'app est protégée par un seul mot de passe : arrête-toi là.
+    deeplink: "https://{{ domain }}/"

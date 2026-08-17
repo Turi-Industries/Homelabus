@@ -232,6 +232,11 @@ qui a tort, pas le test.
   Un deadman hébergé par le controller meurt avec lui ; une alerte relayée par le
   controller ne part pas quand c'est lui qui est mort. Et si `curl` échoue, l'échec est
   avalé par `>/dev/null 2>&1` : d'où le repli sur stderr, que cron envoie par courriel.
+- **Un `..` dans un motif a le même effet qu'un bras `_ =>`.** Constaté sur
+  `Capability::Sso { redirect_paths, .. }` : le `mode` était ignoré, donc une app en
+  `mode: none` (exclusion volontaire) recevait un client OIDC aux URI VIDES, et une app
+  derrière portail un client pointant vers elle au lieu d'oauth2-proxy. Le compilateur
+  ne pouvait pas le dire — c'est exactement ce que l'exhaustivité devait empêcher.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -316,6 +321,18 @@ vérifiée contre un vrai couple primaire/standby — copie initiale, rattrapage
 coupure, alerte de slot orphelin avec son remède, et détection des standbys qu'on ne
 sait pas distinguer. Asynchrone par décision : en synchrone, la panne du standby
 bloquerait les écritures de la primaire.
+
+Catalogue : Gitea, Vikunja, Vaultwarden, plus **n8n, Jellyfin, LibreSpeed et Termix**.
+Les ajouter a révélé trois défauts du résolveur (client OIDC créé pour une exclusion
+volontaire, callback de portail pointant vers l'app, `native` sans `redirectPaths`
+accepté), tous corrigés — c'est bien l'ajout d'apps aux combinaisons différentes qui
+fait sortir ces trous, pas le volume.
+
+🔴 **Trou connu, non corrigé : les identifiants de base n'atteignent pas le conteneur.**
+`ProvisionDatabase` crée la base, le rôle et le mot de passe, mais `DeployService` ne
+reçoit que les variables statiques du `guide.yaml`. Une app à base de données démarre
+donc sans savoir s'y connecter — et retombe en silence sur son SQLite interne. C'est la
+moitié manquante du résolveur de capacités.
 
 Fait aussi : les **dumps MariaDB** (`hlb-backup::mariadump`), qui manquaient — une app
 MariaDB était provisionnée mais n'avait aucune sauvegarde logique.

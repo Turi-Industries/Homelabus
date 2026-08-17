@@ -1,0 +1,57 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: nfs-media
+    title: Vérifier le partage NFS de la médiathèque
+    phase: pre-install
+    severity: blocking
+    body: |
+      Le volume `jellyfin-media` doit pointer vers le partage NFS du NAS.
+
+      ⚠️ Sans lui, Jellyfin démarre parfaitement et présente une bibliothèque
+      VIDE. Rien n'indique que le montage manque : on croit à un problème
+      d'indexation et on cherche au mauvais endroit.
+
+      Vérifie depuis un nœud :
+        showmount -e <nas>
+        mount | grep media
+
+  - id: first-account
+    title: Créer le compte administrateur
+    phase: post-install
+    severity: blocking
+    body: |
+      L'assistant de première ouverture crée le compte administrateur.
+
+      🔴 Jellyfin n'est PAS derrière le SSO — ses clients TV ne savent pas suivre
+      une redirection d'authentification. Ce mot de passe est donc la seule chose
+      qui protège la médiathèque : mets-le dans Vaultwarden, pas ailleurs.
+    deeplink: "https://{{ domain }}/web/#/wizardstart.html"
+    verify:
+      type: http
+      url: "https://{{ domain }}/health"
+
+  - id: remote-access
+    title: Décider de l'accès hors VPN
+    phase: post-install
+    severity: recommended
+    after: [first-account]
+    body: |
+      Jellyfin est exposé en PRIVÉ : joignable depuis le VPN seulement.
+
+      Le rendre public reviendrait à poser son formulaire de connexion face à
+      Internet, sans le fournisseur d'identité pour le couvrir. Si tu veux
+      regarder hors de chez toi, le VPN est la bonne réponse — les clients
+      Jellyfin s'en accommodent très bien.

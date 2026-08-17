@@ -55,6 +55,27 @@ pub fn validate(m: &Manifest) -> Result<()> {
         )));
     }
 
+    // 🔴 §5.2 — `mode: native` sans `redirectPaths` produit un client OIDC SANS URI
+    // de redirection. PocketID n'a alors rien vers quoi renvoyer, et la panne ne se
+    // voit qu'au retour de la connexion, sur un message qui parle d'URI non
+    // enregistrée sans dire laquelle il attendait.
+    //
+    // Le manifest est refusé ici plutôt que de laisser planifier un client inutile :
+    // c'est une faute de rédaction, elle se dit avec son numéro de ligne.
+    for c in &m.spec.requires {
+        if let Capability::Sso { mode: SsoMode::Native, redirect_paths } = c {
+            if redirect_paths.is_empty() {
+                return Err(Error::Validation(format!(
+                    "{} déclare « sso: native » sans redirectPaths : le client OIDC \
+                     n'aurait aucune URI de redirection et la connexion échouerait au \
+                     retour. Donne le chemin de callback de l'app, ou passe en \
+                     « proxy-only » si elle ne parle pas OIDC",
+                    m.metadata.name
+                )));
+            }
+        }
+    }
+
     // §10.2 — une base sur NFS finit par se corrompre : le verrouillage de fichiers
     // n'y est pas fiable.
     for c in &m.spec.requires {

@@ -12,9 +12,9 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Composant | État |
 |---|---|
 | Spike `bollard`/Swarm (risque n°1) | ✅ **validé** — voir ci-dessous |
-| `hlb-types` — manifests, capacités, validation | ✅ 33 tests |
+| `hlb-types` — manifests, capacités, validation | ✅ 41 tests |
 | `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
-| `hlb-resolver` — résolution + graphe + plan | ✅ 21 tests |
+| `hlb-resolver` — résolution + graphe + plan | ✅ 25 tests |
 | `hlb-catalog` — chargement et validation | ✅ 9 tests |
 | `hlb-state` — état persistant, reprise, secrets (sqlx/SQLite) | ✅ 27 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
@@ -39,7 +39,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
 | `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
 
-**796 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**800 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

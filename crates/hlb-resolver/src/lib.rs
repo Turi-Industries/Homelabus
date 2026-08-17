@@ -11,7 +11,7 @@
 pub mod graph;
 pub mod plan;
 
-use hlb_types::{Capability, ExposePolicy, Manifest};
+use hlb_types::{Capability, ExposePolicy, Manifest, SsoMode};
 
 pub use graph::{DependencyGraph, GraphError};
 pub use plan::{Action, Plan};
@@ -59,6 +59,14 @@ impl InstallParams {
         }
     }
 }
+
+/// Le callback d'oauth2-proxy, servi sur le domaine de l'app elle-même.
+///
+/// ⚠️ Doit rester aligné sur le bloc `handle /oauth2/*` que produit
+/// `hlb-ingress::rendre_forward_auth`. Les deux décrivent le même chemin vu de deux
+/// endroits : s'ils divergent, la connexion échoue à l'étape du retour, et le message
+/// de PocketID parle d'URI non enregistrée sans dire laquelle il attendait.
+pub const CALLBACK_PORTAIL: &str = "/oauth2/callback";
 
 /// Traduit un manifest + des paramètres d'installation en plan d'exécution.
 ///
@@ -273,27 +281,66 @@ fn resolve_capability(
             });
         }
 
-        Capability::Sso { redirect_paths, .. } => {
-            // §5.2 — les URI de callback dépendent du domaine choisi à l'installation.
-            // Jamais en dur dans le manifest.
-            let domain = params
-                .domain
-                .as_ref()
-                .ok_or(Error::MissingParam("domain"))?;
+        Capability::Sso { mode, redirect_paths } => {
+            // 🔴 Le `mode` décide, et il est examiné exhaustivement. La version
+            // précédente l'ignorait (`..`), avec deux conséquences silencieuses :
+            // une app en exclusion volontaire recevait quand même un client OIDC
+            // aux URI VIDES, et une app derrière portail recevait un client pointant
+            // vers elle au lieu du portail — donc un client inutilisable dans les
+            // deux cas, plus un secret créé pour rien.
+            //
+            // Un `..` sur un champ a le même effet qu'un bras `_ =>` : il fait taire
+            // le compilateur là où on veut justement qu'il parle.
+            match mode {
+                // §5 — exclusion assumée : l'app gère ses propres comptes, ou son
+                // protocole est incompatible (clients TV, applications natives).
+                // Créer un client OIDC ici laisserait croire à une protection qui
+                // n'existe pas, et le secret associé n'aurait jamais de lecteur.
+                SsoMode::None => {}
 
-            let uris = redirect_paths
-                .iter()
-                .map(|p| format!("https://{domain}{p}"))
-                .collect();
+                // Le meilleur cas : l'app parle OIDC, les URI viennent d'elle.
+                SsoMode::Native => {
+                    // §5.2 — les URI de callback dépendent du domaine choisi à
+                    // l'installation. Jamais en dur dans le manifest.
+                    let domain = params
+                        .domain
+                        .as_ref()
+                        .ok_or(Error::MissingParam("domain"))?;
 
-            plan.push(Action::CreateOidcClient {
-                app: app.to_string(),
-                redirect_uris: uris,
-            });
-            plan.push(Action::GenerateSecret {
-                name: format!("{app}-oidc-secret"),
-                purpose: "client secret OIDC".into(),
-            });
+                    plan.push(Action::CreateOidcClient {
+                        app: app.to_string(),
+                        redirect_uris: redirect_paths
+                            .iter()
+                            .map(|p| format!("https://{domain}{p}"))
+                            .collect(),
+                    });
+                    plan.push(Action::GenerateSecret {
+                        name: format!("{app}-oidc-secret"),
+                        purpose: "client secret OIDC".into(),
+                    });
+                }
+
+                // 🔴 C'est le PORTAIL qui parle OIDC, pas l'app. Le callback est
+                // donc celui d'oauth2-proxy — `/oauth2/callback` sur le domaine de
+                // l'app, puisque Caddy le sert là (voir `rendre_forward_auth`).
+                // Enregistrer les chemins de l'app produirait un client dont
+                // PocketID rejetterait la redirection au moment de la connexion.
+                SsoMode::ProxyOnly | SsoMode::ProxyHeader => {
+                    let domain = params
+                        .domain
+                        .as_ref()
+                        .ok_or(Error::MissingParam("domain"))?;
+
+                    plan.push(Action::CreateOidcClient {
+                        app: app.to_string(),
+                        redirect_uris: vec![format!("https://{domain}{CALLBACK_PORTAIL}")],
+                    });
+                    plan.push(Action::GenerateSecret {
+                        name: format!("{app}-oidc-secret"),
+                        purpose: "client secret OIDC du portail".into(),
+                    });
+                }
+            }
         }
 
         Capability::Smtp => {
@@ -404,9 +451,99 @@ mod tests {
 
     #[test]
     fn sso_without_domain_fails_early() {
-        let m = manifest("  requires:\n    - kind: sso\n      mode: native\n");
+        let m = manifest(
+            "  requires:\n    - kind: sso\n      mode: native\n      \
+             redirectPaths: [\"/callback\"]\n",
+        );
         let err = resolve(&m, &InstallParams::default()).unwrap_err();
         assert!(matches!(err, Error::MissingParam("domain")), "{err}");
+    }
+
+    /// Les URI de redirection du client OIDC planifié, s'il y en a un.
+    fn uris_oidc(p: &Plan) -> Option<Vec<String>> {
+        p.actions.iter().find_map(|a| match a {
+            Action::CreateOidcClient { redirect_uris, .. } => Some(redirect_uris.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_deliberate_sso_exclusion_creates_nothing() {
+        // 🔴 Constaté en ajoutant Jellyfin : `mode: none` produisait quand même un
+        // client OIDC, aux URI de redirection VIDES, plus un secret que personne ne
+        // lirait jamais. Le `mode` était ignoré par un `..` — même effet qu'un bras
+        // `_ =>` : faire taire le compilateur là où on veut justement qu'il parle.
+        //
+        // `none` est une exclusion VOLONTAIRE (clients TV incapables de suivre une
+        // redirection, app à comptes propres). Créer un client laisserait croire à
+        // une protection qui n'existe pas.
+        let m = manifest("  requires:\n    - kind: sso\n      mode: none\n");
+        let p = resolve(&m, &InstallParams::with_domain("media.example.fr")).expect("plan");
+
+        assert!(uris_oidc(&p).is_none(), "aucun client OIDC ne doit être créé");
+        assert!(
+            !p.actions.iter().any(|a| matches!(
+                a,
+                Action::GenerateSecret { name, .. } if name.ends_with("-oidc-secret")
+            )),
+            "ni secret OIDC, que personne ne lirait : {:?}",
+            p.actions
+        );
+    }
+
+    #[test]
+    fn a_deliberate_exclusion_does_not_even_need_a_domain() {
+        // Corollaire : sans client à créer, le domaine n'est plus requis. Exiger un
+        // paramètre pour une capacité qui ne provisionne rien serait un faux blocage.
+        let m = manifest("  requires:\n    - kind: sso\n      mode: none\n");
+        resolve(&m, &InstallParams::default()).expect("aucun domaine n'est nécessaire");
+    }
+
+    #[test]
+    fn a_portal_backed_app_registers_the_portal_callback() {
+        // 🔴 Derrière un portail, c'est oauth2-proxy qui parle OIDC, pas l'app. Un
+        // client enregistré sur les chemins de l'app produirait une redirection que
+        // PocketID refuse au moment de la connexion — la panne survient au RETOUR,
+        // sur un message qui ne dit pas quelle URI était attendue.
+        for mode in ["proxy-only", "proxy-header"] {
+            let m = manifest(&format!(
+                "  requires:\n    - kind: sso\n      mode: {mode}\n      \
+                 redirectPaths: [\"/rest/oauth2-credential/callback\"]\n"
+            ));
+            let p = resolve(&m, &InstallParams::with_domain("n8n.example.fr")).expect("plan");
+
+            assert_eq!(
+                uris_oidc(&p).expect("client OIDC"),
+                vec![format!("https://n8n.example.fr{CALLBACK_PORTAIL}")],
+                "mode {mode} : les chemins de l'app ne s'appliquent pas au portail"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oidc_client_is_never_created_without_a_redirect_uri() {
+        // Un client sans URI est inutilisable : PocketID n'a rien vers quoi renvoyer.
+        // Quel que soit le mode, ou bien on ne crée rien, ou bien on crée un client
+        // complet — jamais un client à moitié.
+        for mode in ["none", "proxy-only", "proxy-header"] {
+            let m = manifest(&format!("  requires:\n    - kind: sso\n      mode: {mode}\n"));
+            let p = resolve(&m, &InstallParams::with_domain("app.example.fr")).expect("plan");
+
+            if let Some(uris) = uris_oidc(&p) {
+                assert!(!uris.is_empty(), "mode {mode} : client sans URI de redirection");
+            }
+        }
+
+        // 🔴 `native` est le cas qui ne peut PAS s'en sortir seul : sans chemin
+        // déclaré, personne ne sait où renvoyer. Trouvé par ce test même, qui
+        // échouait sur ce mode. Le manifest est donc refusé à la validation plutôt
+        // que de planifier un client inutilisable.
+        let m = manifest("  requires:\n    - kind: sso\n      mode: native\n");
+        let e = resolve(&m, &InstallParams::with_domain("app.example.fr"))
+            .expect_err("un native sans redirectPaths doit être refusé");
+        let msg = e.to_string();
+        assert!(msg.contains("redirectPaths"), "{msg}");
+        assert!(msg.contains("proxy-only"), "l'erreur doit dire quoi faire : {msg}");
     }
 
     #[test]

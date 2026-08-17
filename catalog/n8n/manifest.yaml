@@ -1,0 +1,53 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: n8n
+  displayName: n8n
+  category: automation
+  homepage: https://n8n.io
+spec:
+  image: { repo: n8nio/n8n, tag: "1.123.72" }
+  requires:
+    - kind: database
+      engine: postgres
+
+    # 🔴 PAS de SSO natif : l'OIDC de n8n est réservé à l'édition entreprise.
+    # La communautaire a ses propres comptes (le premier inscrit est
+    # propriétaire). `proxy-only` pose donc un portail devant.
+    #
+    # ⚠️ Conséquence à connaître : le portail couvre AUSSI /webhook/*. Les
+    # déclencheurs appelés depuis l'extérieur ne passeront pas. Tant que
+    # l'ingress ne sait pas distinguer les chemins, c'est l'un ou l'autre — et
+    # on choisit de protéger l'interface, qui détient les identifiants.
+    - kind: sso
+      mode: proxy-only
+
+    # 🔴 À conserver MÊME avec PostgreSQL. Ce répertoire ne porte pas que la base
+    # SQLite qu'on vient de remplacer : il contient la clé de chiffrement, les
+    # journaux d'instance et les données du contrôle de source. n8n le dit
+    # lui-même. Le supprimer en croyant que « tout est en base » perd la clé.
+    - kind: storage
+      name: data
+      path: /home/node/.n8n
+      tier: local
+      backup: true
+
+    # Les workflows envoient des mails (notification d'échec, rapports).
+    - kind: smtp
+  ingress:
+    - host: "{{ domain }}"
+      port: 5678
+      chain: [caddy-back]
+      # 🔴 Privé. n8n stocke les identifiants de TOUS les services qu'il pilote :
+      # clés d'API, jetons, mots de passe. C'est un coffre-fort qui s'ignore.
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz >/dev/null || exit 1"]
+  update:
+    channel: minor

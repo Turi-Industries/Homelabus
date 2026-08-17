@@ -1,0 +1,38 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: librespeed
+  displayName: LibreSpeed
+  category: network
+  homepage: https://github.com/librespeed/speedtest
+spec:
+  image: { repo: ghcr.io/librespeed/speedtest, tag: "6.2.1-alpine" }
+  # Aucune capacité : ni base, ni cache, ni stockage, ni SSO.
+  #
+  # C'est un choix, pas un oubli. LibreSpeed sait enregistrer les résultats
+  # (TELEMETRY=true), ce qui exige une base ET conserve l'adresse IP de chaque
+  # visiteur. Un test de débit n'a pas besoin de savoir qui l'a lancé : on reste
+  # sans état, et l'app devient jetable — elle se redéploie sans rien perdre.
+  requires: []
+  ingress:
+    # 🔴 PUBLIC, et c'est le seul cas du catalogue où c'est justifié sans réserve :
+    # mesurer son débit depuis le VPN mesure le VPN, pas la ligne. L'app n'expose
+    # aucune donnée et ne conserve rien.
+    - host: "{{ domain }}"
+      port: 8080
+      # Pas d'Anubis : un proof-of-work fausserait la mesure qu'on vient faire.
+      chain: [caddy-front, caddy-back]
+      expose: public
+  security:
+    # nginx écrit ses fichiers temporaires et son PID.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    # Sans état : plusieurs réplicas seraient possibles, mais un test de débit
+    # saturé par ses propres instances mesurerait n'importe quoi.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+  update:
+    channel: minor

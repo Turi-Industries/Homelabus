@@ -1,0 +1,31 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: standalone
+    title: Mode autonome, sans télémétrie
+    phase: post-install
+    severity: tip
+    body: |
+      LibreSpeed tourne en mode autonome et n'enregistre AUCUN résultat.
+
+      Activer la télémétrie demanderait une base de données et conserverait
+      l'adresse IP de chaque visiteur — pour une app publique, c'est un fichier
+      de journal de plus à protéger, sans contrepartie.
+    automate:
+      - method: env
+        vars:
+          MODE: standalone
+          TELEMETRY: "false"
+          TITLE: "Débit — {{ base_domain }}"

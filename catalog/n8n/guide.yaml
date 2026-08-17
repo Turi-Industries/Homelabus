@@ -1,0 +1,68 @@
+# §4.6 — ce que le déploiement seul ne couvre pas.
+steps:
+  - id: dns-record
+    title: Créer l'enregistrement DNS
+    phase: pre-install
+    severity: blocking
+    body: |
+      Chez ton registrar, fais pointer {{ domain }} vers le cluster.
+
+      Si un wildcard *.{{ base_domain }} existe déjà, il n'y a rien à faire.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: cle-de-chiffrement
+    title: 🔴 Sauvegarder la clé de chiffrement
+    phase: post-install
+    severity: blocking
+    body: |
+      n8n chiffre TOUS les identifiants de tes workflows — clés d'API, jetons,
+      mots de passe — avec une clé unique. Sans elle, la base est illisible.
+
+      🔴 Le piège : le dump PostgreSQL NE SUFFIT PAS. Restauré seul, il rend des
+      workflows dont aucun identifiant ne peut être déchiffré. La sauvegarde
+      paraît complète, la restauration réussit, et rien ne fonctionne.
+
+      La clé vit dans /home/node/.n8n — d'où le volume `backup: true`. Mais
+      vérifie-le, parce que c'est le genre d'erreur qui ne se découvre qu'un
+      jour de sinistre :
+
+        hlb backup status n8n
+        docker exec $(docker ps -qf name=n8n) cat /home/node/.n8n/config
+
+      Note la clé dans Vaultwarden. Deux copies valent mieux qu'une, et celle-ci
+      ne se régénère pas.
+
+  - id: compte-proprietaire
+    title: Créer le compte propriétaire
+    phase: post-install
+    severity: blocking
+    after: [cle-de-chiffrement]
+    body: |
+      Le premier compte inscrit devient propriétaire de l'instance.
+
+      n8n est exposé en PRIVÉ : personne ne peut prendre ce compte de vitesse
+      depuis Internet. Prends quand même le temps de le faire maintenant.
+    deeplink: "https://{{ domain }}/setup"
+    verify:
+      type: http
+      url: "https://{{ domain }}/healthz"
+
+  - id: webhooks-externes
+    title: Comprendre la limite des webhooks
+    phase: post-install
+    severity: recommended
+    after: [compte-proprietaire]
+    body: |
+      n8n étant privé, les déclencheurs appelés depuis l'extérieur (GitHub,
+      Stripe, un formulaire public…) N'ARRIVERONT PAS.
+
+      Ce n'est pas une panne, c'est le compromis assumé du manifest : n8n détient
+      les identifiants de tout ce qu'il pilote, et l'ingress ne sait pas encore
+      distinguer /webhook/* du reste pour n'ouvrir que lui.
+
+      En attendant, deux solutions qui marchent :
+        - déclencheurs par intervalle ou par sondage (polling) ;
+        - webhooks appelés depuis le VPN.
