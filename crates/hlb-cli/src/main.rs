@@ -490,6 +490,20 @@ enum DrCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// 🔴 Répéter une restauration pour de vrai, dans un conteneur jetable (§8.3).
+    Exercise {
+        /// Répertoire des sauvegardes de base.
+        #[arg(long, default_value = "/archive/base")]
+        base_dir: String,
+        /// Image PostgreSQL, de version compatible avec la sauvegarde.
+        #[arg(long, default_value = "postgres:17-alpine")]
+        image: String,
+        /// 🔴 J'affirme que la cible est jetable. Sans ça, l'exercice refuse.
+        #[arg(long)]
+        disposable: bool,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Suis-je prêt à basculer ? Ne modifie rien.
     Status,
 }
@@ -2527,6 +2541,73 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let orch = SwarmOrchestrator::connect().ok();
 
                 match cmd {
+                    DrCmd::Exercise { base_dir, image, disposable, apply } => {
+                        use hlb_backup::drill;
+
+                        let bases = charger_bases(&state).await?;
+                        let cible = drill::Target {
+                            container: drill::container_name(maintenant())?,
+                            disposable: *disposable,
+                        };
+
+                        if let Err(r) = drill::authorize(&cible, !bases.is_empty()) {
+                            eprintln!("{}", r.describe());
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        // `authorize` a déjà refusé le cas vide, mais on ne s'appuie
+                        // pas dessus : un `expect` en production casse le binaire,
+                        // là où un refus explicite reste réparable.
+                        let Some(derniere) = bases.iter().max_by_key(|b| b.finished_at) else {
+                            eprintln!("Aucune sauvegarde de base — rien à exercer.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        if !apply {
+                            println!("Exercerait la restauration de {} :", derniere.id);
+                            println!("  conteneur jetable : {}", cible.container);
+                            println!("  source (lecture seule) : {base_dir}/{}", derniere.id);
+                            println!("  image  : {image}");
+                            println!();
+                            println!("  L'exercice restaure la sauvegarde dans un conteneur NEUF,");
+                            println!("  vérifie que PostgreSQL l'ouvre, compte les tables, puis");
+                            println!("  détruit tout. La production n'est jamais touchée.");
+                            println!();
+                            println!("  ⚠️  Il prouve que la BASE revient. Il ne prouve pas que");
+                            println!("     l'application redémarre dessus.");
+                            println!();
+                            println!("  Relance avec --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        println!("Exercice en cours (restauration réelle)…");
+                        let o = drill::run_postgres(&cible, base_dir, &derniere.id, image).await?;
+
+                        state
+                            .record_drill(
+                                "postgres",
+                                o.succeeded(),
+                                o.tables,
+                                o.seconds as i64,
+                                &o.detail,
+                            )
+                            .await?;
+                        state
+                            .audit(
+                                "cli", ACTEUR_ROLE, "dr-exercise", &derniere.id,
+                                if o.succeeded() { "ok" } else { "failed" },
+                                Some(&o.describe()),
+                            )
+                            .await?;
+
+                        println!("{}", o.describe());
+                        Ok(if o.succeeded() {
+                            ExitCode::SUCCESS
+                        } else {
+                            ExitCode::FAILURE
+                        })
+                    }
+
                     DrCmd::Status => {
                         let bases = charger_bases(&state).await?;
                         let nodes = match &orch {
@@ -2571,9 +2652,26 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
 
                         println!();
-                        println!("⚠️  Une procédure de reprise jamais testée ne marche pas le");
-                        println!("   jour où on en a besoin (§8.3). Exerce-la sur un nœud de");
-                        println!("   test au moins une fois.");
+                        let jours = state.days_since_successful_drill().await?;
+                        let etat = hlb_backup::Readiness::from_days(jours);
+                        println!("Exercice de reprise : {}", etat.describe());
+
+                        let recents = state.recent_drills(3).await?;
+                        if !recents.is_empty() {
+                            for (quand, portee, statut, tables) in &recents {
+                                println!(
+                                    "  {quand}  {portee}  {}{}",
+                                    if statut == "ok" { "✓" } else { "🔴 échec" },
+                                    tables.map(|n| format!(" ({n} tables)")).unwrap_or_default()
+                                );
+                            }
+                        }
+
+                        if etat.needs_attention() {
+                            println!();
+                            println!("   hlb dr exercise --disposable --apply");
+                            return Ok(ExitCode::FAILURE);
+                        }
                         Ok(ExitCode::SUCCESS)
                     }
 

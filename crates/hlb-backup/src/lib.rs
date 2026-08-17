@@ -10,6 +10,7 @@
 
 pub mod pgdump;
 pub mod dr;
+pub mod drill;
 pub mod pitr;
 pub mod snapshot;
 pub mod sqlite;
@@ -30,6 +31,7 @@ pub use schedule::Schedule;
 pub use verify::{verify_by_restore, verify_snapshot, Verification};
 pub use pitr::{parse_pg_url, scan_archive, wal_coverage, Segment};
 pub use dr::{plan_promotion, Profile as DrProfile};
+pub use drill::{Readiness, Scope as DrillScope, Target as DrillTarget};
 // ⚠️ `Snapshot` existe déjà pour restic : renommé ici, sinon les deux notions —
 // « instantané restic » et « instantané de système de fichiers » — se confondraient
 // à l'usage alors qu'elles ne protègent PAS des mêmes pannes.

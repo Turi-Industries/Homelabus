@@ -334,3 +334,97 @@ async fn a_scheduled_dump_reaches_the_repository_and_comes_back() {
         .args(["volume", "rm", "-f", depot])
         .output();
 }
+
+/// Un exercice de reprise restaure-t-il vraiment une base utilisable ? (§8.3)
+///
+/// 🔴 C'est le seul test qui parcourt la chaîne complète : sauvegarde de base →
+/// restauration dans un conteneur neuf → PostgreSQL qui démarre dessus → données
+/// lisibles. Chaque maillon est testé ailleurs ; celui-ci vérifie qu'ils s'emboîtent.
+///
+/// Et il vérifie surtout ce qu'aucun test unitaire ne peut voir : que l'archive
+/// ressort **intacte**. Un exercice qui corromprait la sauvegarde qu'il vérifie
+/// serait le comble.
+#[tokio::test]
+#[ignore = "nécessite Docker"]
+async fn a_drill_restores_a_usable_database_without_touching_the_archive() {
+    use hlb_backup::drill;
+    use hlb_backup::pitr::basebackup;
+
+    start_postgres();
+
+    // La réplication depuis un autre conteneur : sans cette ligne, pg_basebackup est
+    // refusé avec un message qui parle de mot de passe (cf. pitr::basebackup).
+    docker(&[
+        "exec", CONTAINER, "sh", "-c",
+        "grep -q 'host replication all all' /var/lib/postgresql/data/pg_hba.conf || \
+         echo 'host replication all all scram-sha-256' >> /var/lib/postgresql/data/pg_hba.conf",
+    ]);
+    psql("postgres", "SELECT pg_reload_conf()");
+
+    psql("postgres", "DROP DATABASE IF EXISTS exercice");
+    psql("postgres", "CREATE DATABASE exercice");
+    psql(
+        "exercice",
+        "CREATE TABLE clients (id int, nom text);
+         CREATE TABLE commandes (id int);
+         INSERT INTO clients VALUES (1, 'a'), (2, 'b');",
+    );
+
+    // 1. Une vraie sauvegarde de base.
+    //
+    // ⚠️ PAS un `tempfile::tempdir()` : sur macOS, /var/folders n'est pas partagé
+    // avec la VM Docker, donc `pg_basebackup` écrirait DANS la VM et l'hôte ne
+    // verrait rien. C'est le troisième endroit du projet où ce piège se présente
+    // (cf. verify.rs et pgdump.rs). On passe donc par `target/`, sous /Users, qui
+    // est monté.
+    let racine = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/hlb-test-drill");
+    let _ = std::fs::remove_dir_all(&racine);
+    std::fs::create_dir_all(&racine).expect("répertoire de test");
+
+    let cible = basebackup::Target::new(racine.to_string_lossy(), CONTAINER)
+        .credentials("postgres", PASSWORD)
+        .network(NETWORK)
+        .image(PG_IMAGE);
+
+    let base_id = basebackup::run(&cible, 1_786_881_600)
+        .await
+        .expect("sauvegarde de base");
+
+    let archive = racine.join(&base_id).join("base.tar.gz");
+    let avant = std::fs::metadata(&archive).expect("archive").len();
+
+    // 2. L'exercice.
+    let t = drill::Target {
+        container: drill::container_name(1_786_881_600).expect("nom"),
+        disposable: true,
+    };
+    drill::authorize(&t, true).expect("cible jetable autorisée");
+
+    let o = drill::run_postgres(&t, &racine.to_string_lossy(), &base_id, PG_IMAGE)
+        .await
+        .expect("exercice exécutable");
+
+    assert!(
+        o.succeeded(),
+        "🔴 la chaîne complète doit aboutir : {}",
+        o.describe()
+    );
+    // `exercice` a trois tables dans son schéma public… mais l'exercice restaure le
+    // CLUSTER, donc il se connecte à `postgres`, qui n'en a aucune. Ce qui compte est
+    // qu'il en trouve : une base vide donnerait 0 et échouerait.
+    assert!(o.tables.unwrap_or(0) > 0, "{}", o.describe());
+
+    // 3. 🔴 L'archive est intacte : le montage en lecture seule a tenu.
+    let apres = std::fs::metadata(&archive).expect("archive").len();
+    assert_eq!(avant, apres, "l'exercice a MODIFIÉ la sauvegarde qu'il vérifiait");
+
+    // 4. Rien ne traîne.
+    let restants = docker(&["ps", "-a", "--filter", &format!("name={}", t.container), "-q"]);
+    assert!(
+        String::from_utf8_lossy(&restants.stdout).trim().is_empty(),
+        "le conteneur d'exercice n'a pas été détruit"
+    );
+
+    let _ = std::fs::remove_dir_all(&racine);
+}

@@ -333,6 +333,73 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Consigne un exercice de reprise (§8.3).
+    ///
+    /// 🔴 Les échecs sont enregistrés comme les réussites. Ne garder que les
+    /// réussites ferait apparaître une procédure « exercée le mois dernier » alors
+    /// que l'exercice avait échoué — soit exactement l'inverse de ce qu'on veut
+    /// savoir.
+    pub async fn record_drill(
+        &self,
+        scope: &str,
+        ok: bool,
+        tables: Option<i64>,
+        duration_s: i64,
+        detail: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO dr_drills (scope, status, tables, duration_s, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(scope)
+        .bind(if ok { "ok" } else { "failed" })
+        .bind(tables)
+        .bind(duration_s)
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Jours depuis le dernier exercice **RÉUSSI**.
+    ///
+    /// ⚠️ Réussi seulement : un exercice qui échoue ne prouve rien sur la capacité à
+    /// restaurer, et le compter remettrait le compteur à zéro sans raison.
+    pub async fn days_since_successful_drill(&self) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT CAST((julianday('now') - julianday(MAX(finished_at))) AS INTEGER) AS d
+             FROM dr_drills WHERE status = 'ok'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("d").ok().flatten()))
+    }
+
+    /// Les derniers exercices, le plus récent d'abord.
+    pub async fn recent_drills(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String, Option<i64>)>> {
+        let rows = sqlx::query(
+            "SELECT finished_at, scope, status, tables FROM dr_drills
+             ORDER BY finished_at DESC, id DESC LIMIT ?1",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("finished_at")?,
+                    r.try_get("scope")?,
+                    r.try_get("status")?,
+                    r.try_get("tables")?,
+                ))
+            })
+            .collect()
+    }
+
     /// Enregistre un jeton d'accès (§9ter).
     ///
     /// 🔴 Seule l'empreinte est conservée : la valeur n'existe qu'une fois, au moment
@@ -939,6 +1006,37 @@ mod tests {
             b.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(),
             ["b1", "b2", "b3"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_drill_does_not_reset_the_clock() {
+        // 🔴 Un exercice qui échoue ne prouve RIEN sur la capacité à restaurer. Le
+        // compter ferait apparaître une procédure « exercée le mois dernier » alors
+        // qu'elle avait échoué — l'inverse de ce qu'on veut savoir.
+        let s = st().await;
+        s.record_drill("postgres", false, Some(0), 12, "base vide")
+            .await
+            .expect("échec consigné");
+
+        assert_eq!(
+            s.days_since_successful_drill().await.expect("lecture"),
+            None,
+            "un échec ne doit pas compter comme un exercice réussi"
+        );
+
+        // Mais il reste VISIBLE : c'est l'information la plus utile.
+        let v = s.recent_drills(10).await.expect("lecture");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].2, "failed");
+    }
+
+    #[tokio::test]
+    async fn a_successful_drill_starts_the_clock() {
+        let s = st().await;
+        s.record_drill("postgres", true, Some(14), 30, "")
+            .await
+            .expect("réussite");
+        assert_eq!(s.days_since_successful_drill().await.expect("lecture"), Some(0));
     }
 
     #[tokio::test]

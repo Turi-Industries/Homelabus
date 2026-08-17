@@ -23,7 +23,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 33 + 7 tests |
 | `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
 | `hlb-updater` — veille, fenêtres, rollback, **Trivy + cosign** | ✅ 30 tests |
-| `hlb-backup` — restic, pg_dump, PITR, **SQLite**, **Litestream**, **DR** | ✅ 108 + 17 tests |
+| `hlb-backup` — restic, PITR, SQLite, Litestream, DR, **exercices** | ✅ 146 + 18 tests |
 | `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
 | `hlb-mail` — client Stalwart (JMAP) : boîtes et aliases | ✅ 16 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
@@ -38,7 +38,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 22 tests |
 | `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
 
-**697 tests unitaires + 65 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**710 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

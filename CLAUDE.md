@@ -187,9 +187,11 @@ qui a tort, pas le test.
   `pg_wal` grossit jusqu'à saturer le disque. Archiver vers une destination cassée est
   plus dangereux que ne pas archiver.
 - **Le dossier temporaire de l'hôte n'est PAS partagé avec la VM Docker sur macOS.**
-  Tout espace jetable monté dans un conteneur doit être un *volume Docker*, et son
-  contenu compté depuis un conteneur. Un `tempfile::tempdir()` y apparaît vide, ce qui
-  fait conclure à une sauvegarde vide sur une sauvegarde saine.
+  Tout espace jetable monté dans un conteneur doit être un *volume Docker* (ou un
+  chemin sous `/Users`), et son contenu lu depuis un conteneur. Un
+  `tempfile::tempdir()` y apparaît vide, ce qui fait conclure à une sauvegarde vide sur
+  une sauvegarde saine. **Ce piège s'est présenté trois fois** : vérification restic,
+  dumps SQL, exercices de reprise.
 - **Stalwart n'a pas d'API REST pour les comptes.** Tout passe par JMAP (`POST /jmap/`,
   capacité `urn:stalwart:jmap`, méthodes `x:Account/set` et `x:Domain/query`), à partir
   de la **v0.16** seulement. Le discriminant est `@type`, `emailAddress` est calculé par
@@ -277,6 +279,9 @@ Fait enfin : `hlb self` (compatibilité, migrations réversibles, rollback du sc
 runtime `compose` qui n'existait que pour lui n'a plus de raison d'être. Les mentions
 de mailcow dans PLAN.md sont historiques : elles expliquent le choix de Stalwart.
 
-Reste la feuille de route du §12 : phase 7 (HA PostgreSQL en réplication streaming,
-exercices de reprise automatisés) et la bascule des binaires de `hlb self update`,
-qui attend une source de distribution signée.
+Fait aussi : `hlb dr exercise` — la restauration répétée pour de vrai dans un
+conteneur jetable (§8.3), avec un compteur de péremption dans `dr status`.
+
+Reste la feuille de route du §12 : HA PostgreSQL en réplication streaming (phase 7,
+demande un second nœud `heavy`) et la bascule des binaires de `hlb self update`, qui
+attend une source de distribution signée.
