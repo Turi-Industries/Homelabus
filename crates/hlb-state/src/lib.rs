@@ -650,9 +650,18 @@ impl State {
 
     /// Marque une action manuelle comme traitée.
     ///
-    /// ⚠️ Aujourd'hui c'est une attestation de l'utilisateur. La vérification
-    /// automatique (bloc `verify:` du §4.6 : dns, http, tcp, api…) n'est pas encore
-    /// écrite — tant qu'elle ne l'est pas, le système croit l'utilisateur sur parole.
+    /// ⚠️ Cette fonction ne vérifie RIEN par elle-même : elle enregistre une
+    /// constatation faite ailleurs.
+    ///
+    /// Deux appelants, aux garanties opposées :
+    ///
+    /// - `hlb todo --verify` a d'abord exécuté le bloc `verify:` du manifest
+    ///   (`hlb_guide::Verifier` : dns, http, tcp…). L'étape est **constatée**.
+    /// - `hlb ack` n'a rien exécuté. C'est une **attestation** : le système croit
+    ///   l'utilisateur sur parole, et le CLI le dit à chaque usage.
+    ///
+    /// Les confondre reviendrait à croire une app protégée parce que quelqu'un a
+    /// affirmé l'avoir configurée.
     pub async fn verify_guide(&self, app: &str, id: &str) -> Result<bool> {
         let res = sqlx::query(
             "UPDATE pending_guides SET verified_at = datetime('now')
