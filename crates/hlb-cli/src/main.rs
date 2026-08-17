@@ -478,6 +478,13 @@ enum TokenCmd {
         /// adresses sur la boîte d'autrui.
         #[arg(long)]
         user: Option<String>,
+        /// Boîte de destination des aliases créés par ce jeton.
+        ///
+        /// 🔴 Absente : la boîte par défaut. Le protocole addy.io n'a AUCUN champ pour
+        /// choisir la boîte — c'est donc le jeton qui la porte. Un jeton par boîte, et
+        /// changer de destination revient à changer de jeton dans Bitwarden.
+        #[arg(long, requires = "user")]
+        mailbox: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -674,6 +681,9 @@ enum AliasCmd {
         /// Boîte concernée. Par défaut, la boîte par défaut.
         #[arg(long)]
         boite: Option<String>,
+        /// Poser réellement le script chez Stalwart. Aperçu par défaut.
+        #[arg(long)]
+        apply: bool,
     },
     /// 🔴 Supprimer les aliases temporaires expirés.
     ///
@@ -1733,7 +1743,7 @@ async fn gerer_alias(
             Ok(ExitCode::SUCCESS)
         }
 
-        AliasCmd::Sieve { nom, boite } => {
+        AliasCmd::Sieve { nom, boite, apply } => {
             let c = charger_compte(state, nom).await?;
             let cible = match boite {
                 Some(b) => b.clone(),
@@ -1762,12 +1772,42 @@ async fn gerer_alias(
                 })
                 .collect();
 
-            print!("{}", hlb_users::sieve::bloc(&regles));
+            if !*apply {
+                print!("{}", hlb_users::sieve::bloc(&regles));
+                println!();
+                println!("# ─────────────────────────────────────────────────────────");
+                println!("# Aperçu : RIEN n'a été posé. Ajoute --apply.");
+                println!("# ⚠️ Ce bloc s'insère dans le script du compte SANS toucher aux");
+                println!("#    règles écrites à la main : elles vivent hors des marqueurs.");
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            let Some(m) = mail else {
+                eprintln!("🔴 Stalwart non configuré : le script n'a PAS été posé.");
+                eprintln!("   Les règles existent dans HomelabUS et ne trient rien.");
+                return Ok(ExitCode::FAILURE);
+            };
+
+            let dom = c
+                .boites
+                .iter()
+                .find(|b| b.local == cible)
+                .map(|b| b.domaine.clone())
+                .unwrap_or_else(|| domaine.to_string());
+
+            // 🔴 La fusion est faite ICI, à partir du script réellement présent chez
+            // Stalwart. La faire à l'aveugle écraserait les règles écrites à la main
+            // depuis la dernière génération.
+            let final_ = m
+                .apply_sieve(&format!("{cible}@{dom}"), &|existant| {
+                    hlb_users::sieve::fusionner(existant, &regles)
+                })
+                .await?;
+
+            println!("✓ script posé sur {cible}@{dom} ({} règle(s))", regles.len());
+            println!("  {} octets au total, règles personnelles comprises.", final_.len());
             println!();
-            println!("# ─────────────────────────────────────────────────────────");
-            println!("# ⚠️ Ce bloc s'insère dans le script Sieve du compte SANS toucher");
-            println!("#    aux règles écrites à la main : elles vivent hors des marqueurs.");
-            println!("#    Relis-les et corrige-les dans Roundcube (greffon managesieve).");
+            println!("  Relis-le dans Roundcube → Paramètres → Filtres (greffon managesieve).");
             Ok(ExitCode::SUCCESS)
         }
 
@@ -3210,7 +3250,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
                     }
 
-                    TokenCmd::Create { name, role, user, apply } => {
+                    TokenCmd::Create { name, role, user, mailbox, apply } => {
                         let Some(r) = hlb_types::Role::parse(role) else {
                             eprintln!("Rôle « {role} » inconnu.");
                             eprintln!("  viewer   : tout voir, ne rien modifier");
@@ -3218,6 +3258,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             eprintln!("  admin    : tout, y compris ce qui détruit");
                             return Ok(ExitCode::FAILURE);
                         };
+
+                        // 🔴 On vérifie la boîte AVANT de créer le jeton. La vérifier
+                        // après laissait un jeton créé, rattaché, et SANS boîte — il
+                        // aurait donc écrit dans la boîte par défaut, ce qui est
+                        // précisément le repli silencieux qu'on veut interdire.
+                        if let (Some(u), Some(b)) = (user, mailbox) {
+                            let connues = state.mailboxes(u).await?;
+                            if !connues.iter().any(|(l, ..)| l == b) {
+                                eprintln!("🔴 « {u} » n'a pas de boîte « {b} » — aucun jeton créé.");
+                                eprintln!("   hlb user mailbox add {u} {b}");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        }
 
                         if !apply {
                             println!("Créerait le jeton « {name} » en rôle {}.", r.as_str());
@@ -3239,15 +3292,24 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         state.store_token(&stocke).await?;
                         if let Some(u) = user {
                             state.set_token_user(name, Some(u)).await?;
+
+                            if let Some(b) = mailbox {
+                                state.set_token_mailbox(name, Some(b)).await?;
+                            }
                         }
                         state
                             .audit("cli", ACTEUR_ROLE, "token-create", name, "ok", Some(r.as_str()))
                             .await?;
 
                         println!("✓ jeton « {name} » créé en rôle {}.", r.as_str());
-                        match user {
-                            Some(u) => println!("  rattaché à « {u} » — peut créer ses aliases."),
-                            None => println!("  jeton de SERVICE : ne peut pas créer d'alias."),
+                        match (user, mailbox) {
+                            (Some(u), Some(b)) => {
+                                println!("  rattaché à « {u} », aliases → boîte « {b} »")
+                            }
+                            (Some(u), None) => {
+                                println!("  rattaché à « {u} », aliases → boîte par défaut")
+                            }
+                            _ => println!("  jeton de SERVICE : ne peut pas créer d'alias."),
                         }
                         println!();
                         println!("🔴 NOTE-LE MAINTENANT — il ne sera plus jamais affiché :");

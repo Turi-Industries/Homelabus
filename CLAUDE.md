@@ -358,6 +358,14 @@ qui a tort, pas le test.
   dès qu'une requête agit POUR quelqu'un : sans rattachement, un jeton volé créerait des
   aliases sur la boîte de n'importe qui. Un jeton `admin` non rattaché est donc refusé
   là où un `operator` rattaché passe.
+- **Un script Sieve ne voyage pas dans l'appel JMAP.** `SieveScript` ne porte qu'un
+  `blobId` : il faut téléverser le contenu, puis le référencer. Et **sans
+  `onSuccessActivateScript`, le script existe et ne trie RIEN** — panne totalement
+  silencieuse, les règles sont visibles dans Roundcube et sans effet.
+- **Le protocole addy.io n'a aucun champ pour choisir la boîte.** Bitwarden n'envoie
+  que `domain` et `description`. La destination vit donc sur le JETON — un jeton par
+  boîte — et un jeton qui vise une boîte disparue ÉCHOUE au lieu de retomber sur celle
+  par défaut : l'utilisateur croirait ses aliases rangés là où ils ne sont pas.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant

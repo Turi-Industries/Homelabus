@@ -660,6 +660,39 @@ impl State {
             .collect()
     }
 
+    /// La destination d'un jeton : `(utilisateur, boîte)`.
+    ///
+    /// 🔴 La boîte vit sur le JETON parce que le protocole addy.io n'a aucun champ
+    /// pour la choisir — Bitwarden n'envoie que `domain` et `description`. Un jeton
+    /// par boîte, et changer de destination revient à changer de jeton dans les
+    /// réglages du gestionnaire de mots de passe : explicite, et ça se relit.
+    ///
+    /// La boîte est `None` pour « celle par défaut », qui est le cas courant.
+    pub async fn token_target(&self, token_name: &str) -> Result<(Option<String>, Option<String>)> {
+        let row = sqlx::query("SELECT user, mailbox FROM api_tokens WHERE name = ?1")
+            .bind(token_name)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(match row {
+            Some(r) => (
+                r.try_get::<Option<String>, _>("user").ok().flatten(),
+                r.try_get::<Option<String>, _>("mailbox").ok().flatten(),
+            ),
+            None => (None, None),
+        })
+    }
+
+    /// Fixe la boîte visée par un jeton.
+    pub async fn set_token_mailbox(&self, token_name: &str, mailbox: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET mailbox = ?2 WHERE name = ?1")
+            .bind(token_name)
+            .bind(mailbox)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Rattache un jeton d'API à un utilisateur.
     ///
     /// 🔴 Sans ce lien, l'API d'aliases devrait recevoir le nom de l'utilisateur dans
@@ -1415,6 +1448,64 @@ mod tests {
             .expect("échec");
         assert_eq!(s.consecutive_failures_on("demo", "nas").await.unwrap(), 0);
         assert_eq!(s.consecutive_failures_on("demo", "offsite").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_token_can_target_a_specific_mailbox() {
+        // 🔴 Le protocole addy.io n'a AUCUN champ pour choisir la boîte : Bitwarden
+        // n'envoie que `domain` et `description`. Le jeton est donc le seul endroit
+        // qui reste — un jeton par boîte, et changer de destination revient à changer
+        // de jeton dans les réglages du gestionnaire de mots de passe.
+        let s = State::in_memory().await.expect("état");
+        s.upsert_user("remy", "standard", None).await.expect("compte");
+
+        let (_, jeton) = hlb_types::generate_token(
+            "bw-photo",
+            hlb_types::Role::Operator,
+            [7u8; hlb_types::token::TOKEN_BYTES],
+        );
+        s.store_token(&jeton).await.expect("jeton");
+        s.set_token_user("bw-photo", Some("remy")).await.expect("rattachement");
+        s.set_token_mailbox("bw-photo", Some("photo")).await.expect("boîte");
+
+        assert_eq!(
+            s.token_target("bw-photo").await.expect("cible"),
+            (Some("remy".into()), Some("photo".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_service_token_targets_nobody() {
+        // Un jeton sans identité ne doit pas pouvoir agir au nom de quelqu'un : le
+        // voler donnerait sinon le pouvoir de créer des adresses sur la boîte d'autrui.
+        let s = State::in_memory().await.expect("état");
+        let (_, jeton) = hlb_types::generate_token(
+            "service",
+            // Même en ADMIN : le privilège ne remplace pas l'identité.
+            hlb_types::Role::Admin,
+            [3u8; hlb_types::token::TOKEN_BYTES],
+        );
+        s.store_token(&jeton).await.expect("jeton");
+
+        assert_eq!(s.token_target("service").await.expect("cible"), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_token_without_a_mailbox_falls_back_to_the_default_one() {
+        // Le cas courant : un seul jeton, la boîte par défaut, rien à configurer.
+        let s = State::in_memory().await.expect("état");
+        s.upsert_user("remy", "standard", None).await.expect("compte");
+        let (_, jeton) = hlb_types::generate_token(
+            "bw",
+            hlb_types::Role::Operator,
+            [9u8; hlb_types::token::TOKEN_BYTES],
+        );
+        s.store_token(&jeton).await.expect("jeton");
+        s.set_token_user("bw", Some("remy")).await.expect("rattachement");
+
+        let (u, b) = s.token_target("bw").await.expect("cible");
+        assert_eq!(u.as_deref(), Some("remy"));
+        assert!(b.is_none(), "aucune boîte visée = celle par défaut");
     }
 
     #[tokio::test]

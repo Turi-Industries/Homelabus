@@ -1,0 +1,14 @@
+-- La boîte de destination d'un jeton d'API (§5bis.3).
+--
+-- 🔴 Pourquoi la boîte vit sur le JETON et non dans la requête.
+--
+-- Le protocole addy.io n'a aucun champ pour choisir une boîte : Bitwarden n'envoie que
+-- `domain` et `description` (relevé dans son code source). On ne peut donc pas
+-- demander à l'utilisateur au moment de la génération.
+--
+-- Le jeton est le seul endroit qui reste, et c'est en fait le bon : dans Bitwarden, on
+-- colle un jeton dans les réglages du générateur. Un jeton par boîte, et changer de
+-- destination revient à changer de jeton — ce qui est explicite et se relit.
+--
+-- NULL = la boîte par défaut du compte. C'est le cas courant, et il ne demande rien.
+ALTER TABLE api_tokens ADD COLUMN mailbox TEXT;

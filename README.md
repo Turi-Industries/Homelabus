@@ -41,7 +41,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-objstore` — client Garage : compartiments et clés isolées | ✅ 6 tests |
 | `hlb-users` — comptes, boîtes, **aliases**, quotas, **Sieve**, **API addy.io** | ✅ 50 tests |
 
-**893 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**896 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

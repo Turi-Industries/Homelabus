@@ -181,7 +181,13 @@ async fn creer_alias(
     AxumState(s): AxumState<Arc<AppState>>,
     Json(demande): Json<hlb_users::CreationDemandee>,
 ) -> Response {
-    let Ok(Some(user)) = s.state.token_user(&auth.token_name).await else {
+    let (utilisateur, boite_visee) = s
+        .state
+        .token_target(&auth.token_name)
+        .await
+        .unwrap_or((None, None));
+
+    let Some(user) = utilisateur else {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -201,13 +207,27 @@ async fn creer_alias(
         Ok(b) => b,
         Err(e) => return ApiError(e.to_string()).into_response(),
     };
-    let Some((boite, domaine_boite, _)) = boites.into_iter().find(|(.., d)| *d) else {
+    // 🔴 La boîte visée par le JETON l'emporte : c'est le seul moyen de choisir, le
+    // protocole addy.io n'ayant aucun champ pour ça. À défaut, la boîte par défaut.
+    let choisie = match &boite_visee {
+        Some(nom) => boites.iter().find(|(l, ..)| l == nom).cloned(),
+        None => boites.iter().find(|(.., d)| *d).cloned(),
+    };
+
+    let Some((boite, domaine_boite, _)) = choisie else {
+        // ⚠️ Un jeton qui vise une boîte supprimée doit ÉCHOUER, pas retomber
+        // silencieusement sur la boîte par défaut : l'utilisateur croirait ses aliases
+        // rangés là où ils ne sont pas, et les règles de tri ne s'appliqueraient plus.
+        let détail = match &boite_visee {
+            Some(nom) => format!(
+                "la boîte « {nom} » visée par ce jeton n'existe plus pour {user}. \
+                 Recrée-la, ou refais un jeton sans --mailbox"
+            ),
+            None => format!("{user} n'a aucune boîte par défaut : l'alias n'aurait nulle part où aller"),
+        };
         return (
             StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("{user} n'a aucune boîte par défaut : l'alias n'aurait \
-                                  nulle part où aller")
-            })),
+            Json(serde_json::json!({ "error": détail })),
         )
             .into_response();
     };

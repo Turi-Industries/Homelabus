@@ -323,6 +323,187 @@ impl Stalwart {
         Ok(id)
     }
 
+    /// Téléverse un contenu et rend son `blobId`.
+    ///
+    /// 🔴 Le contenu d'un script Sieve ne voyage PAS dans l'appel JMAP : `SieveScript`
+    /// ne porte qu'un `blobId`. Il faut donc téléverser d'abord, référencer ensuite.
+    /// Envoyer le script directement dans `SieveScript/set` échouerait sur une
+    /// propriété inconnue — et JMAP ignore silencieusement ce qu'il ne connaît pas,
+    /// donc le script serait « créé » et vide.
+    pub async fn upload_blob(&self, account_id: &str, contenu: &str) -> Result<String> {
+        let url = format!("{}/jmap/upload/{account_id}/", self.base_url);
+        let req = self
+            .http
+            .post(&url)
+            .header("Content-Type", "application/sieve")
+            .body(contenu.to_string());
+
+        let req = match &self.auth {
+            Auth::Basic { user, password } => req.basic_auth(user, Some(password)),
+            Auth::Bearer(t) => req.bearer_auth(t),
+        };
+
+        let resp = req.send().await.map_err(|source| Error::Http {
+            source,
+            context: "téléversement du script".into(),
+        })?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(Error::Unauthorized);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let detail = resp.text().await.unwrap_or_default();
+            return Err(Error::Api { status, detail });
+        }
+
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Unexpected(format!("réponse de téléversement illisible : {e}")))?;
+
+        v.get("blobId")
+            .and_then(|b| b.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                Error::Unexpected(format!("aucun blobId dans la réponse : {v}"))
+            })
+    }
+
+    /// Récupère le contenu d'un blob.
+    pub async fn download_blob(&self, account_id: &str, blob_id: &str) -> Result<String> {
+        let url = format!(
+            "{}/jmap/download/{account_id}/{blob_id}/script?accept=application/sieve",
+            self.base_url
+        );
+        let req = self.http.get(&url);
+        let req = match &self.auth {
+            Auth::Basic { user, password } => req.basic_auth(user, Some(password)),
+            Auth::Bearer(t) => req.bearer_auth(t),
+        };
+
+        let resp = req.send().await.map_err(|source| Error::Http {
+            source,
+            context: "téléchargement du script".into(),
+        })?;
+
+        if !resp.status().is_success() {
+            // ⚠️ Un script absent n'est pas une erreur : c'est un compte qui n'en a
+            // pas encore. Rendre une chaîne vide laisse la fusion créer le premier.
+            return Ok(String::new());
+        }
+        resp.text()
+            .await
+            .map_err(|e| Error::Unexpected(format!("script illisible : {e}")))
+    }
+
+    /// Le script Sieve actif d'un compte : `(id, blobId)`.
+    pub async fn active_sieve_script(&self, account_id: &str) -> Result<Option<(String, String)>> {
+        let args = self
+            .call(
+                "SieveScript/get",
+                serde_json::json!({
+                    "accountId": account_id,
+                    "properties": ["id", "name", "blobId", "isActive"]
+                }),
+            )
+            .await?;
+
+        Ok(args
+            .get("list")
+            .and_then(|l| l.as_array())
+            .and_then(|l| {
+                l.iter()
+                    .find(|s| s.get("isActive").and_then(|a| a.as_bool()) == Some(true))
+                    // À défaut d'actif, le premier : mieux vaut compléter un script
+                    // inactif que d'en créer un second qui ferait doublon.
+                    .or_else(|| l.first())
+            })
+            .and_then(|s| {
+                Some((
+                    s.get("id")?.as_str()?.to_string(),
+                    s.get("blobId")?.as_str()?.to_string(),
+                ))
+            }))
+    }
+
+    /// Pose le script de tri, en préservant ce que l'utilisateur a écrit.
+    ///
+    /// 🔴 Lecture-modification-écriture, comme pour les aliases. `regles` ne remplace
+    /// que le bloc délimité : les règles écrites à la main vivent hors des marqueurs et
+    /// sont recopiées telles quelles. Sans ça, une simple création d'alias effacerait
+    /// des heures de réglages.
+    ///
+    /// Renvoie le script final, pour que l'appelant puisse le montrer.
+    pub async fn apply_sieve(
+        &self,
+        address: &str,
+        bloc_genere: &dyn Fn(&str) -> String,
+    ) -> Result<String> {
+        let (local, domain) = address
+            .split_once('@')
+            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+        let domain_id = self.domain_id(domain).await?;
+        let account_id = self
+            .find_account(local, &domain_id)
+            .await?
+            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+
+        let existant = match self.active_sieve_script(&account_id).await? {
+            Some((_, blob)) => self.download_blob(&account_id, &blob).await?,
+            None => String::new(),
+        };
+
+        let final_ = bloc_genere(&existant);
+        let blob = self.upload_blob(&account_id, &final_).await?;
+
+        let precedent = self.active_sieve_script(&account_id).await?;
+        let args = match &precedent {
+            // Mise à jour du script existant : on garde son identifiant, donc son
+            // état actif. En créer un second laisserait l'ancien actif, et le
+            // nouveau ne s'appliquerait jamais.
+            Some((id, _)) => {
+                self.call(
+                    "SieveScript/set",
+                    serde_json::json!({
+                        "accountId": account_id,
+                        "update": { id: { "blobId": blob } }
+                    }),
+                )
+                .await?
+            }
+            None => {
+                self.call(
+                    "SieveScript/set",
+                    serde_json::json!({
+                        "accountId": account_id,
+                        "create": { "hlb": { "name": "homelabus", "blobId": blob } },
+                        // 🔴 Sans activation, le script existe et ne trie RIEN. La
+                        // panne est totalement silencieuse : les règles sont là,
+                        // visibles dans Roundcube, et sans effet.
+                        "onSuccessActivateScript": "#hlb"
+                    }),
+                )
+                .await?
+            }
+        };
+
+        // 🔴 HTTP 200 ne veut pas dire posé. L'échec vit dans notCreated/notUpdated.
+        for clef in ["notCreated", "notUpdated"] {
+            if let Some(obj) = args.get(clef).and_then(|v| v.as_object()) {
+                if let Some((_, err)) = obj.iter().next() {
+                    return Err(Error::NotCreated {
+                        object: format!("le script Sieve de « {address} »"),
+                        reason: describe_set_error(err),
+                    });
+                }
+            }
+        }
+
+        tracing::info!(compte = %address, octets = final_.len(), "script Sieve posé");
+        Ok(final_)
+    }
+
     /// Les aliases actuellement posés sur un compte.
     ///
     /// ⚠️ Nécessaire avant toute modification : JMAP `update` **remplace** la propriété
