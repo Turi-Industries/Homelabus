@@ -1252,6 +1252,153 @@ async fn destinations_pour(
         .collect())
 }
 
+/// Archive un dump vers TOUTES les destinations de la classe critique.
+///
+/// Renvoie le nombre de destinations servies.
+///
+/// 🔴 Un échec sur une destination n'empêche pas les autres. Un hors-site injoignable
+/// qui interromprait la boucle supprimerait aussi la copie locale : on perdrait les
+/// deux pour la panne d'une seule.
+async fn archiver_partout(
+    state: &State,
+    vault: &Vault,
+    app: &str,
+    kind: &str,
+    reseau: &str,
+    repli: Option<&str>,
+    dump: &hlb_backup::pgdump::scheduled::Dump,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let password = restic_password(state, vault).await?;
+    let dests =
+        destinations_effectives(state, app, hlb_backup::Classe::Critique, repli).await?;
+
+    if dests.is_empty() {
+        eprintln!("⚠️  {app} : aucune destination critique — le dump n'est allé NULLE PART.");
+        return Ok(0);
+    }
+
+    let mut servies = 0;
+    for d in &dests {
+        // Les identifiants sortent du coffre ici : `archive_to` n'y touche jamais.
+        let identifiants = match &d.credentials_secret {
+            Some(nom) => match state.secret(nom).await? {
+                Some(ct) => Some(vault.decrypt(&ct)?),
+                None => None,
+            },
+            None => None,
+        };
+
+        match hlb_backup::pgdump::scheduled::archive_to(
+            d,
+            identifiants.as_deref(),
+            Some(reseau),
+            &password,
+            dump,
+        )
+        .await
+        {
+            Ok(id) => {
+                state
+                    .record_backup_to(app, kind, &d.nom, Some(&id), None)
+                    .await?;
+                print!("✓{} ", d.nom);
+                servies += 1;
+            }
+            Err(e) => {
+                state
+                    .record_backup_to(app, kind, &d.nom, None, Some(&e.to_string()))
+                    .await?;
+                print!("✗{}({e}) ", d.nom);
+            }
+        }
+    }
+    Ok(servies)
+}
+
+/// Le fournisseur de sauvegarde d'une destination précise.
+///
+/// 🔴 Le dépôt local se MONTE, le dépôt S3 se joint par le réseau — c'est
+/// `Destination::runner` qui tranche, et se tromper produit un « repository does not
+/// exist » qui désigne un chemin local sans rapport avec la vraie destination.
+async fn provider_pour(
+    dest: &hlb_backup::Destination,
+    reseau: &str,
+    state: &State,
+    vault: &Vault,
+) -> Result<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>, Box<dyn std::error::Error>>
+{
+    let password = restic_password(state, vault).await?;
+
+    // Les identifiants S3 sortent du coffre ICI, au plus près de l'exécution.
+    let identifiants = match &dest.credentials_secret {
+        Some(nom) => match state.secret(nom).await? {
+            Some(ct) => Some(vault.decrypt(&ct)?),
+            None => None,
+        },
+        None => None,
+    };
+    let env = dest.env(identifiants.as_deref())?;
+
+    let mut par_app: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (app, _) in state.installed_apps().await? {
+        let v = state.volumes_to_backup(&app).await?;
+        if !v.is_empty() {
+            par_app.insert(app, v);
+        }
+    }
+
+    let dest = dest.clone();
+    let reseau = reseau.to_string();
+
+    Ok(hlb_backup::ResticBackupProvider::new(move |app| {
+        let volumes = par_app.get(app)?;
+
+        let (mut runner, chemin) = dest.runner(Some(&reseau));
+        let mut paths = Vec::new();
+        for (name, _) in volumes {
+            // Le volume Docker est monté par son NOM : le point de montage de l'hôte
+            // n'est pas accessible depuis la VM Docker sur macOS.
+            runner = runner.mount(name, format!("/donnees/{name}"));
+            paths.push(format!("/donnees/{name}"));
+        }
+
+        Some((
+            hlb_backup::Repository::new(runner, chemin, password.clone())
+                .extra_env(env.clone()),
+            paths,
+        ))
+    }))
+}
+
+/// Les destinations à servir, avec repli sur `--backup-repo`.
+///
+/// ⚠️ Le repli existe pour ne pas casser une installation qui n'a pas encore déclaré de
+/// destination : sans lui, une mise à jour de HomelabUS arrêterait silencieusement
+/// toutes les sauvegardes — le pire moment pour découvrir un changement de format.
+async fn destinations_effectives(
+    state: &State,
+    app: &str,
+    classe: hlb_backup::Classe,
+    repli: Option<&str>,
+) -> Result<Vec<hlb_backup::Destination>, Box<dyn std::error::Error>> {
+    let d = destinations_pour(state, app, classe).await?;
+    if !d.is_empty() {
+        return Ok(d);
+    }
+
+    Ok(repli
+        .map(|l| {
+            vec![hlb_backup::Destination {
+                nom: "defaut".into(),
+                location: l.to_string(),
+                classes: vec![hlb_backup::Classe::Critique, hlb_backup::Classe::Volumineux],
+                credentials_secret: None,
+            }]
+        })
+        .unwrap_or_default())
+}
+
 /// La couverture d'une app : son état sur CHAQUE destination routée.
 async fn couverture_de(
     state: &State,
@@ -1328,18 +1475,14 @@ async fn snapshot_sqlite_volume(
     state: &State,
     vault: &Vault,
     repo: Option<&str>,
+    network: &str,
     app: &str,
     mountpoint: &str,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    let Some(depot) = repo else {
-        return Err("aucun dépôt configuré".into());
-    };
-
     let staging = tempfile::tempdir()?;
     let bases =
         hlb_backup::sqlite_snapshot_all(std::path::Path::new(mountpoint), staging.path()).await?;
 
-    let password = restic_password(state, vault).await?;
     let mut ok = 0;
 
     for chemin in &bases {
@@ -1358,16 +1501,18 @@ async fn snapshot_sqlite_volume(
             bytes: contenu,
         };
 
-        match hlb_backup::pgdump::scheduled::archive(depot, &password, &d).await {
-            Ok(id) => {
-                state.record_backup(app, "sqlite-snapshot", Some(&id), None).await?;
+        // 🔴 Une base SQLite est de la classe CRITIQUE : petite, irremplaçable, et
+        // c'est elle qu'on veut hors site en priorité.
+        match archiver_partout(state, vault, app, "sqlite-snapshot", network, repo, &d).await {
+            Ok(n) if n > 0 => {
                 ok += 1;
             }
+            Ok(_) => {}
             Err(e) => {
-                state
-                    .record_backup(app, "sqlite-snapshot", None, Some(&e.to_string()))
-                    .await?;
-                return Err(e.into());
+                // `archiver_partout` a déjà consigné l'échec destination par
+                // destination : réenregistrer ici produirait un doublon sans
+                // destination, qui fausserait le compteur d'échecs consécutifs.
+                return Err(e);
             }
         }
     }
@@ -1388,16 +1533,12 @@ async fn dump_databases(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use hlb_backup::pgdump::{scheduled, PgDumper, PgTarget};
 
-    let Some(depot) = repo else {
-        eprintln!("🔴 aucun dépôt : les dumps n'auraient nulle part où aller.");
-        return Ok(0);
-    };
+
     let Some(creds) = hlb_backup::parse_pg_url(admin_url) else {
         eprintln!("🔴 URL PostgreSQL illisible : dumps ignorés.");
         return Ok(0);
     };
 
-    let password = restic_password(state, vault).await?;
     let at = maintenant();
     let mut ok = 0;
 
@@ -1427,18 +1568,13 @@ async fn dump_databases(
 
         match scheduled::produce(&dumper, app, &cible, at).await {
             Ok(d) => {
-                match scheduled::archive(depot, &password, &d).await {
-                    Ok(id) => {
-                        state
-                            .record_backup(app, "sql-dump", Some(&id), None)
-                            .await?;
-                        println!("✓ {} Ko", d.bytes.len() / 1024);
+                match archiver_partout(state, vault, app, "sql-dump", network, repo, &d).await {
+                    Ok(n) if n > 0 => {
+                        println!("({} Ko)", d.bytes.len() / 1024);
                         ok += 1;
                     }
-                    Err(e) => {
-                        state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
-                        println!("✗ archivage : {e}");
-                    }
+                    Ok(_) => println!("aucune destination servie"),
+                    Err(e) => println!("✗ archivage : {e}"),
                 }
             }
             Err(e) => {
@@ -1472,16 +1608,12 @@ async fn dump_mariadb_databases(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use hlb_backup::mariadump::{self, Coherence, MariaDumper, MariaTarget};
 
-    let Some(depot) = repo else {
-        eprintln!("🔴 aucun dépôt : les dumps MariaDB n'auraient nulle part où aller.");
-        return Ok(0);
-    };
+
     let Some(creds) = hlb_backup::parse_maria_url(admin_url) else {
         eprintln!("🔴 URL MariaDB illisible : dumps ignorés.");
         return Ok(0);
     };
 
-    let password = restic_password(state, vault).await?;
     let at = maintenant();
     let mut ok = 0;
 
@@ -1531,16 +1663,13 @@ async fn dump_mariadb_databases(
         );
 
         match mariadump::scheduled::produce(&dumper, app, &cible, coherence, at).await {
-            Ok(d) => match hlb_backup::pgdump::scheduled::archive(depot, &password, &d).await {
-                Ok(id) => {
-                    state.record_backup(app, "sql-dump", Some(&id), None).await?;
-                    println!("✓ {} Ko", d.bytes.len() / 1024);
+            Ok(d) => match archiver_partout(state, vault, app, "sql-dump", network, repo, &d).await {
+                Ok(n) if n > 0 => {
+                    println!("({} Ko)", d.bytes.len() / 1024);
                     ok += 1;
                 }
-                Err(e) => {
-                    state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
-                    println!("✗ archivage : {e}");
-                }
+                Ok(_) => println!("aucune destination servie"),
+                Err(e) => println!("✗ archivage : {e}"),
             },
             Err(e) => {
                 state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
@@ -4224,7 +4353,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 couverture_de(&state, app, sched.overdue_after().as_secs() as i64)
                                     .await?;
 
-                            let etat = match couverture.pire() {
+                            // Un échec répété rend le résumé alarmant, même si la
+                            // dernière réussite est récente.
+                            let mut echecs_totaux = 0;
+                            for (nom, _) in &couverture.par_destination {
+                                echecs_totaux += state.consecutive_failures_on(app, nom).await?;
+                            }
+
+                            let etat = if echecs_totaux > 0 {
+                                "🔴 des tentatives échouent"
+                            } else {
+                                match couverture.pire() {
                                 Some(hlb_backup::EtatDestination::Jamais) => {
                                     "🔴 une destination JAMAIS servie"
                                 }
@@ -4241,6 +4380,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                     } else {
                                         "✓ à jour"
                                     }
+                                }
                                 }
                             };
                             println!(
@@ -4270,7 +4410,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                             ("🔴", "JAMAIS reçu".to_string())
                                         }
                                     };
-                                    println!("               └ {marque} {nom:<10} {quand}");
+                                    // 🔴 Un échec RÉPÉTÉ se voit tout de suite, sans
+                                    // attendre le seuil de péremption. Sinon une
+                                    // destination qui échoue à chaque tentative
+                                    // resterait affichée « ✓ » pendant douze heures.
+                                    let echecs =
+                                        state.consecutive_failures_on(app, nom).await?;
+                                    let suffixe = if echecs > 0 {
+                                        format!("  🔴 {echecs} échec(s) depuis")
+                                    } else {
+                                        String::new()
+                                    };
+                                    println!("               └ {marque} {nom:<10} {quand}{suffixe}");
                                 }
 
                                 let a_jour = couverture.copies_a_jour();
@@ -4289,13 +4440,6 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
 
                     BackupCmd::Run { force } => {
-                        let provider = build_backup_provider(
-                            cli.backup_repo.as_deref(), &state, &vault,
-                        ).await?;
-                        let Some(provider) = provider else {
-                            eprintln!("aucun dépôt configuré — utilise --backup-repo");
-                            return Ok(ExitCode::FAILURE);
-                        };
                         use hlb_updater::BackupProvider;
 
                         let mut faites = 0;
@@ -4303,25 +4447,79 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             if statut == "failed" {
                                 continue;
                             }
-                            let age = state.seconds_since_last_success(&app).await?
-                                .map(|s| std::time::Duration::from_secs(s as u64));
-                            if !force && !sched.is_due(age) {
-                                continue;
+
+                            // Les volumes applicatifs : la classe VOLUMINEUSE.
+                            let dests = destinations_effectives(
+                                &state,
+                                &app,
+                                hlb_backup::Classe::Volumineux,
+                                cli.backup_repo.as_deref(),
+                            )
+                            .await?;
+
+                            for d in &dests {
+                                // 🔴 L'échéance se juge PAR DESTINATION. La juger
+                                // globalement ferait sauter le hors-site dès que le NAS
+                                // vient d'être servi — et il ne recevrait jamais rien,
+                                // pendant que le statut global paraîtrait frais.
+                                let age = state
+                                    .seconds_since_last_success_on(&app, &d.nom)
+                                    .await?
+                                    .map(|s| std::time::Duration::from_secs(s as u64));
+                                if !force && !sched.is_due(age) {
+                                    continue;
+                                }
+
+                                print!("{app} → {}… ", d.nom);
+                                use std::io::Write as _;
+                                let _ = std::io::stdout().flush();
+
+                                // 🔴 Un échec sur UNE destination ne doit pas priver les
+                                // autres. Un hors-site injoignable qui interromprait la
+                                // boucle supprimerait aussi la sauvegarde locale — on
+                                // perdrait les deux copies pour la panne d'une seule.
+                                let provider =
+                                    match provider_pour(d, &cli.platform_network, &state, &vault)
+                                        .await
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            state
+                                                .record_backup_to(
+                                                    &app, "volume", &d.nom, None,
+                                                    Some(&e.to_string()),
+                                                )
+                                                .await?;
+                                            println!("✗ {e}");
+                                            continue;
+                                        }
+                                    };
+
+                                match provider.snapshot(&app).await {
+                                    Ok(id) => {
+                                        state
+                                            .record_backup_to(
+                                                &app, "volume", &d.nom, Some(&id), None,
+                                            )
+                                            .await?;
+                                        println!("✓ {}", &id[..8.min(id.len())]);
+                                        faites += 1;
+                                    }
+                                    Err(e) => {
+                                        // Enregistré comme échec : l'échéance n'est PAS
+                                        // repoussée, la sauvegarde reste due (§8.1).
+                                        state
+                                            .record_backup_to(
+                                                &app, "volume", &d.nom, None, Some(&e),
+                                            )
+                                            .await?;
+                                        println!("✗ {e}");
+                                    }
+                                }
                             }
 
-                            print!("{app}… ");
-                            match provider.snapshot(&app).await {
-                                Ok(id) => {
-                                    state.record_backup(&app, "volume", Some(&id), None).await?;
-                                    println!("✓ {}", &id[..8.min(id.len())]);
-                                    faites += 1;
-                                }
-                                Err(e) => {
-                                    // Enregistré comme échec : l'échéance n'est PAS
-                                    // repoussée, la sauvegarde reste due (§8.1).
-                                    state.record_backup(&app, "volume", None, Some(&e)).await?;
-                                    println!("✗ {e}");
-                                }
+                            if dests.is_empty() {
+                                println!("{app} : aucune destination pour les volumes.");
                             }
                         }
                         // 🔴 Les bases SQLite d'abord : un volume SQLite copié à
@@ -4334,7 +4532,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                             match snapshot_sqlite_volume(
                                 &state, &vault, cli.backup_repo.as_deref(),
-                                &app, &montage,
+                                &cli.platform_network, &app, &montage,
                             )
                             .await
                             {

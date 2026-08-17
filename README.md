@@ -40,7 +40,7 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
 | `hlb-objstore` — client Garage : compartiments et clés isolées | ✅ 6 tests |
 
-**836 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**840 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
 
 ### Tests d'intégration PostgreSQL
 

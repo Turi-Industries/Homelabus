@@ -358,10 +358,37 @@ pub mod scheduled {
         password: &str,
         dump: &Dump,
     ) -> Result<String> {
+        let dest = crate::destination::Destination {
+            nom: "defaut".into(),
+            location: repo_location.to_string(),
+            classes: vec![crate::destination::Classe::Critique],
+            credentials_secret: None,
+        };
+        archive_to(&dest, None, None, password, dump).await
+    }
+
+    /// Archive un dump vers une DESTINATION, locale ou S3.
+    ///
+    /// 🔴 Un dépôt S3 ne se monte pas : c'est `Destination::runner` qui décide, et le
+    /// confondre produirait un « repository does not exist » désignant un chemin local
+    /// sans rapport avec la vraie destination.
+    /// `identifiants` est la VALEUR du secret S3 (`clé:secret`), déjà sortie du coffre
+    /// par l'appelant.
+    ///
+    /// ⚠️ Surtout pas `dest.credentials_secret`, qui n'est que le NOM du secret :
+    /// le passer tel quel enverrait « backup-dest-offsite » comme clé d'accès, et S3
+    /// répondrait « signature invalide » — une erreur qui n'oriente vers rien.
+    pub async fn archive_to(
+        dest: &crate::destination::Destination,
+        identifiants: Option<&str>,
+        reseau: Option<&str>,
+        password: &str,
+        dump: &Dump,
+    ) -> Result<String> {
         let volume = format!("hlb-dump-{}", crate::verify::jeton_public());
         docker(&["volume", "create", &volume]).await?;
 
-        let r = archiver_dans(&volume, repo_location, password, dump).await;
+        let r = archiver_dans_dest(&volume, dest, identifiants, reseau, password, dump).await;
 
         if let Err(e) = docker(&["volume", "rm", "-f", &volume]).await {
             tracing::warn!(volume, "volume de transit non supprimé : {e}");
@@ -369,14 +396,20 @@ pub mod scheduled {
         r
     }
 
-    async fn archiver_dans(
+    async fn archiver_dans_dest(
         volume: &str,
-        repo_location: &str,
+        dest: &crate::destination::Destination,
+        identifiants: Option<&str>,
+        reseau: Option<&str>,
         password: &str,
         dump: &Dump,
     ) -> Result<String> {
-        use crate::runner::ContainerRunner;
         use tokio::io::AsyncWriteExt;
+
+        // 🔴 Les identifiants sont déjà RÉSOLUS par l'appelant : ce module ne touche
+        // jamais au coffre, et ne voit donc jamais passer le nom d'un secret là où
+        // une valeur est attendue.
+        let env = dest.env(identifiants)?;
 
         // Le dump entre dans le volume par l'entrée standard d'un conteneur : c'est
         // le seul chemin qui traverse la frontière hôte/VM de façon fiable.
@@ -414,10 +447,10 @@ pub mod scheduled {
             )));
         }
 
-        let runner = ContainerRunner::default()
-            .mount(repo_location, "/depot")
-            .mount(volume, "/staging");
-        let repo = crate::restic::Repository::new(runner, "/depot", password.to_string());
+        let (runner, chemin) = dest.runner(reseau);
+        let runner = runner.mount(volume, "/staging");
+        let repo = crate::restic::Repository::new(runner, chemin, password.to_string())
+            .extra_env(env.clone());
 
         repo.init().await?;
         repo.backup(

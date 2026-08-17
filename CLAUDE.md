@@ -285,6 +285,22 @@ qui a tort, pas le test.
 - **Un dépôt restic S3 ne se MONTE pas.** Le monter crée un répertoire vide, et restic
   répond « repository does not exist » en désignant un chemin local sans rapport avec la
   vraie destination. Et il faut un `--network` pour joindre un Garage interne.
+- **Un échec sur une destination ne doit jamais priver les autres.** Un hors-site
+  injoignable qui interromprait la boucle supprimerait aussi la sauvegarde locale : on
+  perdrait les deux copies pour la panne d'une seule.
+- **L'échéance se juge PAR destination.** La juger globalement fait sauter le hors-site
+  dès que le NAS vient d'être servi — il ne recevrait alors jamais rien, pendant que le
+  statut global paraîtrait frais.
+- **Un échec RÉPÉTÉ doit se voir avant le seuil de péremption.** Une destination qui
+  échoue à chaque tentative reste « fraîche » douze heures avec l'intervalle par défaut.
+  D'où le compteur d'échecs consécutifs, affiché immédiatement.
+- **`datetime('now')` a une résolution d'une SECONDE.** Une réussite et l'échec qui la
+  suit dans la même seconde portent le même horodatage, et une comparaison stricte les
+  exclut — le compteur reste à zéro alors que tout échoue. Ordonner par `id`, qui est
+  monotone.
+- **`credentials_secret` est le NOM du secret, pas sa valeur.** Le passer tel quel
+  enverrait « backup-dest-offsite » comme clé d'accès S3, et le serveur répondrait
+  « signature invalide » — une erreur qui n'oriente vers rien.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -409,7 +425,9 @@ Fait : les **destinations de sauvegarde multiples** (`hlb backup dest` / `route`
 l'environnement, jamais dans l'URL ni la ligne de commande), et le routage se fait par
 **classe de volume** : `critique` (dumps, état, secrets — quelques Go, ça part hors
 site) et `volumineux` (photos, fichiers — des centaines de Go, ça reste où la connexion
-le permet), avec un réglage par app.
+le permet), avec un réglage par app. `hlb backup run` sert chaque destination
+séparément — un échec sur l'une n'empêche pas les autres, et chacune a sa propre
+échéance.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

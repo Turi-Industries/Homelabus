@@ -385,6 +385,35 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Combien de tentatives ONT ÉCHOUÉ depuis la dernière réussite ?
+    ///
+    /// 🔴 La fraîcheur seule ne suffit pas. Une destination qui échoue à CHAQUE
+    /// tentative reste « fraîche » jusqu'à ce que le seuil de péremption passe — douze
+    /// heures avec l'intervalle par défaut. Pendant tout ce temps, le tableau de bord
+    /// affiche un ✓ pour une destination qui ne reçoit plus rien.
+    ///
+    /// Un échec répété est un signal immédiat, pas un signal différé.
+    pub async fn consecutive_failures_on(&self, app: &str, destination: &str) -> Result<i64> {
+        // ⚠️ On ordonne par `id`, PAS par `finished_at`. `datetime('now')` a une
+        // résolution d'une SECONDE : une réussite et l'échec qui la suit dans la même
+        // seconde portent le même horodatage, et une comparaison stricte les exclut —
+        // le compteur reste à zéro alors que tout échoue. L'identifiant est monotone
+        // et n'a pas ce défaut.
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM backup_runs
+             WHERE app = ?1 AND destination = ?2 AND status = 'failed'
+               AND id > COALESCE(
+                     (SELECT MAX(id) FROM backup_runs
+                      WHERE app = ?1 AND destination = ?2 AND status = 'ok'),
+                     0)",
+        )
+        .bind(app)
+        .bind(destination)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<i64, _>("n").unwrap_or(0))
+    }
+
     /// Déclare ou met à jour une destination.
     pub async fn upsert_destination(
         &self,
@@ -1102,6 +1131,57 @@ mod tests {
                 .expect("par destination"),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_show_up_before_the_staleness_threshold() {
+        // 🔴 Constaté en exécutant la boucle pour de vrai : une destination qui échoue
+        // à CHAQUE tentative reste « fraîche » tant que le seuil de péremption n'est
+        // pas franchi — douze heures avec l'intervalle par défaut. Le tableau de bord
+        // affiche un ✓ pour une destination qui ne reçoit plus rien.
+        let s = State::in_memory().await.expect("état");
+
+        s.record_backup_to("demo", "volume", "offsite", Some("ok1"), None)
+            .await
+            .expect("réussite");
+        assert_eq!(
+            s.consecutive_failures_on("demo", "offsite").await.unwrap(),
+            0
+        );
+
+        // ⚠️ Ces quatre écritures tombent dans la MÊME seconde. C'est ce qui a fait
+        // échouer la première version, qui comparait des horodatages : `datetime('now')`
+        // n'a qu'une résolution d'une seconde. L'ordre vient donc de l'`id`.
+        for _ in 0..3 {
+            s.record_backup_to("demo", "volume", "offsite", None, Some("injoignable"))
+                .await
+                .expect("échec");
+        }
+        assert_eq!(
+            s.consecutive_failures_on("demo", "offsite").await.unwrap(),
+            3,
+            "trois échecs depuis la dernière réussite"
+        );
+
+        // Et une nouvelle réussite remet le compteur à zéro : c'est un compteur
+        // d'échecs CONSÉCUTIFS, pas un total historique qui ne redescendrait jamais.
+        s.record_backup_to("demo", "volume", "offsite", Some("ok2"), None)
+            .await
+            .expect("réussite");
+        assert_eq!(
+            s.consecutive_failures_on("demo", "offsite").await.unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn failures_on_one_destination_do_not_count_for_another() {
+        let s = State::in_memory().await.expect("état");
+        s.record_backup_to("demo", "volume", "offsite", None, Some("boum"))
+            .await
+            .expect("échec");
+        assert_eq!(s.consecutive_failures_on("demo", "nas").await.unwrap(), 0);
+        assert_eq!(s.consecutive_failures_on("demo", "offsite").await.unwrap(), 1);
     }
 
     #[tokio::test]

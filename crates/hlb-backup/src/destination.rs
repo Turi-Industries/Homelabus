@@ -153,6 +153,34 @@ impl Destination {
     }
 }
 
+impl Destination {
+    /// Le runner conteneur et le chemin de dépôt à donner à restic.
+    ///
+    /// 🔴 Toute la différence entre local et S3 tient ici, et elle est facile à rater :
+    /// un dépôt local se **monte** et restic le voit en `/depot` ; un dépôt S3 se
+    /// **joint par le réseau** et restic reçoit l'URL telle quelle. Monter une URL
+    /// créerait un répertoire vide, et restic répondrait « repository does not exist »
+    /// en désignant un chemin local sans rapport avec la vraie destination.
+    ///
+    /// `network` sert aux dépôts S3 servis DANS le cluster (Garage) : sans lui, le
+    /// conteneur restic ne résout pas `garage`.
+    pub fn runner(
+        &self,
+        network: Option<&str>,
+    ) -> (crate::runner::ContainerRunner, String) {
+        let mut r = crate::runner::ContainerRunner::default();
+
+        if self.est_s3() {
+            if let Some(n) = network {
+                r = r.network(n);
+            }
+            (r, self.location.clone())
+        } else {
+            (r.mount(&self.location, "/depot"), "/depot".to_string())
+        }
+    }
+}
+
 /// La fraîcheur d'une destination pour une app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Etat {
@@ -328,6 +356,28 @@ mod tests {
     }
 
     #[test]
+    fn the_secret_name_is_never_mistaken_for_its_value() {
+        // 🔴 `credentials_secret` est le NOM du secret au coffre, pas sa valeur.
+        // Le passer tel quel enverrait « backup-dest-offsite » comme clé d'accès, et
+        // S3 répondrait « signature invalide » — une erreur qui n'oriente vers rien.
+        //
+        // Un nom de secret ne contient pas de « : », donc `env()` le refuse. Ce test
+        // fige ce garde-fou.
+        let dest = Destination {
+            nom: "offsite".into(),
+            location: "s3:https://s3.ext/depot".into(),
+            classes: vec![Classe::Critique],
+            credentials_secret: Some("backup-dest-offsite".into()),
+        };
+
+        let e = dest
+            .env(Some("backup-dest-offsite"))
+            .expect_err("un nom de secret n'est pas un couple clé:secret")
+            .to_string();
+        assert!(e.contains("clé_accès:clé_secrète"), "{e}");
+    }
+
+    #[test]
     fn a_local_destination_needs_no_credentials() {
         let dest = d("nas", "/mnt/nas/restic", vec![Classe::Volumineux]);
         assert!(dest.env(None).expect("aucun identifiant requis").is_empty());
@@ -382,6 +432,20 @@ mod tests {
         assert_eq!(Classe::parse("VOLUMES"), Some(Classe::Volumineux));
         assert_eq!(Classe::parse(" volumineux "), Some(Classe::Volumineux));
         assert_eq!(Classe::parse("n'importe quoi"), None);
+    }
+
+    #[test]
+    fn an_s3_repository_is_passed_as_a_url_not_a_mount() {
+        // 🔴 Monter une URL créerait un répertoire vide, et restic répondrait
+        // « repository does not exist » en désignant un chemin local qui n'a rien à
+        // voir avec la vraie destination — le diagnostic partirait à côté.
+        let s3 = d("offsite", "s3:https://s3.ext/depot", vec![Classe::Critique]);
+        let (_, chemin) = s3.runner(None);
+        assert_eq!(chemin, "s3:https://s3.ext/depot");
+
+        let local = d("nas", "/mnt/nas/restic", vec![Classe::Critique]);
+        let (_, chemin) = local.runner(None);
+        assert_eq!(chemin, "/depot", "un dépôt local est monté et vu en /depot");
     }
 
     #[test]
