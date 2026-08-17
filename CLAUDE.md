@@ -345,6 +345,19 @@ qui a tort, pas le test.
 - **`NULL` ≠ chaîne vide pour un dossier de tri.** `NULL` = « rien n'a été décidé », on
   propose un défaut ; `""` = « je ne veux PAS de tri », et c'est un choix explicite.
   Les confondre réimpose un dossier à chaque régénération.
+- **🔴 idmail et `hlb-mail` ne peuvent pas coexister.** idmail ne parle pas à Stalwart :
+  il REMPLACE son annuaire (`directory` externe de type sqlite). Les deux ensemble
+  donneraient un alias créé en JMAP dans un annuaire que Stalwart ne consulte plus —
+  l'adresse ne recevrait rien, sans que rien ne le signale. D'où l'API compatible
+  addy.io côté HomelabUS plutôt que l'intégration d'idmail.
+- **Le contrat de l'API addy.io est imposé par BITWARDEN**, pas par nous. Relevé dans
+  son code (`libs/tools/generator/core/src/integration/addy-io.ts`) : la réponse doit
+  être `{data:{email}}` — à la racine, le client lit `undefined` et l'alias existe côté
+  serveur sans que personne ne le sache.
+- **Un jeton d'API porte un RÔLE, pas une identité.** Suffisant pour lire l'état, faux
+  dès qu'une requête agit POUR quelqu'un : sans rattachement, un jeton volé créerait des
+  aliases sur la boîte de n'importe qui. Un jeton `admin` non rattaché est donc refusé
+  là où un `operator` rattaché passe.
 - **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
   fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
 - **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
@@ -486,7 +499,10 @@ Fait aussi : les deux **webmails** du §5bis.2ter — **Bulwark** (JMAP natif po
 Stalwart, `channel: pin` : aucune release Git ni licence déclarée, seules les images
 existent) et **Roundcube** comme filet de sécurité, délibérément SANS SSO pour rester
 joignable quand PocketID tombe. Et la **génération des règles Sieve** de tri par alias,
-avec dossier configurable par l'utilisateur.
+avec dossier configurable par l'utilisateur. Et l'**API compatible addy.io /
+Bitwarden** (`POST /api/v1/aliases`) : Vaultwarden génère l'alias au moment de créer un
+compte sur un site, comme avec idmail — qu'on n'intègre PAS, puisqu'il remplacerait
+l'annuaire de Stalwart.
 
 Il ne reste rien de la feuille de route du §12. Le déploiement multi-nœuds de la
 réplication attend un second nœud `heavy` réel ; `hlb self update` attend une URL de

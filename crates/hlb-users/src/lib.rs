@@ -30,11 +30,13 @@
 //! jamais recréer ce qui existe.
 
 pub mod alias;
+pub mod forwarder;
 pub mod generation;
 pub mod profil;
 pub mod sieve;
 
 pub use alias::{Alias, Duree, Etat as EtatAlias};
+pub use forwarder::{AliasCree, CreationDemandee};
 pub use generation::Genere;
 pub use profil::{Demande, Profil, Refus, Usage};
 pub use sieve::Regle as RegleSieve;

@@ -471,6 +471,13 @@ enum TokenCmd {
         /// viewer (tout voir), operator (installer, sauvegarder), admin (tout).
         #[arg(long, default_value = "viewer")]
         role: String,
+        /// Rattacher le jeton à un compte, pour l'API d'aliases (§5bis.3).
+        ///
+        /// 🔴 Sans lui, c'est un jeton de SERVICE : il ne peut pas créer d'alias au
+        /// nom de quelqu'un. Le voler ne donnerait donc pas le pouvoir d'ouvrir des
+        /// adresses sur la boîte d'autrui.
+        #[arg(long)]
+        user: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -3203,7 +3210,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
                     }
 
-                    TokenCmd::Create { name, role, apply } => {
+                    TokenCmd::Create { name, role, user, apply } => {
                         let Some(r) = hlb_types::Role::parse(role) else {
                             eprintln!("Rôle « {role} » inconnu.");
                             eprintln!("  viewer   : tout voir, ne rien modifier");
@@ -3230,11 +3237,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         let (valeur, stocke) = hlb_types::generate_token(name, r, alea);
                         state.store_token(&stocke).await?;
+                        if let Some(u) = user {
+                            state.set_token_user(name, Some(u)).await?;
+                        }
                         state
                             .audit("cli", ACTEUR_ROLE, "token-create", name, "ok", Some(r.as_str()))
                             .await?;
 
                         println!("✓ jeton « {name} » créé en rôle {}.", r.as_str());
+                        match user {
+                            Some(u) => println!("  rattaché à « {u} » — peut créer ses aliases."),
+                            None => println!("  jeton de SERVICE : ne peut pas créer d'alias."),
+                        }
                         println!();
                         println!("🔴 NOTE-LE MAINTENANT — il ne sera plus jamais affiché :");
                         println!();

@@ -1,0 +1,11 @@
+-- Rattacher un jeton d'API à un utilisateur (§5bis.3).
+--
+-- 🔴 Jusqu'ici un jeton portait un RÔLE mais aucune identité. C'était suffisant pour
+-- lire l'état du cluster — l'état est le même pour tout le monde. Ça ne l'est plus dès
+-- qu'une requête agit POUR quelqu'un : sans ce lien, l'API d'aliases devrait recevoir
+-- le nom de l'utilisateur dans le corps de la requête, et un jeton volé pourrait alors
+-- créer des aliases sur la boîte de n'importe qui.
+--
+-- NULL = jeton de service, sans identité. C'est le cas des jetons d'exploitation, et
+-- ils n'ont pas le droit d'agir au nom d'un utilisateur.
+ALTER TABLE api_tokens ADD COLUMN user TEXT;

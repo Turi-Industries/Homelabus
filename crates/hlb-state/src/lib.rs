@@ -660,6 +660,31 @@ impl State {
             .collect()
     }
 
+    /// Rattache un jeton d'API à un utilisateur.
+    ///
+    /// 🔴 Sans ce lien, l'API d'aliases devrait recevoir le nom de l'utilisateur dans
+    /// le corps de la requête — et un jeton volé pourrait alors créer des aliases sur
+    /// la boîte de n'importe qui.
+    pub async fn set_token_user(&self, token_name: &str, user: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET user = ?2 WHERE name = ?1")
+            .bind(token_name)
+            .bind(user)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// L'utilisateur auquel ce jeton est rattaché, s'il y en a un.
+    ///
+    /// `None` = jeton de service : il n'a pas le droit d'agir au nom de quelqu'un.
+    pub async fn token_user(&self, token_name: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT user FROM api_tokens WHERE name = ?1")
+            .bind(token_name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("user").ok().flatten()))
+    }
+
     /// Fixe le dossier de tri d'un alias.
     ///
     /// 🔴 `None` remet « rien n'a été décidé » (un défaut sera proposé) ; `Some("")`

@@ -171,6 +171,108 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for Authentifie {
     }
 }
 
+/// Crée un alias jetable, au format attendu par Bitwarden / addy.io (§5bis.3).
+///
+/// 🔴 Le jeton doit être rattaché à un UTILISATEUR. Un jeton de service — celui d'un
+/// script d'exploitation — n'a pas le droit d'agir au nom de quelqu'un : sinon, le
+/// voler donnerait le pouvoir de créer des adresses sur la boîte de n'importe qui.
+async fn creer_alias(
+    auth: Authentifie,
+    AxumState(s): AxumState<Arc<AppState>>,
+    Json(demande): Json<hlb_users::CreationDemandee>,
+) -> Response {
+    let Ok(Some(user)) = s.state.token_user(&auth.token_name).await else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "ce jeton n'est rattaché à aucun utilisateur. Crée-en un avec \
+                          « hlb token create <nom> --role operator --user <compte> » : \
+                          un jeton de service ne peut pas créer d'alias au nom de \
+                          quelqu'un"
+            })),
+        )
+            .into_response();
+    };
+
+    // La boîte par défaut du compte reçoit l'alias. C'est le seul choix qui a du sens
+    // ici : le client ne connaît pas les boîtes, et lui demander de choisir ferait
+    // sortir du protocole que Bitwarden sait parler.
+    let boites = match s.state.mailboxes(&user).await {
+        Ok(b) => b,
+        Err(e) => return ApiError(e.to_string()).into_response(),
+    };
+    let Some((boite, domaine_boite, _)) = boites.into_iter().find(|(.., d)| *d) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("{user} n'a aucune boîte par défaut : l'alias n'aurait \
+                                  nulle part où aller")
+            })),
+        )
+            .into_response();
+    };
+
+    // ⚠️ Le domaine demandé par le client n'est retenu QUE s'il correspond à celui de
+    // la boîte. Accepter n'importe quel domaine créerait une adresse sur un domaine
+    // qu'on ne sert pas : elle ne recevrait jamais rien, et l'utilisateur la croirait
+    // active parce que le client l'a affichée.
+    let domaine = match demande.domain.as_deref() {
+        Some(d) if d != domaine_boite => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("domaine « {d} » non servi pour ce compte ; \
+                                      attendu « {domaine_boite} »")
+                })),
+            )
+                .into_response();
+        }
+        _ => domaine_boite,
+    };
+
+    let description = demande.description.clone().unwrap_or_default();
+    let indice = hlb_users::forwarder::indice_depuis_description(&description);
+
+    let mut alea = [0u8; hlb_users::generation::SUFFIXE_LEN];
+    hlb_secrets::fill_random(&mut alea);
+    let genere = hlb_users::Genere::pour(indice.as_deref().unwrap_or(""), &alea);
+
+    // Le quota s'applique ICI aussi : une API qui contourne les limites rendrait les
+    // profils décoratifs.
+    // ⚠️ Permanent par défaut — Bitwarden n'a aucune notion de durée, et fabriquer une
+    // expiration que l'utilisateur n'a pas demandée ferait mourir ses adresses sans
+    // prévenir.
+    if let Err(e) = s.state.add_alias(
+        &user,
+        &boite,
+        &genere.local,
+        None,
+        indice.as_deref(),
+        Some(&description),
+    ).await
+    {
+        return ApiError(e.to_string()).into_response();
+    }
+
+    // Le dossier de tri proposé, que l'utilisateur pourra changer.
+    if let Some(d) = hlb_users::sieve::Regle::dossier_par_defaut(indice.as_deref()) {
+        let _ = s.state.set_alias_folder(&user, &genere.local, Some(&d)).await;
+    }
+
+    tracing::info!(user, alias = %genere.local, "alias créé par l'API addy.io");
+
+    // 201 : Bitwarden accepte 200 comme 201, et 201 est le code juste pour une
+    // création.
+    (
+        StatusCode::CREATED,
+        Json(hlb_users::AliasCree::new(
+            genere.adresse(&domaine),
+            description,
+        )),
+    )
+        .into_response()
+}
+
 /// Erreur d'API, rendue en JSON plutôt qu'en page HTML.
 pub struct ApiError(String);
 
@@ -201,6 +303,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Noms et usages seulement — jamais les valeurs, même derrière l'API.
         .route("/api/secrets", get(list_secrets))
         .route("/api/audit", get(list_audit))
+        // 🔴 API compatible addy.io : c'est BITWARDEN qui impose cette route et cette
+        // forme, relevées dans son code source. Voir `hlb_users::forwarder`.
+        .route("/api/v1/aliases", axum::routing::post(creer_alias))
         .route("/metrics", get(prometheus))
         .route("/", get(ui_index))
         .route("/{*fichier}", get(ui_fichier))
