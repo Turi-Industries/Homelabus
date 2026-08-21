@@ -1,11 +1,11 @@
-//! L'abstraction d'orchestration.
+//! The orchestration abstraction.
 //!
-//! Le trait existe pour deux raisons (§10.4 du plan) :
-//!   1. isoler le reste du code des trous éventuels de `bollard` ;
-//!   2. garder ouverte la porte vers un autre orchestrateur sans réécrire le produit.
+//! The trait exists for two reasons:
+//!   1. to insulate the rest of the code from any gaps in `bollard`;
+//!   2. to keep the door open to another orchestrator without rewriting the product.
 //!
-//! Coût aujourd'hui : quelques centaines de lignes. Bénéfice : on peut remplacer
-//! l'implémentation Swarm sans toucher au résolveur, au catalogue ni à l'API.
+//! Cost today: a few hundred lines. Benefit: the Swarm implementation can be replaced
+//! without touching the resolver, the catalog or the API.
 
 pub mod cluster;
 pub mod swarm;
@@ -22,12 +22,12 @@ pub enum Error {
     #[error("erreur docker : {0}")]
     Docker(#[from] bollard::errors::Error),
 
-    #[error("service « {0} » introuvable")]
+    #[error("service \"{0}\" not found")]
     NotFound(String),
 
     #[error(
-        "le service « {service} » n'est pas devenu sain avant {timeout_secs} s \
-             ({running}/{desired} tâches en cours)"
+        "service \"{service}\" did not become healthy within {timeout_secs} s \
+             ({running}/{desired} tasks running)"
     )]
     HealthTimeout {
         service: String,
@@ -36,40 +36,39 @@ pub enum Error {
         desired: u64,
     },
 
-    #[error("réponse inattendue du daemon : {0}")]
+    #[error("unexpected response from the daemon: {0}")]
     Unexpected(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Ce qu'on demande à déployer. Volontairement pauvre : la traduction depuis le
-/// manifest est le travail du résolveur, pas de l'orchestrateur.
+/// What we ask to deploy. Deliberately thin: translating from the manifest is the
+/// resolver's job, not the orchestrator's.
 #[derive(Debug, Clone)]
 pub struct ServiceSpec {
     pub name: String,
-    /// Référence complète, digest inclus quand il est connu.
+    /// Full reference, digest included when it is known.
     pub image: String,
     pub replicas: u64,
-    /// Vide = point d'entrée de l'image.
+    /// Empty means the image's own entrypoint.
     pub command: Vec<String>,
     pub env: Vec<(String, String)>,
     /// Contraintes de placement Swarm, ex. `node.labels.tier==heavy`.
     pub constraints: Vec<String>,
     pub labels: Vec<(String, String)>,
     pub networks: Vec<String>,
-    /// Comment répliquer le service.
+    /// How to replicate the service.
     pub mode: ServiceMode,
-    /// Volumes à monter : `(nom du volume, chemin dans le conteneur)`.
+    /// Volumes to mount: `(volume name, path inside the container)`.
     ///
-    /// 🔴 Sans eux, les données d'une app partent dans la couche éphémère du
-    /// conteneur et disparaissent au premier redéploiement.
+    /// 🔴 Without them, an app's data goes into the container's ephemeral layer and
+    /// disappears on the first redeploy.
     pub mounts: Vec<(String, String)>,
-    /// §9 — durcissement. Vient du manifest et est **appliqué**, pas seulement
-    /// déclaré. Le type est celui de `hlb-types` : une seule définition, comme pour
-    /// tout le reste du schéma (§11).
+    /// Hardening. Comes from the manifest and is **applied**, not merely declared.
+    /// The type is `hlb-types`': one definition, as for the rest of the schema.
     pub hardening: SecuritySpec,
-    /// Sonde de santé. Sans elle, `wait_healthy` ne peut que compter des tâches
-    /// « en cours », ce qui ne dit rien de l'application elle-même.
+    /// Health probe. Without it, `wait_healthy` can only count "running" tasks, which
+    /// says nothing about the application itself.
     pub healthcheck: Option<Healthcheck>,
 }
 
@@ -91,16 +90,16 @@ impl ServiceSpec {
         }
     }
 
-    /// Un exemplaire par nœud, y compris les nœuds ajoutés plus tard.
+    /// One instance per node, including nodes added later.
     ///
-    /// C'est ce qui distingue l'agent d'un démon qu'il faudrait installer à la main
-    /// partout : ajouter une machine au cluster suffit à l'y faire apparaître.
+    /// This is what separates the agent from a daemon you would have to install by
+    /// hand everywhere: adding a machine to the cluster is enough for it to appear.
     pub fn global(mut self) -> Self {
         self.mode = ServiceMode::Global;
         self
     }
 
-    /// Ajoute un volume nommé, monté au chemin indiqué.
+    /// Adds a named volume, mounted at the given path.
     pub fn mount(mut self, volume: impl Into<String>, path: impl Into<String>) -> Self {
         self.mounts.push((volume.into(), path.into()));
         self
@@ -142,14 +141,14 @@ impl ServiceSpec {
     }
 }
 
-/// L'état observé d'un service.
-/// Comment Swarm répartit les exemplaires d'un service.
+/// A service's observed state.
+/// How Swarm spreads a service's instances.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ServiceMode {
-    /// Un nombre fixe d'exemplaires, placés où Swarm veut.
+    /// A fixed number of instances, placed wherever Swarm wants.
     #[default]
     Replicated,
-    /// Exactement un par nœud éligible. `replicas` est alors ignoré.
+    /// Exactly one per eligible node. `replicas` is then ignored.
     Global,
 }
 
@@ -166,13 +165,13 @@ impl ExecOutput {
     }
 }
 
-/// Un volume et son emplacement réel sur l'hôte.
+/// A volume and its real location on the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeInfo {
     pub name: String,
-    /// Chemin sur le nœud qui l'héberge. C'est ce que restic sauvegarde (§8).
+    /// Path on the node hosting it. This is what restic backs up.
     pub mountpoint: String,
-    /// Le volume existait-il déjà ?
+    /// Did the volume already exist?
     pub existed: bool,
 }
 
@@ -182,7 +181,7 @@ pub struct ServiceStatus {
     pub id: String,
     pub desired_replicas: u64,
     pub running_replicas: usize,
-    /// Image réellement utilisée par le service, digest résolu par Swarm.
+    /// The image the service actually uses, with the digest resolved by Swarm.
     pub image: String,
     pub update_state: Option<UpdateState>,
 }
@@ -193,10 +192,10 @@ impl ServiceStatus {
     }
 }
 
-/// L'état de la dernière mise à jour, tel que rapporté par Swarm.
+/// The state of the last update, as Swarm reports it.
 ///
-/// C'est la brique qui rend le rollback automatique du §7 possible : on n'a pas à
-/// deviner si une mise à jour a échoué, Swarm le dit.
+/// This is what makes automatic rollback possible: there is no need to guess whether
+/// an update failed, Swarm says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateState {
     Updating,
@@ -217,57 +216,57 @@ impl UpdateState {
     }
 }
 
-/// Une tâche Swarm : **un** réplica, sur **un** nœud.
+/// A Swarm task: **one** replica, on **one** node.
 ///
-/// ## Pourquoi elle existe
+/// ## Why it exists
 ///
-/// `running_tasks()` interrogeait déjà Swarm et réduisait tout à un `usize`. Le nœud
-/// d'affectation, le message d'erreur et les dates étaient jetés — or c'est exactement
-/// ce qu'il faut pour répondre à « pourquoi cette app est-elle rouge ? » et pour
-/// dessiner la vue topologie du §11bis.
+/// `running_tasks()` already queried Swarm and reduced everything to a `usize`. The
+/// assigned node, the error message and the timestamps were thrown away - which is
+/// exactly what is needed to answer "why is this app red?" and to draw the topology
+/// view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskInfo {
     pub id: String,
     pub service: String,
-    /// Le numéro de réplica. `None` pour un service en mode global.
+    /// The replica number. `None` for a service in global mode.
     pub slot: Option<u64>,
     pub node_id: Option<String>,
-    /// L'état voulu par Swarm : `running`, `shutdown`, `accepted`…
+    /// The state Swarm wants: `running`, `shutdown`, `accepted`...
     pub desired_state: String,
-    /// L'état réel : `running`, `failed`, `rejected`, `pending`…
+    /// The actual state: `running`, `failed`, `rejected`, `pending`...
     pub state: String,
     pub image: String,
-    /// Ce que Swarm dit de la tâche (« started », « no suitable node »…).
+    /// What Swarm says about the task ("started", "no suitable node"...).
     pub message: Option<String>,
-    /// 🔴 L'erreur, quand il y en a une. C'est LE champ qui explique une app en échec,
-    /// et c'est celui que l'ancien compteur jetait.
+    /// 🔴 The error, when there is one. This is THE field that explains a failed app,
+    /// and it is the one the old counter threw away.
     pub err: Option<String>,
-    /// Horodatage Unix du dernier changement d'état.
+    /// Unix timestamp of the last state change.
     pub updated_at: Option<i64>,
 }
 
 impl TaskInfo {
-    /// Cette tâche tourne-t-elle vraiment ?
+    /// Is this task really running?
     ///
-    /// ⚠️ Les DEUX conditions. Swarm conserve l'historique des tâches mortes : filtrer
-    /// sur le seul état voulu compterait des cadavres.
+    /// ⚠️ BOTH conditions. Swarm keeps the history of dead tasks: filtering on the
+    /// desired state alone would count corpses.
     pub fn est_vivante(&self) -> bool {
         self.desired_state == "running" && self.state == "running"
     }
 
-    /// Cette tâche a-t-elle échoué ?
+    /// Did this task fail?
     ///
-    /// Distinct de « pas vivante » : une tâche volontairement arrêtée (mise à jour,
-    /// réduction d'échelle) n'est pas une panne, et la compter comme telle ferait
-    /// clignoter le tableau de bord à chaque déploiement normal.
+    /// Distinct from "not alive": a deliberately stopped task (an update, a
+    /// scale-down) is not a failure, and counting it as one would make the dashboard
+    /// blink on every normal deployment.
     pub fn a_echoue(&self) -> bool {
         matches!(self.state.as_str(), "failed" | "rejected" | "orphaned")
     }
 
-    /// Ce qui explique l'état, en une ligne.
+    /// What explains the state, in one line.
     ///
-    /// L'erreur d'abord : c'est elle qu'on cherche. Le message de Swarm ensuite, qui
-    /// dit souvent ce que l'erreur ne dit pas (« no suitable node »).
+    /// The error first: that is what you are looking for. Swarm's message second,
+    /// which often says what the error does not ("no suitable node").
     pub fn explication(&self) -> Option<&str> {
         self.err
             .as_deref()
@@ -281,9 +280,9 @@ impl TaskInfo {
 pub struct LigneLog {
     /// Horodatage Unix. `None` si Docker ne l'a pas fourni.
     pub at: Option<i64>,
-    /// `true` = stderr. Beaucoup d'applications écrivent tout sur stderr : afficher
-    /// ces lignes en rouge ferait passer un démarrage normal pour une avalanche
-    /// d'erreurs.
+    /// `true` means stderr. Many applications write everything to stderr: painting
+    /// those lines red would make a normal startup look like an avalanche of
+    /// errors.
     pub erreur: bool,
     pub ligne: String,
 }
@@ -294,54 +293,54 @@ pub trait Orchestrator: Send + Sync {
 
     async fn deploy(&self, spec: &ServiceSpec) -> Result<String>;
 
-    /// Met à jour l'image d'un service existant.
+    /// Updates the image of an existing service.
     ///
-    /// Doit appliquer `order: start-first` et `failure_action: rollback` — sans quoi
-    /// tout le pipeline du §7 s'écroule.
+    /// Must apply `order: start-first` and `failure_action: rollback` - without those,
+    /// the whole update pipeline collapses.
     async fn update_image(&self, name: &str, image: &str) -> Result<()>;
 
-    /// Ajuste le nombre de réplicas d'un service existant.
+    /// Adjusts an existing service's replica count.
     async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
 
     // ── Vie du cluster (§2ter, §10.3) ───────────────────────────────────────
 
-    /// Initialise un Swarm sur cette machine. Idempotent : un Swarm déjà actif
-    /// n'est pas réinitialisé — ce serait détruire le cluster existant.
+    /// Initialises a Swarm on this machine. Idempotent: an already active Swarm is
+    /// not reinitialised - that would destroy the existing cluster.
     async fn cluster_init(&self, advertise_addr: Option<&str>) -> Result<String>;
 
-    /// Active le verrouillage automatique du Swarm (§9) et renvoie la clé.
+    /// Enables Swarm autolock and returns the key.
     ///
-    /// 🔴 Sans autolock, les clés Raft du cluster sont **en clair sur le disque** de
-    /// chaque manager. Quiconque récupère un disque récupère de quoi prendre le
-    /// contrôle du cluster. Avec autolock, un manager redémarré reste verrouillé
-    /// jusqu'à ce qu'on lui fournisse la clé.
+    /// 🔴 Without autolock, the cluster's Raft keys sit **in clear on the disk** of
+    /// every manager. Anyone who recovers a disk recovers enough to take over the
+    /// cluster. With autolock, a restarted manager stays locked until it is given the
+    /// key.
     async fn enable_autolock(&self) -> Result<String>;
 
     /// L'autolock est-il actif ?
     async fn autolock_enabled(&self) -> Result<bool>;
 
-    /// Les jetons de rattachement, et l'adresse à laquelle se connecter.
+    /// The join tokens, and the address to connect to.
     async fn join_tokens(&self) -> Result<cluster::JoinTokens>;
 
-    /// Les nœuds du cluster, avec leur rôle et leur tier.
+    /// The cluster nodes, with their role and their tier.
     async fn nodes(&self) -> Result<Vec<cluster::NodeInfo>>;
 
-    /// Pose une étiquette sur un nœud — c'est ainsi que le tier devient une
-    /// contrainte de placement effective (§2bis.2).
+    /// Sets a label on a node - this is how a tier becomes an effective placement
+    /// constraint.
     async fn label_node(&self, node: &str, key: &str, value: &str) -> Result<()>;
 
-    /// Exécute une commande dans un conteneur en cours d'un service.
+    /// Runs a command inside a running container of a service.
     ///
-    /// Sert aux automatisations `method: exec` des guides (§4.6bis) : beaucoup
-    /// d'apps ne se configurent que par leur CLI (`gitea admin`, `occ`…).
+    /// Used by the guides' `method: exec` automations: many apps can only be
+    /// configured through their CLI (`gitea admin`, `occ`...).
     async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput>;
 
-    /// Crée un volume nommé, étiqueté comme géré par Homelabus.
+    /// Creates a named volume, labelled as managed by Homelabus.
     ///
-    /// Idempotent : un volume existant est conservé tel quel — il porte des données.
+    /// Idempotent: an existing volume is kept as-is - it holds data.
     async fn create_volume(&self, name: &str) -> Result<VolumeInfo>;
 
-    /// Décrit un volume existant.
+    /// Describes an existing volume.
     async fn inspect_volume(&self, name: &str) -> Result<VolumeInfo>;
 
     async fn status(&self, name: &str) -> Result<ServiceStatus>;
@@ -350,22 +349,22 @@ pub trait Orchestrator: Send + Sync {
 
     async fn remove(&self, name: &str) -> Result<()>;
 
-    /// Attend que le service ait convergé. Utilisé par l'ordonnanceur du §4.7 :
-    /// Swarm n'ayant pas de `depends_on`, c'est nous qui séquençons.
+    /// Waits for the service to converge. Used by the deployment ordering: Swarm has
+    /// no `depends_on`, so we do the sequencing.
     async fn wait_healthy(&self, name: &str, timeout_secs: u64) -> Result<ServiceStatus>;
 
-    /// Les tâches, avec leur placement et leur erreur.
+    /// The tasks, with their placement and their error.
     ///
-    /// `service = None` rend celles de tous les services gérés. **Sans filtre d'état** :
-    /// les tâches mortes sont ce qui explique une panne, et les cacher ici obligerait à
-    /// aller lire `docker service ps` à la main.
+    /// `service = None` returns those of every managed service. **With no state
+    /// filter**: dead tasks are what explains an outage, and hiding them here would
+    /// force you to go and read `docker service ps` by hand.
     async fn tasks(&self, service: Option<&str>) -> Result<Vec<TaskInfo>>;
 
-    /// Les dernières lignes de journal d'un service.
+    /// The last log lines of a service.
     ///
-    /// ⚠️ `lignes` est borné côté implémentation : un service bavard laissé sans limite
-    /// remplirait la mémoire du controller, et c'est le controller qui tomberait — pas
-    /// le service qu'on cherchait à diagnostiquer.
+    /// ⚠️ The line count is bounded in the implementation: a chatty service left
+    /// unbounded would fill the controller's memory, and the controller is what would
+    /// fall over - not the service being diagnosed.
     async fn logs(&self, service: &str, lignes: u32) -> Result<Vec<LigneLog>>;
 }
 
@@ -390,10 +389,9 @@ mod tests {
 
     #[test]
     fn a_dead_task_is_never_counted_as_alive() {
-        // 🔴 Swarm conserve l'historique des tâches mortes. Une tâche que Swarm VEUT
-        // voir tourner mais qui a échoué n'est pas vivante — et l'inverse non plus :
-        // une tâche qui tourne encore alors que Swarm veut l'arrêter est en train de
-        // partir.
+        // 🔴 Swarm keeps the history of dead tasks. A task Swarm WANTS running but
+        // that has failed is not alive - and neither is the reverse: a task still
+        // running while Swarm wants it stopped is on its way out.
         assert!(tache("running", "running").est_vivante());
         assert!(!tache("running", "failed").est_vivante());
         assert!(!tache("shutdown", "running").est_vivante());
@@ -402,9 +400,9 @@ mod tests {
 
     #[test]
     fn a_deliberate_shutdown_is_not_a_failure() {
-        // Une tâche arrêtée pour une mise à jour ou une réduction d'échelle n'est pas
-        // une panne. La compter comme telle ferait clignoter le tableau de bord à
-        // chaque déploiement normal — et on cesserait de le regarder.
+        // A task stopped for an update or a scale-down is not a failure. Counting it
+        // as one would make the dashboard blink on every normal deployment - and people
+        // would stop looking at it.
         assert!(!tache("shutdown", "shutdown").a_echoue());
         assert!(!tache("shutdown", "complete").a_echoue());
         assert!(tache("running", "failed").a_echoue());
@@ -414,8 +412,8 @@ mod tests {
 
     #[test]
     fn the_error_is_preferred_to_the_status_message() {
-        // Les deux existent souvent ensemble : `message` dit « started », `err` dit
-        // pourquoi ça n'a pas marché. C'est l'erreur qu'on cherche.
+        // The two often coexist: `message` says "started", `err` says why it did not
+        // work. The error is what you are looking for.
         let mut t = tache("running", "failed");
         t.message = Some("started".into());
         t.err = Some("no such image".into());
@@ -427,8 +425,8 @@ mod tests {
 
     #[test]
     fn an_empty_explanation_is_none_rather_than_blank() {
-        // Une chaîne vide afficherait une ligne d'explication sans explication, ce qui
-        // fait chercher un problème d'affichage.
+        // An empty string would render an explanation line with no explanation, which
+        // sends you looking for a display bug.
         let mut t = tache("running", "pending");
         t.err = Some(String::new());
         t.message = Some(String::new());
@@ -437,9 +435,9 @@ mod tests {
 
     #[test]
     fn a_log_line_knows_which_stream_it_came_from() {
-        // Beaucoup d'applications écrivent TOUT sur stderr : peindre ces lignes en
-        // rouge ferait passer un démarrage normal pour une avalanche d'erreurs. Le
-        // champ existe pour être affiché avec discernement, pas pour colorer.
+        // Many applications write EVERYTHING to stderr: painting those lines red
+        // would make a normal startup look like an avalanche of errors. The field
+        // exists to be displayed with judgement, not to colour.
         let l = LigneLog {
             at: Some(1_000),
             erreur: true,

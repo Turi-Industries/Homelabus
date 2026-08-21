@@ -1,18 +1,17 @@
-//! Vie du cluster : initialisation, nœuds, tiers et quorum (§2ter, §2bis, §10.3).
+//! Cluster life: initialisation, nodes, tiers and quorum.
 //!
-//! Ce module est volontairement séparé du déploiement de services : ce sont deux
-//! préoccupations différentes, et mélanger « faire tourner une app » avec « ajouter
-//! une machine » rend les deux plus difficiles à raisonner.
+//! Deliberately separate from service deployment: these are two different concerns,
+//! and mixing "run an app" with "add a machine" makes both harder to reason about.
 
 use serde::{Deserialize, Serialize};
 
-/// Le rôle d'un nœud dans Swarm.
+/// A node's role in Swarm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeRole {
     /// Participe au quorum Raft et peut piloter le cluster.
     Manager,
-    /// Exécute des tâches, sans droit de décision.
+    /// Runs tasks, with no say in decisions.
     Worker,
 }
 
@@ -34,20 +33,20 @@ pub struct NodeInfo {
     pub status: String,
     /// `active`, `pause`, `drain`.
     pub availability: String,
-    /// Le tier déclaré (§2bis.2), s'il est posé.
+    /// The declared tier, when it is set.
     pub tier: Option<String>,
     pub is_leader: bool,
     pub memory_mb: Option<u64>,
-    /// 🔴 Le **domaine de panne** : le fer physique, pas la machine logique (§2bis.2).
+    /// 🔴 The **failure domain**: the physical hardware, not the logical machine.
     ///
-    /// Deux VM sur le même serveur sont deux nœuds Swarm et **un seul** point de
-    /// panne. Répartir deux réplicas « sur deux nœuds différents » ne protège alors de
-    /// rien — Swarm rend une illusion de redondance, et on la découvre le jour où le
-    /// fer tombe.
+    /// Two VMs on the same server are two Swarm nodes and **one** point of failure.
+    /// Spreading two replicas "across two different nodes" then protects nothing -
+    /// Swarm returns an illusion of redundancy, and you discover it the day the
+    /// hardware dies.
     ///
-    /// Swarm ne peut pas le deviner : il est déclaré à `hlb node add` et posé en
-    /// étiquette `hlb.failureDomain`. `None` = non déclaré, ce qui doit se VOIR
-    /// plutôt que de faire supposer que chaque nœud est isolé.
+    /// Swarm cannot guess it: it is declared at `hlb node add` and set as the
+    /// `hlb.failureDomain` label. `None` means undeclared, which must be VISIBLE
+    /// rather than let anyone assume each node is isolated.
     pub failure_domain: Option<String>,
 }
 
@@ -57,35 +56,35 @@ impl NodeInfo {
     }
 }
 
-/// Un domaine de panne : un fer, et les nœuds qui vivent dessus.
+/// A failure domain: one piece of hardware, and the nodes living on it.
 ///
-/// ## 🔴 Ce que cette structure existe pour montrer
+/// ## 🔴 What this structure exists to show
 ///
-/// En ligne de commande, on voit trois nœuds et on se croit protégé. Deux d'entre eux
-/// sont deux VM sur le même serveur : le fer tombe, deux tiers du cluster partent
-/// avec. C'est l'illusion que la vue topologie (§11bis) doit dissiper, et elle ne le
-/// peut que si le regroupement est explicite.
+/// On the command line you see three nodes and believe you are protected. Two of them
+/// are VMs on the same server: the hardware dies and two thirds of the cluster goes
+/// with it. That is the illusion the topology view must dispel, and it can only do so
+/// if the grouping is explicit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailureDomain {
-    /// Le nom déclaré, ou `None` pour les nœuds sans domaine déclaré.
+    /// The declared name, or `None` for nodes with no declared domain.
     pub nom: Option<String>,
-    /// Les nœuds qui y vivent, par identifiant.
+    /// The nodes living on it, by id.
     pub noeuds: Vec<String>,
 }
 
 impl FailureDomain {
-    /// Ce domaine porte-t-il assez de nœuds pour que sa perte soit grave ?
+    /// Does this domain carry enough nodes for its loss to be serious?
     pub fn concentre(&self, total_noeuds: usize) -> bool {
-        // Plus de la moitié du cluster sur un seul fer : sa perte emporte le quorum.
+        // More than half the cluster on one piece of hardware: losing it takes quorum.
         total_noeuds > 1 && self.noeuds.len() * 2 > total_noeuds
     }
 }
 
-/// Regroupe des nœuds par domaine de panne.
+/// Groups nodes by failure domain.
 ///
-/// ⚠️ Les nœuds **sans domaine déclaré** forment un groupe à part, jamais un domaine
-/// par nœud. Les supposer isolés serait exactement l'hypothèse optimiste qui produit
-/// l'illusion de redondance — on ne sait pas, et il faut que ça se voie.
+/// ⚠️ Nodes **with no declared domain** form a group of their own, never one domain
+/// per node. Assuming they are isolated would be exactly the optimistic assumption
+/// that creates the illusion of redundancy - we do not know, and that must show.
 pub fn grouper_par_domaine(noeuds: &[NodeInfo]) -> Vec<FailureDomain> {
     let mut connus: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     let mut inconnus = Vec::new();
@@ -105,7 +104,7 @@ pub fn grouper_par_domaine(noeuds: &[NodeInfo]) -> Vec<FailureDomain> {
         })
         .collect();
 
-    // Le plus concentré d'abord : c'est celui dont la perte fait le plus de dégâts.
+    // Most concentrated first: that is the one whose loss does the most damage.
     out.sort_by(|a, b| {
         b.noeuds
             .len()
@@ -122,50 +121,50 @@ pub fn grouper_par_domaine(noeuds: &[NodeInfo]) -> Vec<FailureDomain> {
     out
 }
 
-/// Une violation d'anti-affinité : plusieurs réplicas d'un service sur le même fer.
+/// An anti-affinity violation: several replicas of a service on the same hardware.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Violation {
     pub service: String,
-    /// Le domaine concerné. `None` = domaine non déclaré.
+    /// The domain in question. `None` means undeclared.
     pub domaine: Option<String>,
-    /// Combien de réplicas s'y trouvent.
+    /// How many replicas are there.
     pub replicas: usize,
     /// Sur combien au total.
     pub total: usize,
 }
 
 impl Violation {
-    /// Tous les réplicas sont-ils au même endroit ?
+    /// Are all the replicas in the same place?
     ///
-    /// 🔴 Le cas le plus grave : le service paraît redondant et ne l'est pas du tout.
+    /// 🔴 The worst case: the service looks redundant and is not at all.
     pub fn totale(&self) -> bool {
         self.replicas == self.total && self.total > 1
     }
 
     pub fn describe(&self) -> String {
-        let ou = match &self.domaine {
-            Some(d) => format!("le domaine « {d} »"),
-            // ⚠️ Un domaine non déclaré n'est pas une violation prouvée : c'est une
-            // ignorance. Le dire ainsi évite de faire chercher un problème inexistant.
-            None => "des nœuds sans domaine de panne déclaré".to_string(),
+        let where_ = match &self.domaine {
+            Some(d) => format!("domain \"{d}\""),
+            // ⚠️ An undeclared domain is not a proven violation, it is ignorance.
+            // Saying so avoids sending anyone after a problem that may not exist.
+            None => "nodes with no declared failure domain".to_string(),
         };
         if self.totale() {
             format!(
-                "{} : ses {} réplicas sont TOUS sur {ou} — la redondance est une illusion",
+                "{}: all {} of its replicas are on {where_}: the redundancy is an illusion",
                 self.service, self.total
             )
         } else {
             format!(
-                "{} : {} de ses {} réplicas partagent {ou}",
+                "{}: {} of its {} replicas share {where_}",
                 self.service, self.replicas, self.total
             )
         }
     }
 }
 
-/// Les services dont plusieurs réplicas partagent un domaine de panne.
+/// The services whose replicas share a failure domain.
 ///
-/// `placements` est `(service, identifiant de nœud)` pour chaque réplica **vivant**.
+/// `placements` is `(service, node id)` for each **live** replica.
 pub fn violations_anti_affinite(
     placements: &[(String, String)],
     noeuds: &[NodeInfo],
@@ -192,8 +191,8 @@ pub fn violations_anti_affinite(
     let mut out = Vec::new();
     for (service, domaines) in par_service {
         let total: usize = domaines.values().sum();
-        // Un service à un seul réplica n'a rien à répartir : le signaler serait du
-        // bruit, et le bruit fait cesser de lire les alertes.
+        // A single-replica service has nothing to spread: flagging it would be noise,
+        // and noise makes people stop reading alerts.
         if total < 2 {
             continue;
         }
@@ -219,17 +218,17 @@ pub fn violations_anti_affinite(
     out
 }
 
-/// L'étiquette Swarm qui porte le domaine de panne.
+/// The Swarm label carrying the failure domain.
 ///
-/// Posée par `hlb node add`, qui la DEMANDE : c'est la seule information que ni Swarm
-/// ni l'agent ne peuvent déduire — savoir que deux VM tournent sur le même serveur
-/// suppose de connaître la salle machine.
+/// Set by `hlb node add`, which ASKS for it: this is the one piece of information
+/// neither Swarm nor the agent can infer - knowing two VMs run on the same server
+/// means knowing the machine room.
 pub const LABEL_FAILURE_DOMAIN: &str = "hlb.failureDomain";
 
-/// Le tier d'un nœud, déduit de sa mémoire (§2bis.2).
+/// A node's tier, derived from its memory.
 ///
-/// 🔴 Ce n'est pas cosmétique : c'est ce qui empêche PostgreSQL d'atterrir sur un
-/// nœud à 4 Go, où il fonctionnerait jusqu'au jour où il tue la machine par OOM.
+/// 🔴 Not cosmetic: this is what stops PostgreSQL landing on a 4 GB node, where it
+/// would work until the day it kills the machine with an OOM.
 pub fn tier_for_memory(memory_mb: u64) -> &'static str {
     if memory_mb >= 8192 {
         "heavy"
@@ -238,18 +237,18 @@ pub fn tier_for_memory(memory_mb: u64) -> &'static str {
     }
 }
 
-/// L'état de santé du quorum Raft (§10.3).
+/// The health of the Raft quorum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuorumHealth {
-    /// Un seul manager : pas de tolérance de panne, mais cohérent.
+    /// A single manager: no fault tolerance, but coherent.
     Solo,
-    /// 🔴 Deux managers : **pire qu'un seul**. La perte de l'un fait perdre le
-    /// quorum et bloque tout le cluster, alors qu'avec un seul manager on peut
-    /// au moins redémarrer avec `--force-new-cluster`.
+    /// 🔴 Two managers: **worse than one**. Losing either loses the quorum and blocks
+    /// the whole cluster, whereas with a single manager you can at least restart with
+    /// `--force-new-cluster`.
     Dangerous { managers: usize },
-    /// Nombre impair ≥ 3 : tolère (n-1)/2 pannes.
+    /// An odd number ≥ 3: tolerates (n-1)/2 failures.
     Healthy { managers: usize, tolerates: usize },
-    /// Nombre pair ≥ 4 : fonctionne, mais un manager de plus ne sert à rien.
+    /// An even number ≥ 4: works, but the extra manager buys nothing.
     Wasteful { managers: usize, tolerates: usize },
 }
 
@@ -276,39 +275,46 @@ impl QuorumHealth {
 
     pub fn describe(&self) -> String {
         match self {
-            Self::Solo => "1 manager — aucune tolérance de panne, mais cohérent. \
-                           Ajoute deux managers pour du vrai quorum."
+            Self::Solo => "1 manager - no fault tolerance, but coherent. \
+                           Add two managers for a real quorum."
                 .into(),
             Self::Dangerous { managers } => format!(
-                "🔴 {managers} managers — PIRE qu'un seul : perdre l'un des deux bloque \
-                 tout le cluster. Passe à 3, ou redescends à 1."
+                "🔴 {managers} managers - WORSE than one: losing either blocks \
+                 the whole cluster. Go to 3, or back down to 1."
             ),
             Self::Healthy {
                 managers,
                 tolerates,
             } => {
-                format!("{managers} managers — tolère {tolerates} panne(s)")
+                format!(
+                    "{managers} managers - tolerates {tolerates} {}",
+                    if *tolerates == 1 {
+                        "failure"
+                    } else {
+                        "failures"
+                    }
+                )
             }
             Self::Wasteful {
                 managers,
                 tolerates,
             } => format!(
-                "{managers} managers — tolère {tolerates} panne(s), soit autant qu'avec \
-                 {}. Le manager en trop n'apporte rien.",
+                "{managers} managers - tolerates the same {tolerates} as \
+                 {} would. The extra manager buys nothing.",
                 managers - 1
             ),
         }
     }
 }
 
-/// Le profil du cluster, déduit du nombre de nœuds (§2ter.1).
+/// The cluster profile, derived from the node count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClusterProfile {
-    /// Un seul nœud : tout dessus, pas de contrainte de placement utile.
+    /// A single node: everything on it, no useful placement constraint.
     Solo,
-    /// Deux nœuds : 1 manager + 1 worker. **Jamais deux managers.**
+    /// Two nodes: 1 manager + 1 worker. **Never two managers.**
     Paired,
-    /// Trois nœuds ou plus : quorum réel.
+    /// Three nodes or more: a real quorum.
     Quorum,
 }
 
@@ -324,8 +330,8 @@ impl ClusterProfile {
     /// Combien de managers ce profil recommande-t-il ?
     pub fn recommended_managers(&self) -> usize {
         match self {
-            // 🔴 Deux nœuds ⇒ UN seul manager. Deux managers feraient perdre le
-            // quorum à la moindre panne (§10.3).
+            // 🔴 Two nodes means ONE manager. Two managers would lose the quorum on
+            // the first failure.
             Self::Solo | Self::Paired => 1,
             Self::Quorum => 3,
         }
@@ -340,12 +346,12 @@ impl ClusterProfile {
     }
 }
 
-/// Les jetons pour rattacher un nœud.
+/// The tokens for joining a node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinTokens {
     pub manager: String,
     pub worker: String,
-    /// Adresse à laquelle les nouveaux nœuds doivent se connecter.
+    /// The address new nodes must connect to.
     pub advertise_addr: String,
 }
 
@@ -378,9 +384,9 @@ mod tests {
 
     #[test]
     fn two_vms_on_one_box_form_one_domain() {
-        // 🔴 LE cas du §2bis.2 : en ligne de commande on voit trois nœuds et on se
-        // croit protégé. Deux sont des VM du même serveur — le fer tombe, deux tiers
-        // du cluster partent avec.
+        // 🔴 THE case: on the command line you see three nodes and believe you are
+        // protected. Two are VMs on the same server - the hardware dies, and two thirds
+        // of the cluster goes with it.
         let noeuds = [
             noeud("swarm-heavy", Some("big-01")),
             noeud("mailcow", Some("big-01")),
@@ -388,25 +394,25 @@ mod tests {
         ];
         let d = grouper_par_domaine(&noeuds);
 
-        assert_eq!(d.len(), 2, "trois nœuds, deux fers");
+        assert_eq!(d.len(), 2, "three nodes, two pieces of hardware");
         assert_eq!(
             d[0].nom.as_deref(),
             Some("big-01"),
-            "le plus concentré d'abord"
+            "most concentrated first"
         );
         assert_eq!(d[0].noeuds.len(), 2);
         assert!(
             d[0].concentre(3),
-            "deux nœuds sur trois : sa perte emporte le quorum"
+            "two nodes out of three: losing it takes the quorum"
         );
         assert!(!d[1].concentre(3));
     }
 
     #[test]
     fn undeclared_nodes_are_grouped_not_assumed_isolated() {
-        // ⚠️ Supposer qu'un nœud sans domaine déclaré est isolé serait l'hypothèse
-        // optimiste qui produit exactement l'illusion qu'on cherche à dissiper. On ne
-        // sait pas, et il faut que ça se voie.
+        // ⚠️ Assuming a node with no declared domain is isolated would be exactly the
+        // optimistic assumption that creates the illusion we are trying to dispel. We
+        // do not know, and that must show.
         let noeuds = [
             noeud("a", None),
             noeud("b", None),
@@ -414,19 +420,19 @@ mod tests {
         ];
         let d = grouper_par_domaine(&noeuds);
 
-        let inconnu = d
+        let unknown = d
             .iter()
             .find(|x| x.nom.is_none())
-            .expect("un groupe inconnu");
-        assert_eq!(inconnu.noeuds.len(), 2, "regroupés, pas un domaine chacun");
-        // Et il vient en dernier : ce n'est pas une violation prouvée.
+            .expect("un groupe unknown");
+        assert_eq!(unknown.noeuds.len(), 2, "grouped, not one domain each");
+        // And it comes last: it is not a proven violation.
         assert!(d.last().is_some_and(|x| x.nom.is_none()));
     }
 
     #[test]
     fn all_replicas_on_one_box_is_the_worst_case() {
-        // 🔴 Le service paraît redondant et ne l'est pas du tout : c'est le mensonge
-        // que Swarm produit quand l'anti-affinité porte sur `node.id`.
+        // 🔴 The service looks redundant and is not at all: the lie Swarm produces
+        // when anti-affinity is expressed over `node.id`.
         let noeuds = [
             noeud("vm-a", Some("big-01")),
             noeud("vm-b", Some("big-01")),
@@ -439,7 +445,7 @@ mod tests {
 
         let v = violations_anti_affinite(&placements, &noeuds);
         assert_eq!(v.len(), 1);
-        assert!(v[0].totale(), "les DEUX réplicas sont sur le même fer");
+        assert!(v[0].totale(), "BOTH replicas are on the same hardware");
         assert!(v[0].describe().contains("illusion"), "{}", v[0].describe());
     }
 
@@ -458,8 +464,8 @@ mod tests {
 
     #[test]
     fn a_single_replica_service_is_never_flagged() {
-        // Un service à un seul réplica n'a rien à répartir. Le signaler serait du
-        // bruit — et le bruit fait cesser de lire les alertes.
+        // A single-replica service has nothing to spread. Flagging it would be noise
+        // - and noise makes people stop reading alerts.
         let noeuds = [noeud("vm-a", Some("big-01"))];
         let placements = [("valkey".to_string(), "vm-a".to_string())];
         assert!(violations_anti_affinite(&placements, &noeuds).is_empty());
@@ -467,8 +473,8 @@ mod tests {
 
     #[test]
     fn a_partial_violation_is_reported_but_ranked_lower() {
-        // Trois réplicas, deux au même endroit : c'est moins grave que « tous au même
-        // endroit », mais ça reste une redondance surévaluée.
+        // Three replicas, two in the same place: less serious than "all in the same
+        // place", but still redundancy overstated.
         let noeuds = [
             noeud("vm-a", Some("big-01")),
             noeud("vm-b", Some("big-01")),
@@ -494,7 +500,7 @@ mod tests {
             noeud("small-01", Some("small-01")),
         ];
         let placements = [
-            // vikunja : tous au même endroit — le pire.
+            // vikunja: all in the same place - the worst case.
             ("vikunja".to_string(), "vm-a".to_string()),
             ("vikunja".to_string(), "vm-b".to_string()),
             // gitea : deux sur trois.
@@ -511,9 +517,9 @@ mod tests {
 
     #[test]
     fn an_undeclared_domain_is_not_reported_as_a_proven_violation() {
-        // ⚠️ Deux réplicas sur des nœuds sans domaine déclaré : on ne SAIT PAS s'ils
-        // partagent un fer. Le message doit le dire, sinon on cherche un problème qui
-        // n'existe peut-être pas.
+        // ⚠️ Two replicas on nodes with no declared domain: we do NOT KNOW whether
+        // they share hardware. The message must say so, or you go looking for a problem
+        // that may not exist.
         let noeuds = [noeud("a", None), noeud("b", None)];
         let placements = [
             ("gitea".to_string(), "a".to_string()),
@@ -524,7 +530,7 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert!(v[0].domaine.is_none());
         assert!(
-            v[0].describe().contains("sans domaine de panne déclaré"),
+            v[0].describe().contains("no declared failure domain"),
             "{}",
             v[0].describe()
         );
@@ -532,17 +538,17 @@ mod tests {
 
     #[test]
     fn two_managers_is_flagged_as_worse_than_one() {
-        // 🔴 Le piège le plus contre-intuitif de Swarm, et le plus coûteux.
+        // 🔴 Swarm's most counter-intuitive trap, and its most expensive.
         let q = QuorumHealth::assess(2);
         assert!(q.needs_attention());
-        assert!(q.describe().contains("PIRE qu'un seul"), "{}", q.describe());
+        assert!(q.describe().contains("WORSE than one"), "{}", q.describe());
     }
 
     #[test]
     fn one_manager_is_acceptable_though_fragile() {
         let q = QuorumHealth::assess(1);
         assert!(!q.needs_attention());
-        assert!(q.describe().contains("aucune tolérance"));
+        assert!(q.describe().contains("no fault tolerance"));
     }
 
     #[test]
@@ -565,15 +571,15 @@ mod tests {
 
     #[test]
     fn an_even_count_is_wasteful_but_not_dangerous() {
-        // 4 managers tolèrent 1 panne, exactement comme 3.
+        // 4 managers tolerate 1 failure, exactly as 3 do.
         let q = QuorumHealth::assess(4);
         assert!(!q.needs_attention());
-        assert!(q.describe().contains("n'apporte rien"), "{}", q.describe());
+        assert!(q.describe().contains("buys nothing"), "{}", q.describe());
     }
 
     #[test]
     fn a_two_node_cluster_gets_a_single_manager() {
-        // 🔴 C'est la conséquence directe du piège ci-dessus.
+        // 🔴 The direct consequence of the trap above.
         assert_eq!(ClusterProfile::for_node_count(2), ClusterProfile::Paired);
         assert_eq!(ClusterProfile::Paired.recommended_managers(), 1);
     }
@@ -587,8 +593,8 @@ mod tests {
 
     #[test]
     fn a_small_node_is_never_heavy() {
-        // Les nœuds à 4 Go du plan doivent rester « light » : y placer une base de
-        // données la ferait fonctionner jusqu'au jour de l'OOM.
+        // 4 GB nodes must stay "light": placing a database there would work until the
+        // day of the OOM.
         assert_eq!(tier_for_memory(3900), "light");
         assert_eq!(tier_for_memory(4096), "light");
         assert_eq!(tier_for_memory(8192), "heavy");

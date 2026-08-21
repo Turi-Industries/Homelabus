@@ -1,11 +1,11 @@
-//! Spike `bollard` — la question n°1 du plan (§13).
+//! The `bollard` spike - the project's first risk.
 //!
-//! Objectif : prouver **avant** d'écrire le reste du produit que `bollard` couvre
-//! réellement la surface Swarm dont Homelabus dépend. Si un trou existe, il vaut mieux
-//! le découvrir maintenant que dans quatre mois.
+//! The goal: prove **before** writing the rest of the product that `bollard` really
+//! covers the Swarm surface Homelabus depends on. If there is a gap, better to find it
+//! now than in four months.
 //!
-//! Ces tests exigent un Swarm actif. Ils sont `#[ignore]` pour que `cargo test` reste
-//! rapide et utilisable sans Docker :
+//! These tests need an active Swarm. They are `#[ignore]`d so `cargo test` stays fast
+//! and usable without Docker:
 //!
 //! ```sh
 //! docker swarm init
@@ -18,15 +18,15 @@
 use hlb_orchestrator::{Orchestrator, ServiceSpec, SwarmOrchestrator, UpdateState};
 
 const IMAGE: &str = "alpine:3";
-/// Image inexistante : le pull échoue, la tâche ne démarre jamais.
-/// C'est le scénario réaliste d'un digest erroné ou d'une image retirée.
+/// A non-existent image: the pull fails and the task never starts. This is the
+/// realistic scenario of a wrong digest or a withdrawn image.
 const BROKEN: &str = "alpine:cette-version-nexiste-pas";
 
 fn orch() -> SwarmOrchestrator {
     SwarmOrchestrator::connect().expect("daemon docker joignable")
 }
 
-/// Nom unique par test : les tests peuvent tourner en parallèle sur un même daemon.
+/// A unique name per test: tests can run in parallel against one daemon.
 fn name(suffix: &str) -> String {
     format!("hlb-spike-{suffix}")
 }
@@ -40,15 +40,15 @@ fn sleeper(n: &str) -> ServiceSpec {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q1_daemon_et_swarm_joignables() {
     let version = orch().ping().await.expect("ping");
     println!("✓ daemon docker {version}");
 }
 
-/// Q2 — création de service, convergence, et lecture d'état.
+/// Q2 - service creation, convergence, and reading state back.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q2_deploy_et_convergence() {
     let o = orch();
     let n = name("deploy");
@@ -61,43 +61,43 @@ async fn q2_deploy_et_convergence() {
     assert_eq!(st.desired_replicas, 2);
     assert_eq!(st.running_replicas, 2);
     assert!(st.is_converged());
-    println!("✓ 2/2 tâches en cours, image={}", st.image);
+    println!("✓ 2/2 tasks running, image={}", st.image);
 
     cleanup(&o, &n).await;
 }
 
-/// Q3 — contraintes de placement. Sans elles, tout le §2bis (tiers de nœuds,
-/// épinglage des bases) est impossible.
+/// Q3 - placement constraints. Without them, node tiers and pinning databases are
+/// impossible.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q3_contraintes_de_placement() {
     let o = orch();
     let n = name("placement");
     cleanup(&o, &n).await;
 
-    // Contrainte satisfiable : un manager existe forcément.
+    // A satisfiable constraint: a manager necessarily exists.
     o.deploy(&sleeper(&n).constraint("node.role==manager"))
         .await
         .expect("deploy avec contrainte");
     let st = o.wait_healthy(&n, 120).await.expect("convergence");
     assert_eq!(st.running_replicas, 1);
-    println!("✓ contrainte node.role==manager respectée");
+    println!("✓ node.role==manager constraint honoured");
     cleanup(&o, &n).await;
 
-    // Contrainte impossible : la tâche doit rester non planifiée, pas planter.
+    // An impossible constraint: the task must stay unscheduled, not crash.
     let n2 = name("placement-impossible");
     cleanup(&o, &n2).await;
     o.deploy(&sleeper(&n2).constraint("node.labels.tier==nexiste-pas"))
         .await
-        .expect("deploy accepté même si non planifiable");
+        .expect("deploy accepted even when unschedulable");
     let err = o.wait_healthy(&n2, 15).await.unwrap_err();
-    println!("✓ contrainte impossible → non convergé, erreur claire : {err}");
+    println!("✓ impossible constraint → did not converge, clear error: {err}");
     cleanup(&o, &n2).await;
 }
 
-/// Q4 — mise à jour d'image avec contrôle de concurrence par version.
+/// Q4 - image update with version-based concurrency control.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q4_update_image() {
     let o = orch();
     let n = name("update");
@@ -110,20 +110,20 @@ async fn q4_update_image() {
     let st = o
         .wait_healthy(&n, 120)
         .await
-        .expect("convergence après update");
+        .expect("convergence after update");
     assert!(st.image.contains("3.21"), "image effective : {}", st.image);
-    println!("✓ mise à jour appliquée → {}", st.image);
+    println!("✓ update applied → {}", st.image);
 
     cleanup(&o, &n).await;
 }
 
-/// 🔴 Q5 — LE test qui compte : Swarm annule-t-il tout seul une mise à jour ratée ?
+/// 🔴 Q5 - THE test that matters: does Swarm roll back a failed update on its own?
 ///
-/// C'est le socle du §7. Le plan insiste : « la logique de rollback ne s'exercera
-/// jamais en conditions réelles avant le jour où tu en auras désespérément besoin —
-/// il faut donc la tester exprès ».
+/// This is the foundation of the whole update pipeline. Rollback logic never exercises
+/// itself in real conditions before the day you desperately need it, so it has to be
+/// tested deliberately.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
     let o = orch();
     let n = name("rollback");
@@ -132,14 +132,14 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
     o.deploy(&sleeper(&n)).await.expect("deploy");
     let avant = o.wait_healthy(&n, 120).await.expect("convergence initiale");
     println!(
-        "  état initial : {} ({} tâche)",
+        "  initial state: {} ({} task)",
         avant.image, avant.running_replicas
     );
 
-    // On pousse volontairement une image cassée.
-    o.update_image(&n, BROKEN).await.expect("update accepté");
+    // A broken image is pushed deliberately.
+    o.update_image(&n, BROKEN).await.expect("update accepted");
 
-    // Swarm doit détecter l'échec et revenir en arrière, sans qu'on intervienne.
+    // Swarm must detect the failure and roll back, with no intervention from us.
     let mut observed = None;
     for _ in 0..60 {
         let st = o.status(&n).await.expect("status");
@@ -153,20 +153,20 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
     }
 
     let (state, st) = observed.expect(
-        "Swarm n'a signalé aucun échec de mise à jour : \
+        "Swarm reported no update failure: \
          failure_action=rollback ne fonctionne pas comme attendu",
     );
 
-    println!("✓ Swarm a réagi : {state:?}");
+    println!("✓ Swarm reacted: {state:?}");
     assert!(
         matches!(
             state,
             UpdateState::RollbackStarted | UpdateState::RollbackCompleted | UpdateState::Paused
         ),
-        "état inattendu : {state:?}"
+        "unexpected state: {state:?}"
     );
 
-    // Et le service doit avoir survécu : c'est tout l'intérêt de start-first.
+    // And the service must have survived: that is the whole point of start-first.
     assert_eq!(
         st.running_replicas, 1,
         "le service ne doit jamais tomber pendant un rollback"
@@ -179,10 +179,9 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
     cleanup(&o, &n).await;
 }
 
-/// Q6 — le filtrage par label : Homelabus ne doit jamais toucher aux services
-/// qu'il n'a pas créés.
+/// Q6 - label filtering: Homelabus must never touch services it did not create.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q6_list_ne_voit_que_le_gere() {
     let o = orch();
     let n = name("list");
@@ -192,26 +191,34 @@ async fn q6_list_ne_voit_que_le_gere() {
     let services = o.list().await.expect("list");
     assert!(
         services.iter().any(|s| s.name == n),
-        "le service géré doit apparaître"
+        "the managed service must appear"
     );
-    println!("✓ {} service(s) géré(s) listé(s)", services.len());
+    println!(
+        "✓ {} managed {} listed",
+        services.len(),
+        if services.len() == 1 {
+            "service"
+        } else {
+            "services"
+        }
+    );
 
     cleanup(&o, &n).await;
 }
 
 /// Q7 — un service inconnu donne une erreur exploitable, pas un panic.
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn q7_service_inconnu() {
     let err = orch().status("hlb-spike-nexiste-pas").await.unwrap_err();
     assert!(
         matches!(err, hlb_orchestrator::Error::NotFound(_)),
         "{err:?}"
     );
-    println!("✓ erreur typée : {err}");
+    println!("✓ typed error: {err}");
 }
 
-// ── §9 : le durcissement doit être APPLIQUÉ, pas seulement déclaré ───────────
+// ── Hardening must be APPLIED, not merely declared ───────────────────────────
 
 /// Lit la spec effective d'un service, telle que Swarm la stocke.
 async fn effective_spec(name: &str) -> serde_json::Value {
@@ -229,11 +236,11 @@ async fn effective_spec(name: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn hardening_reaches_swarm() {
-    // 🔴 Le test qui manquait : la spec de sécurité était déclarée dans les manifests,
-    // validée, et jamais transmise. Un conteneur se déployait avec les privilèges par
-    // défaut de Docker alors que le plan pose « sécurité par défaut » en invariant.
+    // 🔴 The test that was missing: the security spec was declared in manifests,
+    // validated, and never passed on. A container deployed with Docker's default
+    // privileges while "secure by default" was supposed to be an invariant.
     let o = orch();
     let n = name("durcissement");
     cleanup(&o, &n).await;
@@ -243,26 +250,26 @@ async fn hardening_reaches_swarm() {
 
     let cs = effective_spec(&n).await;
 
-    assert_eq!(cs["ReadOnly"], true, "rootfs devrait être en lecture seule");
+    assert_eq!(cs["ReadOnly"], true, "rootfs should be read-only");
     assert_eq!(
         cs["CapabilityDrop"],
         serde_json::json!(["ALL"]),
-        "toutes les capacités devraient être retirées"
+        "every capability should be dropped"
     );
     assert_eq!(
         cs["Privileges"]["NoNewPrivileges"], true,
-        "no-new-privileges devrait être posé"
+        "no-new-privileges should be set"
     );
-    println!("✓ rootfs ro, cap_drop ALL, no-new-privileges appliqués par Swarm");
+    println!("✓ rootfs ro, cap_drop ALL, no-new-privileges applied by Swarm");
 
     cleanup(&o, &n).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn a_relaxed_manifest_is_honoured_too() {
-    // Une app qui a besoin de plus doit pouvoir le demander — sinon le durcissement
-    // par défaut serait contourné en désactivant Homelabus.
+    // An app that needs more must be able to ask - otherwise the default hardening
+    // would be worked around by disabling Homelabus.
     let o = orch();
     let n = name("assoupli");
     cleanup(&o, &n).await;
@@ -279,20 +286,20 @@ async fn a_relaxed_manifest_is_honoured_too() {
     o.wait_healthy(&n, 120).await.expect("convergence");
 
     let cs = effective_spec(&n).await;
-    // Docker omet les valeurs fausses : absent équivaut à `false`.
+    // Docker omits false values: absent is equivalent to `false`.
     assert!(
         cs["ReadOnly"].is_null() || cs["ReadOnly"] == false,
-        "rootfs devrait être inscriptible : {}",
+        "rootfs should be writable: {}",
         cs["ReadOnly"]
     );
     assert_eq!(cs["CapabilityAdd"], serde_json::json!(["NET_BIND_SERVICE"]));
-    println!("✓ assouplissement explicite respecté");
+    println!("✓ explicit relaxation honoured");
 
     cleanup(&o, &n).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn healthchecks_reach_swarm() {
     let o = orch();
     let n = name("sonde");
@@ -311,12 +318,12 @@ async fn healthchecks_reach_swarm() {
     o.wait_healthy(&n, 120).await.expect("convergence");
 
     let cs = effective_spec(&n).await;
-    // ⚠️ Le champ s'écrit « Healthcheck », pas « HealthCheck ».
+    // ⚠️ The field is spelled "Healthcheck", not "HealthCheck".
     assert_eq!(
         cs["Healthcheck"]["Test"],
         serde_json::json!(["CMD-SHELL", "true"])
     );
-    // Swarm stocke les durées en nanosecondes.
+    // Swarm stores durations in nanoseconds.
     assert_eq!(cs["Healthcheck"]["Interval"], 5_000_000_000i64);
     assert_eq!(cs["Healthcheck"]["Retries"], 3);
     println!("✓ sonde transmise, intervalles convertis en nanosecondes");
@@ -325,12 +332,12 @@ async fn healthchecks_reach_swarm() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un Docker Swarm actif"]
+#[ignore = "needs an active Docker Swarm"]
 async fn declared_volumes_are_actually_mounted() {
-    // 🔴 Régression sérieuse trouvée en production : les volumes étaient créés par
-    // l'exécuteur puis JAMAIS attachés au service. Les données partaient dans la
-    // couche éphémère du conteneur et disparaissaient au premier redéploiement —
-    // tout en étant déclarées « sauvegardées ».
+    // 🔴 A serious regression found in production: volumes were created by the
+    // executor and then NEVER attached to the service. Data went into the container's
+    // ephemeral layer and disappeared on the first redeploy - while being declared
+    // "backed up".
     let o = orch();
     let n = name("montage");
     let vol = format!("{n}-data");
@@ -340,18 +347,18 @@ async fn declared_volumes_are_actually_mounted() {
         .output();
 
     o.create_volume(&vol).await.expect("volume");
-    o.deploy(&sleeper(&n).mount(&vol, "/donnees"))
+    o.deploy(&sleeper(&n).mount(&vol, "/data"))
         .await
         .expect("deploy");
     o.wait_healthy(&n, 120).await.expect("convergence");
 
     let cs = effective_spec(&n).await;
-    let mounts = cs["Mounts"].as_array().expect("montages présents");
+    let mounts = cs["Mounts"].as_array().expect("mounts present");
     assert_eq!(mounts.len(), 1, "un montage attendu : {cs}");
     assert_eq!(mounts[0]["Source"], vol.as_str());
-    assert_eq!(mounts[0]["Target"], "/donnees");
+    assert_eq!(mounts[0]["Target"], "/data");
     assert_eq!(mounts[0]["Type"], "volume");
-    println!("✓ volume {vol} monté sur /donnees");
+    println!("✓ volume {vol} mounted at /data");
 
     cleanup(&o, &n).await;
     let _ = std::process::Command::new("docker")

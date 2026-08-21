@@ -1,7 +1,7 @@
-//! Implémentation Docker Swarm, via `bollard`.
+//! The Docker Swarm implementation, through `bollard`.
 //!
-//! Toute la connaissance de `bollard` est confinée ici. Le reste du produit ne voit
-//! que le trait — c'est ce qui rend le pari `bollard` réversible (§10.4).
+//! All knowledge of `bollard` is confined here. The rest of the product only sees the
+//! trait - which is what makes the `bollard` bet reversible.
 
 use std::collections::HashMap;
 
@@ -30,12 +30,12 @@ use crate::{
 
 const NS: i64 = 1_000_000_000;
 
-/// Un horodatage RFC 3339 tel que Docker les rend, en secondes Unix.
+/// An RFC 3339 timestamp as Docker returns them, in Unix seconds.
 ///
-/// Analyse écrite à la main : `chrono` est déjà là mais pour d'autres raisons, et une
-/// date Docker a toujours la même forme (`2026-08-18T10:16:04.123456789Z`). Rend `None`
-/// sur tout ce qui ne colle pas — un horodatage à moitié lu placerait une ligne de
-/// journal en 1970, et on chercherait un problème d'horloge.
+/// Parsed by hand: `chrono` is present but for other reasons, and a Docker date always
+/// has the same shape (`2026-08-18T10:16:04.123456789Z`). Returns `None` on anything
+/// that does not fit - a half-read timestamp would put a log line in 1970, and you
+/// would go looking for a clock problem.
 fn horodatage_unix(s: &str) -> Option<i64> {
     let (date, reste) = s.split_once('T')?;
     let (a, reste_d) = date.split_once('-')?;
@@ -50,8 +50,8 @@ fn horodatage_unix(s: &str) -> Option<i64> {
     let (a, m, j): (i64, i64, i64) = (a.parse().ok()?, m.parse().ok()?, j.parse().ok()?);
     let (h, mi, se): (i64, i64, i64) = (h.parse().ok()?, mi.parse().ok()?, se.parse().ok()?);
 
-    // Jours depuis l'époque, par l'algorithme des « jours civils » de Howard Hinnant.
-    // Il gère les années bissextiles séculaires, que la division naïve par 4 rate.
+    // Days since the epoch, using Howard Hinnant's "civil days" algorithm. It handles
+    // century leap years, which a naive division by 4 gets wrong.
     let a2 = a - i64::from(m <= 2);
     let ere = if a2 >= 0 { a2 } else { a2 - 399 } / 400;
     let annee_ere = a2 - ere * 400;
@@ -62,7 +62,7 @@ fn horodatage_unix(s: &str) -> Option<i64> {
     Some(jours * 86_400 + h * 3_600 + mi * 60 + se)
 }
 
-/// Marque les services que Homelabus gère, pour ne jamais toucher au reste.
+/// Marks the services Homelabus manages, so the rest is never touched.
 pub const MANAGED_LABEL: &str = "hlb.managed";
 
 pub struct SwarmOrchestrator {
@@ -70,7 +70,7 @@ pub struct SwarmOrchestrator {
 }
 
 impl SwarmOrchestrator {
-    /// Se connecte au daemon local (socket Unix, ou `DOCKER_HOST` s'il est défini).
+    /// Connects to the local daemon (Unix socket, or `DOCKER_HOST` when set).
     pub fn connect() -> Result<Self> {
         let docker = Docker::connect_with_defaults()?;
         Ok(Self { docker })
@@ -80,28 +80,28 @@ impl SwarmOrchestrator {
         Self { docker }
     }
 
-    /// La politique de mise à jour du §7, appliquée à **tout** service déployé.
+    /// The update policy, applied to **every** deployed service.
     ///
-    /// Ce n'est pas configurable par app : c'est le socle qui rend le rollback
-    /// automatique possible. Une app qui ne le supporte pas doit être en `pin`.
+    /// This is not configurable per app: it is the foundation that makes automatic
+    /// rollback possible. An app that cannot cope belongs on `pin`.
     fn update_config() -> ServiceSpecUpdateConfig {
         ServiceSpecUpdateConfig {
-            // Une tâche à la fois : on ne remplace jamais tout le service d'un coup.
+            // One task at a time: the whole service is never replaced at once.
             parallelism: Some(1),
-            // La nouvelle tâche démarre avant l'arrêt de l'ancienne → zéro coupure.
+            // The new task starts before the old one stops → no downtime.
             order: Some(ServiceSpecUpdateConfigOrderEnum::START_FIRST),
-            // Le cœur du §7 : Swarm annule lui-même une mise à jour qui échoue.
+            // The heart of it: Swarm rolls back a failing update itself.
             failure_action: Some(ServiceSpecUpdateConfigFailureActionEnum::ROLLBACK),
-            // Surveille 30 s après démarrage : un conteneur qui meurt à la 5e seconde
-            // doit compter comme un échec, pas comme un succès.
+            // Watches for 30 s after startup: a container that dies at the fifth
+            // second must count as a failure, not a success.
             monitor: Some(30 * NS),
             max_failure_ratio: Some(0.0),
             delay: Some(5 * NS),
         }
     }
 
-    /// Le retour arrière doit être plus prudent que l'aller : on arrête d'abord,
-    /// pour éviter que deux versions coexistent sur un schéma déjà migré.
+    /// Rolling back must be more careful than rolling forward: stop first, to avoid
+    /// two versions coexisting over an already-migrated schema.
     fn rollback_config() -> ServiceSpecRollbackConfig {
         ServiceSpecRollbackConfig {
             parallelism: Some(1),
@@ -132,8 +132,8 @@ impl SwarmOrchestrator {
                     },
                     env: Some(spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect()),
 
-                    // §9 — durcissement effectivement transmis à Swarm, pas
-                    // seulement déclaré dans le manifest.
+                    // Hardening actually passed to Swarm, not merely declared in the
+                    // manifest.
                     read_only: Some(spec.hardening.read_only_rootfs),
                     user: spec.hardening.user.clone(),
                     capability_drop: if spec.hardening.cap_drop.is_empty() {
@@ -146,15 +146,15 @@ impl SwarmOrchestrator {
                     } else {
                         Some(spec.hardening.cap_add.clone())
                     },
-                    // `no-new-privileges` n'a pas de champ dédié : il passe par les
-                    // options de sécurité, comme en ligne de commande Docker.
+                    // `no-new-privileges` has no dedicated field: it goes through the
+                    // security options, as on the Docker command line.
                     privileges: Some(TaskSpecContainerSpecPrivileges {
                         no_new_privileges: Some(spec.hardening.no_new_privileges),
                         ..Default::default()
                     }),
 
-                    // Les volumes déclarés sont réellement attachés : sans ça, les
-                    // données vivraient dans la couche éphémère du conteneur.
+                    // Declared volumes are actually attached: without this, data would
+                    // live in the container's ephemeral layer.
                     mounts: if spec.mounts.is_empty() {
                         None
                     } else {
@@ -190,9 +190,9 @@ impl SwarmOrchestrator {
             }),
             mode: Some(match spec.mode {
                 crate::ServiceMode::Global => ServiceSpecMode {
-                    // `replicas` n'a pas de sens ici : Swarm en place exactement un
-                    // par nœud, et en ajoute un automatiquement à chaque nouveau nœud.
-                    // Le mode global se signale par un objet vide dans l'API Docker.
+                    // `replicas` is meaningless here: Swarm places exactly one per
+                    // node, and adds one automatically for each new node. Global mode
+                    // is signalled by an empty object in the Docker API.
                     global: Some(HashMap::new()),
                     ..Default::default()
                 },
@@ -209,12 +209,12 @@ impl SwarmOrchestrator {
         }
     }
 
-    /// Compte les tâches réellement en cours d'exécution.
+    /// Counts the tasks actually running.
     ///
-    /// ⚠️ Swarm garde l'historique des tâches mortes : `TaskInfo::est_vivante` exige
-    /// `desired_state` **et** `state`, sinon on compte des cadavres. La règle vit là-bas
-    /// et pas ici — deux implémentations finiraient par diverger, et la divergence
-    /// donnerait un service qu'on croit debout.
+    /// ⚠️ Swarm keeps the history of dead tasks: `TaskInfo::est_vivante` requires
+    /// `desired_state` **and** `state`, or corpses get counted. The rule lives there and
+    /// not here - two implementations would eventually diverge, and the divergence would
+    /// give a service you believe is up.
     async fn running_tasks(&self, service: &str) -> Result<usize> {
         Ok(self
             .lire_taches(Some(service))
@@ -224,9 +224,9 @@ impl SwarmOrchestrator {
             .count())
     }
 
-    /// Les tâches, telles que Swarm les rend.
+    /// The tasks, as Swarm returns them.
     ///
-    /// Sans filtre d'état : les tâches mortes sont ce qui explique une panne.
+    /// With no state filter: dead tasks are what explains an outage.
     async fn lire_taches(&self, service: Option<&str>) -> Result<Vec<TaskInfo>> {
         let mut filters = HashMap::new();
         match service {
@@ -234,9 +234,9 @@ impl SwarmOrchestrator {
                 filters.insert("service".to_string(), vec![s.to_string()]);
             }
             None => {
-                // Sans filtre de service, on se restreint à ce que Homelabus gère :
-                // les autres services du Swarm ne nous regardent pas, et les afficher
-                // laisserait croire qu'on les pilote.
+                // With no service filter we restrict to what Homelabus manages: the
+                // Swarm's other services are none of our business, and showing them
+                // would suggest we drive them.
                 filters.insert("label".to_string(), vec![MANAGED_LABEL.to_string()]);
             }
         }
@@ -254,8 +254,8 @@ impl SwarmOrchestrator {
             service: t
                 .service_id
                 .clone()
-                // Le nom du service est plus utile que son identifiant, mais Swarm ne
-                // le met pas dans la tâche : le label posé au déploiement le porte.
+                // The service name is more useful than its id, but Swarm does not put
+                // it on the task: the label set at deploy time carries it.
                 .or_else(|| {
                     t.labels
                         .as_ref()
@@ -355,14 +355,14 @@ impl Orchestrator for SwarmOrchestrator {
             .create_service(Self::to_bollard(spec), None)
             .await?;
         resp.id
-            .ok_or_else(|| Error::Unexpected("création sans identifiant".into()))
+            .ok_or_else(|| Error::Unexpected("creation returned no id".into()))
     }
 
     async fn update_image(&self, name: &str, image: &str) -> Result<()> {
         let current = self.inspect(name).await?;
 
-        // Swarm exige la version courante : c'est du contrôle de concurrence
-        // optimiste. Sans elle, deux mises à jour simultanées s'écrasent.
+        // Swarm requires the current version: this is optimistic concurrency control.
+        // Without it, two simultaneous updates overwrite each other.
         let version = current
             .version
             .and_then(|v| v.index)
@@ -372,13 +372,13 @@ impl Orchestrator for SwarmOrchestrator {
             .spec
             .ok_or_else(|| Error::Unexpected("service sans spec".into()))?;
 
-        // On ne remplace que l'image : tout le reste de la spec est conservé tel quel.
+        // Only the image is replaced: the rest of the spec is kept as-is.
         if let Some(tt) = spec.task_template.as_mut() {
             if let Some(cs) = tt.container_spec.as_mut() {
                 cs.image = Some(image.to_string());
             }
         }
-        // Et on réaffirme la politique, au cas où le service aurait été créé ailleurs.
+        // And the policy is reasserted, in case the service was created elsewhere.
         spec.update_config = Some(Self::update_config());
         spec.rollback_config = Some(Self::rollback_config());
 
@@ -401,7 +401,7 @@ impl Orchestrator for SwarmOrchestrator {
             .spec
             .ok_or_else(|| Error::Unexpected("service sans spec".into()))?;
 
-        // On ne touche qu'au mode : le reste de la spec est conservé intact.
+        // Only the mode is touched: the rest of the spec is kept intact.
         spec.mode = Some(ServiceSpecMode {
             replicated: Some(ServiceSpecModeReplicated {
                 replicas: Some(replicas as i64),
@@ -418,32 +418,32 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn cluster_init(&self, advertise_addr: Option<&str>) -> Result<String> {
-        // Idempotent : réinitialiser un Swarm actif détruirait le cluster existant.
+        // Idempotent: reinitialising an active Swarm would destroy the existing cluster.
         if let Ok(s) = self.docker.inspect_swarm().await {
             if let Some(id) = s.id {
-                tracing::debug!("Swarm déjà actif, conservé");
+                tracing::debug!("Swarm already active, kept");
                 return Ok(id);
             }
         }
 
         let opts = SwarmInitRequest {
             listen_addr: Some("0.0.0.0:2377".to_string()),
-            // 🔴 Sans adresse annoncée explicite, Docker en choisit une — souvent la
-            // mauvaise sur une machine multi-interfaces, et les nœuds tentent alors
-            // de joindre une IP injoignable.
+            // 🔴 Without an explicit advertise address, Docker picks one - often the
+            // wrong one on a multi-interface machine, and nodes then try to reach an
+            // unreachable IP.
             advertise_addr: Some(advertise_addr.unwrap_or("127.0.0.1").to_string()),
             ..Default::default()
         };
 
         let id = self.docker.init_swarm(opts).await?;
-        tracing::info!(%id, "Swarm initialisé");
+        tracing::info!(%id, "Swarm initialised");
         Ok(id)
     }
 
     async fn enable_autolock(&self) -> Result<String> {
-        // ⚠️ `bollard` 0.19 n'expose ni `update_swarm` ni `get_swarm_unlock_key`.
-        // On passe donc par le CLI Docker pour cette opération précise — c'est la
-        // seule du crate dans ce cas, et c'est dit plutôt que masqué.
+        // ⚠️ `bollard` 0.19 exposes neither `update_swarm` nor `get_swarm_unlock_key`,
+        // so this one operation goes through the Docker CLI - the only one in the crate
+        // that does, and it is said rather than hidden.
         let out = tokio::process::Command::new("docker")
             .args(["swarm", "update", "--autolock=true"])
             .output()
@@ -457,8 +457,8 @@ impl Orchestrator for SwarmOrchestrator {
             )));
         }
 
-        // La clé n'est disponible qu'APRÈS activation : la demander avant renverrait
-        // une chaîne vide, qu'on aurait rangée au coffre en croyant l'affaire faite.
+        // The key is only available AFTER activation: asking before would return an
+        // empty string, which would be filed in the vault as if the job were done.
         let out = tokio::process::Command::new("docker")
             .args(["swarm", "unlock-key", "-q"])
             .output()
@@ -467,12 +467,10 @@ impl Orchestrator for SwarmOrchestrator {
 
         let cle = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if cle.is_empty() {
-            return Err(Error::Unexpected(
-                "Swarm n'a pas renvoyé de clé de déverrouillage".into(),
-            ));
+            return Err(Error::Unexpected("Swarm returned no unlock key".into()));
         }
 
-        tracing::info!("autolock activé");
+        tracing::info!("autolock enabled");
         Ok(cle)
     }
 
@@ -491,7 +489,7 @@ impl Orchestrator for SwarmOrchestrator {
             .join_tokens
             .ok_or_else(|| Error::Unexpected("Swarm sans jetons de rattachement".into()))?;
 
-        // L'adresse annoncée vit dans l'info système, pas dans l'inspection du Swarm.
+        // The advertise address lives in the system info, not in the Swarm inspection.
         let info = self.docker.info().await?;
         let addr = info
             .swarm
@@ -534,9 +532,9 @@ impl Orchestrator for SwarmOrchestrator {
                         .map(|a| format!("{a:?}").to_lowercase())
                         .unwrap_or_else(|| "inconnue".into()),
                     tier: spec.labels.as_ref().and_then(|l| l.get("tier").cloned()),
-                    // 🔴 Lu depuis l'étiquette, jamais deviné : Swarm ne sait pas que
-                    // deux VM partagent un fer. `None` = non déclaré, et ça doit se
-                    // VOIR plutôt que de faire supposer que le nœud est isolé.
+                    // 🔴 Read from the label, never guessed: Swarm does not know two
+                    // VMs share hardware. `None` means undeclared, and that must be
+                    // VISIBLE rather than let anyone assume the node is isolated.
                     failure_domain: spec
                         .labels
                         .as_ref()
@@ -556,7 +554,7 @@ impl Orchestrator for SwarmOrchestrator {
         let version = n
             .version
             .and_then(|v| v.index)
-            .ok_or_else(|| Error::Unexpected("nœud sans version".into()))?;
+            .ok_or_else(|| Error::Unexpected("node with no version".into()))?;
 
         let mut spec = n.spec.unwrap_or_default();
         let mut labels = spec.labels.unwrap_or_default();
@@ -568,13 +566,13 @@ impl Orchestrator for SwarmOrchestrator {
             .build();
         self.docker.update_node(node, spec, opts).await?;
 
-        tracing::info!(node, key, value, "étiquette posée");
+        tracing::info!(node, key, value, "label set");
         Ok(())
     }
 
     async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput> {
-        // Un service n'a pas de conteneur : ses tâches en ont. On cherche donc une
-        // tâche en cours et on entre dans SON conteneur.
+        // A service has no container: its tasks do. So we look for a running task and
+        // enter ITS container.
         let mut filtres = HashMap::new();
         filtres.insert("service".to_string(), vec![name.to_string()]);
         filtres.insert("desired-state".to_string(), vec!["running".to_string()]);
@@ -600,7 +598,7 @@ impl Orchestrator for SwarmOrchestrator {
             })
             .ok_or_else(|| {
                 Error::Unexpected(format!(
-                    "aucune tâche en cours pour « {name} » : impossible d'exécuter la commande"
+                    "no running task for \"{name}\": cannot run the command"
                 ))
             })?;
 
@@ -648,9 +646,9 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn create_volume(&self, name: &str) -> Result<VolumeInfo> {
-        // Un volume qui existe déjà porte des données : on ne le recrée jamais.
+        // A volume that already exists holds data: it is never recreated.
         if let Ok(v) = self.inspect_volume(name).await {
-            tracing::debug!(name, "volume déjà présent, conservé");
+            tracing::debug!(name, "volume already present, kept");
             return Ok(VolumeInfo { existed: true, ..v });
         }
 
@@ -664,7 +662,7 @@ impl Orchestrator for SwarmOrchestrator {
         };
 
         let v = self.docker.create_volume(opts).await?;
-        tracing::info!(name, mountpoint = %v.mountpoint, "volume créé");
+        tracing::info!(name, mountpoint = %v.mountpoint, "volume created");
         Ok(VolumeInfo {
             name: v.name,
             mountpoint: v.mountpoint,
@@ -729,17 +727,17 @@ impl Orchestrator for SwarmOrchestrator {
     async fn logs(&self, service: &str, lignes: u32) -> Result<Vec<LigneLog>> {
         use futures::StreamExt as _;
 
-        // 🔴 Borné. Un service bavard laissé sans limite remplirait la mémoire du
-        // controller — et c'est le controller qui tomberait, pas le service qu'on
-        // cherchait à diagnostiquer.
+        // 🔴 Bounded. A chatty service left unbounded would fill the controller's
+        // memory - and the controller is what would fall over, not the service being
+        // diagnosed.
         const PLAFOND: u32 = 2_000;
         let n = lignes.clamp(1, PLAFOND);
 
         let opts = bollard::query_parameters::LogsOptionsBuilder::default()
             .stdout(true)
             .stderr(true)
-            // Sans horodatage, une ligne de journal ne se corrèle à rien : le seul
-            // usage réel des logs est de les rapprocher d'un événement daté.
+            // Without a timestamp a log line correlates with nothing: the only real
+            // use of logs is lining them up against a dated event.
             .timestamps(true)
             .tail(&n.to_string())
             .build();
@@ -755,14 +753,14 @@ impl Orchestrator for SwarmOrchestrator {
                 | LogOutput::Console { message }
                 | LogOutput::StdIn { message } => (false, message),
             };
-            // ⚠️ `from_utf8_lossy` : un journal applicatif contient parfois des octets
-            // qui ne sont pas de l'UTF-8 (couleurs ANSI tronquées, binaire). Échouer
-            // priverait de TOUT le journal à cause d'une seule ligne.
+            // ⚠️ `from_utf8_lossy`: an application log sometimes contains bytes that
+            // are not UTF-8 (truncated ANSI colours, binary). Failing would withhold
+            // the WHOLE log because of one line.
             let texte = String::from_utf8_lossy(brut);
             let texte = texte.trim_end_matches(['\n', '\r']);
 
-            // Docker préfixe chaque ligne de son horodatage RFC 3339 quand
-            // `timestamps` est actif.
+            // Docker prefixes each line with its RFC 3339 timestamp when `timestamps`
+            // is on.
             let (at, ligne) = match texte.split_once(' ') {
                 Some((h, reste)) => (horodatage_unix(h), reste.to_string()),
                 None => (None, texte.to_string()),
@@ -781,7 +779,7 @@ impl Orchestrator for SwarmOrchestrator {
         while tokio::time::Instant::now() < deadline {
             last = self.status(name).await?;
 
-            // Inutile d'attendre la fin d'un timeout si Swarm a déjà annulé.
+            // No point waiting out a timeout when Swarm has already rolled back.
             if last.update_state.is_some_and(|s| s.is_failure()) {
                 break;
             }
@@ -806,10 +804,10 @@ mod tests {
 
     #[test]
     fn docker_timestamps_are_read_or_refused_never_guessed() {
-        // 🔴 Un horodatage à moitié lu placerait une ligne de journal en 1970, et on
-        // chercherait un problème d'horloge sur le nœud.
+        // 🔴 A half-read timestamp would put a log line in 1970, and you would go
+        // looking for a clock problem on the node.
         assert_eq!(horodatage_unix("1970-01-01T00:00:00Z"), Some(0));
-        // Valeurs de référence, calculées indépendamment (pas déduites du code testé).
+        // Reference values, computed independently (not derived from the code tested).
         assert_eq!(
             horodatage_unix("2026-08-18T10:16:04.123456789Z"),
             Some(1_787_048_164)
@@ -817,8 +815,8 @@ mod tests {
         // Sans fraction ni « Z » : Docker varie selon les versions.
         assert_eq!(horodatage_unix("2026-08-18T10:16:04"), Some(1_787_048_164));
 
-        // Une année bissextile séculaire : 2000 est bissextile, 1900 ne l'est pas.
-        // La division naïve par 4 se trompe ici.
+        // A century leap year: 2000 is a leap year, 1900 is not. A naive division by
+        // 4 gets this wrong.
         assert_eq!(horodatage_unix("2000-03-01T00:00:00Z"), Some(951_868_800));
 
         for mauvais in [
@@ -834,7 +832,7 @@ mod tests {
 
     #[test]
     fn a_timestamp_round_trips_against_a_known_pair() {
-        // Un contrôle croisé : 86 400 s après l'époque, c'est le 2 janvier 1970.
+        // A cross-check: 86,400 s after the epoch is 2 January 1970.
         assert_eq!(horodatage_unix("1970-01-02T00:00:00Z"), Some(86_400));
         // Et un an plus tard, 1971 : 365 jours (1970 n'est pas bissextile).
         assert_eq!(horodatage_unix("1971-01-01T00:00:00Z"), Some(31_536_000));
