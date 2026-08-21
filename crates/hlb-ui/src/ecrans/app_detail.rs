@@ -165,7 +165,7 @@ fn actions_app(ui: &mut egui::Ui, nom: &str, d: &AppDetail, etroit: bool) -> Opt
             if ui
                 .button(format!(
                     "Passer à {}",
-                    hlb_api::pluriel(cible, "réplica", "réplicas")
+                    hlb_api::plural(cible, "réplica", "réplicas")
                 ))
                 .clicked()
             {

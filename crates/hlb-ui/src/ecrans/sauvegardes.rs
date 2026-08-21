@@ -57,7 +57,7 @@ pub fn afficher(
             p.critique,
             format!(
                 "{} n'{} AUCUNE copie à jour.",
-                hlb_api::pluriel(sans as u64, "application", "applications"),
+                hlb_api::plural(sans as u64, "application", "applications"),
                 if sans > 1 { "ont" } else { "a" }
             ),
         )
@@ -66,7 +66,7 @@ pub fn afficher(
             p.attention,
             format!(
                 "{} n'{} plus qu'une seule copie.",
-                hlb_api::pluriel(une as u64, "application", "applications"),
+                hlb_api::plural(une as u64, "application", "applications"),
                 if une > 1 { "ont" } else { "a" }
             ),
         )

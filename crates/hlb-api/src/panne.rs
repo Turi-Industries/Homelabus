@@ -139,7 +139,7 @@ impl Simulation {
         } else {
             format!(
                 "Si {quoi} tombait, {} s'arrêterai{} : {}",
-                crate::pluriel(self.services_perdus.len() as u64, "service", "services"),
+                crate::plural(self.services_perdus.len() as u64, "service", "services"),
                 accord(self.services_perdus.len()),
                 self.services_perdus.join(", ")
             )
@@ -148,7 +148,7 @@ impl Simulation {
         if !self.services_diminues.is_empty() {
             phrase.push_str(&format!(
                 ", et {} continuerai{} avec moins de réplicas",
-                crate::pluriel(self.services_diminues.len() as u64, "service", "services"),
+                crate::plural(self.services_diminues.len() as u64, "service", "services"),
                 accord(self.services_diminues.len())
             ));
         }

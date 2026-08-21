@@ -1,53 +1,53 @@
-//! Le plan d'exécution : ce que Homelabus **va** faire, avant de le faire.
+//! The execution plan: what Homelabus **will** do, before it does it.
 //!
-//! C'est la sortie de `--dry-run`, et le principe directeur du §2ter.4 : *tu valides un
-//! plan, tu ne subis pas un script*. Rien ne doit être modifié sans être annoncé.
+//! This is what `--dry-run` prints, and the guiding principle behind it: *you approve
+//! a plan, you do not endure a script*. Nothing may be modified without being
+//! announced first.
 //!
-//! Le plan est aussi un objet de test : en CI, on vérifie qu'il ne change pas de façon
-//! inattendue entre deux versions (§12bis).
+//! The plan is also a test object: CI checks it does not change unexpectedly between
+//! versions.
 
 use std::fmt;
 
 use hlb_types::{DbEngine, StorageTier};
 
-/// Une action atomique. Volontairement descriptive : l'exécution est ailleurs.
+/// An atomic action. Deliberately descriptive: execution lives elsewhere.
 ///
-/// `DeployService` est nettement plus gros que les autres variantes. On l'assume :
-/// un plan compte quelques dizaines d'actions, jamais des millions, et mettre la
-/// variante en boîte rendrait tous les motifs de correspondance plus lourds à lire
-/// pour un gain mémoire sans objet ici.
+/// `DeployService` is markedly larger than the other variants, and that is accepted: a
+/// plan holds a few dozen actions, never millions, and boxing the variant would make
+/// every match pattern heavier to read for a memory saving with no purpose here.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// §3.1 — une base + un rôle par app, jamais de superuser partagé.
+    /// One database and one role per app, never a shared superuser.
     ProvisionDatabase {
         engine: DbEngine,
         database: String,
         role: String,
-        /// Le secret qui porte le mot de passe. Il doit être généré AVANT.
+        /// The secret carrying the password. It must be generated BEFORE.
         password_secret: String,
-        /// Extensions à activer. ⚠️ Elles doivent être présentes dans l'IMAGE.
+        /// Extensions to enable. ⚠️ They must be present in the IMAGE.
         #[allow(clippy::struct_field_names)]
         extensions: Vec<String>,
     },
 
-    /// Un compartiment S3 avec sa clé d'accès isolée (§3.5).
+    /// An S3 bucket with its own isolated access key.
     ///
-    /// 🔴 Une clé PAR APP, jamais une clé d'administration partagée — même raison
-    /// qu'un rôle PostgreSQL par app (§3.1) : une clé unique donnerait à chaque app la
-    /// lecture des compartiments de toutes les autres.
+    /// 🔴 One key PER APP, never a shared admin key - same reason as one PostgreSQL
+    /// role per app: a single key would give every app read access to every other's
+    /// buckets.
     ProvisionBucket {
         bucket: String,
-        /// Nom de la clé d'accès, qui porte le nom de l'app.
+        /// The access key's name, which carries the app's name.
         key_name: String,
-        /// Le secret qui portera la clé secrète. Généré AVANT.
+        /// The secret that will carry the secret key. Generated BEFORE.
         secret_name: String,
     },
 
-    /// Mot de passe généré aléatoirement, jamais saisi, jamais dans le Git.
+    /// A randomly generated password, never typed, never in Git.
     GenerateSecret { name: String, purpose: String },
 
-    /// §5.2 — le client OIDC est créé dans PocketID, pas à la main.
+    /// The OIDC client is created in PocketID, not by hand.
     CreateOidcClient {
         app: String,
         redirect_uris: Vec<String>,
@@ -58,23 +58,22 @@ pub enum Action {
         path: String,
         tier: StorageTier,
         backup: bool,
-        /// 🔴 Le volume contient une base SQLite (§3.4). Elle ne doit JAMAIS être
-        /// copiée à chaud : le fichier principal et son WAL sont capturés à des
-        /// instants différents, et la base restaurée est corrompue — sans que rien
-        /// ne le signale au moment de la sauvegarde.
+        /// 🔴 The volume holds a SQLite database. It must NEVER be copied hot: the
+        /// main file and its WAL are captured at different instants, and the restored
+        /// database is corrupt - with nothing signalling it at backup time.
         sqlite: bool,
     },
 
     ProvisionMailAccount {
         address: String,
         aliases: bool,
-        /// 🔴 Déclaré au manifest, **non appliqué** : `hlb-mail` n'a aucune opération
-        /// de quota, Stalwart ne l'exposant pas en JMAP à ce jour.
+        /// 🔴 Declared in the manifest, **not enforced**: `hlb-mail` has no quota
+        /// operation, Stalwart not exposing one over JMAP to date.
         ///
-        /// Il est porté jusqu'ici quand même, plutôt qu'ignoré par un `..` dans le
-        /// motif du résolveur — c'est exactement ce qui s'était produit et qui rendait
-        /// un quota déclaré silencieusement décoratif. L'exécuteur refuse l'action au
-        /// lieu de créer la boîte sans son quota.
+        /// It is carried this far anyway rather than ignored by a `..` in the
+        /// resolver's pattern - which is exactly what used to happen, making a declared
+        /// quota silently decorative. The executor refuses the action instead of
+        /// creating the mailbox without its quota.
         quota_bytes: Option<u64>,
     },
 
@@ -86,16 +85,16 @@ pub enum Action {
         /// Variables d'environnement, y compris celles issues des automatisations
         /// `method: env` des guides (§4.6bis).
         env: Vec<(String, String)>,
-        /// Volumes à monter : `(nom, chemin)`. Déduits des capacités `storage`.
+        /// Volumes to mount: `(name, path)`. Derived from the `storage` capabilities.
         mounts: Vec<(String, String)>,
-        /// §9 — durcissement, transporté depuis le manifest jusqu'à Swarm.
+        /// Hardening, carried from the manifest through to Swarm.
         hardening: hlb_types::SecuritySpec,
-        /// Sans sonde, `wait_healthy` ne sait que compter des tâches en cours.
+        /// Without a probe, `wait_healthy` can only count running tasks.
         healthcheck: Option<hlb_types::Healthcheck>,
     },
 
-    /// §7 — le catalogue déclare un tag ; le digest est résolu contre le registre
-    /// puis figé. Un tag est mutable, un digest ne l'est pas.
+    /// The catalog declares a tag; the digest is resolved against the registry and
+    /// then frozen. A tag is mutable, a digest is not.
     ResolveDigest { repo: String, tag: String },
 
     /// Attente explicite : Swarm n'a pas de `depends_on` (§4.7).
@@ -110,21 +109,21 @@ pub enum Action {
         public: bool,
     },
 
-    /// §4.6 — une action à faire, éventuellement automatisable (§4.6bis).
+    /// An action to carry out, possibly automatable.
     PendingGuideStep {
         id: String,
         title: String,
         blocking: bool,
         /// Le service dans lequel tenter l'automatisation.
         service: String,
-        /// L'étape déclarée, pour que l'exécuteur sache quoi tenter.
+        /// The declared step, so the executor knows what to attempt.
         step: Box<hlb_types::GuideStep>,
     },
 }
 
 impl Action {
-    /// Une action qui modifie quelque chose hors du cluster, ou qui est coûteuse à
-    /// annuler. Sert à colorer le plan et à décider ce qui demande confirmation.
+    /// An action that changes something outside the cluster, or that is expensive to
+    /// undo. Used to colour the plan and decide what needs confirmation.
     pub fn is_mutating(&self) -> bool {
         !matches!(
             self,
@@ -145,8 +144,8 @@ impl fmt::Display for Action {
             } => {
                 write!(
                     f,
-                    "créer la base {database} sur {} avec le rôle {role} \
-                     (isolé, mot de passe {password_secret})",
+                    "create database {database} on {} with role {role} \
+                     (isolated, password {password_secret})",
                     engine.service_name()
                 )?;
                 if !extensions.is_empty() {
@@ -160,15 +159,15 @@ impl fmt::Display for Action {
                 secret_name,
             } => write!(
                 f,
-                "créer le compartiment {bucket} avec la clé isolée {key_name} \
+                "create bucket {bucket} with isolated key {key_name} \
                  (secret {secret_name})"
             ),
             Self::GenerateSecret { name, purpose } => {
-                write!(f, "générer le secret {name} ({purpose})")
+                write!(f, "generate secret {name} ({purpose})")
             }
             Self::CreateOidcClient { app, redirect_uris } => write!(
                 f,
-                "créer le client OIDC « {app} » dans PocketID → {}",
+                "create OIDC client \"{app}\" in PocketID → {}",
                 redirect_uris.join(", ")
             ),
             Self::CreateVolume {
@@ -179,9 +178,9 @@ impl fmt::Display for Action {
                 sqlite,
             } => write!(
                 f,
-                "créer le volume {name} sur {path} (tier {tier:?}, sauvegarde {}{})",
-                if *backup { "activée" } else { "désactivée" },
-                if *sqlite { ", instantané SQLite" } else { "" }
+                "create volume {name} at {path} (tier {tier:?}, backup {}{})",
+                if *backup { "on" } else { "off" },
+                if *sqlite { ", SQLite snapshot" } else { "" }
             ),
             Self::ProvisionMailAccount {
                 address,
@@ -190,13 +189,13 @@ impl fmt::Display for Action {
             } => {
                 write!(
                     f,
-                    "créer la boîte {address}{}",
-                    if *aliases { " avec aliases" } else { "" }
+                    "create mailbox {address}{}",
+                    if *aliases { " with aliases" } else { "" }
                 )?;
                 if let Some(q) = quota_bytes {
-                    // Affiché dans l'aperçu : un quota qu'on ne sait pas poser doit se
-                    // voir AVANT l'installation, pas se découvrir à l'usage.
-                    write!(f, " [quota {q} o — NON APPLIQUÉ, cf. §5bis]")?;
+                    // Shown in the preview: a quota we cannot set must be visible
+                    // BEFORE installation, not discovered in use.
+                    write!(f, " [quota {q} B - NOT ENFORCED]")?;
                 }
                 Ok(())
             }
@@ -210,12 +209,12 @@ impl fmt::Display for Action {
                 hardening,
                 healthcheck,
             } => {
-                write!(f, "déployer {name} ×{replicas} depuis {image}")?;
+                write!(f, "deploy {name} ×{replicas} from {image}")?;
                 if !constraints.is_empty() {
                     write!(f, " [{}]", constraints.join(", "))?;
                 }
-                // Le durcissement figure dans le plan : il doit être visible avant
-                // application, pas découvert après coup.
+                // Hardening appears in the plan: it must be visible before it is
+                // applied, not discovered afterwards.
                 let mut d = Vec::new();
                 if hardening.read_only_rootfs {
                     d.push("rootfs ro".to_string());
@@ -227,7 +226,7 @@ impl fmt::Display for Action {
                     d.push(format!("cap_drop {}", hardening.cap_drop.join("+")));
                 }
                 if healthcheck.is_some() {
-                    d.push("sonde".to_string());
+                    d.push("probe".to_string());
                 }
                 if !env.is_empty() {
                     d.push(format!("{} variables", env.len()));
@@ -241,10 +240,13 @@ impl fmt::Display for Action {
                 Ok(())
             }
             Self::ResolveDigest { repo, tag } => {
-                write!(f, "résoudre le digest de {repo}:{tag} contre le registre")
+                write!(f, "resolve the digest of {repo}:{tag} against the registry")
             }
             Self::WaitHealthy { name, timeout_secs } => {
-                write!(f, "attendre que {name} soit sain (max {timeout_secs} s)")
+                write!(
+                    f,
+                    "wait for {name} to become healthy (max {timeout_secs} s)"
+                )
             }
             Self::ConfigureIngress {
                 host,
@@ -254,13 +256,13 @@ impl fmt::Display for Action {
                 public,
             } => write!(
                 f,
-                "router {host} → {service}:{port} via {} ({})",
+                "route {host} → {service}:{port} through {} ({})",
                 if chain.is_empty() {
                     "direct".to_string()
                 } else {
                     chain.join(" → ")
                 },
-                if *public { "public" } else { "VPN uniquement" }
+                if *public { "public" } else { "VPN only" }
             ),
             Self::PendingGuideStep {
                 id,
@@ -270,19 +272,19 @@ impl fmt::Display for Action {
                 ..
             } => write!(
                 f,
-                "{} {} « {title} » [{id}]",
+                "{} {} \"{title}\" [{id}]",
                 if *blocking { "🔴" } else { "🟠" },
                 if step.is_automatable() {
                     "action"
                 } else {
-                    "action manuelle"
+                    "manual action"
                 }
             ),
         }
     }
 }
 
-/// La liste ordonnée des actions, telle qu'elle sera exécutée.
+/// The ordered list of actions, exactly as it will be executed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
     pub actions: Vec<Action>,
@@ -301,8 +303,8 @@ impl Plan {
         self.actions.len()
     }
 
-    /// Les actions manuelles bloquantes. Si cette liste n'est pas vide, l'installation
-    /// ne doit pas démarrer (§4.6).
+    /// The blocking manual actions. If this list is not empty, the installation must
+    /// not start.
     pub fn blocking_steps(&self) -> Vec<&Action> {
         self.actions
             .iter()
@@ -318,12 +320,13 @@ impl Plan {
 impl fmt::Display for Plan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_empty() {
-            return writeln!(f, "Aucune action : l'état désiré est déjà atteint.");
+            return writeln!(f, "No action: the desired state is already reached.");
         }
         writeln!(
             f,
-            "{} action(s), dont {} modifiante(s) :\n",
+            "{} {}, {} of them mutating:\n",
             self.len(),
+            if self.len() == 1 { "action" } else { "actions" },
             self.mutating_count()
         )?;
         for (i, a) in self.actions.iter().enumerate() {
@@ -333,8 +336,13 @@ impl fmt::Display for Plan {
         if !blocking.is_empty() {
             writeln!(
                 f,
-                "\n🔴 {} action(s) manuelle(s) bloquante(s) : l'installation ne démarrera pas avant.",
-                blocking.len()
+                "\n🔴 {} blocking manual {}: the installation will not start first.",
+                blocking.len(),
+                if blocking.len() == 1 {
+                    "action"
+                } else {
+                    "actions"
+                }
             )?;
         }
         Ok(())

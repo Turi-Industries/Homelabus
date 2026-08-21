@@ -70,7 +70,7 @@ pub fn afficher(
             c::palette(ui).critique,
             &format!(
                 "{} entre ce qui est déclaré et ce qui répond.",
-                hlb_api::pluriel(divergentes as u64, "divergence", "divergences")
+                hlb_api::plural(divergentes as u64, "divergence", "divergences")
             ),
             Some(
                 "Une app publiée par erreur ne se voit nulle part ailleurs : ni dans \

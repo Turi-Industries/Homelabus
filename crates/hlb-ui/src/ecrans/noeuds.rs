@@ -42,10 +42,10 @@ pub fn afficher(
                 c::legende(
                     ui,
                     &match muets {
-                        0 => hlb_api::pluriel(n.len() as u64, "nœud", "nœuds"),
+                        0 => hlb_api::plural(n.len() as u64, "nœud", "nœuds"),
                         m => format!(
                             "{}, dont {} injoignable{}",
-                            hlb_api::pluriel(n.len() as u64, "nœud", "nœuds"),
+                            hlb_api::plural(n.len() as u64, "nœud", "nœuds"),
                             m,
                             if m > 1 { "s" } else { "" }
                         ),

@@ -672,21 +672,18 @@ impl PageStatut {
             .count();
 
         if hs > 0 {
-            return format!(
-                "{} hors service.",
-                pluriel(hs as u64, "service", "services")
-            );
+            return format!("{} hors service.", plural(hs as u64, "service", "services"));
         }
         if !self.incidents.is_empty() {
             return format!(
                 "{} en cours.",
-                pluriel(self.incidents.len() as u64, "incident", "incidents")
+                plural(self.incidents.len() as u64, "incident", "incidents")
             );
         }
         if degrades > 0 {
             return format!(
                 "{} en mode dégradé.",
-                pluriel(degrades as u64, "service", "services")
+                plural(degrades as u64, "service", "services")
             );
         }
         "Tous les services sont opérationnels.".to_string()
@@ -1067,7 +1064,7 @@ impl ResultatAction {
         if echecs > 0 {
             return format!(
                 "{} en échec — l'action s'est arrêtée là.",
-                pluriel(echecs as u64, "étape", "étapes")
+                plural(echecs as u64, "étape", "étapes")
             );
         }
         if manquantes > 0 {
@@ -1079,7 +1076,7 @@ impl ResultatAction {
             return format!(
                 "{} {} pas encore implémentée{} — l'action est INCOMPLÈTE, malgré \
                  l'absence d'erreur.",
-                pluriel(manquantes as u64, "étape", "étapes"),
+                plural(manquantes as u64, "étape", "étapes"),
                 if manquantes > 1 { "ne sont" } else { "n'est" },
                 if manquantes > 1 { "s" } else { "" }
             );
@@ -1168,7 +1165,7 @@ impl Topologie {
             return format!(
                 "{} dont TOUS les réplicas partagent un même fer — leur redondance est \
                  une illusion.",
-                pluriel(totales as u64, "service", "services")
+                plural(totales as u64, "service", "services")
             );
         }
         if let Some(d) = self.domaines.iter().find(|d| d.concentre) {
@@ -1271,7 +1268,7 @@ impl CouvertureSummary {
             0 if self.jamais_sauvegardee() => "JAMAIS sauvegardée".to_string(),
             0 => format!(
                 "aucune copie À JOUR — {} trop {}",
-                pluriel(
+                plural(
                     self.par_destination.len() as u64,
                     "destination",
                     "destinations"
@@ -1284,7 +1281,7 @@ impl CouvertureSummary {
             ),
             1 => format!(
                 "1 seule copie à jour sur {} — le 3-2-1 n'est pas tenu",
-                pluriel(
+                plural(
                     self.par_destination.len() as u64,
                     "destination",
                     "destinations"
@@ -1714,18 +1711,21 @@ pub fn octets(v: f64) -> String {
     format!("{v:.1} Pio")
 }
 
-/// Accorde un mot au singulier ou au pluriel.
+/// Agrees a word with a count.
 ///
-/// ⚠️ Le projet est en français et se lit : « 1 réplicas » saute aux yeux et donne
-/// l'impression d'un texte fabriqué par accident. Écrire « réplica(s) » partout serait
-/// le contraire du soin qu'on met au reste.
-pub fn pluriel(n: u64, singulier: &str, pluriel: &str) -> String {
-    // 🔴 Zéro prend le SINGULIER en français — « 0 réplica », pas « 0 réplicas ».
-    // C'est la règle qui surprend, et celle qu'un `if n > 1` naïf rate.
-    if n <= 1 {
-        format!("{n} {singulier}")
+/// ⚠️ Text gets read: "1 replicas" jumps out and makes a page look accidentally
+/// generated. Writing "replica(s)" everywhere would be the opposite of the care put
+/// into the rest.
+///
+/// 🔴 This function was written for French, where **zero takes the singular** ("0
+/// réplica"). English inverts that rule: only one is singular. The translation was
+/// therefore a rewrite, not a rename - a mechanical port would have produced
+/// "0 replica" everywhere.
+pub fn plural(n: u64, singular: &str, plural: &str) -> String {
+    if n == 1 {
+        format!("{n} {singular}")
     } else {
-        format!("{n} {pluriel}")
+        format!("{n} {plural}")
     }
 }
 
@@ -1915,13 +1915,13 @@ mod tests {
     }
 
     #[test]
-    fn french_agreement_treats_zero_as_singular() {
-        // 🔴 « 0 réplica » en français, pas « 0 réplicas ». C'est la règle qui
-        // surprend, et celle qu'un `if n > 1` naïf rate.
-        assert_eq!(pluriel(0, "réplica", "réplicas"), "0 réplica");
-        assert_eq!(pluriel(1, "réplica", "réplicas"), "1 réplica");
-        assert_eq!(pluriel(2, "réplica", "réplicas"), "2 réplicas");
-        assert_eq!(pluriel(12, "copie", "copies"), "12 copies");
+    fn only_one_is_singular() {
+        // 🔴 This inverts the French rule the function was first written for, where
+        // zero takes the singular. In English "0 replica" reads as a bug.
+        assert_eq!(plural(0, "replica", "replicas"), "0 replicas");
+        assert_eq!(plural(1, "replica", "replicas"), "1 replica");
+        assert_eq!(plural(2, "replica", "replicas"), "2 replicas");
+        assert_eq!(plural(12, "copy", "copies"), "12 copies");
     }
 
     #[test]

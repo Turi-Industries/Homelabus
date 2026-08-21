@@ -53,7 +53,7 @@ pub fn afficher(
             p.attention,
             &format!(
                 "{} bloque{} un déploiement.",
-                hlb_api::pluriel(bloquants as u64, "action", "actions"),
+                hlb_api::plural(bloquants as u64, "action", "actions"),
                 if bloquants > 1 { "nt" } else { "" }
             ),
             Some(ACK_EST_UNE_ATTESTATION),

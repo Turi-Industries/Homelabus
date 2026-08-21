@@ -1,103 +1,102 @@
-//! Jetons d'accès à l'API (§9ter).
+//! API access tokens.
 //!
-//! ## Ce que ceci est, et ce que ce n'est pas
+//! ## What this is, and what it is not
 //!
-//! Le §9ter prévoit que les rôles viennent des **groupes PocketID** : une seule source
-//! de vérité pour les identités. C'est la bonne cible, et ce module ne la remplace
-//! pas — il fournit la couche en dessous.
+//! Roles can come from **PocketID groups** - a single source of truth for identities.
+//! This module does not replace that; it provides the layer underneath.
 //!
-//! Un jeton porteur reste nécessaire même avec OIDC : c'est ce qu'un flux OIDC finit
-//! par délivrer, et c'est ce dont un script ou un collecteur de métriques a besoin,
-//! puisqu'ils ne peuvent pas ouvrir un navigateur pour se connecter.
+//! A bearer token stays necessary even with OIDC: it is what an OIDC flow ultimately
+//! hands out, and it is what a script or a metrics collector needs, since neither can
+//! open a browser to sign in.
 //!
-//! ## 🔴 Le jeton n'est jamais stocké en clair
+//! ## 🔴 The token is never stored in clear
 //!
-//! Le coffre `age` chiffre déjà ce qu'il contient, donc stocker le jeton tel quel
-//! « marcherait ». Mais alors, quiconque obtient la clé maîtresse **et** la base
-//! obtient des jetons **utilisables immédiatement**.
+//! The `age` vault already encrypts what it holds, so storing the token as-is would
+//! "work". But then anyone obtaining the master key **and** the database obtains
+//! tokens that are **immediately usable**.
 //!
-//! On stocke donc une **empreinte**. Une fuite du coffre révèle qu'un jeton existe,
-//! pas sa valeur : il faut le régénérer, pas s'en inquiéter. C'est exactement le
-//! raisonnement d'un fichier de mots de passe, et il vaut ici pour la même raison.
+//! So a **fingerprint** is stored instead. A vault leak reveals that a token exists,
+//! not its value: it has to be regenerated, not panicked over. This is exactly the
+//! reasoning behind a password file, and it holds here for the same reason.
 //!
-//! ⚠️ Conséquence assumée : **un jeton perdu ne se retrouve pas**, il se remplace.
+//! ⚠️ An accepted consequence: **a lost token is not recovered**, it is replaced.
 
 use serde::{Deserialize, Serialize};
 
 use crate::rbac::Role;
 
-/// Longueur du jeton engendré, en octets d'entropie.
+/// Length of the generated token, in bytes of entropy.
 ///
-/// 32 octets = 256 bits. Bien au-delà de ce qui se force par recherche exhaustive,
-/// et le coût d'un jeton plus long est nul.
+/// 32 bytes is 256 bits. Far beyond what brute force reaches, and a longer token costs
+/// nothing.
 pub const TOKEN_BYTES: usize = 32;
 
-/// Un jeton, tel qu'il est conservé.
+/// A token, as it is stored.
 ///
-/// 🔴 Il n'y a **pas de champ pour la valeur**. Comme pour [`crate::rbac::Role`], la
-/// garantie est structurelle : on ne peut pas fuiter ce qu'on ne peut pas représenter.
+/// 🔴 There is **no field for the value**. As with [`crate::rbac::Role`], the guarantee
+/// is structural: you cannot leak what you cannot represent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredToken {
-    /// Nom lisible, pour savoir lequel révoquer.
+    /// A readable name, so you know which one to revoke.
     pub name: String,
     pub role: Role,
-    /// Empreinte hexadécimale de la valeur.
+    /// Hexadecimal fingerprint of the value.
     pub fingerprint: String,
 }
 
 impl StoredToken {
-    /// Le jeton fourni correspond-il ?
+    /// Does the supplied token match?
     ///
-    /// 🔴 Comparaison à **temps constant**. Un `==` sur des chaînes s'arrête au
-    /// premier octet différent : le temps de réponse révèle combien de caractères
-    /// sont corrects, et le jeton se devine octet par octet. Le surcoût ici est nul,
-    /// l'absence de protection ne l'est pas.
+    /// 🔴 **Constant-time** comparison. A `==` on strings stops at the first differing
+    /// byte: the response time reveals how many characters are correct, and the token
+    /// can be guessed byte by byte. The cost here is nil; the cost of not protecting
+    /// against it is not.
     pub fn matches(&self, presented: &str) -> bool {
         constant_eq(&fingerprint(presented), &self.fingerprint)
     }
 }
 
-/// L'empreinte d'un jeton.
+/// A token's fingerprint.
 ///
-/// ## Pourquoi SHA-256 et pas un hachage de mot de passe
+/// ## Why SHA-256 and not a password hash
 ///
-/// Un `bcrypt`/`argon2` sert à ralentir la recherche exhaustive **d'un secret que
-/// l'humain a choisi**, donc à faible entropie. Ici le jeton fait 256 bits engendrés
-/// aléatoirement : il n'y a rien à ralentir, l'espace est déjà hors de portée.
+/// A `bcrypt`/`argon2` exists to slow down brute force **against a secret a human
+/// chose**, and therefore of low entropy. Here the token is 256 randomly generated
+/// bits: there is nothing to slow down, the space is already out of reach.
 ///
-/// Et un hachage lent serait un défaut : il s'exécute à **chaque requête** de l'API,
-/// y compris celles du collecteur de métriques qui passe toutes les quinze secondes.
+/// And a slow hash would be a defect: it runs on **every API request**, including
+/// those of the metrics collector that comes round every fifteen seconds.
 pub fn fingerprint_of(token: &str) -> String {
     fingerprint(token)
 }
 
-/// L'empreinte SHA-256 d'un binaire ou d'un fichier, en hexadécimal.
+/// The SHA-256 fingerprint of a binary or a file, in hexadecimal.
 ///
-/// Même implémentation que pour les jetons, vérifiée contre les vecteurs du NIST :
-/// un second SHA-256 dans le projet serait un second endroit où se tromper.
+/// Same implementation as for tokens, checked against the NIST vectors: a second
+/// SHA-256 in the project would be a second place to get it wrong.
 pub fn sha256_hex(data: &[u8]) -> String {
     sha256(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// L'empreinte SHA-256 brute.
+/// The raw SHA-256 fingerprint.
 ///
-/// Exposée pour PKCE (§ le défi `S256` d'OAuth 2.1 se calcule en base64url sur les
-/// octets, pas sur leur représentation hexadécimale — hacher le texte hexadécimal
-/// donnerait un défi que le serveur d'autorisation rejetterait).
+/// Exposed for PKCE: OAuth 2.1's `S256` challenge is computed as base64url over the
+/// bytes, not over their hexadecimal representation - hashing the hex text would
+/// produce a challenge the authorisation server rejects.
 pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     sha256(data)
 }
 
-/// Encodage base64url **sans remplissage** (RFC 4648 §5).
+/// base64url encoding **without padding** (RFC 4648 §5).
 ///
-/// Écrit à la main plutôt qu'ajouté en dépendance, comme le base32 des jetons : c'est
-/// vingt lignes, et une dépendance de moins dans la chaîne d'approvisionnement d'un
-/// crate qui manipule des secrets.
+/// Written by hand rather than pulled in as a dependency, like the token base32: it is
+/// twenty lines, and one fewer dependency in the supply chain of a crate that handles
+/// secrets.
 ///
-/// ⚠️ L'alphabet **URL** (`-` et `_`), pas le standard : `+` et `/` seraient réencodés
-/// par le navigateur dans un paramètre de requête, et le défi PKCE ne correspondrait
-/// plus au vérificateur — avec une erreur qui parle de code invalide et n'oriente vers
-/// rien.
+/// ⚠️ The **URL** alphabet (`-` and `_`), not the standard one: `+` and `/` would be
+/// re-encoded by the browser inside a query parameter, and the PKCE challenge would no
+/// longer match the verifier - with an error about an invalid code that points at
+/// nothing.
 pub fn base64url(data: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -108,7 +107,7 @@ pub fn base64url(data: &[u8]) -> String {
             *bloc.get(2).unwrap_or(&0),
         ];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        // 4 caractères pour 3 octets, moins ceux que le dernier bloc incomplet n'a pas.
+        // 4 characters per 3 bytes, minus those the last incomplete block lacks.
         let utiles = bloc.len() + 1;
         for i in 0..utiles {
             let idx = ((n >> (18 - 6 * i)) & 0x3F) as usize;
@@ -118,10 +117,11 @@ pub fn base64url(data: &[u8]) -> String {
     out
 }
 
-/// Décodage base64url sans remplissage, tolérant au remplissage `=`.
+/// base64url decoding without padding, tolerant of `=` padding.
 ///
-/// Sert à lire la charge utile d'un `id_token` — voir la note de sécurité de
-/// `hlb_identity::oidc`, qui explique pourquoi on la lit sans vérifier sa signature.
+/// Used to read an `id_token` payload - see the security note in
+/// `hlb_identity::oidc`, which explains why it is read without verifying its
+/// signature.
 pub fn base64url_decode(s: &str) -> Option<Vec<u8>> {
     let mut acc: u32 = 0;
     let mut bits = 0u32;
@@ -149,17 +149,17 @@ pub fn base64url_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 fn fingerprint(token: &str) -> String {
-    // SHA-256 en implémentation directe : pas de dépendance nouvelle pour trente
-    // lignes, et l'algorithme est figé depuis vingt ans.
+    // SHA-256 implemented directly: no new dependency for thirty lines, and the
+    // algorithm has been frozen for twenty years.
     let d = sha256(token.as_bytes());
     d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Un jeton neuf : la valeur (à donner UNE fois) et sa forme stockée.
+/// A fresh token: the value (handed out ONCE) and its stored form.
 pub fn generate(name: &str, role: Role, random: [u8; TOKEN_BYTES]) -> (String, StoredToken) {
-    // Base32 sans padding : lisible, sélectionnable d'un double-clic, et sans
-    // caractère que le shell interprète — contrairement au base64, dont le « / »
-    // et le « + » cassent les copier-coller dans une URL ou un fichier d'unité.
+    // Base32 without padding: readable, selectable with a double-click, and free of
+    // characters the shell interprets - unlike base64, whose "/" and "+" break
+    // copy-paste into a URL or a unit file.
     let valeur = base32(&random);
     let stored = StoredToken {
         name: name.to_string(),
@@ -169,7 +169,7 @@ pub fn generate(name: &str, role: Role, random: [u8; TOKEN_BYTES]) -> (String, S
     (valeur, stored)
 }
 
-/// Comparaison à temps constant.
+/// Constant-time comparison.
 pub fn constant_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn base64url_matches_the_reference_vectors() {
-        // RFC 4648 §10, transposé à l'alphabet URL et sans remplissage.
+        // RFC 4648 §10, transposed to the URL alphabet and without padding.
         assert_eq!(base64url(b""), "");
         assert_eq!(base64url(b"f"), "Zg");
         assert_eq!(base64url(b"fo"), "Zm8");
@@ -306,8 +306,8 @@ mod tests {
 
     #[test]
     fn base64url_never_emits_characters_a_url_would_reencode() {
-        // 🔴 `+` et `/` seraient réencodés dans un paramètre de requête, et le défi
-        // PKCE ne correspondrait plus au vérificateur.
+        // 🔴 `+` and `/` would be re-encoded inside a query parameter, and the PKCE
+        // challenge would no longer match the verifier.
         let tout = base64url(&(0u8..=255).collect::<Vec<u8>>());
         assert!(!tout.contains('+'), "{tout}");
         assert!(!tout.contains('/'), "{tout}");
@@ -329,30 +329,30 @@ mod tests {
 
     #[test]
     fn base64url_decoding_refuses_a_foreign_alphabet() {
-        // Une charge utile qui n'est pas du base64url n'est pas « presque bonne » :
-        // la lire à moitié donnerait un JSON tronqué, donc une erreur trompeuse.
+        // A payload that is not base64url is not "nearly right": reading half of it
+        // would give truncated JSON, and therefore a misleading error.
         assert_eq!(base64url_decode("abc+def"), None);
         assert_eq!(base64url_decode("abc/def"), None);
     }
 
     #[test]
     fn the_pkce_challenge_hashes_bytes_not_hex() {
-        // Hacher la représentation hexadécimale donnerait un défi que le serveur
-        // d'autorisation rejetterait, avec une erreur qui parle de code invalide.
-        let verif = "vérificateur".as_bytes();
-        assert_eq!(sha256_bytes(verif).len(), 32);
+        // Hashing the hexadecimal representation would produce a challenge the
+        // authorisation server rejects, with an error about an invalid code.
+        let verifier = "verifier".as_bytes();
+        assert_eq!(sha256_bytes(verifier).len(), 32);
         assert_ne!(
-            base64url(&sha256_bytes(verif)),
-            base64url(sha256_hex(verif).as_bytes())
+            base64url(&sha256_bytes(verifier)),
+            base64url(sha256_hex(verifier).as_bytes())
         );
     }
 
     #[test]
     fn sha256_matches_the_reference_vectors() {
-        // 🔴 Une implémentation cryptographique écrite à la main DOIT être vérifiée
-        // contre les vecteurs officiels. Une erreur d'un bit donnerait un hachage
-        // parfaitement cohérent avec lui-même, donc des jetons qui « marchent » —
-        // jusqu'au jour où l'on compare avec un autre outil.
+        // 🔴 A hand-written cryptographic implementation MUST be checked against the
+        // official vectors. A one-bit mistake would give a hash perfectly consistent
+        // with itself, and therefore tokens that "work" - until the day you compare
+        // with another tool.
         let vide: String = sha256(b"").iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             vide,
@@ -378,10 +378,10 @@ mod tests {
 
     #[test]
     fn the_stored_form_has_no_field_for_the_value() {
-        // 🔴 La garantie est structurelle : on ne peut pas fuiter ce qu'on ne peut
-        // pas représenter.
+        // 🔴 The guarantee is structural: you cannot leak what you cannot
+        // represent.
         let (_, s) = generate("ui", Role::Viewer, alea(1));
-        let j = serde_json::to_string(&s).expect("sérialisable");
+        let j = serde_json::to_string(&s).expect("serialisable");
         assert!(!j.contains("value"), "{j}");
         assert!(!j.contains("token\":"), "{j}");
         assert!(j.contains("fingerprint"));
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_vault_dump_does_not_yield_usable_tokens() {
-        // Le point du hachage : une fuite révèle qu'un jeton EXISTE, pas sa valeur.
+        // The point of hashing: a leak reveals a token EXISTS, not its value.
         let (valeur, s) = generate("ui", Role::Viewer, alea(7));
         assert!(!s.fingerprint.contains(&valeur));
         assert_ne!(s.fingerprint, valeur);
@@ -415,21 +415,21 @@ mod tests {
 
     #[test]
     fn the_token_survives_a_copy_paste() {
-        // ⚠️ Base32 : pas de « / » ni de « + » comme en base64, qui cassent les
-        // copier-coller dans une URL ou un fichier d'unité systemd.
+        // ⚠️ Base32: no "/" or "+" as in base64, which break copy-paste into a URL or
+        // a systemd unit file.
         let (v, _) = generate("x", Role::Admin, alea(9));
         assert!(v
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
         assert!(!v.contains('/') && !v.contains('+') && !v.contains('='));
-        // 32 octets → au moins 51 caractères base32.
-        assert!(v.len() >= 51, "{} caractères", v.len());
+        // 32 bytes gives at least 51 base32 characters.
+        assert!(v.len() >= 51, "{} characters", v.len());
     }
 
     #[test]
     fn comparison_does_not_leak_by_timing() {
-        // Un `==` s'arrête au premier octet différent : le temps de réponse dirait
-        // combien de caractères sont bons, et le jeton se devinerait octet par octet.
+        // A `==` stops at the first differing byte: the response time would say how
+        // many characters are right, and the token could be guessed byte by byte.
         assert!(constant_eq("abc", "abc"));
         assert!(!constant_eq("abc", "abd"));
         assert!(!constant_eq("abc", "abcd"));
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn the_role_is_carried_by_the_token() {
-        // C'est lui qui décidera ce que la requête a le droit de faire.
+        // This is what will decide what the request is allowed to do.
         let (_, s) = generate("ops", Role::Operator, alea(5));
         assert_eq!(s.role, Role::Operator);
         assert!(s.role.allows(crate::rbac::Action::Operate));

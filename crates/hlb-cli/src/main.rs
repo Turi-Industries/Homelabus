@@ -3185,7 +3185,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     println!("# ═══ Caddy backend ═══\n{back}");
                     println!(
                         "\n{}. Relance avec --apply pour recharger Caddy.",
-                        hlb_api::pluriel(routes.len() as u64, "route", "routes")
+                        hlb_api::plural(routes.len() as u64, "route", "routes")
                     );
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 }
@@ -3193,7 +3193,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 CaddyAdmin::new(front_admin).load_caddyfile(&front).await?;
                 println!(
                     "✓ Caddy frontal rechargé ({})",
-                    hlb_api::pluriel(routes.len() as u64, "route", "routes")
+                    hlb_api::plural(routes.len() as u64, "route", "routes")
                 );
 
                 // 🔴 Enregistrer CE QUI VIENT D'ÊTRE POSÉ, après le rechargement et pas
@@ -5813,7 +5813,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             .await
                             {
                                 Ok(n) if n > 0 => {
-                                    println!("✓ {}", hlb_api::pluriel(n as u64, "copie", "copies"));
+                                    println!("✓ {}", hlb_api::plural(n as u64, "copie", "copies"));
                                     faites += 1;
                                 }
                                 // ⚠️ Zéro destination servie n'est pas un succès : c'est

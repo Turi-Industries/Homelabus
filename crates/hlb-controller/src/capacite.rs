@@ -62,7 +62,7 @@ impl Budget {
             return Some(format!(
                 "{} du tier « {} » ne répond pas : {} Mo est un MINORANT, pas une \
                  mesure.",
-                hlb_api::pluriel(self.noeuds_muets as u64, "nœud", "nœuds"),
+                hlb_api::plural(self.noeuds_muets as u64, "nœud", "nœuds"),
                 self.tier,
                 self.disponible_mb
             ));

@@ -86,7 +86,7 @@ pub async fn controles(
             Verdict::Bon,
             format!(
                 "{} déclarées.",
-                hlb_api::pluriel(n as u64, "destination", "destinations")
+                hlb_api::plural(n as u64, "destination", "destinations")
             ),
             None,
         ),
@@ -179,7 +179,7 @@ pub async fn controles(
             format!(
                 "{} `admin` en circulation : chacun ouvre tout, et on ne sait plus \
                  lesquels servent encore.",
-                hlb_api::pluriel(n as u64, "jeton", "jetons")
+                hlb_api::plural(n as u64, "jeton", "jetons")
             ),
             Some("hlb token list"),
         ),

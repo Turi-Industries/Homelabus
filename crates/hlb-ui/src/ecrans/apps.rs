@@ -30,7 +30,7 @@ pub fn afficher(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) -> Option<Stri
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             c::legende(
                 ui,
-                &hlb_api::pluriel(apps.len() as u64, "installée", "installées"),
+                &hlb_api::plural(apps.len() as u64, "installée", "installées"),
             );
         });
     });
@@ -112,7 +112,7 @@ fn carte_app(ui: &mut egui::Ui, a: &AppSummary, etroit: bool, p: crate::design::
                 ui,
                 &format!(
                     "{} bloquante{}",
-                    hlb_api::pluriel(
+                    hlb_api::plural(
                         a.blocking_guides.max(0) as u64,
                         "action manuelle",
                         "actions manuelles"

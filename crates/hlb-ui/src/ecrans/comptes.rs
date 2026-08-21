@@ -65,7 +65,7 @@ pub fn afficher(
             p.critique,
             &format!(
                 "{} incomplet{}.",
-                hlb_api::pluriel(casses as u64, "compte", "comptes"),
+                hlb_api::plural(casses as u64, "compte", "comptes"),
                 if casses > 1 { "s" } else { "" }
             ),
             Some(
@@ -83,7 +83,7 @@ pub fn afficher(
             p.critique,
             &format!(
                 "{} reçoi{} ENCORE.",
-                hlb_api::pluriel(rompues as u64, "alias expiré", "aliases expirés"),
+                hlb_api::plural(rompues as u64, "alias expiré", "aliases expirés"),
                 if rompues > 1 { "vent" } else { "t" }
             ),
             Some(
@@ -104,7 +104,7 @@ pub fn afficher(
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             c::legende(
                 ui,
-                &hlb_api::pluriel(comptes.len() as u64, "compte", "comptes"),
+                &hlb_api::plural(comptes.len() as u64, "compte", "comptes"),
             );
         });
     });
@@ -176,7 +176,7 @@ fn formulaire_invitation(ui: &mut egui::Ui, p: crate::design::Palette) -> Option
         ui.horizontal_wrapped(|ui| {
             c::legende(ui, "pour");
             for n in [1_i64, 3, 5, 10, 25] {
-                let libelle = hlb_api::pluriel(n as u64, "personne", "personnes");
+                let libelle = hlb_api::plural(n as u64, "personne", "personnes");
                 if ui.selectable_label(usages == n, libelle).clicked() {
                     usages = n;
                 }
@@ -205,7 +205,7 @@ fn formulaire_invitation(ui: &mut egui::Ui, p: crate::design::Palette) -> Option
                 p.attention,
                 &format!(
                     "Ce lien laissera entrer {}.",
-                    hlb_api::pluriel(usages as u64, "personne", "personnes")
+                    hlb_api::plural(usages as u64, "personne", "personnes")
                 ),
                 Some("S'il fuite, ce sont autant de comptes créés. Un lien par personne coûte plus cher à transmettre, et beaucoup moins cher à révoquer."),
             );
@@ -271,7 +271,7 @@ fn carte_compte(
                     if x.sessions > 0 {
                         c::legende(
                             ui,
-                            &hlb_api::pluriel(x.sessions as u64, "session", "sessions"),
+                            &hlb_api::plural(x.sessions as u64, "session", "sessions"),
                         );
                     }
                 });
@@ -293,7 +293,7 @@ fn carte_compte(
                 ui,
                 &format!(
                     "{} qui reçoi{} encore",
-                    hlb_api::pluriel(
+                    hlb_api::plural(
                         x.promesses_rompues as u64,
                         "alias expiré",
                         "aliases expirés"
@@ -371,7 +371,7 @@ fn carte_invitation(
                         ui,
                         &format!(
                             "{} restante{} · expire dans {}",
-                            hlb_api::pluriel(i.restants() as u64, "entrée", "entrées"),
+                            hlb_api::plural(i.restants() as u64, "entrée", "entrées"),
                             if i.restants() > 1 { "s" } else { "" },
                             hlb_api::humanise(i.expire_dans_s)
                         ),

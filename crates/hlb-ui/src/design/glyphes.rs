@@ -75,7 +75,7 @@ pub fn explication(s: &str) -> Option<String> {
     // infobulle n'y échappe pas.
     Some(format!(
         "{} que la police ne peut pas afficher : {}{}",
-        hlb_api::pluriel(a.len() as u64, "caractère", "caractères"),
+        hlb_api::plural(a.len() as u64, "caractère", "caractères"),
         liste.join(", "),
         if a.len() > 5 { "…" } else { "" }
     ))

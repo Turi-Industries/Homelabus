@@ -1,12 +1,12 @@
-//! Le résolveur de capacités — le cœur du design (§4.3 du plan).
+//! The capability resolver - the heart of the design.
 //!
-//! Un manifest ne dit **jamais** « connecte-toi à postgres:5432 ». Il déclare un
-//! besoin : `Capability::Database { engine: Postgres }`. Le résolveur transforme ce
-//! besoin en actions concrètes.
+//! A manifest **never** says "connect to postgres:5432". It declares a need:
+//! `Capability::Database { engine: Postgres }`. The resolver turns that need into
+//! concrete actions.
 //!
-//! Conséquence : le même manifest fonctionne que Postgres soit local, sur un autre
-//! nœud, derrière PgBouncer ou ailleurs. **C'est ce qui rend le système réellement
-//! modulaire.**
+//! Consequence: the same manifest works whether Postgres is local, on another node,
+//! behind PgBouncer or elsewhere. **That is what makes the system genuinely
+//! modular.**
 
 pub mod graph;
 pub mod plan;
@@ -24,19 +24,19 @@ pub enum Error {
     #[error(transparent)]
     Manifest(#[from] hlb_types::Error),
 
-    #[error("paramètre « {0} » requis mais absent")]
+    #[error("parameter \"{0}\" is required but absent")]
     MissingParam(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Les valeurs fournies au moment de l'installation, qui ne peuvent pas être dans le
-/// manifest parce qu'elles dépendent de l'installation elle-même.
+/// The values supplied at install time, which cannot live in the manifest because
+/// they depend on the installation itself.
 #[derive(Debug, Clone)]
 pub struct InstallParams {
     /// Domaine complet choisi par l'utilisateur, ex. `git.example.fr`.
     pub domain: Option<String>,
-    /// Domaine mail de base, pour les capacités `MailAccount`.
+    /// Base mail domain, for `MailAccount` capabilities.
     pub mail_domain: Option<String>,
     pub health_timeout_secs: u64,
 }
@@ -60,26 +60,26 @@ impl InstallParams {
     }
 }
 
-/// Le callback d'oauth2-proxy, servi sur le domaine de l'app elle-même.
+/// The oauth2-proxy callback, served on the app's own domain.
 ///
-/// ⚠️ Doit rester aligné sur le bloc `handle /oauth2/*` que produit
-/// `hlb-ingress::rendre_forward_auth`. Les deux décrivent le même chemin vu de deux
-/// endroits : s'ils divergent, la connexion échoue à l'étape du retour, et le message
-/// de PocketID parle d'URI non enregistrée sans dire laquelle il attendait.
+/// ⚠️ Must stay aligned with the `handle /oauth2/*` block produced by
+/// `hlb-ingress::rendre_forward_auth`. Both describe the same path seen from two
+/// places: if they diverge, sign-in fails on the return leg, and PocketID's message
+/// talks about an unregistered URI without saying which one it expected.
 pub const CALLBACK_PORTAIL: &str = "/oauth2/callback";
 
-/// Traduit un manifest + des paramètres d'installation en plan d'exécution.
+/// Translates a manifest plus install parameters into an execution plan.
 ///
-/// L'ordre des actions n'est pas cosmétique : les dépendances (base, secrets, client
-/// OIDC) doivent exister **avant** le déploiement du service qui les consomme.
+/// The order of actions is not cosmetic: the dependencies (database, secrets, OIDC
+/// client) must exist **before** the service consuming them is deployed.
 pub fn resolve(m: &Manifest, params: &InstallParams) -> Result<Plan> {
     resolve_with_guide(m, &hlb_types::Guide::default(), params)
 }
 
-/// Variante qui prend en compte le `guide.yaml` de l'app (§4.6).
+/// Variant that takes the app's `guide.yaml` into account.
 ///
-/// Les étapes déclarées remplacent le guide générique qui était codé en dur ici :
-/// une app décrit désormais ses propres prérequis, et le résolveur ne devine plus.
+/// The declared steps replace the generic guide that used to be hard-coded here: an
+/// app now describes its own prerequisites, and the resolver stops guessing.
 pub fn resolve_with_guide(
     m: &Manifest,
     guide: &hlb_types::Guide,
@@ -90,12 +90,12 @@ pub fn resolve_with_guide(
     let app = &m.metadata.name;
     let mut plan = Plan::default();
 
-    // 1. Les prérequis, capacité par capacité.
+    // 1. The prerequisites, capability by capability.
     for cap in &m.spec.requires {
         resolve_capability(cap, app, params, &mut plan)?;
     }
 
-    // 2. Le digest, s'il n'est pas déjà figé (§7).
+    // 2. The digest, if it is not already pinned.
     if !m.spec.image.is_pinned() {
         plan.push(Action::ResolveDigest {
             repo: m.spec.image.repo.clone(),
@@ -103,29 +103,27 @@ pub fn resolve_with_guide(
         });
     }
 
-    // 3. Les automatisations `method: env` des guides.
+    // 3. The guides' `method: env` automations.
     //
-    // ⚠️ Subtilité : contrairement à `exec` et `api`, une variable d'environnement
-    // ne peut PAS être appliquée après coup — Swarm recrée la tâche pour la prendre
-    // en compte. L'échelle du §4.6bis n'est donc pas purement séquentielle à
-    // l'exécution : `env` est résolu ICI, au moment du plan, tandis que `exec` et
-    // `api` s'exécutent une fois le service sain.
-    // 🔴 Les liaisons du manifest : comment l'app reçoit ce qu'on a provisionné pour
-    // elle (§4.3). C'était la moitié manquante du résolveur — créer la base, le rôle
-    // et le mot de passe sans jamais les transmettre laissait l'app retomber sur son
-    // SQLite interne : service sain, sonde verte, tableau de bord au vert, et les
-    // données dans un fichier que personne ne sauvegardait, pendant qu'une base vide
-    // était fidèlement dumpée chaque nuit.
+    // ⚠️ Subtlety: unlike `exec` and `api`, an environment variable can NOT be applied
+    // after the fact - Swarm recreates the task to pick it up. So the automation ladder
+    // is not purely sequential at run time: `env` is resolved HERE, at plan time, while
+    // `exec` and `api` run once the service is healthy.
+    // 🔴 The manifest's bindings: how the app receives what was provisioned for it.
+    // This was the resolver's missing half - creating the database, the role and the
+    // password without ever passing them on left the app falling back to its internal
+    // SQLite: healthy service, green probe, green dashboard, and the data in a file
+    // nobody backed up, while an empty database was faithfully dumped every night.
     //
-    // 🔴 Les jetons de SECRET ne sont PAS résolus ici. Le plan est affiché par
-    // `hlb plan`, enregistré dans l'état et exporté vers le miroir Git (§2.3) : y
-    // substituer un mot de passe le publierait aux trois endroits, dont un dépôt qui
-    // garde l'historique. La substitution a lieu dans l'exécuteur.
+    // 🔴 SECRET tokens are NOT resolved here. The plan is displayed by `hlb plan`,
+    // recorded in the state and exported to the Git mirror: substituting a password
+    // into it would publish it in all three places, one of which keeps history.
+    // Substitution happens in the executor.
     //
-    // ⚠️ `BTreeMap` : le tri est ce qui rend le plan reproductible d'une exécution à
-    // l'autre, et l'insertion ordonnée donne une règle de priorité claire — le guide
-    // écrase le manifest, parce qu'il porte une décision prise à l'installation
-    // (« fermer les inscriptions ») là où le manifest porte un défaut de catalogue.
+    // ⚠️ `BTreeMap`: the ordering is what makes a plan reproducible from one run to the
+    // next, and ordered insertion gives a clear precedence rule - the guide overrides
+    // the manifest, because it carries a decision made at install time ("close
+    // sign-ups") where the manifest carries a catalog default.
     let mut table: std::collections::BTreeMap<String, String> = m.spec.env.clone();
     for s in &guide.steps {
         for a in &s.automate {
@@ -138,11 +136,11 @@ pub fn resolve_with_guide(
     }
     let env: Vec<(String, String)> = table.into_iter().collect();
 
-    // 4. Les volumes à monter, déduits des capacités `storage`.
+    // 4. The volumes to mount, derived from the `storage` capabilities.
     //
-    // 🔴 Le nom doit correspondre EXACTEMENT à celui créé par `CreateVolume`,
-    // sinon Swarm crée un second volume vide à la volée et les données déclarées
-    // sauvegardées ne sont pas celles que l'app utilise.
+    // 🔴 The name must match EXACTLY the one created by `CreateVolume`, or Swarm
+    // creates a second empty volume on the fly and the data declared as backed up is
+    // not the data the app uses.
     let mounts: Vec<(String, String)> = m
         .spec
         .requires
@@ -153,13 +151,13 @@ pub fn resolve_with_guide(
         })
         .collect();
 
-    // 4bis. Les compagnons, AVANT l'app (§4.7bis).
+    // 4bis. The companions, BEFORE the app.
     //
-    // 🔴 L'ordre est le mécanisme, comme pour le graphe de dépendances (§4.7) : Swarm
-    // n'a pas de `depends_on`, et une app qui démarre avant son compagnon boucle en
-    // erreur — ou pire, démarre en mode dégradé sans le dire. Immich sans son service
-    // d'apprentissage indexe les photos sans jamais reconnaître un visage, et rien
-    // n'indique que la moitié de la fonctionnalité est absente.
+    // 🔴 The order is the mechanism, as for the dependency graph: Swarm has no
+    // `depends_on`, and an app starting before its companion crash-loops - or worse,
+    // starts degraded without saying so. Immich without its machine-learning service
+    // indexes photos and never recognises a face, with nothing indicating that half
+    // the feature is missing.
     for c in &m.spec.companions {
         let service = format!("{app}-{}", c.name);
 
@@ -167,8 +165,8 @@ pub fn resolve_with_guide(
             plan.push(Action::CreateVolume {
                 name: format!("{service}-{}", v.name),
                 path: v.path.clone(),
-                // Un compagnon est toujours local : ses volumes sont du cache ou du
-                // modèle, et NFS n'apporterait que de la latence.
+                // A companion is always local: its volumes hold cache or models, and
+                // NFS would only add latency.
                 tier: hlb_types::StorageTier::Local,
                 backup: v.backup,
                 // Un compagnon ne porte pas de base applicative (pas de `requires`).
@@ -184,8 +182,8 @@ pub fn resolve_with_guide(
         }
 
         let mut contraintes = Vec::new();
-        // Le tier du compagnon prime sur celui de l'app : un service de calcul mérite
-        // `heavy` même quand son app est `light`.
+        // The companion's tier wins over the app's: a compute service deserves
+        // `heavy` even when its app is `light`.
         if let Some(t) = c.tier.as_ref().or(m.spec.swarm.tier.as_ref()) {
             contraintes.push(format!("node.labels.tier=={t}"));
         }
@@ -206,19 +204,19 @@ pub fn resolve_with_guide(
             healthcheck: c.healthcheck.clone(),
         });
 
-        // 🔴 On attend qu'il soit sain avant de déployer l'app. Sans cette attente,
-        // l'ordre du plan ne garantirait que l'ordre des APPELS à Swarm, pas celui
-        // des démarrages réels.
+        // 🔴 We wait for it to be healthy before deploying the app. Without that
+        // wait, the plan's order would only guarantee the order of the CALLS to Swarm,
+        // not the order of the actual startups.
         plan.push(Action::WaitHealthy {
             name: service,
             timeout_secs: params.health_timeout_secs,
         });
     }
 
-    // 5. Le service lui-même.
+    // 5. The service itself.
     let mut constraints = Vec::new();
     if let Some(tier) = &m.spec.swarm.tier {
-        // §2bis.2 — le placement découle du tier, jamais d'un nom de nœud en dur.
+        // Placement follows from the tier, never from a hard-coded node name.
         constraints.push(format!("node.labels.tier=={tier}"));
     }
 
@@ -229,7 +227,7 @@ pub fn resolve_with_guide(
         constraints,
         env,
         mounts,
-        // §9 — les valeurs du manifest sont transmises telles quelles jusqu'à Swarm.
+        // The manifest's values are passed through to Swarm as they are.
         hardening: m.spec.security.clone(),
         healthcheck: m.spec.swarm.healthcheck.clone(),
     });
@@ -240,10 +238,10 @@ pub fn resolve_with_guide(
         timeout_secs: params.health_timeout_secs,
     });
 
-    // 7. Les étapes du guide, AVANT toute exposition (§4.6bis).
+    // 7. The guide's steps, BEFORE any exposure.
     //
-    // L'ordre est le mécanisme de protection lui-même : c'est parce que ces étapes
-    // précèdent l'ingress que la fenêtre « premier inscrit = admin » reste fermée.
+    // The order is the protection mechanism itself: it is because these steps come
+    // before the ingress that the "first to sign up becomes admin" window stays shut.
     let vars = domain_vars(params);
     for s in &guide.steps {
         plan.push(Action::PendingGuideStep {
@@ -255,8 +253,8 @@ pub fn resolve_with_guide(
         });
     }
 
-    // Une app en `after-guide` sans aucune étape bloquante déclarée serait exposée
-    // publiquement sans garde-fou : on en pose un par défaut plutôt que d'ouvrir.
+    // An app on `after-guide` with no blocking step declared would be exposed
+    // publicly with no guard rail: one is added by default rather than opening up.
     let expose_apres_guide = m
         .spec
         .ingress
@@ -265,7 +263,7 @@ pub fn resolve_with_guide(
     if expose_apres_guide && !guide.steps.iter().any(|s| s.is_blocking()) {
         plan.push(Action::PendingGuideStep {
             id: format!("{app}-first-admin"),
-            title: format!("Vérifier le compte administrateur de {app} et fermer les inscriptions"),
+            title: format!("Check {app}'s administrator account and close sign-ups"),
             blocking: true,
             service: app.clone(),
             step: Box::new(hlb_types::GuideStep {
@@ -313,8 +311,8 @@ fn resolve_capability(
     params: &InstallParams,
     plan: &mut Plan,
 ) -> Result<()> {
-    // Le `match` est exhaustif : ajouter une variante à `Capability` fait échouer la
-    // compilation ici. C'est exactement pourquoi le plan a retenu Rust (§1).
+    // The `match` is exhaustive: adding a variant to `Capability` breaks compilation
+    // here. That is exactly why this project is written in Rust.
     match cap {
         Capability::Database {
             engine,
@@ -324,13 +322,14 @@ fn resolve_capability(
             let db = name.clone().unwrap_or_else(|| app.to_string());
             let secret = format!("{app}-db-password");
 
-            // ⚠️ L'ordre compte : le mot de passe doit exister avant le rôle qui
-            // l'utilise. L'inverse produisait une base impossible à créer.
+            // ⚠️ Order matters: the password must exist before the role that uses it.
+            // The other way round produced a database that could not be created.
             //
-            // ⚠️ Et une seule fois : une app à plusieurs bases (Seafile en a trois)
-            // partage UN rôle, donc UN mot de passe. Trois générations identiques
-            // encombreraient le plan et l'état sans rien changer — la seconde serait
-            // de toute façon ignorée, `store_secret_if_absent` ne réécrivant jamais.
+            // ⚠️ And exactly once: an app with several databases (Seafile has three)
+            // shares ONE role, and therefore ONE password. Three identical generations
+            // would clutter the plan and the state without changing anything - the
+            // second would be ignored regardless, `store_secret_if_absent` never
+            // rewriting.
             let deja = plan
                 .actions
                 .iter()
@@ -338,19 +337,19 @@ fn resolve_capability(
             if !deja {
                 plan.push(Action::GenerateSecret {
                     name: secret.clone(),
-                    // Le rôle, pas la base : c'est lui que le mot de passe protège.
-                    purpose: format!("mot de passe du rôle {app}"),
+                    // The role, not the database: the password protects the role.
+                    purpose: format!("password for the {app} role"),
                 });
             }
             plan.push(Action::ProvisionDatabase {
                 engine: *engine,
                 database: db.clone(),
-                // 🔴 Le rôle porte le nom de l'APP, pas celui de la base.
+                // 🔴 The role is named after the APP, not after the database.
                 //
-                // Une app peut avoir plusieurs bases — Seafile en veut trois — et elle
-                // s'y connecte avec UN seul compte. Nommer le rôle d'après la base
-                // produirait trois comptes distincts pour un seul jeu d'identifiants,
-                // et l'app échouerait sur deux d'entre elles.
+                // An app can have several databases - Seafile wants three - and it
+                // connects to them with ONE account. Naming the role after the database
+                // would produce three distinct accounts for one credential set, and the
+                // app would fail on two of them.
                 role: app.to_string(),
                 password_secret: secret,
                 extensions: extensions.clone(),
@@ -366,7 +365,7 @@ fn resolve_capability(
                     constraints: Vec::new(),
                     env: Vec::new(),
                     mounts: Vec::new(),
-                    // Un cache dédié est durci comme tout le reste (§9).
+                    // A dedicated cache is hardened like everything else.
                     hardening: hlb_types::SecuritySpec::default(),
                     healthcheck: None,
                 });
@@ -381,26 +380,26 @@ fn resolve_capability(
             mode,
             redirect_paths,
         } => {
-            // 🔴 Le `mode` décide, et il est examiné exhaustivement. La version
-            // précédente l'ignorait (`..`), avec deux conséquences silencieuses :
-            // une app en exclusion volontaire recevait quand même un client OIDC
-            // aux URI VIDES, et une app derrière portail recevait un client pointant
-            // vers elle au lieu du portail — donc un client inutilisable dans les
-            // deux cas, plus un secret créé pour rien.
+            // 🔴 The `mode` decides, and it is matched exhaustively. The previous
+            // version ignored it (`..`), with two silent consequences: an app in
+            // deliberate exclusion still received an OIDC client with EMPTY URIs, and
+            // an app behind a portal received a client pointing at itself instead of
+            // the portal - an unusable client in both cases, plus a secret created for
+            // nothing.
             //
-            // Un `..` sur un champ a le même effet qu'un bras `_ =>` : il fait taire
-            // le compilateur là où on veut justement qu'il parle.
+            // A `..` over a field has the same effect as a `_ =>` arm: it silences the
+            // compiler exactly where you want it to speak.
             match mode {
-                // §5 — exclusion assumée : l'app gère ses propres comptes, ou son
-                // protocole est incompatible (clients TV, applications natives).
-                // Créer un client OIDC ici laisserait croire à une protection qui
-                // n'existe pas, et le secret associé n'aurait jamais de lecteur.
+                // A deliberate exclusion: the app manages its own accounts, or its
+                // protocol is incompatible (TV clients, native apps). Creating an OIDC
+                // client here would suggest a protection that does not exist, and the
+                // associated secret would never have a reader.
                 SsoMode::None => {}
 
                 // Le meilleur cas : l'app parle OIDC, les URI viennent d'elle.
                 SsoMode::Native => {
-                    // §5.2 — les URI de callback dépendent du domaine choisi à
-                    // l'installation. Jamais en dur dans le manifest.
+                    // Callback URIs depend on the domain chosen at install time.
+                    // Never hard-coded in the manifest.
                     let domain = params
                         .domain
                         .as_ref()
@@ -419,11 +418,11 @@ fn resolve_capability(
                     });
                 }
 
-                // 🔴 C'est le PORTAIL qui parle OIDC, pas l'app. Le callback est
-                // donc celui d'oauth2-proxy — `/oauth2/callback` sur le domaine de
-                // l'app, puisque Caddy le sert là (voir `rendre_forward_auth`).
-                // Enregistrer les chemins de l'app produirait un client dont
-                // PocketID rejetterait la redirection au moment de la connexion.
+                // 🔴 It is the PORTAL that speaks OIDC, not the app. So the callback
+                // is oauth2-proxy's - `/oauth2/callback` on the app's domain, since
+                // Caddy serves it there (see `rendre_forward_auth`). Registering the
+                // app's own paths would produce a client whose redirect PocketID
+                // rejects at sign-in time.
                 SsoMode::ProxyOnly | SsoMode::ProxyHeader => {
                     let domain = params
                         .domain
@@ -449,13 +448,13 @@ fn resolve_capability(
             // Le secret AVANT le compartiment qui l'utilise, comme pour les bases.
             plan.push(Action::GenerateSecret {
                 name: secret.clone(),
-                purpose: "clé secrète S3".into(),
+                purpose: "S3 secret key".into(),
             });
             plan.push(Action::ProvisionBucket {
                 bucket: compartiment,
-                // 🔴 Une clé par app. Partager la clé d'administration donnerait à
-                // chaque app la lecture des compartiments de toutes les autres —
-                // les photos d'Immich lisibles depuis le wiki, et réciproquement.
+                // 🔴 One key per app. Sharing the admin key would give every app read
+                // access to every other's buckets - Immich's photos readable from the
+                // wiki, and the other way round.
                 key_name: app.to_string(),
                 secret_name: secret,
             });
@@ -468,9 +467,10 @@ fn resolve_capability(
             });
         }
 
-        // 🔴 Motif EXHAUSTIF, sans `..`. Le `..` qui était ici avalait `quota_bytes`,
-        // exactement comme il avait avalé `mode` sur `Capability::Sso` — un `..` a le
-        // même effet qu'un bras `_ =>`, et le compilateur ne peut rien en dire.
+        // 🔴 An EXHAUSTIVE pattern, with no `..`. The `..` that used to be here
+        // swallowed `quota_bytes`, exactly as it had swallowed `mode` on
+        // `Capability::Sso` - a `..` has the same effect as a `_ =>` arm, and the
+        // compiler cannot say a thing about it.
         Capability::MailAccount {
             aliases,
             quota_bytes,
@@ -505,10 +505,9 @@ fn resolve_capability(
     Ok(())
 }
 
-/// Remplace `{{ domain }}` par la valeur fournie à l'installation.
+/// Replaces `{{ domain }}` with the value supplied at install time.
 ///
-/// Volontairement minimal : le vrai moteur de templates (minijinja) arrivera avec le
-/// rendu des fichiers compose. Ici, on ne veut qu'une substitution vérifiable.
+/// Deliberately minimal: this is only a substitution that can be checked.
 fn render_host(tpl: &str, params: &InstallParams) -> Result<String> {
     if !tpl.contains("{{") {
         return Ok(tpl.to_string());
@@ -528,10 +527,11 @@ mod tests {
 
     #[test]
     fn a_declared_mailbox_quota_reaches_the_plan() {
-        // 🔴 Le `..` qui était dans ce motif avalait `quota_bytes` : un quota déclaré
-        // au manifest n'atteignait jamais le plan, et la boîte était créée sans lui.
-        // C'est le même défaut que sur `Capability::Sso { mode }`, et le compilateur ne
-        // pouvait rien en dire — un `..` a le même effet qu'un bras `_ =>`.
+        // 🔴 The `..` that used to be in this pattern swallowed `quota_bytes`: a
+        // quota declared in the manifest never reached the plan, and the mailbox was
+        // created without it. Same defect as on `Capability::Sso { mode }`, and the
+        // compiler could say nothing about it - a `..` has the same effect as a
+        // `_ =>` arm.
         let mut plan = Plan::default();
         let params = InstallParams {
             mail_domain: Some("turi.fr".into()),
@@ -546,13 +546,13 @@ mod tests {
             &params,
             &mut plan,
         )
-        .expect("résolution");
+        .expect("resolution");
 
         let a = plan
             .actions
             .iter()
             .find(|a| matches!(a, Action::ProvisionMailAccount { .. }))
-            .expect("une action de boîte");
+            .expect("a mailbox action");
         match a {
             Action::ProvisionMailAccount {
                 quota_bytes,
@@ -562,19 +562,19 @@ mod tests {
                 assert_eq!(
                     *quota_bytes,
                     Some(5_000_000),
-                    "le quota a été avalé en route"
+                    "the quota was swallowed on the way"
                 );
                 assert!(*aliases);
             }
             _ => unreachable!(),
         }
-        // Et il doit se VOIR dans l'aperçu : un quota qu'on ne sait pas poser doit
-        // apparaître avant l'installation, pas se découvrir à l'usage.
-        assert!(a.to_string().contains("NON APPLIQUÉ"), "{a}");
+        // And it must be VISIBLE in the preview: a quota we cannot set must show up
+        // before installation, not be discovered in use.
+        assert!(a.to_string().contains("NOT ENFORCED"), "{a}");
     }
 
-    /// Ingress en `after-guide`. En chaîne brute : un `\` de continuation Rust
-    /// mange la newline ET l'indentation, ce qui casse le YAML de façon déroutante.
+    /// Ingress on `after-guide`. As a raw string: a Rust line-continuation `\` eats
+    /// the newline AND the indentation, breaking the YAML confusingly.
     const AFTER_GUIDE: &str = r#"  ingress:
     - host: git.example.fr
       port: 3000
@@ -601,7 +601,7 @@ mod tests {
             password_secret: "gitea-db-password".into(),
             extensions: Vec::new(),
         }));
-        // §3.1 — un rôle par app, jamais de mot de passe réutilisé.
+        // One role per app, never a reused password.
         assert!(p.actions.iter().any(
             |a| matches!(a, Action::GenerateSecret { name, .. } if name == "gitea-db-password")
         ));
@@ -622,7 +622,7 @@ mod tests {
                 Action::CreateOidcClient { redirect_uris, .. } => Some(redirect_uris.clone()),
                 _ => None,
             })
-            .expect("client OIDC planifié");
+            .expect("OIDC client planned");
 
         assert_eq!(
             uris,
@@ -640,7 +640,7 @@ mod tests {
         assert!(matches!(err, Error::MissingParam("domain")), "{err}");
     }
 
-    /// Les URI de redirection du client OIDC planifié, s'il y en a un.
+    /// The redirect URIs of the planned OIDC client, if there is one.
     fn uris_oidc(p: &Plan) -> Option<Vec<String>> {
         p.actions.iter().find_map(|a| match a {
             Action::CreateOidcClient { redirect_uris, .. } => Some(redirect_uris.clone()),
@@ -650,21 +650,18 @@ mod tests {
 
     #[test]
     fn a_deliberate_sso_exclusion_creates_nothing() {
-        // 🔴 Constaté en ajoutant Jellyfin : `mode: none` produisait quand même un
-        // client OIDC, aux URI de redirection VIDES, plus un secret que personne ne
-        // lirait jamais. Le `mode` était ignoré par un `..` — même effet qu'un bras
-        // `_ =>` : faire taire le compilateur là où on veut justement qu'il parle.
+        // 🔴 Found while adding Jellyfin: `mode: none` still produced an OIDC client,
+        // with EMPTY redirect URIs, plus a secret nobody would ever read. `mode` was
+        // ignored by a `..` - same effect as a `_ =>` arm: silencing the compiler
+        // exactly where you want it to speak.
         //
-        // `none` est une exclusion VOLONTAIRE (clients TV incapables de suivre une
-        // redirection, app à comptes propres). Créer un client laisserait croire à
-        // une protection qui n'existe pas.
+        // `none` is a DELIBERATE exclusion (TV clients that cannot follow a redirect,
+        // apps with their own accounts). Creating a client would suggest a protection
+        // that does not exist.
         let m = manifest("  requires:\n    - kind: sso\n      mode: none\n");
         let p = resolve(&m, &InstallParams::with_domain("media.example.fr")).expect("plan");
 
-        assert!(
-            uris_oidc(&p).is_none(),
-            "aucun client OIDC ne doit être créé"
-        );
+        assert!(uris_oidc(&p).is_none(), "no OIDC client must be created");
         assert!(
             !p.actions.iter().any(|a| matches!(
                 a,
@@ -677,18 +674,19 @@ mod tests {
 
     #[test]
     fn a_deliberate_exclusion_does_not_even_need_a_domain() {
-        // Corollaire : sans client à créer, le domaine n'est plus requis. Exiger un
-        // paramètre pour une capacité qui ne provisionne rien serait un faux blocage.
+        // Corollary: with no client to create, the domain is no longer required.
+        // Requiring a parameter for a capability that provisions nothing would be a
+        // false blocker.
         let m = manifest("  requires:\n    - kind: sso\n      mode: none\n");
-        resolve(&m, &InstallParams::default()).expect("aucun domaine n'est nécessaire");
+        resolve(&m, &InstallParams::default()).expect("no domain is needed");
     }
 
     #[test]
     fn a_portal_backed_app_registers_the_portal_callback() {
-        // 🔴 Derrière un portail, c'est oauth2-proxy qui parle OIDC, pas l'app. Un
-        // client enregistré sur les chemins de l'app produirait une redirection que
-        // PocketID refuse au moment de la connexion — la panne survient au RETOUR,
-        // sur un message qui ne dit pas quelle URI était attendue.
+        // 🔴 Behind a portal it is oauth2-proxy that speaks OIDC, not the app. A
+        // client registered on the app's own paths would produce a redirect PocketID
+        // refuses at sign-in - the failure happens on the RETURN leg, on a message
+        // that does not say which URI was expected.
         for mode in ["proxy-only", "proxy-header"] {
             let m = manifest(&format!(
                 "  requires:\n    - kind: sso\n      mode: {mode}\n      \
@@ -706,9 +704,9 @@ mod tests {
 
     #[test]
     fn an_oidc_client_is_never_created_without_a_redirect_uri() {
-        // Un client sans URI est inutilisable : PocketID n'a rien vers quoi renvoyer.
-        // Quel que soit le mode, ou bien on ne crée rien, ou bien on crée un client
-        // complet — jamais un client à moitié.
+        // A client with no URI is unusable: PocketID has nothing to send the user
+        // back to. Whatever the mode, either nothing is created or a complete client
+        // is - never half a client.
         for mode in ["none", "proxy-only", "proxy-header"] {
             let m = manifest(&format!(
                 "  requires:\n    - kind: sso\n      mode: {mode}\n"
@@ -723,13 +721,13 @@ mod tests {
             }
         }
 
-        // 🔴 `native` est le cas qui ne peut PAS s'en sortir seul : sans chemin
-        // déclaré, personne ne sait où renvoyer. Trouvé par ce test même, qui
-        // échouait sur ce mode. Le manifest est donc refusé à la validation plutôt
-        // que de planifier un client inutilisable.
+        // 🔴 `native` is the case that can NOT work it out alone: with no declared
+        // path, nobody knows where to send the user back. Found by this very test,
+        // which failed on that mode. So the manifest is refused at validation rather
+        // than planning an unusable client.
         let m = manifest("  requires:\n    - kind: sso\n      mode: native\n");
         let e = resolve(&m, &InstallParams::with_domain("app.example.fr"))
-            .expect_err("un native sans redirectPaths doit être refusé");
+            .expect_err("a native without redirectPaths must be refused");
         let msg = e.to_string();
         assert!(msg.contains("redirectPaths"), "{msg}");
         assert!(
@@ -747,17 +745,14 @@ mod tests {
             .actions
             .iter()
             .position(|a| matches!(a, Action::GenerateSecret { .. }))
-            .expect("secret planifié");
+            .expect("secret planned");
         let db = p
             .actions
             .iter()
             .position(|a| matches!(a, Action::ProvisionDatabase { .. }))
-            .expect("base planifiée");
+            .expect("database planned");
 
-        assert!(
-            secret < db,
-            "sans mot de passe, le rôle ne peut pas être créé"
-        );
+        assert!(secret < db, "without a password the role cannot be created");
     }
 
     #[test]
@@ -769,22 +764,22 @@ mod tests {
             .actions
             .iter()
             .position(|a| matches!(a, Action::ProvisionDatabase { .. }))
-            .expect("base planifiée");
+            .expect("database planned");
         let deploy = p
             .actions
             .iter()
             .position(|a| matches!(a, Action::DeployService { .. }))
-            .expect("déploiement planifié");
+            .expect("deployment planned");
 
         assert!(db < deploy, "la base doit exister avant le service");
     }
 
     #[test]
     fn a_declared_guide_step_becomes_a_blocking_action() {
-        // §4.6 — les étapes viennent désormais du `guide.yaml` de l'app.
+        // The steps now come from the app's `guide.yaml`.
         let m = manifest("  ingress:\n    - host: git.example.fr\n      port: 3000\n");
         let g: hlb_types::Guide = serde_yaml_ng::from_str(
-            "steps:\n  - id: dns\n    title: Créer le DNS\n    severity: blocking\n",
+            "steps:\n  - id: dns\n    title: Create the DNS record\n    severity: blocking\n",
         )
         .expect("guide");
 
@@ -814,15 +809,15 @@ mod tests {
 
     #[test]
     fn after_guide_without_any_blocking_step_still_gets_a_guard() {
-        // 🔴 Sinon une app en `after-guide` sans guide déclaré serait exposée
-        // publiquement sans le moindre garde-fou.
+        // 🔴 Otherwise an app on `after-guide` with no declared guide would be
+        // exposed publicly with no guard rail at all.
         let m = manifest(AFTER_GUIDE);
         let p = resolve_with_guide(&m, &hlb_types::Guide::default(), &InstallParams::default())
             .expect("plan");
         assert_eq!(
             p.blocking_steps().len(),
             1,
-            "un garde-fou par défaut est attendu"
+            "a default guard rail is expected"
         );
     }
 
@@ -833,7 +828,7 @@ mod tests {
              expose: after-guide\n",
         );
         let g: hlb_types::Guide = serde_yaml_ng::from_str(
-            "steps:\n  - id: admin\n    title: Créer l'admin\n    severity: blocking\n",
+            "steps:\n  - id: admin\n    title: Create the admin\n    severity: blocking\n",
         )
         .expect("guide");
         let p = resolve_with_guide(&m, &g, &InstallParams::with_domain("git.example.fr"))
@@ -843,12 +838,12 @@ mod tests {
             .actions
             .iter()
             .position(|a| matches!(a, Action::PendingGuideStep { blocking: true, .. }))
-            .expect("étape de guide bloquante");
+            .expect("blocking guide step");
         let ingress = p
             .actions
             .iter()
             .position(|a| matches!(a, Action::ConfigureIngress { .. }))
-            .expect("ingress planifié");
+            .expect("ingress planned");
 
         assert!(guide < ingress, "le guide passe avant l'exposition");
         assert_eq!(p.blocking_steps().len(), 1);
@@ -883,7 +878,7 @@ mod tests {
             .actions
             .iter()
             .position(|a| matches!(a, Action::DeployService { .. }))
-            .expect("déploiement");
+            .expect("deployment");
         assert!(matches!(
             p.actions.get(deploy + 1),
             Some(Action::WaitHealthy { .. })
@@ -912,15 +907,15 @@ mod tests {
             .actions
             .iter()
             .position(|a| matches!(a, Action::ResolveDigest { .. }))
-            .expect("résolution de digest planifiée");
+            .expect("digest resolution planned");
         let deploy = p
             .actions
             .iter()
             .position(|a| matches!(a, Action::DeployService { .. }))
-            .expect("déploiement");
+            .expect("deployment");
         assert!(
             resolve_pos < deploy,
-            "le digest est résolu avant le déploiement"
+            "the digest is resolved before the deployment"
         );
     }
 }

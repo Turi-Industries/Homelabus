@@ -51,13 +51,13 @@ pub fn afficher(
                     ui,
                     &format!(
                         "{}, dont {silencees} en sourdine",
-                        hlb_api::pluriel(alertes.len() as u64, "active", "actives")
+                        hlb_api::plural(alertes.len() as u64, "active", "actives")
                     ),
                 );
             } else {
                 c::legende(
                     ui,
-                    &hlb_api::pluriel(alertes.len() as u64, "active", "actives"),
+                    &hlb_api::plural(alertes.len() as u64, "active", "actives"),
                 );
             }
         });
@@ -75,7 +75,7 @@ pub fn afficher(
             p.attention,
             &format!(
                 "{} ne peu{} plus être évaluée{}.",
-                hlb_api::pluriel(aveugles as u64, "règle", "règles"),
+                hlb_api::plural(aveugles as u64, "règle", "règles"),
                 if aveugles > 1 { "vent" } else { "t" },
                 if aveugles > 1 { "s" } else { "" }
             ),

@@ -313,7 +313,7 @@ pub async fn installer_app(
         applique,
         resume: format!(
             "installer {app} — {}",
-            hlb_api::pluriel(plan.actions.len() as u64, "action", "actions")
+            hlb_api::plural(plan.actions.len() as u64, "action", "actions")
         ),
         etapes,
         commande_cli: commande,
@@ -422,7 +422,7 @@ pub async fn backup_run(
             0 => format!("sauvegarder {app} — aucune destination : rien ne partirait"),
             n => format!(
                 "sauvegarder {app} vers {}",
-                hlb_api::pluriel(n as u64, "destination", "destinations")
+                hlb_api::plural(n as u64, "destination", "destinations")
             ),
         },
         etapes,
@@ -564,11 +564,11 @@ pub async fn redimensionner(
         description: match actuel {
             Some(a) => format!(
                 "passer {app} de {a} à {}",
-                hlb_api::pluriel(cible, "réplica", "réplicas")
+                hlb_api::plural(cible, "réplica", "réplicas")
             ),
             None => format!(
                 "passer {app} à {}",
-                hlb_api::pluriel(cible, "réplica", "réplicas")
+                hlb_api::plural(cible, "réplica", "réplicas")
             ),
         },
         etat: EtatEtape::Prevue,
@@ -593,7 +593,7 @@ pub async fn redimensionner(
 
     let r = ResultatAction {
         applique,
-        resume: format!("{app} à {}", hlb_api::pluriel(cible, "réplica", "réplicas")),
+        resume: format!("{app} à {}", hlb_api::plural(cible, "réplica", "réplicas")),
         etapes: vec![etape],
         commande_cli: format!("hlb scale {app} {cible} --apply"),
         blocages,
@@ -653,7 +653,7 @@ pub async fn destination(
     if !connues.is_empty() {
         blocages.push(format!(
             "{} {} : {} — attendu « critique » ou « volumineux »",
-            hlb_api::pluriel(connues.len() as u64, "classe", "classes"),
+            hlb_api::plural(connues.len() as u64, "classe", "classes"),
             if connues.len() > 1 {
                 "inconnues"
             } else {
@@ -876,7 +876,7 @@ pub async fn supprimer_app(
             ),
             n => format!(
                 "supprimer {app} — {} {} conservé{}, les données restent",
-                hlb_api::pluriel(n as u64, "volume", "volumes"),
+                hlb_api::plural(n as u64, "volume", "volumes"),
                 if n > 1 { "sont" } else { "est" },
                 if n > 1 { "s" } else { "" }
             ),

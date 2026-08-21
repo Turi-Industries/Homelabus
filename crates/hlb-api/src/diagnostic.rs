@@ -95,17 +95,17 @@ pub fn expliquer(app: &AppDetail, noeuds: &[NoeudSummary], alertes: &[AlerteActi
             (0, 0) => format!("{nom} n'a aucun réplica en vie."),
             (0, n) => format!(
                 "{nom} n'a aucun réplica en vie, et {} en échec.",
-                crate::pluriel(n as u64, "réplica", "réplicas")
+                crate::plural(n as u64, "réplica", "réplicas")
             ),
             (v, 0) => format!(
                 "{nom} tourne avec {}, mais son état est « {} ».",
-                crate::pluriel(v as u64, "réplica", "réplicas"),
+                crate::plural(v as u64, "réplica", "réplicas"),
                 app.resume.status
             ),
             (v, n) => format!(
                 "{nom} tourne avec {}, et {} en échec.",
-                crate::pluriel(v as u64, "réplica", "réplicas"),
-                crate::pluriel(n as u64, "réplica", "réplicas")
+                crate::plural(v as u64, "réplica", "réplicas"),
+                crate::plural(n as u64, "réplica", "réplicas")
             ),
         },
         source: None,

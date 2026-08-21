@@ -223,7 +223,7 @@ pub async fn creer_invitation(
     if usages > USAGES_A_SIGNALER {
         avertissements.push(format!(
             "ce lien laissera entrer {} : s'il fuite, ce sont autant de comptes créés",
-            hlb_api::pluriel(usages as u64, "personne", "personnes")
+            hlb_api::plural(usages as u64, "personne", "personnes")
         ));
     }
 
@@ -234,7 +234,7 @@ pub async fn creer_invitation(
             "créer une invitation « {profil} » / « {} », valable {}, pour {}",
             role.as_str(),
             hlb_api::humanise(duree),
-            hlb_api::pluriel(usages as u64, "personne", "personnes")
+            hlb_api::plural(usages as u64, "personne", "personnes")
         ),
         etat: EtatEtape::Prevue,
         erreur: None,

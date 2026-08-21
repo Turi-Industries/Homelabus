@@ -140,7 +140,7 @@ pub fn afficher(ui: &mut egui::Ui, preferences: Option<&hlb_api::Preferences>) -
                         format!(
                             "{} : {}",
                             t.nom,
-                            hlb_api::pluriel(pbs.len() as u64, "problème", "problèmes")
+                            hlb_api::plural(pbs.len() as u64, "problème", "problèmes")
                         )
                     },
                 );

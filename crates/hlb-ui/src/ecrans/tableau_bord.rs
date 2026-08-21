@@ -53,7 +53,7 @@ pub fn afficher(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) {
             p.critique,
             format!(
                 "{} demande{} une action.",
-                hlb_api::pluriel(critiques as u64, "application", "applications"),
+                hlb_api::plural(critiques as u64, "application", "applications"),
                 if critiques > 1 { "nt" } else { "" }
             ),
         )
@@ -62,7 +62,7 @@ pub fn afficher(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) {
             p.attention,
             format!(
                 "{a_voir} à surveiller, {} en attente.",
-                hlb_api::pluriel(
+                hlb_api::plural(
                     bloquants.max(0) as u64,
                     "action manuelle",
                     "actions manuelles"
@@ -102,7 +102,7 @@ pub fn afficher(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) {
             data.todo.len().to_string(),
             Some(format!(
                 "dont {}",
-                hlb_api::pluriel(bloquants.max(0) as u64, "bloquante", "bloquantes")
+                hlb_api::plural(bloquants.max(0) as u64, "bloquante", "bloquantes")
             )),
             if bloquants > 0 { p.attention } else { p.texte },
         ),
@@ -189,7 +189,7 @@ fn raison(a: &hlb_api::AppSummary, _p: &crate::design::Palette) -> String {
     if a.blocking_guides > 0 {
         return format!(
             "{} bloque{} le déploiement",
-            hlb_api::pluriel(
+            hlb_api::plural(
                 a.blocking_guides.max(0) as u64,
                 "action manuelle",
                 "actions manuelles"

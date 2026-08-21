@@ -119,7 +119,7 @@ pub fn afficher(ui: &mut egui::Ui, topo: Option<&Topologie>, fraicheur: &Freshne
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         c::legende(
                             ui,
-                            &hlb_api::pluriel(sim.noeuds_perdus.len() as u64, "nœud", "nœuds"),
+                            &hlb_api::plural(sim.noeuds_perdus.len() as u64, "nœud", "nœuds"),
                         );
                     });
                 });
@@ -173,10 +173,7 @@ pub fn afficher(ui: &mut egui::Ui, topo: Option<&Topologie>, fraicheur: &Freshne
                     }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    c::legende(
-                        ui,
-                        &hlb_api::pluriel(d.noeuds.len() as u64, "nœud", "nœuds"),
-                    );
+                    c::legende(ui, &hlb_api::plural(d.noeuds.len() as u64, "nœud", "nœuds"));
                 });
             });
 

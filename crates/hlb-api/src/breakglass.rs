@@ -162,7 +162,7 @@ pub fn verdict(garde_fous: &[GardeFou]) -> String {
     if jamais > 0 {
         return format!(
             "{} jamais vérifié{} : c'est celui-là qui manquera.",
-            crate::pluriel(jamais as u64, "garde-fou", "garde-fous"),
+            crate::plural(jamais as u64, "garde-fou", "garde-fous"),
             if jamais > 1 { "s" } else { "" }
         );
     }
@@ -178,7 +178,7 @@ pub fn verdict(garde_fous: &[GardeFou]) -> String {
         return format!(
             "{} à revérifier : les appareils changent, et « on l'avait fait » devient \
              « on croit l'avoir fait ».",
-            crate::pluriel(perimes as u64, "garde-fou", "garde-fous")
+            crate::plural(perimes as u64, "garde-fou", "garde-fous")
         );
     }
 
