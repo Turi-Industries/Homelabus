@@ -119,6 +119,78 @@ impl Capability {
         }
     }
 
+    /// Ce que cette capacité a réellement provisionné, en une phrase.
+    ///
+    /// Destiné à l'écran de détail d'une app : `id()` rend un identifiant technique
+    /// (`object-storage`), qui ne dit pas ce qui a été créé ni avec quel moteur.
+    ///
+    /// 🔴 Le `match` est **exhaustif, sans `..` sur les champs qui portent du sens**.
+    /// Un `..` a le même effet qu'un bras `_ =>` — c'est ainsi que `mode` a été avalé
+    /// sur `Sso`, et `quota_bytes` sur `MailAccount`.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Database { engine, name, extensions } => {
+                let base = format!(
+                    "base {} « {} » isolée (rôle dédié)",
+                    engine.service_name(),
+                    name.as_deref().unwrap_or("<nom de l'app>")
+                );
+                if extensions.is_empty() {
+                    base
+                } else {
+                    // ⚠️ Les extensions doivent être dans l'IMAGE du serveur : les
+                    // nommer ici rend l'exigence visible avant qu'un CREATE EXTENSION
+                    // n'échoue sur ce qui ressemble à un problème de droits.
+                    format!("{base}, extensions : {}", extensions.join(", "))
+                }
+            }
+            Self::Cache { engine, dedicated } => format!(
+                "cache {}{}",
+                engine.service_name(),
+                if *dedicated { " dédié" } else { " partagé" }
+            ),
+            Self::Sso { mode, redirect_paths } => match mode {
+                SsoMode::None => "SSO explicitement exclu — aucun client OIDC".to_string(),
+                SsoMode::Native => format!(
+                    "client OIDC natif ({} URI de rappel)",
+                    redirect_paths.len()
+                ),
+                autre => format!("SSO par portail ({autre:?})"),
+            },
+            Self::Smtp => "relais SMTP".to_string(),
+            Self::MailAccount { quota_bytes, aliases } => {
+                let mut d = "boîte mail".to_string();
+                if *aliases {
+                    d.push_str(" avec aliases");
+                }
+                if let Some(q) = quota_bytes {
+                    // ⚠️ Dit tel quel : Stalwart n'expose pas les quotas en JMAP, donc
+                    // un quota déclaré n'est PAS appliqué. Le taire ferait croire à une
+                    // limite qui n'existe pas.
+                    d.push_str(&format!(" (quota {q} o DÉCLARÉ, non appliqué)"));
+                }
+                d
+            }
+            Self::Storage { name, path, tier, backup, sqlite } => {
+                let mut d = format!("volume « {name} » sur {path} (tier {tier:?})");
+                d.push_str(if *backup {
+                    ", sauvegardé"
+                } else {
+                    ", NON sauvegardé"
+                });
+                if *sqlite {
+                    d.push_str(", instantané SQLite");
+                }
+                d
+            }
+            Self::ObjectStorage { bucket, backup } => format!(
+                "compartiment S3 « {} » avec clé isolée{}",
+                bucket.as_deref().unwrap_or("<nom de l'app>"),
+                if *backup { "" } else { ", NON sauvegardé" }
+            ),
+        }
+    }
+
     /// Le service de plateforme qui satisfait cette capacité, s'il y en a un.
     ///
     /// Sert à construire le graphe de dépendances (§4.7) : Swarm n'a pas de
@@ -207,6 +279,105 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_capability_describes_what_it_actually_provisioned() {
+        // `id()` rend « object-storage », qui ne dit ni ce qui a été créé ni avec quel
+        // moteur. L'écran de détail a besoin de la phrase.
+        let toutes = [
+            Capability::Database {
+                engine: DbEngine::Postgres,
+                name: Some("gitea".into()),
+                extensions: vec!["vector".into()],
+            },
+            Capability::Cache {
+                engine: CacheEngine::Valkey,
+                dedicated: true,
+            },
+            Capability::Sso {
+                mode: SsoMode::Native,
+                redirect_paths: vec!["/callback".into()],
+            },
+            Capability::Smtp,
+            Capability::MailAccount {
+                quota_bytes: Some(5_000_000),
+                aliases: true,
+            },
+            Capability::Storage {
+                name: "data".into(),
+                path: "/data".into(),
+                tier: StorageTier::default(),
+                backup: true,
+                sqlite: false,
+            },
+            Capability::ObjectStorage {
+                bucket: Some("photos".into()),
+                backup: true,
+            },
+        ];
+
+        for c in &toutes {
+            let d = c.describe();
+            assert!(!d.is_empty(), "{:?} sans description", c.id());
+            assert!(!d.contains(".."), "{d}");
+        }
+    }
+
+    #[test]
+    fn a_deliberate_sso_exclusion_says_so() {
+        // 🔴 `mode: none` est une EXCLUSION VOLONTAIRE, pas un oubli. La confondre avec
+        // les autres modes a déjà produit un client OIDC aux URI vides.
+        let exclu = Capability::Sso {
+            mode: SsoMode::None,
+            redirect_paths: Vec::new(),
+        };
+        assert!(exclu.describe().contains("exclu"), "{}", exclu.describe());
+
+        let natif = Capability::Sso {
+            mode: SsoMode::Native,
+            redirect_paths: vec!["/cb".into()],
+        };
+        assert_ne!(natif.describe(), exclu.describe());
+    }
+
+    #[test]
+    fn a_declared_mail_quota_says_it_is_not_enforced() {
+        // ⚠️ Stalwart n'expose pas les quotas en JMAP. Taire ce fait ferait croire à
+        // une limite qui n'existe pas.
+        let c = Capability::MailAccount {
+            quota_bytes: Some(5_368_709_120),
+            aliases: false,
+        };
+        assert!(c.describe().contains("non appliqué"), "{}", c.describe());
+    }
+
+    #[test]
+    fn an_unbacked_volume_says_so_loudly() {
+        // Un volume non sauvegardé est un choix ; il doit se voir, pas se deviner.
+        let sans = Capability::Storage {
+            name: "cache".into(),
+            path: "/cache".into(),
+            tier: StorageTier::default(),
+            backup: false,
+            sqlite: false,
+        };
+        assert!(sans.describe().contains("NON sauvegardé"), "{}", sans.describe());
+    }
+
+    #[test]
+    fn a_sqlite_volume_is_flagged_because_it_cannot_be_copied_hot() {
+        // 🔴 Le fichier principal et son WAL seraient capturés à des instants
+        // différents, et la base restaurée serait corrompue — sans que rien ne le
+        // signale au moment de la sauvegarde.
+        let c = Capability::Storage {
+            name: "db".into(),
+            path: "/db".into(),
+            tier: StorageTier::default(),
+            backup: true,
+            sqlite: true,
+        };
+        assert!(c.describe().contains("SQLite"), "{}", c.describe());
+    }
 
     #[test]
     fn database_yaml_roundtrip() {

@@ -21,6 +21,8 @@
 //! chaque appel en **régénère un nouveau**, invalidant le précédent. D'où
 //! [`OidcClient::ensure`], qui ne le régénère jamais pour un client existant.
 
+pub mod oidc;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]

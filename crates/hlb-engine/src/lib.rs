@@ -781,10 +781,28 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::ProvisionMailAccount { address, aliases } => {
+            Action::ProvisionMailAccount { address, aliases, quota_bytes } => {
                 let (Some(mail), Some(vault)) = (self.mail, self.vault) else {
                     return Ok(Step::NotImplemented);
                 };
+
+                // 🔴 Un quota déclaré et non posé est pire que pas de quota : la boîte
+                // paraîtrait bornée et grossirait sans fin, jusqu'à saturer le disque
+                // qui porte aussi les bases. `hlb-mail` n'a aucune opération de quota,
+                // Stalwart ne l'exposant pas en JMAP.
+                //
+                // On refuse donc AVANT de créer quoi que ce soit, plutôt que de créer
+                // la boîte et de taire la moitié manquante — « Unimplemented n'est
+                // jamais Done ».
+                if quota_bytes.is_some() {
+                    tracing::warn!(
+                        address,
+                        "quota de boîte déclaré au manifest mais non applicable : \
+                         Stalwart ne l'expose pas en JMAP. Retire `quotaBytes` du \
+                         manifest, ou pose-le à la main dans Stalwart."
+                    );
+                    return Ok(Step::NotImplemented);
+                }
 
                 // Le mot de passe vit au coffre, comme les autres. `if_absent` :
                 // relancer un plan ne doit pas en fabriquer un second, qui ne
@@ -970,6 +988,22 @@ mod tests {
         ) -> hlb_orchestrator::Result<ServiceStatus> {
             self.waited.lock().expect("mutex").push(name.into());
             self.status(name).await
+        }
+
+        async fn tasks(
+            &self,
+            _: Option<&str>,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+            // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+            Ok(Vec::new())
+        }
+
+        async fn logs(
+            &self,
+            _: &str,
+            _: u32,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+            Ok(Vec::new())
         }
     }
 

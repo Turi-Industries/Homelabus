@@ -12,36 +12,38 @@ bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatique
 | Composant | État |
 |---|---|
 | Spike `bollard`/Swarm (risque n°1) | ✅ **validé** — voir ci-dessous |
-| `hlb-types` — manifests, capacités, **liaisons**, validation | ✅ 52 tests |
-| `hlb-orchestrator` — trait + implémentation Swarm | ✅ 7 tests d'intégration |
-| `hlb-resolver` — résolution + graphe + plan | ✅ 25 tests |
+| `hlb-types` — manifests, capacités, **liaisons**, validation | ✅ 69 tests |
+| `hlb-orchestrator` — trait + implémentation Swarm | ✅ 24 tests + 11 d'intégration |
+| `hlb-resolver` — résolution + graphe + plan | ✅ 26 tests |
 | `hlb-catalog` — chargement et validation | ✅ 9 tests |
-| `hlb-state` — état persistant, reprise, secrets, **comptes** (sqlx/SQLite) | ✅ 40 tests |
+| `hlb-state` — état persistant, reprise, secrets, **comptes** (sqlx/SQLite) | ✅ 87 tests |
 | `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
-| `hlb-platform` — provisionnement isolé **PostgreSQL + MariaDB** | ✅ 14 + 11 tests |
-| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 25 tests |
-| `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 33 + 7 tests |
-| `hlb-registry` — résolution de digest, politique de version | ✅ 28 + 6 tests |
+| `hlb-platform` — provisionnement isolé **PostgreSQL + MariaDB** | ✅ 14 tests + 11 d'intégration |
+| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 28 tests |
+| `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 40 tests + 7 d'intégration |
+| `hlb-registry` — résolution de digest, politique de version | ✅ 28 tests + 6 d'intégration |
 | `hlb-updater` — veille, fenêtres, rollback, **Trivy + cosign** | ✅ 30 tests |
-| `hlb-backup` — restic, PITR, SQLite, DR, réplication, MariaDB, **destinations** | ✅ 192 + 18 tests |
-| `hlb-identity` — client PocketID : provisionnement OIDC | ✅ 5 + 4 tests |
-| `hlb-mail` — client Stalwart (JMAP) : boîtes et aliases | ✅ 16 tests |
+| `hlb-backup` — restic, PITR, SQLite, DR, réplication, MariaDB, **destinations**, **restaurabilité** | ✅ 207 tests + 17 d'intégration |
+| `hlb-identity` — client PocketID : OIDC, **connexion des personnes** (PKCE) | ✅ 17 tests + 4 d'intégration |
+| `hlb-mail` — client Stalwart (JMAP) : boîtes, aliases, **Sieve** | ✅ 16 tests |
 | `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
-| `hlb-gitops` — miroir Git de l'état désiré | ✅ 7 tests |
-| `hlb-bootstrap` — distributions, préchecks, **accès SSH gérés** | ✅ 72 + 6 tests |
-| `hlb-agent` — état du nœud, seuils disque, **PKI + mTLS** | ✅ 37 + 10 tests |
-| `hlb-controller` — daemon : API, `/metrics`, boucles, **purge des aliases** | ✅ 48 + 3 tests |
+| `hlb-gitops` — miroir Git de l'état désiré | ✅ 10 tests |
+| `hlb-bootstrap` — distributions, préchecks, **accès SSH gérés** | ✅ 78 tests + 4 d'intégration |
+| `hlb-agent` — état du nœud, **protocole 2** (charge, CPU, swap), PKI + mTLS | ✅ 61 tests |
+| `hlb-controller` — daemon : API, RBAC, audit chaîné, boucles, **mode démo** | ✅ 185 tests + 3 d'intégration |
 | `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 23 tests |
 | `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
-| `hlb-cli` — 27 commandes : `install`, `backup`, `user`, `metrics`, `replication`… | ✅ utilisable |
-| `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 11 tests |
-| `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 22 tests |
-| `hlb-ui` — tableau de bord **egui** : natif, web, téléphone | ✅ 20 + 2 tests |
+| `hlb-cli` — 28 commandes : `install`, `backup`, `user`, `metrics`, `replication`… | ✅ utilisable |
+| `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 97 tests |
+| `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 44 tests |
+| `hlb-ui` — **20 écrans egui** : natif, web, téléphone, PWA, kiosque | ✅ 146 tests + 3 d'intégration |
 | `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
 | `hlb-objstore` — client Garage : compartiments et clés isolées | ✅ 6 tests |
-| `hlb-users` — comptes, boîtes, **aliases**, quotas, **Sieve**, **API addy.io** | ✅ 50 tests |
+| `hlb-users` — comptes, boîtes, **aliases**, quotas, **Sieve**, **API addy.io** | ✅ 51 tests |
 
-**896 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]`, ils exigent Docker).
+**1370 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]` : ils exigent
+Docker, un réseau, ou un vrai controller). `cargo clippy --all-targets` reste à zéro
+avertissement.
 
 ### Tests d'intégration PostgreSQL
 
@@ -132,7 +134,8 @@ export HLB_POSTGRES_ADMIN=postgres://postgres:motdepasse@hote:5432/postgres
 
 🔴 La clé maîtresse (`hlb-master.key`) est créée au premier usage. **Sa perte rend
 tous les secrets et toutes les sauvegardes irrécupérables** — garde deux copies
-hors ligne.
+hors ligne. Elle est dans `.gitignore` : elle ne doit jamais entrer dans un dépôt, et
+sa fuite vaut la fuite de tout le coffre.
 
 ⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. `hlb node add` les
 pose ; sur un nœud rattaché à la main, il faut le faire soi-même — sinon rien ne se
@@ -141,6 +144,49 @@ planifie et `wait_healthy` expire :
 ```sh
 docker node update --label-add tier=heavy $(docker node ls -q)
 ```
+
+## L'interface
+
+20 écrans en **egui** : le même code tourne en natif, dans le navigateur (wasm) et sur
+un téléphone (PWA installable). `hlb-api` définit les types **une seule fois** pour le
+serveur et pour l'interface — il n'y a pas d'OpenAPI, et il n'y en aura pas.
+
+Le moyen le plus rapide de la voir, sans cluster ni Docker : le **mode démonstration**,
+qui peuple une base en mémoire des cas qu'on n'a jamais sous la main — app jamais
+sauvegardée, hors-site mort depuis trois semaines, alias expiré qui reçoit encore,
+compte à moitié créé dans les deux sens.
+
+```sh
+./target/debug/hlb-controller --demo --listen 127.0.0.1:8420 &
+./target/debug/hlb-ui --url http://127.0.0.1:8420 --route /apps
+```
+
+Pour la version web :
+
+```sh
+crates/hlb-ui/build-web.sh          # budget de taille vérifié : 6 Mo max
+./target/debug/hlb-controller --demo --ui-dir crates/hlb-ui/web
+```
+
+Ce que l'interface fait et que le CLI ne fait pas — c'est ce qui justifie son
+existence :
+
+- **La topologie** : les nœuds regroupés par **domaine de panne**, et les violations
+  d'anti-affinité. L'information vivait dans les étiquettes Swarm et n'était lisible
+  nulle part. « Domaine non déclaré » y est distinct de « nœud isolé ».
+- **La corrélation** : restaurabilité (« si je perds tout maintenant, je récupère
+  quoi ? »), simulateur de panne, chaîne causale de la tâche en échec au disque plein,
+  frise unifiée des sauvegardes et des actions, exposition **déclarée** contre
+  **réellement posée**.
+- **Les opérations rares et dangereuses** : rotation assistée d'un secret (le coffre
+  n'est pas la source de vérité), break-glass avec attestations datées qui expirent,
+  runbook imprimable engendré depuis l'état réel et sans aucun secret, plans nommés
+  préparés à froid puis rejoués **tels qu'ils ont été prévisualisés**.
+
+🔴 **Une donnée périmée ne ressemble jamais à une donnée fraîche.** Si le controller
+tombe, l'interface garderait son dernier état connu : toutes les apps vertes pendant
+que le cluster brûle. `Ressource<T>` porte sa `Freshness`, que le type oblige à
+regarder — et le service worker de la PWA ne met **jamais** l'API en cache.
 
 ## Sauvegardes — le 3-2-1 du §8.1
 
@@ -307,10 +353,28 @@ ressemblerait à un succès est traitée comme un défaut, pas comme un raccourc
   que la réplication PostgreSQL, elle vérifiée contre un vrai couple.
 - **Les dumps MariaDB** passent par un runner simulé, pour la même raison.
 
+### Actions de l'API qui ne sont pas encore branchées
+
+L'interface sait **prévisualiser** ces quatre actions — le plan affiché est le vrai,
+produit par le résolveur — mais l'exécution rend `NonImplementee` avec sa raison, et
+renvoie vers la commande à taper. Jamais un faux succès.
+
+| Action | Ce qui manque |
+|---|---|
+| installer une app | coffre + orchestrateur + clients de plateforme dans l'état de l'API |
+| lancer une sauvegarde | le dépôt restic vit dans la boucle du controller |
+| drainer un nœud | `Orchestrator` n'expose pas la disponibilité |
+| supprimer une app | orchestrateur + exécuteur |
+
+Les autres routes du lot 5 agissent réellement : attester un guide, déclarer une
+destination, mettre à l'échelle, ainsi que tous les réglages et la gestion des comptes.
+
 ### Fonctionnalités absentes
 
 - **Pas de libre-service pour les aliases.** Un utilisateur passe par la ligne de
-  commande ou par l'API addy.io ; l'écran dans l'UI reste à écrire.
+  commande ou par l'API addy.io ; l'écran `MaBoite` reste à écrire. Deux autres écrans
+  sont dans ce cas — `MonCompte` et `Catalogue`. Ils sont **absents de la navigation**
+  tant qu'ils n'existent pas : proposer un écran vide serait pire que ne rien proposer.
 - **`hlb user mailbox add` n'ouvre pas le compte Stalwart**, il l'enregistre seulement.
   Les ACL IMAP — plusieurs boîtes sous une seule connexion — ne sont pas câblées.
 - **`hlb db failover`** n'existe pas : la réplication fonctionne et est vérifiée, mais

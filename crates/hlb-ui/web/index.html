@@ -16,6 +16,8 @@
      d'adresse, comme une app. -->
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icone.svg" type="image/svg+xml">
 
 <style>
   html, body {
@@ -82,5 +84,21 @@
         console.error(e);
       });
   </script>
+<script>
+  // 🔴 Le service worker met en cache la COQUILLE, jamais l'API : un cache de données
+  // afficherait des apps vertes servies depuis le cache pendant que le cluster brûle.
+  // Voir sw.js, dont un test refuse tout motif d'API.
+  //
+  // ⚠️ Enregistré seulement en HTTPS (ou sur localhost) : ailleurs le navigateur refuse
+  // silencieusement, et l'erreur de console ferait chercher un défaut inexistant.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {
+        // Sans service worker, l'interface fonctionne exactement pareil : elle n'est
+        // simplement pas installable. Rien à signaler à l'utilisateur.
+      });
+    });
+  }
+</script>
 </body>
 </html>

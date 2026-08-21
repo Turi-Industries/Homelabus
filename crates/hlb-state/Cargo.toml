@@ -8,6 +8,8 @@ description = "Store d'état : apps installées, progression des plans, actions 
 
 [dependencies]
 hlb-types.workspace = true
+hlb-api.workspace = true
+hlb-users.workspace = true
 sqlx.workspace = true
 serde_yaml_ng.workspace = true
 thiserror.workspace = true

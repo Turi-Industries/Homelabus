@@ -16,15 +16,20 @@ path = "src/main.rs"
 
 [dependencies]
 hlb-types.workspace = true
+serde_yaml_ng.workspace = true
 hlb-api.workspace = true
 hlb-state.workspace = true
 hlb-engine.workspace = true
+hlb-ingress.workspace = true
+hlb-resolver.workspace = true
+hlb-catalog.workspace = true
 hlb-orchestrator.workspace = true
 hlb-backup.workspace = true
 hlb-secrets.workspace = true
 hlb-gitops.workspace = true
 hlb-agent.workspace = true
 hlb-mail.workspace = true
+hlb-identity.workspace = true
 hlb-users.workspace = true
 hlb-metrics.workspace = true
 hlb-notify.workspace = true
@@ -40,7 +45,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-serde_yaml_ng.workspace = true
 tempfile = "3"
 tower = "0.5"
 

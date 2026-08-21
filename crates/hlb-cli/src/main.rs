@@ -258,6 +258,13 @@ enum Command {
     Audit {
         #[arg(long, default_value = "30")]
         limit: usize,
+        /// Vérifier le chaînage plutôt qu'afficher les entrées.
+        ///
+        /// Chaque entrée porte l'empreinte de la précédente : une entrée modifiée ou
+        /// retirée casse la chaîne. « Append-only » n'est sinon qu'une convention, que
+        /// rien n'impose à qui ouvre le fichier SQLite.
+        #[arg(long)]
+        verify: bool,
     },
 
     /// Historique des changements de configuration (§2.3).
@@ -591,6 +598,25 @@ enum UserCmd {
         nom: String,
         #[arg(long)]
         profil: String,
+    },
+    /// Le rôle d'une personne dans HomelabUS (§9ter).
+    ///
+    /// ⚠️ Distinct du PROFIL, qui porte les quotas. « Combien de boîtes as-tu droit »
+    /// et « peux-tu détruire le cluster » sont deux questions différentes : les
+    /// confondre obligerait à donner des droits d'exploitation pour accorder une boîte.
+    Role {
+        nom: String,
+        /// utilisateur | viewer | operator | admin. Sans valeur : affiche le rôle.
+        role: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Les sessions ouvertes d'une personne, et de quoi les fermer.
+    Sessions {
+        nom: String,
+        /// Fermer une session par sa référence courte, ou « toutes ».
+        #[arg(long)]
+        close: Option<String>,
     },
     /// Boîtes mail supplémentaires.
     #[command(subcommand)]
@@ -1889,53 +1915,14 @@ async fn gerer_alias(
 }
 
 /// Reconstruit un compte depuis l'état.
+///
+/// Délègue à `State::compte` : la reconstruction vivait ici, et l'API en avait une
+/// autre — c'est ainsi qu'un quota s'appliquait en ligne de commande et pas en HTTP.
 async fn charger_compte(
     state: &State,
     nom: &str,
 ) -> Result<hlb_users::Compte, Box<dyn std::error::Error>> {
-    use hlb_users::{Alias, Boite, Compte, Duree};
-
-    let profil = state
-        .users()
-        .await?
-        .into_iter()
-        .find(|(n, _, _)| n == nom)
-        .map(|(_, p, _)| p)
-        .unwrap_or_else(|| "standard".into());
-
-    let mut c = Compte::nouveau(nom, profil);
-    c.pocket_id = state
-        .users()
-        .await?
-        .into_iter()
-        .find(|(n, _, _)| n == nom)
-        .and_then(|(_, _, id)| id);
-
-    let aliases = state.aliases(nom).await?;
-
-    for (local, domaine, par_defaut) in state.mailboxes(nom).await? {
-        let siens: Vec<Alias> = aliases
-            .iter()
-            .filter(|(boite, ..)| boite == &local)
-            .map(|(_, l, expire, actif, _hint, note)| Alias {
-                local: l.clone(),
-                duree: match expire {
-                    Some(e) => Duree::Temporaire { expire_le: *e },
-                    None => Duree::Permanent,
-                },
-                actif: *actif,
-                note: note.clone(),
-            })
-            .collect();
-
-        c.boites.push(Boite {
-            local,
-            domaine,
-            par_defaut,
-            aliases: siens,
-        });
-    }
-    Ok(c)
+    Ok(state.compte(nom).await?)
 }
 
 /// Analyse une durée : `30j`, `12h`, `90m`.
@@ -2079,6 +2066,44 @@ async fn snapshot_sqlite_volume(
         }
     }
     Ok(ok)
+}
+
+/// L'état de HomelabUS lui-même (lot 11.6).
+///
+/// ## 🔴 Sans ça, une restauration rend un système fonctionnel mais AMNÉSIQUE
+///
+/// La base d'état porte tout ce que ce chantier a créé : la marque, les thèmes choisis
+/// par chacun, les annonces et les incidents, les attributions de rôles, les
+/// invitations, les attestations de secours, les plans préparés, ce qui a été
+/// réellement publié en entrée. Rien de tout cela ne vit dans un volume d'application.
+///
+/// On restaure alors des apps qui tournent, dans une installation qui ne sait plus qui
+/// est administrateur ni quelles routes elle a posées — le genre d'oubli qui ne se voit
+/// qu'au pire moment.
+///
+/// ⚠️ Classe CRITIQUE : quelques mégaoctets, irremplaçables, et c'est le premier fichier
+/// qu'on veut hors site. Et `VACUUM INTO`, jamais une copie : en mode WAL, la base est
+/// trois fichiers que restic copierait l'un après l'autre pendant que le controller
+/// écrit — la panne ne se verrait qu'à la restauration.
+async fn sauvegarder_etat(
+    state: &State,
+    vault: &Vault,
+    repo: Option<&str>,
+    network: &str,
+    chemin_etat: &std::path::Path,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let staging = tempfile::tempdir()?;
+    let instantane = staging.path().join("hlb-etat.snapshot");
+    hlb_backup::sqlite_snapshot(chemin_etat, &instantane).await?;
+
+    let d = hlb_backup::pgdump::scheduled::Dump {
+        app: "hlb".to_string(),
+        database: "etat".to_string(),
+        filename: "hlb-etat.snapshot".to_string(),
+        bytes: std::fs::read(&instantane)?,
+    };
+
+    archiver_partout(state, vault, "hlb", "etat", network, repo, &d).await
 }
 
 /// Sauvegarde logique de chaque base déclarée.
@@ -3030,14 +3055,28 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     println!("# ═══ Caddy frontend ═══\n{front}");
                     println!("# ═══ Caddy backend ═══\n{back}");
                     println!(
-                        "\n{} route(s). Relance avec --apply pour recharger Caddy.",
-                        routes.len()
+                        "\n{}. Relance avec --apply pour recharger Caddy.",
+                        hlb_api::pluriel(routes.len() as u64, "route", "routes")
                     );
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 }
 
                 CaddyAdmin::new(front_admin).load_caddyfile(&front).await?;
-                println!("✓ Caddy frontal rechargé ({} route(s))", routes.len());
+                println!(
+                    "✓ Caddy frontal rechargé ({})",
+                    hlb_api::pluriel(routes.len() as u64, "route", "routes")
+                );
+
+                // 🔴 Enregistrer CE QUI VIENT D'ÊTRE POSÉ, après le rechargement et pas
+                // avant : c'est cette trace qui permet de comparer, plus tard,
+                // l'exposition réelle à ce que les manifests demandent. L'écrire avant
+                // ferait enregistrer une configuration qu'un échec de rechargement
+                // aurait laissée non appliquée.
+                let pose: Vec<(String, String, bool)> = routes
+                    .iter()
+                    .map(|r| (r.host.clone(), r.service.clone(), r.public))
+                    .collect();
+                state.record_ingress(&pose).await?;
 
                 if let Some(back_url) = back_admin {
                     CaddyAdmin::new(back_url).load_caddyfile(&back).await?;
@@ -3149,10 +3188,24 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::Audit { limit } => {
+        Command::Audit { limit, verify } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = State::open(&cli.state).await?;
+
+                if *verify {
+                    let v = state.verify_audit_chain().await?;
+                    println!("{}", v.describe());
+                    if !v.est_intacte() {
+                        eprintln!(
+                            "\n🔴 Le journal a été modifié après coup. Compare-le à la copie \
+                             exportée hors du cluster : c'est elle qui fait foi."
+                        );
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    return Ok(ExitCode::SUCCESS);
+                }
+
                 let t = state.audit_trail(*limit).await?;
 
                 if t.is_empty() {
@@ -3161,13 +3214,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 println!("{:<20} {:<10} {:<12} {:<16} ISSUE", "QUAND", "ACTEUR", "ACTION", "CIBLE");
-                for (at, actor, action, target, outcome) in &t {
-                    let marque = match outcome.as_str() {
+                for e in &t {
+                    let marque = match e.outcome.as_str() {
                         "ok" => "✓",
                         "refused" => "⛔",
                         _ => "✗",
                     };
-                    println!("{at:<20} {actor:<10} {action:<12} {target:<16} {marque} {outcome}");
+                    println!(
+                        "{:<20} {:<10} {:<12} {:<16} {marque} {}",
+                        e.at, e.actor, e.action, e.target, e.outcome
+                    );
+                    // Le détail porte le diff (§9ter) : l'afficher en retrait plutôt
+                    // qu'en colonne, sinon la ligne devient illisible.
+                    if let Some(d) = &e.detail {
+                        println!("{:<20} └─ {d}", "");
+                    }
                 }
                 Ok(ExitCode::SUCCESS)
             })
@@ -3991,6 +4052,111 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
+                    UserCmd::Role { nom, role, apply } => {
+                        // Un rôle accordé à un compte inexistant serait une ligne
+                        // orpheline que personne ne relirait : le compte créé plus tard
+                        // sous le même nom en hériterait sans qu'on l'ait voulu.
+                        if !state.users().await?.iter().any(|(n, _, _)| n == nom) {
+                            eprintln!("compte « {nom} » inconnu — « hlb user list » pour la liste");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        let Some(demande) = role else {
+                            let actuel = state.user_role(nom).await?;
+                            println!("{nom} : {} — {}", actuel.as_str(), actuel.describe());
+                            return Ok(ExitCode::SUCCESS);
+                        };
+
+                        let Some(r) = hlb_types::Role::parse(demande) else {
+                            eprintln!("rôle inconnu « {demande} ». Valeurs possibles :");
+                            for v in hlb_types::Role::tous() {
+                                eprintln!("   {:<12} {}", v.as_str(), v.describe());
+                            }
+                            return Ok(ExitCode::FAILURE);
+                        };
+
+                        let actuel = state.user_role(nom).await?;
+
+                        // 🔴 Rétrograder le dernier administrateur laisserait un système
+                        // où plus personne ne peut accorder de droits : il ne se
+                        // réparerait qu'en éditant SQLite à la main.
+                        if actuel == hlb_types::Role::Admin
+                            && r != hlb_types::Role::Admin
+                            && !state.has_other_admin(nom).await?
+                        {
+                            eprintln!(
+                                "🔴 {nom} est le SEUL administrateur. Le rétrograder laisserait \
+                                 un système où plus personne ne peut accorder de droits."
+                            );
+                            eprintln!("   Nomme d'abord quelqu'un d'autre :  hlb user role <autre> admin --apply");
+                            return Ok(ExitCode::FAILURE);
+                        }
+
+                        if !apply {
+                            println!("Aperçu — {nom} : {} → {}", actuel.as_str(), r.as_str());
+                            println!("   {}", r.describe());
+                            // Une élévation de privilège mérite d'être vue avant d'être
+                            // faite, comme toute opération de ce module.
+                            if r > actuel {
+                                println!("⚠️ C'est une ÉLÉVATION de privilège.");
+                            }
+                            println!("\nRelance avec --apply pour l'appliquer.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        state.set_user_role(nom, r, Some("cli")).await?;
+                        state
+                            .audit(
+                                "cli",
+                                ACTEUR_ROLE,
+                                "user-role",
+                                nom,
+                                "ok",
+                                Some(&format!("{} → {}", actuel.as_str(), r.as_str())),
+                            )
+                            .await?;
+                        println!("✓ {nom} → {} ({})", r.as_str(), r.describe());
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    UserCmd::Sessions { nom, close } => {
+                        let now = maintenant();
+                        if let Some(cible) = close {
+                            let n = if cible == "toutes" {
+                                state.close_all_sessions(nom).await?
+                            } else {
+                                u64::from(state.close_session_by_reference(nom, cible).await?)
+                            };
+                            if n == 0 {
+                                eprintln!("aucune session « {cible} » pour {nom}");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                            state
+                                .audit("cli", ACTEUR_ROLE, "session-close", nom, "ok", Some(cible))
+                                .await?;
+                            println!("✓ {n} session(s) fermée(s)");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+
+                        let sessions = state.sessions_of(nom, now).await?;
+                        if sessions.is_empty() {
+                            println!("{nom} n'a aucune session ouverte.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        println!("{:<10} {:<12} {:<12} APPAREIL", "RÉF", "VUE", "EXPIRE");
+                        for s in &sessions {
+                            println!(
+                                "{:<10} {:<12} {:<12} {}",
+                                s.reference,
+                                format!("il y a {}", hlb_api::humanise(now - s.last_seen)),
+                                format!("dans {}", hlb_api::humanise(s.expires_at - now)),
+                                s.user_agent.as_deref().unwrap_or("inconnu")
+                            );
+                        }
+                        println!("\nFermer :  hlb user sessions {nom} --close <RÉF>|toutes");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
                     UserCmd::Mailbox(sous) => match sous {
                         MailboxCmd::Add { nom, local } => {
                             let c = charger_compte(&state, nom).await?;
@@ -4043,7 +4209,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         // c'est un problème d'authentification.
                         eprintln!("⚠️  Aucun jeton : /metrics est protégé (§9ter) et la");
                         eprintln!("   collecte ne recevra que des 401. Crée-en un :");
-                        eprintln!("     hlb token create collecte --role metrics");
+                        eprintln!("     hlb token create collecte --role viewer");
                         eprintln!();
                     }
                     let cible = scrape::Cible::controller(controller.clone(), token.clone());
@@ -5325,6 +5491,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 println!("{app} : aucune destination pour les volumes.");
                             }
                         }
+                        // 🔴 L'ÉTAT DE HOMELABUS LUI-MÊME, avant tout le reste : sans
+                        // lui, une restauration rend des apps qui tournent dans une
+                        // installation qui ne sait plus qui est administrateur, quelles
+                        // routes elle a posées, ni ce qu'elle a annoncé.
+                        {
+                            print!("hlb/etat (instantané SQLite)… ");
+                            use std::io::Write as _;
+                            let _ = std::io::stdout().flush();
+                            match sauvegarder_etat(
+                                &state, &vault, cli.backup_repo.as_deref(),
+                                &cli.platform_network, &cli.state,
+                            )
+                            .await
+                            {
+                                Ok(n) if n > 0 => {
+                                    println!("✓ {}", hlb_api::pluriel(n as u64, "copie", "copies"));
+                                    faites += 1;
+                                }
+                                // ⚠️ Zéro destination servie n'est pas un succès : c'est
+                                // le cas où l'on croit l'état protégé et où il ne l'est
+                                // pas du tout.
+                                Ok(_) => println!("✗ aucune destination n'a reçu l'état"),
+                                Err(e) => println!("✗ {e}"),
+                            }
+                        }
+
                         // 🔴 Les bases SQLite d'abord : un volume SQLite copié à
                         // chaud donne une base restaurée CORROMPUE, sans que rien ne
                         // le signale au moment de la sauvegarde (§3.4).
@@ -5459,7 +5651,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                     // à signaler cette app comme non vérifiée.
                                     let detail = (!v.matches()).then(|| v.describe());
                                     state
-                                        .record_verification(&a, &snap, detail.as_deref())
+                                        .record_verification(&a, &snap, v.matches(), detail.as_deref())
                                         .await?;
                                     verifiees += 1;
                                     if !v.matches() {
@@ -5469,7 +5661,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 Err(e) => {
                                     println!("✗ {e}");
                                     state
-                                        .record_verification(&a, &snap, Some(&e.to_string()))
+                                        .record_verification(&a, &snap, false, Some(&e.to_string()))
                                         .await?;
                                     ecarts += 1;
                                 }

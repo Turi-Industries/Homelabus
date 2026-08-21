@@ -112,6 +112,22 @@ impl Orchestrator for Fake {
     async fn wait_healthy(&self, n: &str, _: u64) -> hlb_orchestrator::Result<ServiceStatus> {
         self.status(n).await
     }
+
+    async fn tasks(
+        &self,
+        _: Option<&str>,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+        Ok(Vec::new())
+    }
+
+    async fn logs(
+        &self,
+        _: &str,
+        _: u32,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+        Ok(Vec::new())
+    }
 }
 
 fn svc(name: &str, image: &str, desired: u64, running: usize) -> ServiceStatus {
@@ -293,6 +309,21 @@ async fn one_failure_does_not_stop_the_others() {
 
     #[async_trait]
     impl Orchestrator for HalfBroken {
+    async fn tasks(
+        &self,
+        _: Option<&str>,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+        Ok(Vec::new())
+    }
+
+    async fn logs(
+        &self,
+        _: &str,
+        _: u32,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+        Ok(Vec::new())
+    }
         async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
         Ok("SWMKEY-fake".into())
     }

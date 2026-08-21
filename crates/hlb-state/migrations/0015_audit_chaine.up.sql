@@ -1,0 +1,31 @@
+-- Chaînage du journal d'audit (§9ter : « immuable, append-only »).
+--
+-- ## Le problème
+--
+-- La table est append-only par CONVENTION : le crate n'expose ni suppression ni
+-- modification. Mais `hlb.db` est un fichier SQLite, et quiconque l'atteint peut y
+-- faire un `UPDATE`. « Append-only » décrit alors une intention, pas une propriété —
+-- et le journal ne prouve rien de plus que la bonne foi de qui le détient.
+--
+-- ## Le chaînage
+--
+-- Chaque entrée porte l'empreinte de la précédente. Modifier ou retirer une entrée
+-- casse toutes les suivantes, ce que `hlb audit verify` détecte. Cela n'empêche pas la
+-- falsification — rien ne l'empêche sur un fichier local — mais cela la rend
+-- **visible**, ce qui est la seule garantie atteignable sans un tiers de confiance.
+--
+-- Combiné à l'export hors cluster (classe `critique`), un attaquant devrait réécrire
+-- la chaîne ici ET dans une copie qu'il n'atteint pas.
+--
+-- ## 🔴 Pourquoi les anciennes entrées restent NULL
+--
+-- On pourrait calculer les empreintes des entrées existantes au moment de la migration.
+-- Ce serait pire que de ne rien faire : la chaîne PARAÎTRAIT complète et ne prouverait
+-- rien sur le passé, puisqu'on la construirait à partir de ce que la base contient
+-- aujourd'hui — falsifications comprises.
+--
+-- Les entrées antérieures gardent donc `hash IS NULL`, et `hlb audit verify` annonce
+-- explicitement depuis quand la chaîne est vérifiable. Une garantie qu'on n'a pas ne
+-- doit jamais ressembler à une garantie qu'on a.
+ALTER TABLE audit_log ADD COLUMN prev_hash TEXT;
+ALTER TABLE audit_log ADD COLUMN hash TEXT;

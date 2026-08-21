@@ -215,6 +215,77 @@ impl UpdateState {
     }
 }
 
+/// Une tâche Swarm : **un** réplica, sur **un** nœud.
+///
+/// ## Pourquoi elle existe
+///
+/// `running_tasks()` interrogeait déjà Swarm et réduisait tout à un `usize`. Le nœud
+/// d'affectation, le message d'erreur et les dates étaient jetés — or c'est exactement
+/// ce qu'il faut pour répondre à « pourquoi cette app est-elle rouge ? » et pour
+/// dessiner la vue topologie du §11bis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskInfo {
+    pub id: String,
+    pub service: String,
+    /// Le numéro de réplica. `None` pour un service en mode global.
+    pub slot: Option<u64>,
+    pub node_id: Option<String>,
+    /// L'état voulu par Swarm : `running`, `shutdown`, `accepted`…
+    pub desired_state: String,
+    /// L'état réel : `running`, `failed`, `rejected`, `pending`…
+    pub state: String,
+    pub image: String,
+    /// Ce que Swarm dit de la tâche (« started », « no suitable node »…).
+    pub message: Option<String>,
+    /// 🔴 L'erreur, quand il y en a une. C'est LE champ qui explique une app en échec,
+    /// et c'est celui que l'ancien compteur jetait.
+    pub err: Option<String>,
+    /// Horodatage Unix du dernier changement d'état.
+    pub updated_at: Option<i64>,
+}
+
+impl TaskInfo {
+    /// Cette tâche tourne-t-elle vraiment ?
+    ///
+    /// ⚠️ Les DEUX conditions. Swarm conserve l'historique des tâches mortes : filtrer
+    /// sur le seul état voulu compterait des cadavres.
+    pub fn est_vivante(&self) -> bool {
+        self.desired_state == "running" && self.state == "running"
+    }
+
+    /// Cette tâche a-t-elle échoué ?
+    ///
+    /// Distinct de « pas vivante » : une tâche volontairement arrêtée (mise à jour,
+    /// réduction d'échelle) n'est pas une panne, et la compter comme telle ferait
+    /// clignoter le tableau de bord à chaque déploiement normal.
+    pub fn a_echoue(&self) -> bool {
+        matches!(self.state.as_str(), "failed" | "rejected" | "orphaned")
+    }
+
+    /// Ce qui explique l'état, en une ligne.
+    ///
+    /// L'erreur d'abord : c'est elle qu'on cherche. Le message de Swarm ensuite, qui
+    /// dit souvent ce que l'erreur ne dit pas (« no suitable node »).
+    pub fn explication(&self) -> Option<&str> {
+        self.err
+            .as_deref()
+            .or(self.message.as_deref())
+            .filter(|m| !m.is_empty())
+    }
+}
+
+/// Une ligne de journal d'un service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LigneLog {
+    /// Horodatage Unix. `None` si Docker ne l'a pas fourni.
+    pub at: Option<i64>,
+    /// `true` = stderr. Beaucoup d'applications écrivent tout sur stderr : afficher
+    /// ces lignes en rouge ferait passer un démarrage normal pour une avalanche
+    /// d'erreurs.
+    pub erreur: bool,
+    pub ligne: String,
+}
+
 #[async_trait]
 pub trait Orchestrator: Send + Sync {
     async fn ping(&self) -> Result<String>;
@@ -280,4 +351,99 @@ pub trait Orchestrator: Send + Sync {
     /// Attend que le service ait convergé. Utilisé par l'ordonnanceur du §4.7 :
     /// Swarm n'ayant pas de `depends_on`, c'est nous qui séquençons.
     async fn wait_healthy(&self, name: &str, timeout_secs: u64) -> Result<ServiceStatus>;
+
+    /// Les tâches, avec leur placement et leur erreur.
+    ///
+    /// `service = None` rend celles de tous les services gérés. **Sans filtre d'état** :
+    /// les tâches mortes sont ce qui explique une panne, et les cacher ici obligerait à
+    /// aller lire `docker service ps` à la main.
+    async fn tasks(&self, service: Option<&str>) -> Result<Vec<TaskInfo>>;
+
+    /// Les dernières lignes de journal d'un service.
+    ///
+    /// ⚠️ `lignes` est borné côté implémentation : un service bavard laissé sans limite
+    /// remplirait la mémoire du controller, et c'est le controller qui tomberait — pas
+    /// le service qu'on cherchait à diagnostiquer.
+    async fn logs(&self, service: &str, lignes: u32) -> Result<Vec<LigneLog>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tache(desired: &str, etat: &str) -> TaskInfo {
+        TaskInfo {
+            id: "t1".into(),
+            service: "gitea".into(),
+            slot: Some(1),
+            node_id: Some("n1".into()),
+            desired_state: desired.into(),
+            state: etat.into(),
+            image: "gitea/gitea:1.24".into(),
+            message: None,
+            err: None,
+            updated_at: Some(1_000),
+        }
+    }
+
+    #[test]
+    fn a_dead_task_is_never_counted_as_alive() {
+        // 🔴 Swarm conserve l'historique des tâches mortes. Une tâche que Swarm VEUT
+        // voir tourner mais qui a échoué n'est pas vivante — et l'inverse non plus :
+        // une tâche qui tourne encore alors que Swarm veut l'arrêter est en train de
+        // partir.
+        assert!(tache("running", "running").est_vivante());
+        assert!(!tache("running", "failed").est_vivante());
+        assert!(!tache("shutdown", "running").est_vivante());
+        assert!(!tache("shutdown", "shutdown").est_vivante());
+    }
+
+    #[test]
+    fn a_deliberate_shutdown_is_not_a_failure() {
+        // Une tâche arrêtée pour une mise à jour ou une réduction d'échelle n'est pas
+        // une panne. La compter comme telle ferait clignoter le tableau de bord à
+        // chaque déploiement normal — et on cesserait de le regarder.
+        assert!(!tache("shutdown", "shutdown").a_echoue());
+        assert!(!tache("shutdown", "complete").a_echoue());
+        assert!(tache("running", "failed").a_echoue());
+        assert!(tache("running", "rejected").a_echoue());
+        assert!(tache("running", "orphaned").a_echoue());
+    }
+
+    #[test]
+    fn the_error_is_preferred_to_the_status_message() {
+        // Les deux existent souvent ensemble : `message` dit « started », `err` dit
+        // pourquoi ça n'a pas marché. C'est l'erreur qu'on cherche.
+        let mut t = tache("running", "failed");
+        t.message = Some("started".into());
+        t.err = Some("no such image".into());
+        assert_eq!(t.explication(), Some("no such image"));
+
+        t.err = None;
+        assert_eq!(t.explication(), Some("started"));
+    }
+
+    #[test]
+    fn an_empty_explanation_is_none_rather_than_blank() {
+        // Une chaîne vide afficherait une ligne d'explication sans explication, ce qui
+        // fait chercher un problème d'affichage.
+        let mut t = tache("running", "pending");
+        t.err = Some(String::new());
+        t.message = Some(String::new());
+        assert_eq!(t.explication(), None);
+    }
+
+    #[test]
+    fn a_log_line_knows_which_stream_it_came_from() {
+        // Beaucoup d'applications écrivent TOUT sur stderr : peindre ces lignes en
+        // rouge ferait passer un démarrage normal pour une avalanche d'erreurs. Le
+        // champ existe pour être affiché avec discernement, pas pour colorer.
+        let l = LigneLog {
+            at: Some(1_000),
+            erreur: true,
+            ligne: "listening on :3000".into(),
+        };
+        assert!(l.erreur);
+        assert!(!l.ligne.is_empty());
+    }
 }

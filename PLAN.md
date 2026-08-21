@@ -2820,8 +2820,32 @@ Listé comme « à vérifier » depuis le début sans jamais être tranché. Dé
 | `operator` | installer, mettre à jour, redémarrer, sauvegarder | supprimer avec `--purge`, gérer les accès, restaurer en production |
 | `admin` | tout | — |
 
-Rattachés aux **groupes PocketID**, pas gérés dans HomelabUS (§5.9) : une seule source
-de vérité pour les identités.
+> 🔴 **Amendé le 18/08/2026.** Les *identités* restent dans PocketID — une seule source
+> de vérité pour « qui est cette personne ». Mais les **rôles sont attribués dans
+> HomelabUS** (table `user_roles`), et non plus déduits des groupes PocketID.
+>
+> **Pourquoi :** gérer les droits d'accès à HomelabUS depuis l'interface de PocketID, en
+> éditant des groupes dont seul HomelabUS connaît le sens, cachait la moitié du modèle
+> dans un autre produit. `Role::from_groups` existe toujours pour qui préfère l'ancien
+> schéma.
+>
+> **Et un quatrième rôle**, `utilisateur`, en dessous de `viewer` : celui d'une personne
+> qui a un compte, une boîte et des aliases, et rien d'autre. Les trois rôles d'origine
+> étaient tous des rôles d'**exploitation** ; donner `viewer` à quelqu'un qui a
+> simplement une adresse mail lui ouvrirait l'état du cluster, l'inventaire des secrets
+> et le journal d'audit. C'est le rôle par défaut, donc celui d'un jeton dont le rôle est
+> illisible et d'une identité PocketID inconnue de HomelabUS.
+>
+> **Le §9ter disait aussi « journal d'audit immuable ».** Il ne l'était que par
+> convention — aucune commande n'exposait de suppression, mais `hlb.db` est un fichier
+> SQLite qu'on peut ouvrir. Les entrées sont désormais **chaînées par empreinte**
+> (migration `0015`) : une modification a posteriori casse la chaîne, et `hlb audit
+> --verify` le détecte. Cela n'empêche pas la falsification — rien ne l'empêche sur un
+> fichier local — mais cela la rend *visible*, ce qui est la seule garantie atteignable
+> sans tiers de confiance. Combiné à l'export hors cluster, un attaquant devrait
+> réécrire la chaîne ici **et** dans une copie qu'il n'atteint pas.
+
+Rattachement des identités : **groupes PocketID** pour l'identité (§5.9).
 
 **Et deux garde-fous qui comptent plus que les rôles :**
 
@@ -3234,6 +3258,23 @@ une surface d'attaque quasi nulle.
 Les écrans qui *agissent* (installation, restauration, mises à jour) restent en phase 6,
 quand les APIs correspondantes seront stabilisées et éprouvées via le CLI.
 
+> 🔴 **La règle « lecture seule » est levée (18/08/2026).** Elle était juste pour la
+> phase 2.5, et un test l'imposait. Elle ne l'est plus, puisque l'interface doit
+> installer, sauvegarder, restaurer et gérer des comptes.
+>
+> **Trois règles la remplacent, et elles protègent davantage que l'interdiction qu'elles
+> lèvent :**
+>
+> 1. **Aperçu par défaut, en HTTP aussi.** Une route d'action rend le *plan* et ne fait
+>    rien ; elle n'agit qu'avec `?apply=true`. C'est la transposition exacte de
+>    `Executor::apply(true)` — le CLI et l'API se comportent pareil.
+> 2. **L'autorisation est dans la signature du gestionnaire.** `Autorise<PeutOperer>` :
+>    le compilateur l'exige, donc le contrôle ne peut pas être oublié.
+> 3. **Toute route mutante écrit au journal d'audit**, avec l'acteur réel.
+>
+> Chacune est verrouillée par un test qui **parcourt la liste servant à construire le
+> routeur** — une route ajoutée sans respecter les trois fait échouer la suite.
+
 ---
 
 ## 12. Feuille de route
@@ -3327,7 +3368,10 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 - HA Postgres phase 2 (standby + bascule assistée)
 - Exercices de reprise après sinistre automatisés
 
-> **État au 18/08/2026 : la feuille de route est couverte.**
+> **État au 21/08/2026 : la feuille de route est couverte.**
+>
+> `cargo test --workspace` passe — 1370 tests unitaires, 66 d'intégration `#[ignore]` —
+> et `cargo clippy --all-targets` est à zéro avertissement.
 >
 > La réplication streaming est faite et **vérifiée contre un vrai couple
 > primaire/standby** (§3.2) ; il ne manque que `hlb db failover`, la bascule assistée,
@@ -3339,8 +3383,17 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 > **comptes humains et aliases** (§5bis.3), le **multi-conteneur** (§4.8) et le
 > **stockage objet** (§3.5).
 >
-> 🔴 **Le vrai reste à faire n'est pas dans cette liste** : rien de la partie mail n'a
-> été exécuté contre un vrai Stalwart. Voir « Ce qui reste » dans CLAUDE.md.
+> 🔴 **Le vrai reste à faire n'est pas dans cette liste.** Il tient en trois points, et
+> la liste de reprise détaillée — avec les `fichier:ligne` — est dans « Ce qui reste »
+> de CLAUDE.md :
+>
+> 1. **Les exécuteurs réels de quatre routes d'action** (§11bis, lot 5) : installer,
+>    sauvegarder, drainer un nœud, supprimer. L'aperçu est juste et le plan affiché est
+>    le vrai ; c'est l'exécution qui rend `NonImplementee` avec sa raison.
+> 2. **Trois écrans déclarés et non écrits** : `MaBoite` (aliases en libre-service),
+>    `MonCompte`, `Catalogue`. `Route::implemente()` les tient hors de la navigation.
+> 3. **Rien de la partie mail n'a été exécuté contre un vrai Stalwart** — ça demande une
+>    instance, pas du code.
 
 > **~~Runtime `compose` pour mailcow~~ — ABANDONNÉ (décision du 17/08/2026).**
 >

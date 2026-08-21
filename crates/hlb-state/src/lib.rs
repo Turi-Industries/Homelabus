@@ -37,6 +37,168 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Une exécution de sauvegarde, telle qu'on la relit.
+///
+/// ## Pourquoi ce type existe
+///
+/// Seuls les **âges** étaient lisibles (`seconds_since_last_success_on`). C'est assez
+/// pour dire « ça va » ou « ça ne va pas », pas pour répondre à « depuis quand ça ne
+/// marche plus, et qu'est-ce qui a changé ce jour-là ». La frise du §11bis — une
+/// colonne par jour, une ligne par destination — a besoin des lignes, pas de leur
+/// résumé.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupRun {
+    pub id: i64,
+    pub app: String,
+    /// `volume` | `database` | `pg-basebackup`…
+    pub kind: String,
+    /// `None` pour les lignes antérieures aux destinations multiples (migration 0009).
+    pub destination: Option<String>,
+    pub snapshot_id: Option<String>,
+    /// `ok` | `failed`.
+    pub status: String,
+    pub error: Option<String>,
+    pub finished_at: String,
+}
+
+impl BackupRun {
+    pub fn a_reussi(&self) -> bool {
+        self.status == "ok"
+    }
+}
+
+/// Une vérification par restauration réelle (§8.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerificationRun {
+    pub id: i64,
+    pub app: String,
+    pub snapshot_id: String,
+    pub status: String,
+    pub detail: Option<String>,
+    pub verified_at: String,
+}
+
+/// Une entrée du journal d'audit, telle qu'on la relit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRecord {
+    pub id: i64,
+    pub at: String,
+    pub actor: String,
+    /// Le rôle **au moment de l'action**, pas celui d'aujourd'hui. Une personne
+    /// rétrogradée depuis n'efface pas ce qu'elle a fait quand elle pouvait le faire.
+    pub role: String,
+    pub action: String,
+    pub target: String,
+    /// `ok` | `refused` | `failed`. Un refus n'est pas un échec : c'est le système qui
+    /// a protégé l'utilisateur.
+    pub outcome: String,
+    /// Le diff, ou ce qui explique l'issue.
+    pub detail: Option<String>,
+}
+
+/// Verdict du chaînage du journal (§9ter).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditIntegrity {
+    Intacte {
+        verifiees: usize,
+        /// Entrées antérieures au chaînage : elles ne sont pas suspectes, elles sont
+        /// simplement hors de portée de la garantie.
+        non_chainees: usize,
+        /// L'identifiant de la première entrée couverte. `None` = aucune ne l'est.
+        depuis_l_entree: Option<i64>,
+    },
+    /// 🔴 Une entrée a été modifiée, retirée ou insérée.
+    Rompue { a_l_entree: i64, detail: String },
+}
+
+impl AuditIntegrity {
+    pub fn est_intacte(&self) -> bool {
+        matches!(self, Self::Intacte { .. })
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Intacte {
+                verifiees: 0,
+                non_chainees,
+                ..
+            } => format!(
+                "aucune entrée chaînée ({non_chainees} antérieure(s) au chaînage, hors garantie)"
+            ),
+            Self::Intacte {
+                verifiees,
+                non_chainees: 0,
+                ..
+            } => format!("chaîne intacte, {verifiees} entrée(s) vérifiée(s)"),
+            Self::Intacte {
+                verifiees,
+                non_chainees,
+                depuis_l_entree,
+            } => format!(
+                "chaîne intacte depuis l'entrée {} : {verifiees} vérifiée(s), \
+                 {non_chainees} antérieure(s) au chaînage et donc hors garantie",
+                depuis_l_entree.unwrap_or(0)
+            ),
+            Self::Rompue { a_l_entree, detail } => {
+                format!("🔴 CHAÎNE ROMPUE à l'entrée {a_l_entree} : {detail}")
+            }
+        }
+    }
+}
+
+/// Une ligne de `backup_runs`.
+fn ligne_backup(r: &sqlx::sqlite::SqliteRow) -> Result<BackupRun> {
+    Ok(BackupRun {
+        id: r.try_get("id")?,
+        app: r.try_get("app")?,
+        kind: r.try_get("kind")?,
+        destination: r.try_get("destination")?,
+        snapshot_id: r.try_get("snapshot_id")?,
+        status: r.try_get("status")?,
+        error: r.try_get("error")?,
+        finished_at: r.try_get("finished_at")?,
+    })
+}
+
+/// « 7B8CFF » → `[0x7B, 0x8C, 0xFF]`.
+///
+/// Rend `None` sur tout ce qui n'est pas exactement six chiffres hexadécimaux : une
+/// couleur à moitié lue donnerait un accent aberrant, plus difficile à diagnostiquer
+/// qu'un accent absent.
+fn hex_rvb(s: &str) -> Option<[u8; 3]> {
+    let s = s.trim().trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let d = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+    Some([d(0)?, d(2)?, d(4)?])
+}
+
+/// L'empreinte d'une entrée de journal, chaînée à la précédente.
+///
+/// `champs` est ordonné : `[at, actor, role, action, target, outcome]`. Positionnel
+/// pour que les deux appelants — l'écriture et la vérification — ne puissent pas
+/// diverger sur l'ordre sans que le tableau change de forme.
+///
+/// 🔴 Chaque champ est **préfixé de sa longueur** avant d'être concaténé. Une simple
+/// concaténation séparée par `|` permettrait de déplacer du texte d'un champ au
+/// suivant sans changer l'empreinte : une cible `gitea|ok` deviendrait une cible
+/// `gitea` avec l'issue `ok`, et la chaîne resterait valide.
+fn empreinte_entree(prev: Option<&str>, champs: [&str; 6], detail: Option<&str>) -> String {
+    let mut buf = String::new();
+    for champ in [prev.unwrap_or("")]
+        .into_iter()
+        .chain(champs)
+        .chain([detail.unwrap_or("")])
+    {
+        buf.push_str(&champ.len().to_string());
+        buf.push(':');
+        buf.push_str(champ);
+    }
+    hlb_types::token::sha256_hex(buf.as_bytes())
+}
+
+
 /// Statut d'une action dans un plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionStatus {
@@ -224,6 +386,60 @@ impl State {
             .collect()
     }
 
+    /// TOUS les volumes d'une app : (nom, point de montage, sauvegardé, sqlite).
+    ///
+    /// ⚠️ Y compris ceux qui ne sont **pas** sauvegardés, contrairement à
+    /// [`Self::volumes_to_backup`]. Sur un écran de détail, un volume absent de la
+    /// liste se lit « il n'existe pas » ; ce qu'on veut voir, c'est qu'il existe et
+    /// qu'il n'est pas protégé.
+    pub async fn app_volumes(&self, app: &str) -> Result<Vec<(String, String, bool, bool)>> {
+        let rows = sqlx::query(
+            "SELECT name, mountpoint, backup, sqlite FROM app_volumes
+             WHERE app = ?1 ORDER BY name",
+        )
+        .bind(app)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("name")?,
+                    r.try_get("mountpoint")?,
+                    r.try_get::<i64, _>("backup")? != 0,
+                    r.try_get::<i64, _>("sqlite")? != 0,
+                ))
+            })
+            .collect()
+    }
+
+    /// Le journal d'audit filtré sur une cible.
+    pub async fn audit_pour(&self, cible: &str, limite: usize) -> Result<Vec<AuditRecord>> {
+        let rows = sqlx::query(
+            "SELECT id, at, actor, role, action, target, outcome, detail FROM audit_log
+             WHERE target = ?1 ORDER BY at DESC, id DESC LIMIT ?2",
+        )
+        .bind(cible)
+        .bind(limite as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok(AuditRecord {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    actor: r.try_get("actor")?,
+                    role: r.try_get("role")?,
+                    action: r.try_get("action")?,
+                    target: r.try_get("target")?,
+                    outcome: r.try_get("outcome")?,
+                    detail: r.try_get("detail")?,
+                })
+            })
+            .collect()
+    }
+
     /// Les volumes d'une app à sauvegarder : (nom, point de montage).
     ///
     /// Ne renvoie que ceux marqués `backup` — un cache n'a pas à occuper de la place
@@ -241,10 +457,16 @@ impl State {
             .collect()
     }
 
-    /// Consigne une action dans le journal d'audit (§9).
+    /// Consigne une action dans le journal d'audit (§9), en chaînant les entrées.
     ///
-    /// 🔴 Append-only : ce crate n'expose aucun moyen de supprimer ni de modifier
-    /// une entrée. Un journal réécrivable ne prouve rien.
+    /// 🔴 Append-only : ce crate n'expose aucun moyen de supprimer ni de modifier une
+    /// entrée. Mais une convention ne protège pas un fichier SQLite qu'on peut ouvrir :
+    /// chaque entrée porte donc l'empreinte de la précédente (migration `0015`), si
+    /// bien qu'une modification a posteriori casse la chaîne et se voit.
+    ///
+    /// L'insertion se fait dans une transaction **immédiate** : sans elle, deux actions
+    /// simultanées liraient la même empreinte de tête et produiraient deux entrées qui
+    /// se réclament du même prédécesseur — une chaîne fourchue, donc invérifiable.
     pub async fn audit(
         &self,
         actor: &str,
@@ -254,28 +476,54 @@ impl State {
         outcome: &str,
         detail: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let precedent: Option<String> = sqlx::query("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
+            .fetch_optional(&mut *tx)
+            .await?
+            .and_then(|r| r.try_get::<Option<String>, _>("hash").ok().flatten());
+
+        // `datetime('now')` est calculé ici plutôt que laissé au DEFAULT : l'empreinte
+        // doit porter sur la valeur réellement enregistrée, or on ne peut pas hacher ce
+        // que la base n'a pas encore écrit.
+        let at: String = sqlx::query("SELECT datetime('now') AS maintenant")
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get("maintenant")?;
+
+        let empreinte = empreinte_entree(
+            precedent.as_deref(),
+            [&at, actor, role.as_str(), action, target, outcome],
+            detail,
+        );
+
         sqlx::query(
-            "INSERT INTO audit_log (actor, role, action, target, outcome, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO audit_log (at, actor, role, action, target, outcome, detail, prev_hash, hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
+        .bind(&at)
         .bind(actor)
         .bind(role.as_str())
         .bind(action)
         .bind(target)
         .bind(outcome)
         .bind(detail)
-        .execute(&self.pool)
+        .bind(precedent.as_deref())
+        .bind(&empreinte)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
-    /// Les dernières entrées du journal : (quand, acteur, action, cible, issue).
-    pub async fn audit_trail(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, String, String, String, String)>> {
+    /// Les dernières entrées du journal, les plus récentes d'abord.
+    ///
+    /// Rend un type nommé plutôt qu'un n-uplet : à sept champs, `t.4` ne veut plus rien
+    /// dire, et une inversion de deux colonnes de même type passerait la compilation.
+    pub async fn audit_trail(&self, limit: usize) -> Result<Vec<AuditRecord>> {
         let rows = sqlx::query(
-            "SELECT at, actor, action, target, outcome FROM audit_log
+            "SELECT id, at, actor, role, action, target, outcome, detail FROM audit_log
              ORDER BY at DESC, id DESC LIMIT ?1",
         )
         .bind(limit as i64)
@@ -284,15 +532,94 @@ impl State {
 
         rows.iter()
             .map(|r| {
-                Ok((
-                    r.try_get("at")?,
-                    r.try_get("actor")?,
-                    r.try_get("action")?,
-                    r.try_get("target")?,
-                    r.try_get("outcome")?,
-                ))
+                Ok(AuditRecord {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    actor: r.try_get("actor")?,
+                    role: r.try_get("role")?,
+                    action: r.try_get("action")?,
+                    target: r.try_get("target")?,
+                    outcome: r.try_get("outcome")?,
+                    detail: r.try_get("detail")?,
+                })
             })
             .collect()
+    }
+
+    /// Vérifie l'intégrité du chaînage du journal (§9ter).
+    ///
+    /// 🔴 Rend un verdict **qui dit depuis quand il vaut**. Les entrées antérieures à la
+    /// migration `0015` n'ont pas d'empreinte et n'en auront jamais : les calculer
+    /// aujourd'hui produirait une chaîne d'apparence complète bâtie sur un contenu
+    /// éventuellement déjà falsifié. Une garantie qu'on n'a pas ne doit pas ressembler
+    /// à une garantie qu'on a.
+    pub async fn verify_audit_chain(&self) -> Result<AuditIntegrity> {
+        let rows = sqlx::query(
+            "SELECT id, at, actor, role, action, target, outcome, detail, prev_hash, hash
+             FROM audit_log ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut verifiees = 0usize;
+        let mut non_chainees = 0usize;
+        let mut depuis: Option<i64> = None;
+        let mut attendu: Option<String> = None;
+
+        for r in &rows {
+            let id: i64 = r.try_get("id")?;
+            let hash: Option<String> = r.try_get("hash")?;
+            let Some(hash) = hash else {
+                // Antérieure au chaînage : on la compte et on continue.
+                non_chainees += 1;
+                continue;
+            };
+
+            let prev: Option<String> = r.try_get("prev_hash")?;
+            if depuis.is_none() {
+                // La première entrée chaînée n'a pas de prédécesseur à confronter :
+                // `attendu` vaut encore `None` et le restera jusqu'à la fin du tour.
+                depuis = Some(id);
+            } else if prev.as_deref() != attendu.as_deref() {
+                return Ok(AuditIntegrity::Rompue {
+                    a_l_entree: id,
+                    detail: "l'entrée ne désigne pas l'empreinte de celle qui la précède : \
+                             une entrée a été retirée ou insérée"
+                        .to_string(),
+                });
+            }
+
+            let (at, actor, role, action, target, outcome) = (
+                r.try_get::<String, _>("at")?,
+                r.try_get::<String, _>("actor")?,
+                r.try_get::<String, _>("role")?,
+                r.try_get::<String, _>("action")?,
+                r.try_get::<String, _>("target")?,
+                r.try_get::<String, _>("outcome")?,
+            );
+            let recalcule = empreinte_entree(
+                prev.as_deref(),
+                [&at, &actor, &role, &action, &target, &outcome],
+                r.try_get::<Option<String>, _>("detail")?.as_deref(),
+            );
+            if recalcule != hash {
+                return Ok(AuditIntegrity::Rompue {
+                    a_l_entree: id,
+                    detail: "le contenu de l'entrée ne correspond plus à son empreinte : \
+                             elle a été modifiée après coup"
+                        .to_string(),
+                });
+            }
+
+            attendu = Some(hash);
+            verifiees += 1;
+        }
+
+        Ok(AuditIntegrity::Intacte {
+            verifiees,
+            non_chainees,
+            depuis_l_entree: depuis,
+        })
     }
 
     /// Enregistre une sauvegarde et son issue.
@@ -359,6 +686,110 @@ impl State {
         .bind(error)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// L'historique brut des sauvegardes d'une app, la plus récente d'abord.
+    ///
+    /// 🔴 Les ÉCHECS y sont, et c'est le but. Ne rendre que les réussites donnerait une
+    /// frise où rien ne s'est jamais mal passé, et une destination qui échoue depuis
+    /// trois semaines y ressemblerait à une destination qu'on n'utilise pas.
+    pub async fn backup_history(&self, app: &str, limite: usize) -> Result<Vec<BackupRun>> {
+        let rows = sqlx::query(
+            "SELECT id, app, kind, destination, snapshot_id, status, error, finished_at
+             FROM backup_runs WHERE app = ?1
+             ORDER BY id DESC LIMIT ?2",
+        )
+        .bind(app)
+        .bind(limite as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(ligne_backup).collect()
+    }
+
+    /// L'historique de TOUTES les apps — pour la frise globale.
+    pub async fn backup_history_all(&self, limite: usize) -> Result<Vec<BackupRun>> {
+        let rows = sqlx::query(
+            "SELECT id, app, kind, destination, snapshot_id, status, error, finished_at
+             FROM backup_runs ORDER BY id DESC LIMIT ?1",
+        )
+        .bind(limite as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(ligne_backup).collect()
+    }
+
+    /// Les vérifications par restauration, la plus récente d'abord.
+    ///
+    /// C'est le seul indicateur fiable que les sauvegardes fonctionnent vraiment
+    /// (§8.3) : une sauvegarde jamais restaurée est une hypothèse, pas une garantie.
+    pub async fn verifications(&self, app: &str, limite: usize) -> Result<Vec<VerificationRun>> {
+        let rows = sqlx::query(
+            "SELECT id, app, snapshot_id, status, detail, verified_at
+             FROM restore_verifications WHERE app = ?1
+             ORDER BY id DESC LIMIT ?2",
+        )
+        .bind(app)
+        .bind(limite as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok(VerificationRun {
+                    id: r.try_get("id")?,
+                    app: r.try_get("app")?,
+                    snapshot_id: r.try_get("snapshot_id")?,
+                    status: r.try_get("status")?,
+                    detail: r.try_get("detail")?,
+                    verified_at: r.try_get("verified_at")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Recule l'horodatage de la dernière sauvegarde d'une app sur une destination.
+    ///
+    /// ⚠️ **Uniquement pour fabriquer des états**, en test et en mode démonstration :
+    /// une sauvegarde de deux heures et une de trois semaines ne s'affichent pas pareil,
+    /// et c'est précisément l'affichage qu'on veut vérifier. Il n'existe aucune raison
+    /// légitime d'antidater une vraie sauvegarde — le faire mentirait sur la seule
+    /// donnée qui dit si les données sont protégées.
+    ///
+    /// Ne touche qu'à la ligne la plus récente, celle qui décide de la fraîcheur.
+    pub async fn backdate_backup(&self, app: &str, destination: &str, secondes: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE backup_runs
+             SET finished_at = datetime(finished_at, ?3)
+             WHERE id = (SELECT id FROM backup_runs
+                         WHERE app = ?1 AND destination = ?2
+                         ORDER BY id DESC LIMIT 1)",
+        )
+        .bind(app)
+        .bind(destination)
+        .bind(format!("-{secondes} seconds"))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Antidate une entrée du journal d'audit, par identifiant.
+    ///
+    /// ⚠️ Même réserve que `backdate_backup` : **uniquement** pour fabriquer un état de
+    /// démonstration. Une frise chronologique dont tous les événements portent la même
+    /// minute ne montre rien — or c'est exactement ce qu'elle existe pour montrer :
+    /// « l'app est tombée à 3 h 12 » à côté de « mise à jour appliquée à 3 h 10 ».
+    ///
+    /// 🔴 N'est PAS exposée par l'API : réécrire un horodatage d'audit casserait le
+    /// chaînage, et c'est bien le but du chaînage de rendre cela visible.
+    pub async fn backdate_audit(&self, id: i64, secondes: i64) -> Result<()> {
+        sqlx::query("UPDATE audit_log SET at = datetime(at, ?2) WHERE id = ?1")
+            .bind(id)
+            .bind(format!("-{secondes} seconds"))
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1036,10 +1467,18 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<String>, _>("snapshot_id").ok().flatten()))
     }
 
+    /// ⚠️ `reussie` est un argument à part ENTIÈRE, et non déduit de `detail`.
+    ///
+    /// La signature précédente concluait « détail présent donc échec » : un appelant
+    /// qui décrivait une vérification réussie (« 1 284 fichiers relus ») l'enregistrait
+    /// comme un échec, et l'app restait éternellement « jamais vérifiée » alors que la
+    /// vérification avait eu lieu. Le compilateur ne pouvait pas le dire — c'est le
+    /// genre de couplage implicite dont le projet se méfie ailleurs.
     pub async fn record_verification(
         &self,
         app: &str,
         snapshot_id: &str,
+        reussie: bool,
         detail: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
@@ -1048,7 +1487,7 @@ impl State {
         )
         .bind(app)
         .bind(snapshot_id)
-        .bind(if detail.is_some() { "failed" } else { "ok" })
+        .bind(if reussie { "ok" } else { "failed" })
         .bind(detail)
         .execute(&self.pool)
         .await?;
@@ -1066,6 +1505,51 @@ impl State {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
+    }
+
+    /// Enregistre ce qui vient d'être RÉELLEMENT publié (§9.10).
+    ///
+    /// 🔴 Remplace tout le jeu, dans une transaction : une route retirée de la
+    /// configuration doit disparaître d'ici aussi, sinon l'écran d'exposition
+    /// signalerait éternellement une divergence déjà corrigée — et l'on cesserait de
+    /// le lire.
+    pub async fn record_ingress(&self, routes: &[(String, String, bool)]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM ingress_publie")
+            .execute(&mut *tx)
+            .await?;
+        for (host, app, public) in routes {
+            sqlx::query(
+                "INSERT INTO ingress_publie (host, app, public) VALUES (?1, ?2, ?3)",
+            )
+            .bind(host)
+            .bind(app)
+            .bind(if *public { 1 } else { 0 })
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Ce qui est publié selon la dernière application.
+    ///
+    /// ⚠️ Une liste vide veut dire « la configuration d'entrée n'a jamais été
+    /// appliquée », **pas** « rien n'est publié ». L'appelant doit distinguer les deux :
+    /// les confondre annoncerait un cluster fermé alors qu'on n'en sait rien.
+    pub async fn ingress_publie(&self) -> Result<Vec<(String, String, bool)>> {
+        let rows = sqlx::query("SELECT host, app, public FROM ingress_publie ORDER BY host")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("host")?,
+                    r.try_get("app")?,
+                    r.try_get::<i64, _>("public")? != 0,
+                ))
+            })
+            .collect()
     }
 
     /// Fige le digest résolu au déploiement (§7).
@@ -1247,6 +1731,153 @@ impl State {
             .collect()
     }
 
+    /// Enregistre un plan sous un nom (§10.4).
+    ///
+    /// ⚠️ Écrase un plan du même nom : c'est le dernier préparé qui compte. Refuser
+    /// obligerait à inventer des noms à rallonge, et l'on finirait avec « migration-2 »,
+    /// « migration-2-bis » sans savoir lequel est bon.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enregistrer_plan(
+        &self,
+        nom: &str,
+        methode: &str,
+        chemin: &str,
+        corps: &str,
+        resume: &str,
+        par: &str,
+        note: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO plans_nommes (nom, methode, chemin, corps, resume, cree_par, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(nom) DO UPDATE SET
+                 methode = excluded.methode, chemin = excluded.chemin,
+                 corps = excluded.corps, resume = excluded.resume,
+                 cree_par = excluded.cree_par, cree_le = datetime('now'),
+                 note = excluded.note",
+        )
+        .bind(nom)
+        .bind(methode)
+        .bind(chemin)
+        .bind(corps)
+        .bind(resume)
+        .bind(par)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Les plans enregistrés : `(nom, méthode, chemin, corps, résumé, par, âge)`.
+    pub async fn plans_nommes(&self) -> Result<Vec<(String, String, String, String, String, String, i64)>> {
+        let rows = sqlx::query(
+            "SELECT nom, methode, chemin, corps, resume, cree_par,
+                    CAST(strftime('%s','now') AS INTEGER)
+                      - CAST(strftime('%s', cree_le) AS INTEGER) AS age
+             FROM plans_nommes ORDER BY cree_le DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("nom")?,
+                    r.try_get("methode")?,
+                    r.try_get("chemin")?,
+                    r.try_get("corps")?,
+                    r.try_get("resume")?,
+                    r.try_get("cree_par")?,
+                    r.try_get::<Option<i64>, _>("age")?.unwrap_or(0),
+                ))
+            })
+            .collect()
+    }
+
+    /// Oublie un plan.
+    pub async fn oublier_plan(&self, nom: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM plans_nommes WHERE nom = ?1")
+            .bind(nom)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Atteste un garde-fou d'accès de secours (§5.7bis).
+    ///
+    /// ⚠️ Écrase l'attestation précédente : c'est la DERNIÈRE vérification qui compte,
+    /// pas la première. Garder l'historique ferait afficher « vérifié il y a deux ans »
+    /// à côté d'une vérification d'hier.
+    pub async fn attester_breakglass(&self, id: &str, par: &str, note: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO breakglass (id, atteste_par, note) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                 atteste_le = datetime('now'),
+                 atteste_par = excluded.atteste_par,
+                 note = excluded.note",
+        )
+        .bind(id)
+        .bind(par)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Les attestations : `(id, âge en secondes, qui)`.
+    pub async fn breakglass(&self) -> Result<Vec<(String, i64, String)>> {
+        let rows = sqlx::query(
+            "SELECT id, atteste_par,
+                    CAST(strftime('%s','now') AS INTEGER)
+                      - CAST(strftime('%s', atteste_le) AS INTEGER) AS age
+             FROM breakglass",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("id")?,
+                    r.try_get::<Option<i64>, _>("age")?.unwrap_or(0),
+                    r.try_get("atteste_par")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Les secrets avec leur âge, pour l'assistant de rotation (§9quater).
+    ///
+    /// ⚠️ L'âge est celui de la dernière ROTATION, ou de la création si le secret n'a
+    /// jamais été tourné. Rendre l'âge de création dans les deux cas ferait passer un
+    /// secret tourné hier pour un secret de trois ans.
+    ///
+    /// 🔴 Aucune valeur ne sort d'ici, chiffrée ou non : ce que cette méthode ne peut
+    /// pas représenter ne peut pas fuiter.
+    pub async fn secrets_ages(&self) -> Result<Vec<(String, String, i64, bool)>> {
+        let rows = sqlx::query(
+            "SELECT name, purpose,
+                    CAST(strftime('%s','now') AS INTEGER)
+                      - CAST(strftime('%s', COALESCE(rotated_at, created_at)) AS INTEGER)
+                      AS age,
+                    rotated_at IS NULL AS jamais
+             FROM secrets ORDER BY age DESC, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("name")?,
+                    r.try_get("purpose")?,
+                    r.try_get::<Option<i64>, _>("age")?.unwrap_or(0),
+                    r.try_get::<i64, _>("jamais")? != 0,
+                ))
+            })
+            .collect()
+    }
+
     pub async fn add_guide(
         &self,
         app: &str,
@@ -1330,6 +1961,766 @@ impl State {
     }
 }
 
+/// Une session de navigateur, telle qu'on la présente à son propriétaire.
+///
+/// 🔴 Aucun champ ne porte la valeur du cookie : on ne peut pas fuiter ce qu'on ne peut
+/// pas représenter. Même garantie structurelle que `SecretItem` et `StoredToken`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInfo {
+    /// Les premiers caractères de l'empreinte, pour désigner une session sans la
+    /// nommer par un secret. Suffisant pour distinguer les siennes.
+    pub reference: String,
+    pub user: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub last_seen: i64,
+    pub user_agent: Option<String>,
+}
+
+impl State {
+    /// Reconstruit le compte complet d'une personne : profil, identité, boîtes, aliases.
+    ///
+    /// 🔴 Existe ici plutôt que dans le CLI, où elle vivait, parce que **deux
+    /// reconstructions divergentes du même compte est exactement ce qui fait qu'un
+    /// quota s'applique en ligne de commande et pas dans l'API**. C'était le cas :
+    /// `POST /api/v1/aliases` ignorait les profils alors qu'un commentaire affirmait le
+    /// contraire.
+    ///
+    /// `hlb-users` ne peut pas l'héberger : ce crate ne touche jamais la base, et c'est
+    /// ce qui le rend testable sans serveur.
+    pub async fn compte(&self, nom: &str) -> Result<hlb_users::Compte> {
+        use hlb_users::{Alias, Boite, Compte, Duree};
+
+        let inscrit = self
+            .users()
+            .await?
+            .into_iter()
+            .find(|(n, _, _)| n == nom);
+
+        let (profil, pocket_id) = match inscrit {
+            Some((_, p, id)) => (p, id),
+            None => ("standard".to_string(), None),
+        };
+
+        let mut c = Compte::nouveau(nom, profil);
+        c.pocket_id = pocket_id;
+
+        let aliases = self.aliases(nom).await?;
+        for (local, domaine, par_defaut) in self.mailboxes(nom).await? {
+            let siens: Vec<Alias> = aliases
+                .iter()
+                .filter(|(boite, ..)| boite == &local)
+                .map(|(_, l, expire, actif, _hint, note)| Alias {
+                    local: l.clone(),
+                    duree: match expire {
+                        Some(e) => Duree::Temporaire { expire_le: *e },
+                        None => Duree::Permanent,
+                    },
+                    actif: *actif,
+                    note: note.clone(),
+                })
+                .collect();
+
+            c.boites.push(Boite {
+                local,
+                domaine,
+                par_defaut,
+                aliases: siens,
+            });
+        }
+        Ok(c)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sessions (§9ter — connexion des personnes, par opposition aux jetons machine)
+    // ---------------------------------------------------------------------------
+
+    /// Ouvre une session pour une personne déjà authentifiée par PocketID.
+    ///
+    /// `presented` est la valeur du cookie ; **seule son empreinte est conservée**.
+    pub async fn open_session(
+        &self,
+        presented: &str,
+        user: &str,
+        subject: Option<&str>,
+        now: i64,
+        duree_s: i64,
+        user_agent: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO sessions
+               (fingerprint, user, subject, created_at, expires_at, last_seen, user_agent)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6)",
+        )
+        .bind(hlb_types::token::fingerprint_of(presented))
+        .bind(user)
+        .bind(subject)
+        .bind(now)
+        .bind(now.saturating_add(duree_s))
+        .bind(user_agent)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// À qui appartient ce cookie, s'il est encore valide ?
+    ///
+    /// 🔴 L'expiration est filtrée **en SQL**, pas dans l'appelant : une session
+    /// expirée ne doit pas pouvoir être authentifiée par un appelant qui oublierait la
+    /// comparaison. La recherche se fait par empreinte, sur la clé primaire — le temps
+    /// de réponse ne dépend pas du nombre de sessions.
+    ///
+    /// Rend `(user, subject)`. Le **rôle n'est délibérément pas rendu ici** : il est relu
+    /// séparément par [`Self::user_role`], pour qu'une révocation prenne effet à la
+    /// requête suivante et non à l'expiration du cookie.
+    pub async fn find_session(
+        &self,
+        presented: &str,
+        now: i64,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let row = sqlx::query(
+            "SELECT user, subject FROM sessions WHERE fingerprint = ?1 AND expires_at > ?2",
+        )
+        .bind(hlb_types::token::fingerprint_of(presented))
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(Some((r.try_get("user")?, r.try_get("subject")?))),
+        }
+    }
+
+    /// Prolonge une session vivante (expiration glissante) et note son dernier usage.
+    ///
+    /// Détaché de [`Self::find_session`] pour la même raison que `touch_token` l'est de
+    /// `find_token` : noter l'usage ne doit ni ralentir ni faire échouer une requête.
+    pub async fn touch_session(&self, presented: &str, now: i64, duree_s: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET last_seen = ?2, expires_at = ?3
+             WHERE fingerprint = ?1 AND expires_at > ?2",
+        )
+        .bind(hlb_types::token::fingerprint_of(presented))
+        .bind(now)
+        .bind(now.saturating_add(duree_s))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Ferme une session précise (déconnexion).
+    pub async fn close_session(&self, presented: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM sessions WHERE fingerprint = ?1")
+            .bind(hlb_types::token::fingerprint_of(presented))
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Ferme une session désignée par sa référence courte (« déconnecter cet appareil »).
+    pub async fn close_session_by_reference(&self, user: &str, reference: &str) -> Result<bool> {
+        let r = sqlx::query(
+            "DELETE FROM sessions WHERE user = ?1 AND substr(fingerprint, 1, ?3) = ?2",
+        )
+        .bind(user)
+        .bind(reference)
+        .bind(reference.len() as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Ferme TOUTES les sessions d'une personne.
+    ///
+    /// C'est le geste qu'on fait quand on soupçonne une compromission, et il doit être
+    /// atteignable en une commande.
+    pub async fn close_all_sessions(&self, user: &str) -> Result<u64> {
+        let r = sqlx::query("DELETE FROM sessions WHERE user = ?1")
+            .bind(user)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Les sessions vivantes d'une personne, la plus récemment vue d'abord.
+    pub async fn sessions_of(&self, user: &str, now: i64) -> Result<Vec<SessionInfo>> {
+        let rows = sqlx::query(
+            "SELECT fingerprint, user, created_at, expires_at, last_seen, user_agent
+             FROM sessions WHERE user = ?1 AND expires_at > ?2
+             ORDER BY last_seen DESC",
+        )
+        .bind(user)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                let f: String = r.try_get("fingerprint")?;
+                Ok(SessionInfo {
+                    reference: f.chars().take(8).collect(),
+                    user: r.try_get("user")?,
+                    created_at: r.try_get("created_at")?,
+                    expires_at: r.try_get("expires_at")?,
+                    last_seen: r.try_get("last_seen")?,
+                    user_agent: r.try_get("user_agent")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Toutes les sessions vivantes, tous comptes confondus (écran de sécurité).
+    pub async fn all_sessions(&self, now: i64) -> Result<Vec<SessionInfo>> {
+        let rows = sqlx::query(
+            "SELECT fingerprint, user, created_at, expires_at, last_seen, user_agent
+             FROM sessions WHERE expires_at > ?1 ORDER BY last_seen DESC",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                let f: String = r.try_get("fingerprint")?;
+                Ok(SessionInfo {
+                    reference: f.chars().take(8).collect(),
+                    user: r.try_get("user")?,
+                    created_at: r.try_get("created_at")?,
+                    expires_at: r.try_get("expires_at")?,
+                    last_seen: r.try_get("last_seen")?,
+                    user_agent: r.try_get("user_agent")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Efface les sessions périmées.
+    ///
+    /// Elles ne sont plus authentifiantes (le filtre est en SQL), mais les garder
+    /// indéfiniment ferait de la table un historique de connexions que personne n'a
+    /// demandé — et qui partirait dans les sauvegardes.
+    pub async fn purge_expired_sessions(&self, now: i64) -> Result<u64> {
+        let r = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?1")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Le compte HomelabUS rattaché à cette identité PocketID.
+    ///
+    /// 🔴 On rattache par le `sub`, pas par le nom d'utilisateur : le `sub` est stable
+    /// alors qu'un nom se renomme. Un rattachement par le nom perdrait le lien au
+    /// premier renommage, en silence — la personne se reconnecterait et se verrait
+    /// refuser l'accès sans que rien n'explique pourquoi.
+    pub async fn user_by_pocket_id(&self, sub: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT name FROM users WHERE pocket_id = ?1")
+            .bind(sub)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(Some(r.try_get("name")?)),
+        }
+    }
+
+    /// Consigne le lien identité PocketID ↔ compte, à la première connexion.
+    ///
+    /// Idempotent, et ne touche à rien d'autre : le profil et les boîtes ne regardent
+    /// pas la connexion.
+    pub async fn upsert_user_pocket_id(&self, user: &str, sub: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET pocket_id = ?2 WHERE name = ?1")
+            .bind(user)
+            .bind(sub)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------------------
+    // Annonces (lot 7.2)
+    // ---------------------------------------------------------------------------
+
+    /// Publie une annonce.
+    ///
+    /// ⚠️ Huit paramètres, et c'est assumé : les regrouper dans une structure
+    /// obligerait chaque appelant à la construire, pour une seule fonction. Ils sont de
+    /// types distincts, donc une inversion ne compile pas.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn publier_annonce(
+        &self,
+        titre: &str,
+        corps: &str,
+        niveau: hlb_api::NiveauAnnonce,
+        epinglee: bool,
+        audience: Option<hlb_types::Role>,
+        auteur: &str,
+        expire_le: Option<i64>,
+    ) -> Result<i64> {
+        let r = sqlx::query(
+            "INSERT INTO annonces (titre, corps, niveau, epinglee, audience, auteur, expire_le)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(titre)
+        .bind(corps)
+        .bind(niveau.as_str())
+        .bind(i64::from(epinglee))
+        .bind(audience.map(|r| r.as_str()))
+        .bind(auteur)
+        .bind(expire_le)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.last_insert_rowid())
+    }
+
+    /// Ajoute une nouvelle au fil d'une annonce.
+    ///
+    /// 🔴 Une mise à jour s'AJOUTE, elle ne remplace pas : c'est la chronologie qu'on
+    /// relit après un incident — à quelle heure on a su, compris, réglé. Réécrire le
+    /// corps d'origine l'effacerait.
+    pub async fn suivre_annonce(&self, annonce: i64, corps: &str, auteur: &str) -> Result<()> {
+        sqlx::query("INSERT INTO annonce_maj (annonce, corps, auteur) VALUES (?1, ?2, ?3)")
+            .bind(annonce)
+            .bind(corps)
+            .bind(auteur)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Les annonces visibles par ce rôle.
+    ///
+    /// ⚠️ Filtrées par audience : une annonce d'exploitation n'intéresse pas
+    /// l'utilisateur du portail, et l'inonder de messages qui ne le concernent pas lui
+    /// fait cesser de les lire — au moment précis où l'un d'eux comptera.
+    pub async fn annonces(
+        &self,
+        role: hlb_types::Role,
+        maintenant: i64,
+        inclure_expirees: bool,
+    ) -> Result<Vec<hlb_api::Annonce>> {
+        let rows = sqlx::query(
+            "SELECT id, titre, corps, niveau, epinglee, audience, auteur, publiee_le, expire_le
+             FROM annonces
+             WHERE (?2 = 1 OR expire_le IS NULL OR expire_le > ?1)
+             ORDER BY epinglee DESC, id DESC LIMIT 50",
+        )
+        .bind(maintenant)
+        .bind(i64::from(inclure_expirees))
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::new();
+        for r in &rows {
+            // L'audience : `None` = tout le monde. Un rôle illisible en base rend
+            // l'annonce visible de tous plutôt que de personne — une annonce qu'on ne
+            // voit pas ne sert à rien, et le contenu est de toute façon public.
+            let requis = r
+                .try_get::<Option<String>, _>("audience")?
+                .and_then(|a| hlb_types::Role::parse(&a));
+            if requis.is_some_and(|req| role < req) {
+                continue;
+            }
+
+            let id: i64 = r.try_get("id")?;
+            out.push(hlb_api::Annonce {
+                id,
+                titre: r.try_get("titre")?,
+                corps: r.try_get("corps")?,
+                niveau: hlb_api::NiveauAnnonce::parse(&r.try_get::<String, _>("niveau")?),
+                epinglee: r.try_get::<i64, _>("epinglee")? != 0,
+                auteur: r.try_get("auteur")?,
+                publiee_le: r.try_get("publiee_le")?,
+                expire_dans_s: r
+                    .try_get::<Option<i64>, _>("expire_le")?
+                    .map(|e| e - maintenant),
+                suivi: self.suivi_de(id).await?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn suivi_de(&self, annonce: i64) -> Result<Vec<hlb_api::MajAnnonce>> {
+        let rows = sqlx::query(
+            "SELECT corps, auteur, at FROM annonce_maj WHERE annonce = ?1 ORDER BY id ASC",
+        )
+        .bind(annonce)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok(hlb_api::MajAnnonce {
+                    corps: r.try_get("corps")?,
+                    auteur: r.try_get("auteur")?,
+                    at: r.try_get("at")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Retire une annonce.
+    pub async fn retirer_annonce(&self, id: i64) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM annonces WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Invitations (lot 6.2)
+    // ---------------------------------------------------------------------------
+
+    /// Crée une invitation. **Seule l'empreinte est conservée.**
+    ///
+    /// `usages_max` : combien de personnes peuvent s'en servir. **1 par défaut**, le
+    /// cas sûr — un lien à N usages qui fuite fait entrer N personnes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn creer_invitation(
+        &self,
+        presente: &str,
+        cree_par: &str,
+        profil: &str,
+        role: hlb_types::Role,
+        domaine: Option<&str>,
+        maintenant: i64,
+        duree_s: i64,
+        usages_max: i64,
+        note: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO invitations
+               (fingerprint, cree_par, profil, role, domaine, cree_le, expire_le,
+                usages_max, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(hlb_types::token::fingerprint_of(presente))
+        .bind(cree_par)
+        .bind(profil)
+        .bind(role.as_str())
+        .bind(domaine)
+        .bind(maintenant)
+        .bind(maintenant.saturating_add(duree_s))
+        // ⚠️ Borné à 1 au minimum : un `usages_max` de zéro créerait une invitation
+        // inutilisable dès sa création, ce qui ressemble à une panne.
+        .bind(usages_max.max(1))
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Consomme une invitation : la marque utilisée et rend ce qu'elle accorde.
+    ///
+    /// 🔴 **Marquée AVANT toute création**, dans la même requête que la lecture : une
+    /// invitation consommée ne doit pas pouvoir resservir, même si la création échoue
+    /// ensuite. L'inverse permettrait de créer plusieurs comptes avec un lien qu'on
+    /// croit à usage unique — et le second compte porterait le même rôle.
+    ///
+    /// Rend `(profil, rôle, domaine)`, ou `None` si l'invitation est inconnue, expirée
+    /// ou déjà utilisée. Les trois cas sont indistincts **à dessein** : les séparer
+    /// dirait à qui essaie des jetons si l'un d'eux a existé.
+    pub async fn consommer_invitation(
+        &self,
+        presente: &str,
+        compte: &str,
+        maintenant: i64,
+    ) -> Result<Option<(String, hlb_types::Role, Option<String>)>> {
+        let empreinte = hlb_types::token::fingerprint_of(presente);
+        let mut tx = self.pool.begin().await?;
+
+        // 🔴 `usages < usages_max` **dans la requête**, pas dans l'appelant : deux
+        // inscriptions simultanées liraient le même compteur et passeraient toutes les
+        // deux. La transaction rend l'incrément atomique.
+        let row = sqlx::query(
+            "SELECT profil, role, domaine FROM invitations
+             WHERE fingerprint = ?1 AND usages < usages_max AND expire_le > ?2",
+        )
+        .bind(&empreinte)
+        .bind(maintenant)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(r) = row else {
+            return Ok(None);
+        };
+
+        // La marque, dans la MÊME transaction : deux inscriptions simultanées avec le
+        // même lien ne peuvent pas passer toutes les deux.
+        sqlx::query(
+            // `compte` garde le DERNIER inscrit ; la trace complète vit au journal
+            // d'audit, où chaque inscription est consignée avec son nom.
+            "UPDATE invitations
+             SET usages = usages + 1, utilise_le = datetime('now'), compte = ?2
+             WHERE fingerprint = ?1",
+        )
+        .bind(&empreinte)
+        .bind(compte)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(Some((
+            r.try_get("profil")?,
+            r.try_get::<String, _>("role")?
+                .parse()
+                .ok()
+                .and_then(|s: String| hlb_types::Role::parse(&s))
+                .unwrap_or_default(),
+            r.try_get("domaine")?,
+        )))
+    }
+
+    /// Les invitations, la plus récente d'abord.
+    pub async fn invitations(&self, maintenant: i64) -> Result<Vec<hlb_api::InvitationSummary>> {
+        let rows = sqlx::query(
+            "SELECT fingerprint, cree_par, profil, role, expire_le, utilise_le, note,
+                    usages, usages_max
+             FROM invitations ORDER BY cree_le DESC LIMIT 100",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                let f: String = r.try_get("fingerprint")?;
+                Ok(hlb_api::InvitationSummary {
+                    reference: f.chars().take(8).collect(),
+                    cree_par: r.try_get("cree_par")?,
+                    profil: r.try_get("profil")?,
+                    role: r.try_get("role")?,
+                    expire_dans_s: r.try_get::<i64, _>("expire_le")? - maintenant,
+                    utilisee_le: r.try_get("utilise_le")?,
+                    usages: r.try_get::<i64, _>("usages")? as usize,
+                    usages_max: r.try_get::<i64, _>("usages_max")? as usize,
+                    note: r.try_get("note")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Révoque une invitation par sa référence courte.
+    pub async fn revoquer_invitation(&self, reference: &str) -> Result<bool> {
+        // ⚠️ On révoque en ÉPUISANT, pas en supprimant : une invitation qui a déjà
+        // servi porte la trace de qui l'a créée et de qui est entré. L'effacer perdrait
+        // cette trace au moment précis où on en a besoin — quand un lien a fuité.
+        let r = sqlx::query(
+            "UPDATE invitations SET usages = usages_max
+             WHERE substr(fingerprint, 1, ?2) = ?1 AND usages < usages_max",
+        )
+        .bind(reference)
+        .bind(reference.len() as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Apparence : marque et préférences
+    // ---------------------------------------------------------------------------
+
+    /// La marque de l'installation.
+    ///
+    /// ⚠️ Retombe sur le défaut si la ligne manque : une base restaurée d'une version
+    /// antérieure ne doit pas laisser l'interface sans en-tête.
+    pub async fn marque(&self) -> Result<hlb_api::Marque> {
+        let row = sqlx::query(
+            "SELECT nom, produit, accent, pied, theme_defaut, logo IS NOT NULL AS a_logo
+             FROM apparence WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(r) = row else {
+            return Ok(hlb_api::Marque::default());
+        };
+
+        Ok(hlb_api::Marque {
+            nom: r.try_get("nom")?,
+            produit: r.try_get("produit")?,
+            accent: r
+                .try_get::<Option<String>, _>("accent")?
+                .as_deref()
+                .and_then(hex_rvb),
+            logo: r.try_get::<i64, _>("a_logo")? != 0,
+            pied: r.try_get("pied")?,
+            theme_defaut: r.try_get("theme_defaut")?,
+        })
+    }
+
+    /// Enregistre la marque. Ne touche pas au logo, qui a sa propre opération.
+    pub async fn set_marque(&self, m: &hlb_api::Marque) -> Result<()> {
+        let accent = m
+            .accent
+            .map(|[r, v, b]| format!("{r:02X}{v:02X}{b:02X}"));
+        sqlx::query(
+            "INSERT INTO apparence (id, nom, produit, accent, pied, theme_defaut)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               nom = excluded.nom, produit = excluded.produit,
+               accent = excluded.accent, pied = excluded.pied,
+               theme_defaut = excluded.theme_defaut,
+               modifie_le = datetime('now')",
+        )
+        .bind(&m.nom)
+        .bind(&m.produit)
+        .bind(accent)
+        .bind(&m.pied)
+        .bind(&m.theme_defaut)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Le logo, s'il y en a un.
+    pub async fn logo(&self) -> Result<Option<Vec<u8>>> {
+        let row = sqlx::query("SELECT logo FROM apparence WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(r.try_get("logo")?),
+        }
+    }
+
+    /// Pose ou retire le logo.
+    pub async fn set_logo(&self, png: Option<&[u8]>) -> Result<()> {
+        sqlx::query("UPDATE apparence SET logo = ?1, modifie_le = datetime('now') WHERE id = 1")
+            .bind(png)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Le thème choisi par une personne. `None` = celui de l'installation.
+    pub async fn theme_de(&self, user: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT theme FROM user_prefs WHERE user = ?1")
+            .bind(user)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(r.try_get("theme")?),
+        }
+    }
+
+    pub async fn set_theme_de(&self, user: &str, theme: Option<&str>) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_prefs (user, theme) VALUES (?1, ?2)
+             ON CONFLICT(user) DO UPDATE SET theme = excluded.theme,
+                                             modifie_le = datetime('now')",
+        )
+        .bind(user)
+        .bind(theme)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rôles des personnes
+    // ---------------------------------------------------------------------------
+
+    /// Attribue un rôle à une personne.
+    pub async fn set_user_role(
+        &self,
+        user: &str,
+        role: hlb_types::Role,
+        granted_by: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_roles (user, role, granted_by) VALUES (?1, ?2, ?3)
+             ON CONFLICT(user) DO UPDATE SET
+               role = excluded.role,
+               granted_by = excluded.granted_by,
+               granted_at = datetime('now')",
+        )
+        .bind(user)
+        .bind(role.as_str())
+        .bind(granted_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Le rôle d'une personne.
+    ///
+    /// 🔴 L'absence de ligne — et un rôle illisible en base — valent
+    /// `Role::default()`, c'est-à-dire `utilisateur`. Une identité PocketID inconnue de
+    /// HomelabUS entre au plus bas, jamais plus : le défaut doit toujours aller dans le
+    /// sens sûr.
+    pub async fn user_role(&self, user: &str) -> Result<hlb_types::Role> {
+        let row = sqlx::query("SELECT role FROM user_roles WHERE user = ?1")
+            .bind(user)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row
+            .and_then(|r| r.try_get::<String, _>("role").ok())
+            .and_then(|s| hlb_types::Role::parse(&s))
+            .unwrap_or_default())
+    }
+
+    /// Retire l'attribution explicite : la personne retombe au rôle par défaut.
+    pub async fn clear_user_role(&self, user: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM user_roles WHERE user = ?1")
+            .bind(user)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Tous les comptes et leur rôle : (compte, rôle, accordé par, accordé le).
+    ///
+    /// Les comptes sans attribution explicite apparaissent avec le rôle par défaut —
+    /// les omettre laisserait croire qu'ils n'ont aucun accès, alors qu'ils ont celui
+    /// d'un utilisateur.
+    pub async fn users_with_roles(
+        &self,
+    ) -> Result<Vec<(String, hlb_types::Role, Option<String>, Option<String>)>> {
+        let rows = sqlx::query(
+            "SELECT u.name AS name, r.role AS role, r.granted_by AS granted_by,
+                    r.granted_at AS granted_at
+             FROM users u LEFT JOIN user_roles r ON r.user = u.name
+             ORDER BY u.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                let role = r
+                    .try_get::<Option<String>, _>("role")?
+                    .and_then(|s| hlb_types::Role::parse(&s))
+                    .unwrap_or_default();
+                Ok((
+                    r.try_get("name")?,
+                    role,
+                    r.try_get("granted_by")?,
+                    r.try_get("granted_at")?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Y a-t-il au moins un administrateur ?
+    ///
+    /// 🔴 Sert à refuser la rétrogradation du dernier admin : un système sans personne
+    /// pour accorder des droits ne se répare qu'en éditant la base à la main.
+    pub async fn has_other_admin(&self, sauf: &str) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM user_roles WHERE role = 'admin' AND user <> ?1",
+        )
+        .bind(sauf)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<i64, _>("n")? > 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1344,6 +2735,26 @@ mod tests {
 
     async fn st() -> State {
         State::in_memory().await.expect("base en mémoire")
+    }
+
+    #[tokio::test]
+    async fn a_successful_verification_is_never_recorded_as_a_failure() {
+        // 🔴 Le défaut tel qu'il s'est présenté : la signature déduisait l'échec de la
+        // présence d'un détail. Une vérification réussie DÉCRITE (« 1 284 fichiers
+        // relus ») était donc enregistrée en échec, et l'app restait « jamais
+        // vérifiée » — un écran rouge sur un travail effectivement fait, ce qui pousse
+        // à refaire la vérification indéfiniment.
+        let s = State::in_memory().await.expect("état en mémoire");
+
+        s.record_verification("gitea", "a1b2c3d4", true, Some("1 284 fichiers relus"))
+            .await
+            .expect("enregistrement");
+
+        let age = s
+            .seconds_since_last_verification("gitea")
+            .await
+            .expect("lecture");
+        assert!(age.is_some(), "la vérification réussie doit compter");
     }
 
     #[tokio::test]
@@ -1866,6 +3277,845 @@ mod tests {
         assert_eq!(g[0].1, "admin");
     }
 
+    // -----------------------------------------------------------------------
+    // Sessions, rôles et intégrité du journal (lot 1)
+    // -----------------------------------------------------------------------
+
+    /// Un compte, prérequis de toute session (la table a une clé étrangère).
+    async fn avec_compte(s: &State, nom: &str) {
+        s.upsert_user(nom, "standard", Some("pid-1"))
+            .await
+            .expect("compte");
+    }
+
+    #[tokio::test]
+    async fn every_volume_is_listed_even_the_unprotected_ones() {
+        // ⚠️ Un volume absent de la liste se lit « il n'existe pas ». Ce qu'on veut
+        // voir sur un écran de détail, c'est qu'il existe ET qu'il n'est pas protégé.
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None).await.expect("app");
+        s.add_volume("gitea", "gitea-data", "/data", true, false)
+            .await
+            .expect("volume");
+        s.add_volume("gitea", "gitea-cache", "/cache", false, false)
+            .await
+            .expect("volume");
+
+        let tous = s.app_volumes("gitea").await.expect("volumes");
+        assert_eq!(tous.len(), 2, "le cache non sauvegardé doit apparaître");
+
+        let a_sauvegarder = s.volumes_to_backup("gitea").await.expect("volumes");
+        assert_eq!(a_sauvegarder.len(), 1, "mais il ne part pas au dépôt");
+    }
+
+    #[tokio::test]
+    async fn the_audit_can_be_filtered_on_one_app() {
+        // Sur l'écran d'une app, le journal global est illisible : on veut ce qui la
+        // concerne, elle.
+        let s = st().await;
+        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
+            .await
+            .expect("audit");
+        s.audit("cli", hlb_types::Role::Admin, "install", "vikunja", "ok", None)
+            .await
+            .expect("audit");
+
+        let j = s.audit_pour("gitea", 10).await.expect("journal");
+        assert_eq!(j.len(), 1);
+        assert_eq!(j[0].target, "gitea");
+    }
+
+    #[tokio::test]
+    async fn the_history_keeps_the_failures() {
+        // 🔴 Ne rendre que les réussites donnerait une frise où rien ne s'est jamais
+        // mal passé — et une destination qui échoue depuis trois semaines y
+        // ressemblerait à une destination qu'on n'utilise pas.
+        let s = st().await;
+        s.record_backup_to("immich", "volume", "nas", Some("abc"), None)
+            .await
+            .expect("réussite");
+        s.record_backup_to("immich", "volume", "offsite", None, Some("réseau coupé"))
+            .await
+            .expect("échec");
+
+        let h = s.backup_history("immich", 10).await.expect("historique");
+        assert_eq!(h.len(), 2);
+        assert!(h.iter().any(|r| !r.a_reussi()), "l'échec doit être là");
+        let echec = h.iter().find(|r| !r.a_reussi()).expect("l'échec");
+        assert_eq!(echec.error.as_deref(), Some("réseau coupé"));
+        assert_eq!(echec.destination.as_deref(), Some("offsite"));
+    }
+
+    #[tokio::test]
+    async fn the_history_is_newest_first() {
+        // ⚠️ Ordonné par `id` et non par `finished_at` : `datetime('now')` a une
+        // résolution d'une SECONDE, et deux lignes de la même seconde s'ordonneraient
+        // au hasard. C'est le même piège que le compteur d'échecs consécutifs.
+        let s = st().await;
+        for n in 0..5 {
+            s.record_backup_to("gitea", "volume", "nas", Some(&format!("s{n}")), None)
+                .await
+                .expect("sauvegarde");
+        }
+        let h = s.backup_history("gitea", 10).await.expect("historique");
+        assert_eq!(h[0].snapshot_id.as_deref(), Some("s4"), "la plus récente d'abord");
+        for f in h.windows(2) {
+            assert!(f[0].id > f[1].id);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_history_is_bounded() {
+        // Une app sauvegardée toutes les quatre heures pendant un an fait 2 190 lignes.
+        // Les rendre toutes à chaque affichage d'écran serait payé par le controller.
+        let s = st().await;
+        for n in 0..20 {
+            s.record_backup_to("gitea", "volume", "nas", Some(&format!("s{n}")), None)
+                .await
+                .expect("sauvegarde");
+        }
+        assert_eq!(s.backup_history("gitea", 5).await.expect("historique").len(), 5);
+    }
+
+    #[tokio::test]
+    async fn verifications_are_readable_not_just_their_age() {
+        // C'est le seul indicateur fiable que les sauvegardes fonctionnent vraiment.
+        // Ne rendre que l'âge empêchait de savoir CE QUI avait été vérifié.
+        let s = st().await;
+        s.record_verification("gitea", "abc123", true, Some("1 284 fichiers relus"))
+            .await
+            .expect("vérification");
+
+        let v = s.verifications("gitea", 10).await.expect("vérifications");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].snapshot_id, "abc123");
+        assert_eq!(v[0].detail.as_deref(), Some("1 284 fichiers relus"));
+    }
+
+    #[tokio::test]
+    async fn the_global_history_spans_every_app() {
+        // La frise globale du §11bis : une colonne par jour, toutes apps confondues.
+        let s = st().await;
+        s.record_backup_to("gitea", "volume", "nas", Some("a"), None)
+            .await
+            .expect("sauvegarde");
+        s.record_backup_to("immich", "volume", "nas", Some("b"), None)
+            .await
+            .expect("sauvegarde");
+
+        let h = s.backup_history_all(10).await.expect("historique");
+        assert_eq!(h.len(), 2);
+        let apps: std::collections::BTreeSet<&str> =
+            h.iter().map(|r| r.app.as_str()).collect();
+        assert_eq!(apps.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_incident_is_followed_never_rewritten() {
+        // 🔴 C'est la chronologie qu'on relit après coup : à quelle heure on a su,
+        // compris, réglé. Réécrire le corps d'origine l'effacerait.
+        let s = st().await;
+        let id = s
+            .publier_annonce(
+                "Panne de gitea",
+                "On cherche.",
+                hlb_api::NiveauAnnonce::Incident,
+                true,
+                None,
+                "remy",
+                None,
+            )
+            .await
+            .expect("annonce");
+
+        s.suivre_annonce(id, "Cause : disque plein.", "remy").await.expect("suivi");
+        s.suivre_annonce(id, "Résolu.", "remy").await.expect("suivi");
+
+        let v = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
+        assert_eq!(v.len(), 1);
+        // Le message d'origine est INTACT…
+        assert_eq!(v[0].corps, "On cherche.");
+        // …et la chronologie est là, dans l'ordre.
+        assert_eq!(v[0].suivi.len(), 2);
+        assert_eq!(v[0].suivi[0].corps, "Cause : disque plein.");
+        assert_eq!(v[0].derniere_nouvelle(), "Résolu.");
+    }
+
+    #[tokio::test]
+    async fn an_operations_announcement_does_not_reach_the_portal() {
+        // ⚠️ Inonder l'utilisateur de messages qui ne le concernent pas lui fait cesser
+        // de les lire — au moment précis où l'un d'eux comptera.
+        let s = st().await;
+        s.publier_annonce(
+            "Redémarrage des bases",
+            "PostgreSQL redémarre à 3 h.",
+            hlb_api::NiveauAnnonce::Maintenance,
+            false,
+            Some(hlb_types::Role::Operator),
+            "remy",
+            None,
+        )
+        .await
+        .expect("annonce");
+        s.publier_annonce(
+            "Nouveau webmail",
+            "Bulwark est disponible.",
+            hlb_api::NiveauAnnonce::Info,
+            false,
+            None,
+            "remy",
+            None,
+        )
+        .await
+        .expect("annonce");
+
+        let portail = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
+        assert_eq!(portail.len(), 1, "l'annonce d'exploitation a fuité au portail");
+        assert_eq!(portail[0].titre, "Nouveau webmail");
+
+        let admin = s.annonces(hlb_types::Role::Admin, 1_000, false).await.expect("liste");
+        assert_eq!(admin.len(), 2, "l'admin doit voir les deux");
+    }
+
+    #[tokio::test]
+    async fn pinned_announcements_come_first() {
+        let s = st().await;
+        for (titre, epingle) in [("ancienne", false), ("importante", true), ("récente", false)] {
+            s.publier_annonce(
+                titre,
+                "x",
+                hlb_api::NiveauAnnonce::Info,
+                epingle,
+                None,
+                "remy",
+                None,
+            )
+            .await
+            .expect("annonce");
+        }
+        let v = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
+        assert_eq!(v[0].titre, "importante");
+    }
+
+    #[tokio::test]
+    async fn an_expired_announcement_leaves_the_portal_but_stays_in_the_record() {
+        // 🔴 C'est l'historique des incidents, et c'est ce qu'on relit après coup.
+        let s = st().await;
+        s.publier_annonce(
+            "Panne passée",
+            "x",
+            hlb_api::NiveauAnnonce::Incident,
+            false,
+            None,
+            "remy",
+            Some(500),
+        )
+        .await
+        .expect("annonce");
+
+        let portail = s.annonces(hlb_types::Role::Admin, 1_000, false).await.expect("liste");
+        assert!(portail.is_empty(), "une annonce expirée reste au portail");
+
+        let archive = s.annonces(hlb_types::Role::Admin, 1_000, true).await.expect("liste");
+        assert_eq!(archive.len(), 1, "l'historique a été perdu");
+    }
+
+    #[tokio::test]
+    async fn an_invitation_is_never_stored_in_clear() {
+        // 🔴 La base part dans les sauvegardes, donc hors site. Y stocker des jetons
+        // utilisables ferait de chaque copie un trousseau de clés.
+        let s = st().await;
+        s.creer_invitation("lien-secret-52-caracteres", "remy", "standard",
+            hlb_types::Role::Utilisateur, None, 1_000, 604_800, 1, None)
+            .await
+            .expect("invitation");
+
+        let brut: String = sqlx::query("SELECT group_concat(fingerprint) AS tout FROM invitations")
+            .fetch_one(&s.pool)
+            .await
+            .expect("lecture")
+            .try_get("tout")
+            .expect("colonne");
+        assert!(!brut.contains("lien-secret"), "{brut}");
+        assert_eq!(brut.len(), 64, "une empreinte SHA-256");
+    }
+
+    #[tokio::test]
+    async fn an_invitation_can_only_be_used_once() {
+        // 🔴 La réutiliser créerait un second compte avec les mêmes droits, au nom de
+        // quelqu'un qui n'a rien demandé.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 1, None)
+            .await
+            .expect("invitation");
+
+        let premier = s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+        assert!(premier.is_some(), "la première fois doit marcher");
+
+        let second = s.consommer_invitation("lien", "mallory", 1_200).await.expect("conso");
+        assert!(second.is_none(), "un lien à usage unique a resservi");
+    }
+
+    #[tokio::test]
+    async fn an_expired_invitation_is_refused() {
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 60, 1, None)
+            .await
+            .expect("invitation");
+
+        assert!(s.consommer_invitation("lien", "a", 1_050).await.expect("conso").is_some());
+
+        // Une autre, déjà expirée.
+        s.creer_invitation("lien2", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 60, 1, None)
+            .await
+            .expect("invitation");
+        assert!(
+            s.consommer_invitation("lien2", "b", 2_000).await.expect("conso").is_none(),
+            "une invitation périmée a été acceptée"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_invited_never_chooses_their_own_role() {
+        // 🔴 Le rôle est fixé à l'INVITATION. Le laisser choisir permettrait de
+        // s'inscrire administrateur.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "invite", hlb_types::Role::Viewer,
+            None, 1_000, 3_600, 1, None)
+            .await
+            .expect("invitation");
+
+        let (profil, role, _) = s
+            .consommer_invitation("lien", "alice", 1_100)
+            .await
+            .expect("conso")
+            .expect("utilisable");
+        assert_eq!(profil, "invite");
+        assert_eq!(role, hlb_types::Role::Viewer);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_invitation_is_indistinguishable_from_an_expired_one() {
+        // Les séparer dirait à qui essaie des jetons si l'un d'eux a existé.
+        let s = st().await;
+        assert!(s.consommer_invitation("jamais-cree", "a", 1_000).await.expect("conso").is_none());
+    }
+
+    #[tokio::test]
+    async fn listing_invitations_never_exposes_a_usable_value() {
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 1, Some("pour camille"))
+            .await
+            .expect("invitation");
+
+        let v = s.invitations(1_100).await.expect("liste");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].reference.len(), 8, "une référence courte, pas le jeton");
+        assert!(v[0].utilisable());
+        assert_eq!(v[0].expire_dans_s, 3_500);
+        assert_eq!(v[0].note.as_deref(), Some("pour camille"));
+    }
+
+    #[tokio::test]
+    async fn a_multi_use_invitation_serves_exactly_its_quota() {
+        // Inviter cinq personnes avec un lien : ni quatre, ni six.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 3, None)
+            .await
+            .expect("invitation");
+
+        for (n, qui) in ["a", "b", "c"].iter().enumerate() {
+            assert!(
+                s.consommer_invitation("lien", qui, 1_100).await.expect("conso").is_some(),
+                "l'usage {} devait passer",
+                n + 1
+            );
+        }
+        assert!(
+            s.consommer_invitation("lien", "d", 1_100).await.expect("conso").is_none(),
+            "le quatrième usage a été accepté sur un lien à trois"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_use_count_is_visible_before_it_runs_out() {
+        // 🔴 Un lien largement ouvert qui traîne est une porte d'entrée : le nombre
+        // restant doit se voir AVANT qu'il soit épuisé.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 5, None)
+            .await
+            .expect("invitation");
+        s.consommer_invitation("lien", "a", 1_100).await.expect("conso");
+
+        let v = s.invitations(1_200).await.expect("liste");
+        assert_eq!(v[0].usages, 1);
+        assert_eq!(v[0].usages_max, 5);
+        assert_eq!(v[0].restants(), 4);
+        assert!(v[0].largement_ouverte(), "un lien à quatre entrées restantes");
+        assert_eq!(v[0].etat(), "partiellement utilisée");
+    }
+
+    #[tokio::test]
+    async fn zero_uses_is_corrected_to_one_rather_than_creating_a_dead_link() {
+        // ⚠️ Une invitation à zéro usage serait inutilisable dès sa création, ce qui
+        // ressemble à une panne — on chercherait le problème ailleurs.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 0, None)
+            .await
+            .expect("invitation");
+
+        assert!(s.consommer_invitation("lien", "a", 1_100).await.expect("conso").is_some());
+    }
+
+    #[tokio::test]
+    async fn revoking_a_partially_used_link_closes_it_without_erasing_history() {
+        // 🔴 Le geste qu'on fait quand un lien a FUITÉ : le fermer immédiatement. Le
+        // supprimer perdrait la trace de qui l'a créé et de qui est déjà entré —
+        // exactement au moment où on en a besoin.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 10, None)
+            .await
+            .expect("invitation");
+        s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+
+        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+        assert!(s.revoquer_invitation(&reference).await.expect("révocation"));
+
+        // Fermée…
+        assert!(s.consommer_invitation("lien", "mallory", 1_200).await.expect("conso").is_none());
+        // …mais l'historique est là.
+        let v = s.invitations(1_200).await.expect("liste");
+        assert_eq!(v.len(), 1, "l'invitation a été effacée au lieu d'être fermée");
+        assert_eq!(v[0].cree_par, "remy");
+        assert_eq!(v[0].etat(), "épuisée");
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_invitation_has_nothing_left_to_revoke() {
+        // Elle est déjà fermée : la « révoquer » n'aurait aucun effet, et rendre
+        // « fait » laisserait croire à une action qui n'a rien changé.
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 1, None)
+            .await
+            .expect("invitation");
+        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+
+        s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+        assert!(
+            !s.revoquer_invitation(&reference).await.expect("révocation"),
+            "une invitation utilisée ne doit pas s'effacer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pending_invitation_can_be_revoked() {
+        let s = st().await;
+        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
+            None, 1_000, 3_600, 1, None)
+            .await
+            .expect("invitation");
+        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+
+        assert!(s.revoquer_invitation(&reference).await.expect("révocation"));
+        assert!(s.consommer_invitation("lien", "a", 1_100).await.expect("conso").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_brand_exists_before_anyone_configures_it() {
+        // Au premier démarrage, l'interface doit avoir quelque chose à afficher plutôt
+        // qu'un en-tête vide qu'on prendrait pour un défaut de chargement.
+        let s = st().await;
+        let m = s.marque().await.expect("marque");
+        assert_eq!(m.nom, "Turi Industries");
+        assert!(!m.logo);
+    }
+
+    #[tokio::test]
+    async fn a_brand_survives_a_round_trip_including_its_accent() {
+        let s = st().await;
+        let mut m = s.marque().await.expect("marque");
+        m.nom = "Autre Maison".into();
+        m.accent = Some([0x7B, 0x8C, 0xFF]);
+        m.pied = Some("astreinte : 06 00 00 00 00".into());
+        s.set_marque(&m).await.expect("écriture");
+
+        let relue = s.marque().await.expect("relecture");
+        assert_eq!(relue.nom, "Autre Maison");
+        assert_eq!(relue.accent, Some([0x7B, 0x8C, 0xFF]));
+        assert_eq!(relue.pied.as_deref(), Some("astreinte : 06 00 00 00 00"));
+    }
+
+    #[tokio::test]
+    async fn writing_the_brand_never_drops_the_logo() {
+        // Le logo a sa propre opération : l'écraser à chaque changement de nom ferait
+        // disparaître une image qu'on a téléversée une fois, sans prévenir.
+        let s = st().await;
+        s.set_logo(Some(b"\x89PNG-faux")).await.expect("logo");
+
+        let mut m = s.marque().await.expect("marque");
+        assert!(m.logo);
+        m.nom = "Renommee".into();
+        s.set_marque(&m).await.expect("écriture");
+
+        assert!(s.marque().await.expect("marque").logo, "le logo a disparu");
+        assert!(s.logo().await.expect("logo").is_some());
+    }
+
+    #[tokio::test]
+    async fn there_can_only_ever_be_one_brand() {
+        // 🔴 Deux lignes donneraient une marque qui change selon l'ordre de lecture —
+        // un défaut qu'on ne reproduirait jamais. La contrainte est dans le schéma.
+        let s = st().await;
+        let r = sqlx::query("INSERT INTO apparence (id, nom, produit) VALUES (2, 'x', 'y')")
+            .execute(&s.pool)
+            .await;
+        assert!(r.is_err(), "une seconde marque a été acceptée");
+    }
+
+    #[tokio::test]
+    async fn a_theme_is_a_preference_not_a_right() {
+        // Les préférences sont séparées des rôles : mélanger les deux ferait passer un
+        // changement de couleur par le contrôle d'accès aux droits.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        assert_eq!(s.theme_de("remy").await.expect("thème"), None);
+
+        s.set_theme_de("remy", Some("Turi clair")).await.expect("écriture");
+        assert_eq!(
+            s.theme_de("remy").await.expect("thème").as_deref(),
+            Some("Turi clair")
+        );
+    }
+
+    #[test]
+    fn a_half_read_colour_is_refused_rather_than_guessed() {
+        // Un accent aberrant est plus difficile à diagnostiquer qu'un accent absent.
+        assert_eq!(hex_rvb("7B8CFF"), Some([0x7B, 0x8C, 0xFF]));
+        assert_eq!(hex_rvb("#7B8CFF"), Some([0x7B, 0x8C, 0xFF]));
+        assert_eq!(hex_rvb("7B8C"), None);
+        assert_eq!(hex_rvb("ZZZZZZ"), None);
+        assert_eq!(hex_rvb(""), None);
+    }
+
+    #[tokio::test]
+    async fn a_session_cookie_is_never_stored_in_clear() {
+        // 🔴 Même discipline que les jetons d'API : une base qui fuite — et elle part
+        // dans les sauvegardes, donc hors site — ne doit pas être un trousseau de clés.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        s.open_session("cookie-secret-52-caracteres", "remy", Some("sub-1"), 1000, 3600, None)
+            .await
+            .expect("session");
+
+        let brut: String = sqlx::query("SELECT group_concat(fingerprint) AS tout FROM sessions")
+            .fetch_one(&s.pool)
+            .await
+            .expect("lecture")
+            .try_get("tout")
+            .expect("colonne");
+        assert!(
+            !brut.contains("cookie-secret"),
+            "la valeur du cookie ne doit jamais toucher le disque : {brut}"
+        );
+        assert_eq!(brut.len(), 64, "une empreinte SHA-256 hexadécimale");
+    }
+
+    #[tokio::test]
+    async fn an_expired_session_authenticates_nobody() {
+        // 🔴 L'expiration est filtrée en SQL, pas laissée à l'appelant : un appelant
+        // qui oublierait la comparaison authentifierait une session morte.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        s.open_session("c", "remy", None, 1000, 60, None).await.expect("session");
+
+        assert!(s.find_session("c", 1030).await.expect("avant").is_some());
+        assert!(
+            s.find_session("c", 1061).await.expect("après").is_none(),
+            "une session périmée ne doit plus rien authentifier"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_revoked_role_takes_effect_at_the_next_request() {
+        // 🔴 Le rôle n'est PAS copié dans la session. S'il l'était, retirer les droits
+        // d'administrateur à quelqu'un n'aurait aucun effet pendant douze heures — or
+        // on retire des droits précisément quand on est pressé de le faire.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        s.set_user_role("remy", hlb_types::Role::Admin, Some("cli"))
+            .await
+            .expect("rôle");
+        s.open_session("c", "remy", None, 1000, 3600, None).await.expect("session");
+
+        assert_eq!(s.user_role("remy").await.expect("rôle"), hlb_types::Role::Admin);
+
+        s.set_user_role("remy", hlb_types::Role::Viewer, Some("cli"))
+            .await
+            .expect("rétrogradation");
+
+        // La session vit toujours…
+        assert!(s.find_session("c", 1010).await.expect("session").is_some());
+        // …mais elle ne donne plus les mêmes droits.
+        assert_eq!(s.user_role("remy").await.expect("rôle"), hlb_types::Role::Viewer);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_account_closes_its_sessions() {
+        // Une personne révoquée ne doit pas rester connectée jusqu'à l'expiration de
+        // son cookie.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        s.open_session("c", "remy", None, 1000, 3600, None).await.expect("session");
+
+        sqlx::query("DELETE FROM users WHERE name = 'remy'")
+            .execute(&s.pool)
+            .await
+            .expect("suppression");
+
+        assert!(s.find_session("c", 1010).await.expect("session").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_person_is_matched_by_a_stable_subject_not_by_their_name() {
+        // 🔴 Un nom d'utilisateur se renomme chez PocketID ; le `sub` ne bouge pas.
+        // Se rattacher au nom perdrait le lien au premier renommage, et la personne se
+        // verrait refuser l'accès sans qu'aucun message n'explique pourquoi.
+        let s = st().await;
+        s.upsert_user("remy", "standard", Some("sub-stable"))
+            .await
+            .expect("compte");
+
+        assert_eq!(
+            s.user_by_pocket_id("sub-stable").await.expect("recherche"),
+            Some("remy".into())
+        );
+        assert_eq!(s.user_by_pocket_id("autre-sub").await.expect("recherche"), None);
+    }
+
+    #[tokio::test]
+    async fn linking_an_identity_touches_nothing_else() {
+        // La connexion ne regarde ni le profil ni les boîtes : les écraser au passage
+        // ferait perdre un quota à la première connexion.
+        let s = st().await;
+        s.upsert_user("remy", "illimite", None).await.expect("compte");
+        s.add_mailbox("remy", "remy", "turi.fr", true).await.expect("boîte");
+
+        s.upsert_user_pocket_id("remy", "sub-1").await.expect("lien");
+
+        let c = s.compte("remy").await.expect("compte");
+        assert_eq!(c.profil, "illimite");
+        assert_eq!(c.pocket_id.as_deref(), Some("sub-1"));
+        assert_eq!(c.boites.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_person_gets_the_least_privileged_role() {
+        // Une identité PocketID que HomelabUS ne connaît pas entre au plus bas.
+        let s = st().await;
+        assert_eq!(
+            s.user_role("jamais-vu").await.expect("rôle"),
+            hlb_types::Role::Utilisateur
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_role_falls_back_to_the_default() {
+        // Une colonne corrompue ne doit jamais accorder plus de droits.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        sqlx::query("INSERT INTO user_roles (user, role) VALUES ('remy', 'superadmin')")
+            .execute(&s.pool)
+            .await
+            .expect("rôle bidon");
+        assert_eq!(
+            s.user_role("remy").await.expect("rôle"),
+            hlb_types::Role::Utilisateur
+        );
+    }
+
+    #[tokio::test]
+    async fn accounts_without_an_explicit_role_still_appear() {
+        // Les omettre laisserait croire qu'ils n'ont aucun accès, alors qu'ils ont
+        // celui d'un utilisateur.
+        let s = st().await;
+        avec_compte(&s, "alice").await;
+        avec_compte(&s, "bob").await;
+        s.set_user_role("alice", hlb_types::Role::Operator, None)
+            .await
+            .expect("rôle");
+
+        let tous = s.users_with_roles().await.expect("liste");
+        assert_eq!(tous.len(), 2);
+        assert_eq!(tous[0].1, hlb_types::Role::Operator, "alice");
+        assert_eq!(tous[1].1, hlb_types::Role::Utilisateur, "bob, par défaut");
+    }
+
+    #[tokio::test]
+    async fn a_session_can_be_named_without_naming_a_secret() {
+        // On doit pouvoir dire « déconnecte cet appareil » sans manipuler le cookie.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        s.open_session("portable", "remy", None, 1000, 3600, Some("Firefox"))
+            .await
+            .expect("session");
+
+        let vues = s.sessions_of("remy", 1010).await.expect("sessions");
+        assert_eq!(vues.len(), 1);
+        assert_eq!(vues[0].reference.len(), 8);
+        assert_eq!(vues[0].user_agent.as_deref(), Some("Firefox"));
+
+        assert!(s
+            .close_session_by_reference("remy", &vues[0].reference)
+            .await
+            .expect("fermeture"));
+        assert!(s.find_session("portable", 1010).await.expect("session").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_audit_chain_holds_across_entries() {
+        let s = st().await;
+        for n in 0..5 {
+            s.audit("cli", hlb_types::Role::Admin, "install", &format!("app{n}"), "ok", None)
+                .await
+                .expect("audit");
+        }
+        let v = s.verify_audit_chain().await.expect("vérification");
+        assert!(v.est_intacte(), "{}", v.describe());
+        match v {
+            AuditIntegrity::Intacte { verifiees, non_chainees, .. } => {
+                assert_eq!(verifiees, 5);
+                assert_eq!(non_chainees, 0);
+            }
+            AuditIntegrity::Rompue { .. } => panic!("chaîne rompue sans raison"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tampered_entry_breaks_the_chain() {
+        // 🔴 L'intérêt du chaînage : « append-only » n'est qu'une convention tant que
+        // le fichier SQLite est ouvrable. Une réécriture reste possible, mais elle se
+        // voit — ce qui est la seule garantie atteignable sans tiers de confiance.
+        let s = st().await;
+        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
+            .await
+            .expect("audit");
+        s.audit("cli", hlb_types::Role::Admin, "purge", "vikunja", "ok", None)
+            .await
+            .expect("audit");
+
+        sqlx::query("UPDATE audit_log SET target = 'innocent' WHERE action = 'purge'")
+            .execute(&s.pool)
+            .await
+            .expect("falsification");
+
+        let v = s.verify_audit_chain().await.expect("vérification");
+        assert!(!v.est_intacte(), "une entrée modifiée doit se voir");
+        assert!(v.describe().contains("ROMPUE"), "{}", v.describe());
+    }
+
+    #[tokio::test]
+    async fn a_removed_entry_breaks_the_chain() {
+        // Le cas qu'un attaquant tenterait en premier : effacer la trace de son
+        // passage plutôt que la modifier.
+        let s = st().await;
+        for n in 0..3 {
+            s.audit("cli", hlb_types::Role::Admin, "install", &format!("app{n}"), "ok", None)
+                .await
+                .expect("audit");
+        }
+        sqlx::query("DELETE FROM audit_log WHERE target = 'app1'")
+            .execute(&s.pool)
+            .await
+            .expect("suppression");
+
+        let v = s.verify_audit_chain().await.expect("vérification");
+        assert!(!v.est_intacte(), "une entrée retirée doit se voir");
+    }
+
+    #[tokio::test]
+    async fn entries_older_than_the_chain_are_named_not_hidden() {
+        // 🔴 Backfiller les empreintes des anciennes entrées produirait une chaîne
+        // d'apparence complète, bâtie sur un contenu peut-être déjà falsifié. Le
+        // verdict doit donc dire DEPUIS QUAND il vaut.
+        let s = st().await;
+        sqlx::query(
+            "INSERT INTO audit_log (actor, role, action, target, outcome)
+             VALUES ('ancien', 'admin', 'install', 'gitea', 'ok')",
+        )
+        .execute(&s.pool)
+        .await
+        .expect("entrée pré-chaînage");
+
+        s.audit("cli", hlb_types::Role::Admin, "install", "vikunja", "ok", None)
+            .await
+            .expect("audit");
+
+        let v = s.verify_audit_chain().await.expect("vérification");
+        assert!(v.est_intacte());
+        match v {
+            AuditIntegrity::Intacte { verifiees, non_chainees, depuis_l_entree } => {
+                assert_eq!(verifiees, 1);
+                assert_eq!(non_chainees, 1, "l'entrée antérieure est comptée, pas cachée");
+                assert!(depuis_l_entree.is_some());
+            }
+            AuditIntegrity::Rompue { .. } => panic!("pas de rupture attendue"),
+        }
+    }
+
+    #[tokio::test]
+    async fn moving_text_between_fields_does_not_preserve_the_hash() {
+        // 🔴 Sans préfixe de longueur, une cible « gitea|ok » et une cible « gitea »
+        // suivie de l'issue « ok » donneraient la même empreinte : on pourrait
+        // requalifier un échec en réussite sans casser la chaîne.
+        let a = empreinte_entree(None, ["t", "cli", "admin", "purge", "gitea|ok", "failed"], None);
+        let b = empreinte_entree(None, ["t", "cli", "admin", "purge", "gitea", "|okfailed"], None);
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn the_audit_trail_carries_the_role_and_the_diff() {
+        // Le §9ter demande « qui, quoi, quand, avec le diff » ; le diff manquait.
+        let s = st().await;
+        s.audit(
+            "remy",
+            hlb_types::Role::Operator,
+            "config",
+            "backup.interval",
+            "ok",
+            Some("4h → 2h"),
+        )
+        .await
+        .expect("audit");
+
+        let t = s.audit_trail(10).await.expect("journal");
+        assert_eq!(t[0].role, "operator");
+        assert_eq!(t[0].detail.as_deref(), Some("4h → 2h"));
+    }
+
+    #[tokio::test]
+    async fn the_last_admin_cannot_be_identified_as_replaceable() {
+        // Sert au refus de rétrograder le dernier admin : sans lui, plus personne ne
+        // peut accorder de droits et le système ne se répare qu'à la main dans SQLite.
+        let s = st().await;
+        avec_compte(&s, "remy").await;
+        avec_compte(&s, "alice").await;
+        s.set_user_role("remy", hlb_types::Role::Admin, None).await.expect("rôle");
+
+        assert!(!s.has_other_admin("remy").await.expect("compte"), "il est le seul");
+
+        s.set_user_role("alice", hlb_types::Role::Admin, None).await.expect("rôle");
+        assert!(s.has_other_admin("remy").await.expect("compte"), "alice prend le relais");
+    }
+
     #[tokio::test]
     async fn audited_actions_are_retrievable_in_order() {
         let s = st().await;
@@ -1879,8 +4129,8 @@ mod tests {
         let t = s.audit_trail(10).await.unwrap();
         assert_eq!(t.len(), 2);
         // Le plus récent d'abord : c'est ce qu'on veut voir en cas d'incident.
-        assert_eq!(t[0].2, "purge");
-        assert_eq!(t[0].4, "refused");
+        assert_eq!(t[0].action, "purge");
+        assert_eq!(t[0].outcome, "refused");
     }
 
     #[tokio::test]
@@ -1891,7 +4141,7 @@ mod tests {
         s.audit("inconnu", hlb_types::Role::Viewer, "purge", "gitea", "refused", None)
             .await
             .unwrap();
-        assert_eq!(s.audit_trail(10).await.unwrap()[0].4, "refused");
+        assert_eq!(s.audit_trail(10).await.unwrap()[0].outcome, "refused");
     }
 
     #[tokio::test]
@@ -1930,14 +4180,16 @@ mod tests {
         let s = st().await;
         s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
 
-        s.record_verification("gitea", "abc", Some("contenu différent")).await.unwrap();
+        s.record_verification("gitea", "abc", false, Some("contenu différent"))
+            .await
+            .unwrap();
         assert_eq!(
             s.seconds_since_last_verification("gitea").await.unwrap(),
             None,
             "une vérification en échec ne prouve rien"
         );
 
-        s.record_verification("gitea", "abc", None).await.unwrap();
+        s.record_verification("gitea", "abc", true, None).await.unwrap();
         assert!(s.seconds_since_last_verification("gitea").await.unwrap().is_some());
     }
 

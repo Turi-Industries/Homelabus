@@ -120,14 +120,19 @@ impl Coherence {
     pub fn describe(&self) -> &'static str {
         match self {
             Self::Complet => "complet",
+            // ⚠️ Pas d'emoji dans ces messages : ils sont AFFICHÉS par le CLI *et* par
+            // l'interface. Le terminal les rend, egui non — il faudrait les remplacer
+            // par un caractère de substitution, qui gâche la phrase. Un texte partagé
+            // ne doit pas dépendre de ce qu'un seul de ses consommateurs sait afficher.
+            // La gravité est portée par le contenu, et par la couleur de l'appelant.
             Self::SansBoite => {
-                "🔴 identité créée, AUCUNE boîte — cette personne peut se connecter \
+                "identité créée, AUCUNE boîte — cette personne peut se connecter \
                  partout et son adresse ne reçoit rien. Le premier courriel perdu sera \
                  sans doute une réinitialisation de mot de passe. Relance « hlb user add » \
                  avec les mêmes arguments : la création reprend où elle s'était arrêtée"
             }
             Self::SansIdentite => {
-                "🔴 boîte créée, AUCUNE identité — le courrier arrive et personne ne \
+                "boîte créée, AUCUNE identité — le courrier arrive et personne ne \
                  peut le lire. Relance « hlb user add » pour terminer"
             }
             Self::Vide => "aucune identité, aucune boîte",
@@ -230,6 +235,31 @@ pub fn valider_nom(nom: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_messages_carry_no_glyph_the_ui_cannot_display() {
+        // ⚠️ Ces messages sont affichés par le CLI ET par l'interface egui. Le terminal
+        // rend les emoji, egui non : il les remplace par un caractère de substitution,
+        // ce qui gâche la phrase (« ¤ identité créée, AUCUNE boîte »).
+        //
+        // Un texte partagé ne doit pas dépendre de ce qu'un seul de ses consommateurs
+        // sait afficher.
+        for c in [
+            Coherence::Complet,
+            Coherence::SansBoite,
+            Coherence::SansIdentite,
+            Coherence::Vide,
+        ] {
+            for ch in c.describe().chars() {
+                let n = ch as u32;
+                assert!(
+                    n < 0x2C0 || (0x2000..=0x206F).contains(&n),
+                    "{:?} contient U+{n:04X}, que l'interface ne sait pas afficher",
+                    c
+                );
+            }
+        }
+    }
 
     const T: i64 = 1_700_000_000;
 

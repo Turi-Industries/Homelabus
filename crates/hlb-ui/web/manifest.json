@@ -1,0 +1,19 @@
+{
+  "name": "HomelabUS",
+  "short_name": "HomelabUS",
+  "description": "La console de votre homelab.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#12141a",
+  "theme_color": "#12141a",
+  "icons": [
+    {
+      "src": "icone.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

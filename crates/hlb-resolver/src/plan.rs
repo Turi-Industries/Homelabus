@@ -68,6 +68,14 @@ pub enum Action {
     ProvisionMailAccount {
         address: String,
         aliases: bool,
+        /// 🔴 Déclaré au manifest, **non appliqué** : `hlb-mail` n'a aucune opération
+        /// de quota, Stalwart ne l'exposant pas en JMAP à ce jour.
+        ///
+        /// Il est porté jusqu'ici quand même, plutôt qu'ignoré par un `..` dans le
+        /// motif du résolveur — c'est exactement ce qui s'était produit et qui rendait
+        /// un quota déclaré silencieusement décoratif. L'exécuteur refuse l'action au
+        /// lieu de créer la boîte sans son quota.
+        quota_bytes: Option<u64>,
     },
 
     DeployService {
@@ -156,11 +164,15 @@ impl fmt::Display for Action {
                 if *backup { "activée" } else { "désactivée" },
                 if *sqlite { ", instantané SQLite" } else { "" }
             ),
-            Self::ProvisionMailAccount { address, aliases } => write!(
-                f,
-                "créer la boîte {address}{}",
-                if *aliases { " avec aliases" } else { "" }
-            ),
+            Self::ProvisionMailAccount { address, aliases, quota_bytes } => {
+                write!(f, "créer la boîte {address}{}", if *aliases { " avec aliases" } else { "" })?;
+                if let Some(q) = quota_bytes {
+                    // Affiché dans l'aperçu : un quota qu'on ne sait pas poser doit se
+                    // voir AVANT l'installation, pas se découvrir à l'usage.
+                    write!(f, " [quota {q} o — NON APPLIQUÉ, cf. §5bis]")?;
+                }
+                Ok(())
+            }
             Self::DeployService {
                 name, image, replicas, constraints, env, mounts, hardening, healthcheck,
             } => {

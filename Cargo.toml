@@ -65,7 +65,6 @@ hlb-selfupdate = { path = "crates/hlb-selfupdate" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
 hlb-engine = { path = "crates/hlb-engine" }
-hlb-cli = { path = "crates/hlb-cli" }
 
 # --- runtime ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "process", "time"] }
@@ -86,7 +85,6 @@ schemars = "1"
 
 # --- erreurs / logs ---
 thiserror = "2"
-anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

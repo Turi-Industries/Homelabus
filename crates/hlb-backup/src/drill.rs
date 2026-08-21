@@ -157,21 +157,21 @@ impl Outcome {
     pub fn describe(&self) -> String {
         if self.succeeded() {
             format!(
-                "✓ {} restaurée en {} s — {} table(s) lisibles",
+                "{} restaurée en {} s — {} lisibles",
                 self.scope.describe(),
                 self.seconds,
-                self.tables.unwrap_or(0)
+                crate::pluriel_tables(self.tables.unwrap_or(0))
             )
         } else if self.opened {
             format!(
-                "🔴 {} s'ouvre mais ne contient RIEN ({} table(s)). Une base vide se \
+                "{} s'ouvre mais ne contient RIEN ({}). Une base vide se \
                  restaure parfaitement — c'est le pire résultat possible, parce qu'il \
                  ressemble à un succès.",
                 self.scope.describe(),
-                self.tables.unwrap_or(0)
+                crate::pluriel_tables(self.tables.unwrap_or(0))
             )
         } else {
-            format!("🔴 {} ne s'ouvre pas : {}", self.scope.describe(), self.detail)
+            format!("{} ne s'ouvre pas : {}", self.scope.describe(), self.detail)
         }
     }
 }
@@ -213,16 +213,16 @@ impl Readiness {
 
     pub fn describe(&self) -> String {
         match self {
-            Self::Ready { days } => format!("✓ exercée il y a {days} j"),
+            Self::Ready { days } => format!("exercée il y a {days} j"),
             Self::Due { days } => {
-                format!("🟠 exercée il y a {days} j — le §8.3 vise tous les 30 j")
+                format!("exercée il y a {days} j — le §8.3 vise tous les 30 j")
             }
             Self::Overdue { days } => format!(
-                "🔴 exercée il y a {days} j. Au-delà de {RETARD_JOURS} j, la procédure \
+                "exercée il y a {days} j. Au-delà de {RETARD_JOURS} j, la procédure \
                  a eu le temps de diverger : un chemin qui bouge, un mot de passe qui \
                  tourne, une version qui change."
             ),
-            Self::Never => "🔴 JAMAIS exercée. La restauration est le chemin de code \
+            Self::Never => "JAMAIS exercée. La restauration est le chemin de code \
                  le moins parcouru du système, et le seul qu'on découvre le pire jour."
                 .to_string(),
         }

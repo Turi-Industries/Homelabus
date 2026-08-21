@@ -27,5 +27,24 @@ if command -v wasm-opt >/dev/null 2>&1; then
   wasm-opt -Oz -o crates/hlb-ui/web/hlb_ui_bg.wasm crates/hlb-ui/web/hlb_ui_bg.wasm
 fi
 
-echo "✓ UI web dans crates/hlb-ui/web/"
+# --- Budget de taille (lot 12.2) --------------------------------------------
+#
+# 🔴 Polices embarquées, vingt écrans, un encodeur QR : le bundle peut doubler sans
+# que personne ne le voie. Sur une connexion domestique, un wasm de 12 Mo met dix
+# secondes à s'afficher, et l'on conclut que « l'interface est lente ».
+#
+# Le seuil est LARGE et le dépassement est une ERREUR, pas un avertissement : un
+# avertissement dans une sortie de build se lit une fois, puis jamais.
+BUDGET_MO=6
+TAILLE=$(wc -c < crates/hlb-ui/web/hlb_ui_bg.wasm)
+TAILLE_MO=$((TAILLE / 1048576))
+
+if [ "$TAILLE_MO" -ge "$BUDGET_MO" ]; then
+  echo "🔴 Le bundle wasm fait ${TAILLE_MO} Mo, budget ${BUDGET_MO} Mo."
+  echo "   Regarde ce qui a grossi :  cargo bloat --release --target wasm32-unknown-unknown -p hlb-ui"
+  echo "   Ou relève le budget dans ce script, en connaissance de cause."
+  exit 1
+fi
+
+echo "✓ UI web dans crates/hlb-ui/web/ (${TAILLE_MO} Mo / ${BUDGET_MO} Mo)"
 echo "  hlb-controller --ui-dir crates/hlb-ui/web"

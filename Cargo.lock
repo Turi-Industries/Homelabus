@@ -1707,6 +1707,7 @@ dependencies = [
 name = "hlb-api"
 version = "0.1.0"
 dependencies = [
+ "hlb-types",
  "serde",
  "serde_json",
 ]
@@ -1755,6 +1756,7 @@ dependencies = [
  "chrono",
  "clap",
  "hlb-agent",
+ "hlb-api",
  "hlb-backup",
  "hlb-bootstrap",
  "hlb-catalog",
@@ -1793,12 +1795,16 @@ dependencies = [
  "hlb-agent",
  "hlb-api",
  "hlb-backup",
+ "hlb-catalog",
  "hlb-engine",
  "hlb-gitops",
+ "hlb-identity",
+ "hlb-ingress",
  "hlb-mail",
  "hlb-metrics",
  "hlb-notify",
  "hlb-orchestrator",
+ "hlb-resolver",
  "hlb-secrets",
  "hlb-state",
  "hlb-types",
@@ -1868,6 +1874,7 @@ dependencies = [
 name = "hlb-identity"
 version = "0.1.0"
 dependencies = [
+ "hlb-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -2022,7 +2029,9 @@ dependencies = [
 name = "hlb-state"
 version = "0.1.0"
 dependencies = [
+ "hlb-api",
  "hlb-types",
+ "hlb-users",
  "serde_yaml_ng",
  "sqlx",
  "thiserror 2.0.19",
@@ -2053,6 +2062,7 @@ dependencies = [
  "hlb-api",
  "hlb-state",
  "hlb-types",
+ "qrcode",
  "serde",
  "serde_json",
  "tempfile",
@@ -3505,6 +3515,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

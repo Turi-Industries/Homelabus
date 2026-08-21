@@ -104,6 +104,22 @@ impl Orchestrator for Fake {
     async fn wait_healthy(&self, n: &str, _: u64) -> hlb_orchestrator::Result<ServiceStatus> {
         self.status(n).await
     }
+
+    async fn tasks(
+        &self,
+        _: Option<&str>,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+        Ok(Vec::new())
+    }
+
+    async fn logs(
+        &self,
+        _: &str,
+        _: u32,
+    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+        Ok(Vec::new())
+    }
 }
 
 fn status(image: &str, state: Option<UpdateState>, running: usize) -> ServiceStatus {

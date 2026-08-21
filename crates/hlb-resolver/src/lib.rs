@@ -467,7 +467,10 @@ fn resolve_capability(
             });
         }
 
-        Capability::MailAccount { aliases, .. } => {
+        // 🔴 Motif EXHAUSTIF, sans `..`. Le `..` qui était ici avalait `quota_bytes`,
+        // exactement comme il avait avalé `mode` sur `Capability::Sso` — un `..` a le
+        // même effet qu'un bras `_ =>`, et le compilateur ne peut rien en dire.
+        Capability::MailAccount { aliases, quota_bytes } => {
             let domain = params
                 .mail_domain
                 .as_ref()
@@ -475,6 +478,7 @@ fn resolve_capability(
             plan.push(Action::ProvisionMailAccount {
                 address: format!("{app}@{domain}"),
                 aliases: *aliases,
+                quota_bytes: *quota_bytes,
             });
         }
 
@@ -511,6 +515,45 @@ fn render_host(tpl: &str, params: &InstallParams) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_declared_mailbox_quota_reaches_the_plan() {
+        // 🔴 Le `..` qui était dans ce motif avalait `quota_bytes` : un quota déclaré
+        // au manifest n'atteignait jamais le plan, et la boîte était créée sans lui.
+        // C'est le même défaut que sur `Capability::Sso { mode }`, et le compilateur ne
+        // pouvait rien en dire — un `..` a le même effet qu'un bras `_ =>`.
+        let mut plan = Plan::default();
+        let params = InstallParams {
+            mail_domain: Some("turi.fr".into()),
+            ..Default::default()
+        };
+        resolve_capability(
+            &Capability::MailAccount {
+                quota_bytes: Some(5_000_000),
+                aliases: true,
+            },
+            "wiki",
+            &params,
+            &mut plan,
+        )
+        .expect("résolution");
+
+        let a = plan
+            .actions
+            .iter()
+            .find(|a| matches!(a, Action::ProvisionMailAccount { .. }))
+            .expect("une action de boîte");
+        match a {
+            Action::ProvisionMailAccount { quota_bytes, aliases, .. } => {
+                assert_eq!(*quota_bytes, Some(5_000_000), "le quota a été avalé en route");
+                assert!(*aliases);
+            }
+            _ => unreachable!(),
+        }
+        // Et il doit se VOIR dans l'aperçu : un quota qu'on ne sait pas poser doit
+        // apparaître avant l'installation, pas se découvrir à l'usage.
+        assert!(a.to_string().contains("NON APPLIQUÉ"), "{a}");
+    }
 
     /// Ingress en `after-guide`. En chaîne brute : un `\` de continuation Rust
     /// mange la newline ET l'indentation, ce qui casse le YAML de façon déroutante.

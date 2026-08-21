@@ -22,7 +22,7 @@
 //! de tout faire. C'est le principe du §11bis, et c'est ce qui permet de déboguer le
 //! jour où l'interface ne démarre plus.
 
-use hlb_ui::{app, client};
+use hlb_ui::{client, route, shell};
 
 use std::sync::Arc;
 
@@ -47,12 +47,14 @@ struct Cli {
     #[arg(long, default_value = "700")]
     height: f32,
 
-    /// Onglet d'ouverture : apps, todo, journal, secrets.
+    /// Écran d'ouverture, sous la même forme que le fragment d'URL du web :
+    /// `/`, `/apps`, `/a-faire`, `/journal`, `/secrets`, `/reglages`.
     ///
     /// Utile pour épingler l'écran qui t'intéresse — la liste des actions en attente,
-    /// par exemple — sans avoir à cliquer à chaque lancement.
-    #[arg(long, default_value = "apps")]
-    tab: String,
+    /// par exemple — sans avoir à cliquer à chaque lancement. La même valeur marche
+    /// dans le navigateur, après un `#`.
+    #[arg(long, default_value = "/")]
+    route: String,
 
     /// Intervalle de rafraîchissement, en secondes.
     ///
@@ -61,19 +63,28 @@ struct Cli {
     /// la minute. Ça ne fait qu'ajouter de la charge au controller.
     #[arg(long, default_value = "5")]
     refresh_secs: u64,
+
+    /// Mode kiosque : rotation automatique des écrans, aucune interaction.
+    ///
+    /// 🔴 Pour un écran mural. Les écrans qui portent des secrets, des comptes, des
+    /// jetons ou le journal d'audit en sont exclus par construction — un mur est
+    /// visible par quiconque passe dans la pièce. Utilise un jeton `viewer` dédié.
+    #[arg(long)]
+    kiosque: bool,
 }
 
 fn main() -> eframe::Result<()> {
     let cli = Cli::parse();
 
-    let onglet: app::Onglet = match cli.tab.parse() {
-        Ok(o) => o,
+    let route: route::Route = match cli.route.parse() {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(2);
         }
     };
 
+    let kiosque = cli.kiosque;
     let shared = Arc::new(client::Shared::default());
 
     let options = eframe::NativeOptions {
@@ -82,6 +93,8 @@ fn main() -> eframe::Result<()> {
             // 320 pt : la largeur d'un téléphone ancien. En dessous, plus rien n'est
             // lisible, mais au-dessus la disposition étroite doit tenir.
             .with_min_inner_size([320.0, 300.0])
+            // ⚠️ Le titre définitif vient de la marque, servie par le controller.
+            // Celui-ci n'est visible que le temps du premier sondage.
             .with_title("HomelabUS"),
         ..Default::default()
     };
@@ -97,6 +110,10 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "HomelabUS",
         options,
-        Box::new(move |_cc| Ok(Box::new(app::Dashboard::new(partage, poller, onglet)))),
+        Box::new(move |_cc| {
+            let app = shell::Application::new(partage, poller, route);
+            let app = if kiosque { app.en_kiosque() } else { app };
+            Ok(Box::new(app))
+        }),
     )
 }

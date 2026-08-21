@@ -79,6 +79,75 @@ pub fn sha256_hex(data: &[u8]) -> String {
     sha256(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// L'empreinte SHA-256 brute.
+///
+/// Exposée pour PKCE (§ le défi `S256` d'OAuth 2.1 se calcule en base64url sur les
+/// octets, pas sur leur représentation hexadécimale — hacher le texte hexadécimal
+/// donnerait un défi que le serveur d'autorisation rejetterait).
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    sha256(data)
+}
+
+/// Encodage base64url **sans remplissage** (RFC 4648 §5).
+///
+/// Écrit à la main plutôt qu'ajouté en dépendance, comme le base32 des jetons : c'est
+/// vingt lignes, et une dépendance de moins dans la chaîne d'approvisionnement d'un
+/// crate qui manipule des secrets.
+///
+/// ⚠️ L'alphabet **URL** (`-` et `_`), pas le standard : `+` et `/` seraient réencodés
+/// par le navigateur dans un paramètre de requête, et le défi PKCE ne correspondrait
+/// plus au vérificateur — avec une erreur qui parle de code invalide et n'oriente vers
+/// rien.
+pub fn base64url(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for bloc in data.chunks(3) {
+        let b = [
+            bloc[0],
+            *bloc.get(1).unwrap_or(&0),
+            *bloc.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        // 4 caractères pour 3 octets, moins ceux que le dernier bloc incomplet n'a pas.
+        let utiles = bloc.len() + 1;
+        for i in 0..utiles {
+            let idx = ((n >> (18 - 6 * i)) & 0x3F) as usize;
+            out.push(A[idx] as char);
+        }
+    }
+    out
+}
+
+/// Décodage base64url sans remplissage, tolérant au remplissage `=`.
+///
+/// Sert à lire la charge utile d'un `id_token` — voir la note de sécurité de
+/// `hlb_identity::oidc`, qui explique pourquoi on la lit sans vérifier sa signature.
+pub fn base64url_decode(s: &str) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    for c in s.bytes() {
+        if c == b'=' {
+            break;
+        }
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
 fn fingerprint(token: &str) -> String {
     // SHA-256 en implémentation directe : pas de dépendance nouvelle pour trente
     // lignes, et l'algorithme est figé depuis vingt ans.
@@ -109,7 +178,7 @@ pub fn constant_eq(a: &str, b: &str) -> bool {
 }
 
 /// Encodage base32 (RFC 4648, sans remplissage).
-fn base32(data: &[u8]) -> String {
+pub fn base32(data: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let mut out = String::new();
     let mut tampon: u32 = 0;
@@ -221,6 +290,57 @@ mod tests {
     }
 
     #[test]
+    fn base64url_matches_the_reference_vectors() {
+        // RFC 4648 §10, transposé à l'alphabet URL et sans remplissage.
+        assert_eq!(base64url(b""), "");
+        assert_eq!(base64url(b"f"), "Zg");
+        assert_eq!(base64url(b"fo"), "Zm8");
+        assert_eq!(base64url(b"foo"), "Zm9v");
+        assert_eq!(base64url(b"foob"), "Zm9vYg");
+        assert_eq!(base64url(b"fooba"), "Zm9vYmE");
+        assert_eq!(base64url(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64url_never_emits_characters_a_url_would_reencode() {
+        // 🔴 `+` et `/` seraient réencodés dans un paramètre de requête, et le défi
+        // PKCE ne correspondrait plus au vérificateur.
+        let tout = base64url(&(0u8..=255).collect::<Vec<u8>>());
+        assert!(!tout.contains('+'), "{tout}");
+        assert!(!tout.contains('/'), "{tout}");
+        assert!(!tout.contains('='), "pas de remplissage : {tout}");
+    }
+
+    #[test]
+    fn base64url_survives_a_round_trip() {
+        for n in 0..40usize {
+            let brut: Vec<u8> = (0..n).map(|i| (i * 37 % 251) as u8).collect();
+            let code = base64url(&brut);
+            assert_eq!(base64url_decode(&code).as_deref(), Some(brut.as_slice()), "{n} octets");
+        }
+    }
+
+    #[test]
+    fn base64url_decoding_refuses_a_foreign_alphabet() {
+        // Une charge utile qui n'est pas du base64url n'est pas « presque bonne » :
+        // la lire à moitié donnerait un JSON tronqué, donc une erreur trompeuse.
+        assert_eq!(base64url_decode("abc+def"), None);
+        assert_eq!(base64url_decode("abc/def"), None);
+    }
+
+    #[test]
+    fn the_pkce_challenge_hashes_bytes_not_hex() {
+        // Hacher la représentation hexadécimale donnerait un défi que le serveur
+        // d'autorisation rejetterait, avec une erreur qui parle de code invalide.
+        let verif = "vérificateur".as_bytes();
+        assert_eq!(sha256_bytes(verif).len(), 32);
+        assert_ne!(
+            base64url(&sha256_bytes(verif)),
+            base64url(sha256_hex(verif).as_bytes())
+        );
+    }
+
+    #[test]
     fn sha256_matches_the_reference_vectors() {
         // 🔴 Une implémentation cryptographique écrite à la main DOIT être vérifiée
         // contre les vecteurs officiels. Une erreur d'un bit donnerait un hachage
@@ -312,7 +432,7 @@ mod tests {
         // C'est lui qui décidera ce que la requête a le droit de faire.
         let (_, s) = generate("ops", Role::Operator, alea(5));
         assert_eq!(s.role, Role::Operator);
-        assert!(s.role.allows(crate::rbac::Action::Operate));
-        assert!(!s.role.allows(crate::rbac::Action::Destroy));
+        assert!(s.role.allows(crate::rbac::Action::Operer));
+        assert!(!s.role.allows(crate::rbac::Action::Detruire));
     }
 }

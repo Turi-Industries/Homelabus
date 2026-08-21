@@ -22,6 +22,7 @@ pub mod disk;
 pub mod pki;
 pub mod tls;
 pub mod report;
+pub mod systeme;
 
 pub use disk::{DiskPressure, DiskUsage, Projection, Thresholds};
 pub use pki::{CertPair, Purpose};
@@ -38,4 +39,18 @@ pub use report::NodeReport;
 /// 🔴 À incrémenter **uniquement** quand le format des échanges change de façon
 /// incompatible — pas à chaque version du binaire. Les confondre ferait refuser des
 /// agents parfaitement fonctionnels à chaque correctif.
-pub const PROTOCOL: u32 = 1;
+///
+/// | Version | Ce qu'elle apporte |
+/// |---|---|
+/// | 1 | disques, mémoire |
+/// | 2 | charge, occupation CPU, swap, interfaces réseau, noyau/distro, uptime |
+///
+/// ⚠️ Le passage de 1 à 2 est **compatible dans les deux sens** : tous les champs
+/// ajoutés sont `Option` + `serde(default)`. Un controller à jour lit un agent
+/// ancien (les nouvelles mesures valent `None`), et un controller ancien lit un
+/// agent à jour (il ignore ce qu'il ne connaît pas).
+///
+/// C'est ce qui permet de mettre à jour le parc dans n'importe quel ordre. Sans cela,
+/// la première mise à jour rendrait tous les agents « injoignables » — précisément au
+/// moment où l'on a besoin de les voir.
+pub const PROTOCOL: u32 = 2;

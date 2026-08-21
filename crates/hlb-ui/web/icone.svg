@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <!-- Le monogramme peint, comme dans l'interface : aucune police n'intervient,
+       donc rien ne peut manquer au rendu. -->
+  <rect width="192" height="192" rx="42" fill="#12141a"/>
+  <path d="M52 128V64h16v24h24V64h16v64H92v-24H68v24z" fill="#7B8CFF"/>
+</svg>

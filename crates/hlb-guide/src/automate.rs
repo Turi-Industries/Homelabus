@@ -201,6 +201,22 @@ mod tests {
         async fn wait_healthy(&self, _: &str, _: u64) -> hlb_orchestrator::Result<ServiceStatus> {
             Err(hlb_orchestrator::Error::NotFound("x".into()))
         }
+
+        async fn tasks(
+            &self,
+            _: Option<&str>,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+            // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+            Ok(Vec::new())
+        }
+
+        async fn logs(
+            &self,
+            _: &str,
+            _: u32,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+            Ok(Vec::new())
+        }
     }
 
     fn step(yaml: &str) -> GuideStep {

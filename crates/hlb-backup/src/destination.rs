@@ -99,14 +99,23 @@ impl Destination {
     /// ⚠️ Une URL S3 peut porter des identifiants (`s3:https://clé:secret@hôte/seau`).
     /// On la tronque avant le `@` : sinon `hlb backup dest list` publierait la clé dans
     /// le terminal, puis dans l'historique du shell, puis dans une capture d'écran.
-    pub fn describe(&self) -> String {
-        let lieu = match self.location.split_once('@') {
+    /// L'emplacement, identifiants masqués.
+    ///
+    /// ⚠️ Extrait de `describe` plutôt que recopié : deux masquages divergents
+    /// finiraient par en laisser un qui n'en est pas un, et c'est une clé d'accès qui
+    /// partirait dans un terminal ou sur un papier imprimé.
+    pub fn lieu_masque(&self) -> String {
+        match self.location.split_once('@') {
             Some((avant, apres)) if avant.contains("://") => {
                 let schema = avant.split_once("://").map(|(s, _)| s).unwrap_or("s3");
                 format!("{schema}://••••@{apres}")
             }
             _ => self.location.clone(),
-        };
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        let lieu = self.lieu_masque();
 
         let classes: Vec<&str> = self.classes.iter().map(|c| c.nom()).collect();
         if classes.is_empty() {
@@ -258,9 +267,214 @@ impl Couverture {
     }
 }
 
+/// Ce qu'il faut savoir de l'état pour calculer une couverture.
+///
+/// ## Pourquoi un trait plutôt qu'un `&State`
+///
+/// `hlb-backup` ne dépend pas de `hlb-state` et ne doit pas commencer : ce crate est
+/// testable sans base ni serveur, et c'est ce qui permet d'exercer toute la logique de
+/// sauvegarde en mémoire. Le trait inverse la dépendance — l'appelant fournit les
+/// faits, le calcul vit ici.
+///
+/// C'était **le** défaut : `Couverture` n'était construite que dans le CLI. Le
+/// controller ne pouvait donc pas émettre `hlb_backup_copies`, et la règle d'alerte
+/// `copie-unique` — celle qui garde le 3-2-1 — ne s'est jamais déclenchée.
+#[allow(async_fn_in_trait)]
+pub trait SourceCouverture {
+    /// Les destinations déclarées.
+    async fn destinations(&self) -> Vec<Destination>;
+
+    /// Les destinations explicitement routées pour cette app et cette classe.
+    /// Vide = pas de route explicite, on retombe sur ce que chaque destination accepte.
+    async fn route(&self, app: &str, classe: Classe) -> Vec<String>;
+
+    /// Âge de la dernière réussite sur cette destination, en secondes.
+    /// `None` = jamais réussi — ce qui n'est pas « il y a très longtemps ».
+    async fn age_sur(&self, app: &str, destination: &str) -> Option<i64>;
+}
+
+/// Les destinations qui doivent recevoir cette classe pour cette app.
+///
+/// Une route explicite l'emporte ; sinon on retombe sur ce que chaque destination
+/// accepte globalement. C'est ce qui permet de dire « le volumineux d'Immich part hors
+/// site » sans y envoyer celui de toutes les autres apps.
+pub async fn destinations_pour<S: SourceCouverture>(
+    source: &S,
+    app: &str,
+    classe: Classe,
+) -> Vec<Destination> {
+    let toutes = source.destinations().await;
+    let explicites = source.route(app, classe).await;
+
+    if explicites.is_empty() {
+        return toutes.into_iter().filter(|d| d.accepte(classe)).collect();
+    }
+    toutes
+        .into_iter()
+        .filter(|d| explicites.contains(&d.nom))
+        .collect()
+}
+
+/// La couverture réelle d'une app : où ses données sont, et de quand.
+///
+/// 🔴 **Par destination, jamais agrégée.** Un `MAX(finished_at)` sur toutes les
+/// destinations fait passer un hors-site mort depuis trois semaines pour une sauvegarde
+/// de deux heures, parce que le NAS, lui, tourne. On croit le 3-2-1 tenu alors qu'il ne
+/// reste qu'une copie, sur les mêmes machines.
+pub async fn couverture_de<S: SourceCouverture>(
+    source: &S,
+    app: &str,
+    seuil_s: i64,
+) -> Couverture {
+    let mut noms: Vec<String> = Vec::new();
+    for c in [Classe::Critique, Classe::Volumineux] {
+        for d in destinations_pour(source, app, c).await {
+            if !noms.contains(&d.nom) {
+                noms.push(d.nom);
+            }
+        }
+    }
+    // Trié : une couverture qui changerait d'ordre d'un appel à l'autre rendrait les
+    // affichages instables et les tests d'instantané inutilisables.
+    noms.sort();
+
+    let mut par_destination = Vec::new();
+    for n in noms {
+        let age = source.age_sur(app, &n).await;
+        par_destination.push((n, Etat::juger(age, seuil_s)));
+    }
+
+    Couverture {
+        app: app.to_string(),
+        par_destination,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Une source en mémoire : c'est tout l'intérêt d'avoir inversé la dépendance.
+    struct SourceEnMemoire {
+        destinations: Vec<Destination>,
+        routes: Vec<(String, Classe, Vec<String>)>,
+        ages: Vec<(String, String, Option<i64>)>,
+    }
+
+    impl SourceCouverture for SourceEnMemoire {
+        async fn destinations(&self) -> Vec<Destination> {
+            self.destinations.clone()
+        }
+        async fn route(&self, app: &str, classe: Classe) -> Vec<String> {
+            self.routes
+                .iter()
+                .find(|(a, c, _)| a == app && *c == classe)
+                .map(|(_, _, d)| d.clone())
+                .unwrap_or_default()
+        }
+        async fn age_sur(&self, app: &str, destination: &str) -> Option<i64> {
+            self.ages
+                .iter()
+                .find(|(a, d, _)| a == app && d == destination)
+                .and_then(|(_, _, age)| *age)
+        }
+    }
+
+    fn dest(nom: &str, classes: Vec<Classe>) -> Destination {
+        Destination {
+            nom: nom.into(),
+            location: format!("/mnt/{nom}"),
+            classes,
+            credentials_secret: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fresh_destination_never_hides_a_dead_one() {
+        // 🔴 LE piège du §8.1, désormais calculable hors du CLI. Le NAS tourne, le
+        // hors-site est mort depuis des semaines : un agrégat ferait passer ça pour une
+        // sauvegarde de deux heures, et on croirait le 3-2-1 tenu.
+        let s = SourceEnMemoire {
+            destinations: vec![
+                dest("nas", vec![Classe::Critique, Classe::Volumineux]),
+                dest("offsite", vec![Classe::Critique]),
+            ],
+            routes: Vec::new(),
+            ages: vec![
+                ("immich".into(), "nas".into(), Some(7_200)),
+                ("immich".into(), "offsite".into(), Some(21 * 86_400)),
+            ],
+        };
+
+        let c = couverture_de(&s, "immich", 12 * 3_600).await;
+        assert_eq!(c.par_destination.len(), 2);
+        assert_eq!(c.copies_a_jour(), 1, "une seule copie protège vraiment");
+        assert!(
+            c.pire().is_some_and(|e| e.est_alarmant()),
+            "le résumé doit montrer le PIRE cas, pas le meilleur"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_route_overrides_what_a_destination_accepts() {
+        // « Le volumineux d'Immich part hors site » sans y envoyer celui des autres.
+        let s = SourceEnMemoire {
+            destinations: vec![
+                dest("nas", vec![Classe::Critique, Classe::Volumineux]),
+                dest("offsite", vec![Classe::Critique]),
+            ],
+            routes: vec![(
+                "immich".into(),
+                Classe::Volumineux,
+                vec!["offsite".into()],
+            )],
+            ages: Vec::new(),
+        };
+
+        let v = destinations_pour(&s, "immich", Classe::Volumineux).await;
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].nom, "offsite", "la route explicite l'emporte");
+
+        // Une autre app garde le comportement par défaut.
+        let v = destinations_pour(&s, "gitea", Classe::Volumineux).await;
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].nom, "nas");
+    }
+
+    #[tokio::test]
+    async fn an_app_never_backed_up_has_zero_copies() {
+        // « Configuré n'est pas protégé » : deux destinations déclarées, zéro copie.
+        let s = SourceEnMemoire {
+            destinations: vec![
+                dest("nas", vec![Classe::Critique]),
+                dest("offsite", vec![Classe::Critique]),
+            ],
+            routes: Vec::new(),
+            ages: Vec::new(),
+        };
+        let c = couverture_de(&s, "seafile", 12 * 3_600).await;
+        assert_eq!(c.par_destination.len(), 2, "les destinations sont bien déclarées");
+        assert_eq!(c.copies_a_jour(), 0, "et ne protègent de rien");
+    }
+
+    #[tokio::test]
+    async fn coverage_order_is_stable() {
+        // Un ordre qui varierait rendrait les affichages instables et les tests
+        // d'instantané inutilisables.
+        let s = SourceEnMemoire {
+            destinations: vec![
+                dest("zzz", vec![Classe::Critique]),
+                dest("aaa", vec![Classe::Critique]),
+                dest("mmm", vec![Classe::Critique]),
+            ],
+            routes: Vec::new(),
+            ages: Vec::new(),
+        };
+        let c = couverture_de(&s, "app", 3_600).await;
+        let noms: Vec<&str> = c.par_destination.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(noms, vec!["aaa", "mmm", "zzz"]);
+    }
+
 
     fn d(nom: &str, location: &str, classes: Vec<Classe>) -> Destination {
         Destination {

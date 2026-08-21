@@ -25,6 +25,7 @@ path = "src/main.rs"
 
 [dependencies]
 hlb-api.workspace = true
+hlb-types.workspace = true
 egui = "0.33"
 # `glow` plutôt que `wgpu` : le rendu OpenGL démarre partout, y compris dans une
 # machine virtuelle ou en SSH avec redirection X11 — soit exactement les conditions
@@ -37,10 +38,10 @@ serde_json.workspace = true
 # natifs d'un côté, `fetch` du navigateur de l'autre. Une pile TLS native comme
 # `ring` ne compile tout simplement pas pour wasm32.
 ehttp = "0.5"
+qrcode = { version = "0.14.1", default-features = false }
 
 [dev-dependencies]
 hlb-state.workspace = true
-hlb-types.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

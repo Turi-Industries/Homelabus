@@ -75,6 +75,15 @@ struct AgentState {
     hostname: String,
     watch: Vec<String>,
     version: &'static str,
+    /// Le relevé CPU précédent.
+    ///
+    /// 🔴 Les compteurs de `/proc/stat` sont **cumulés depuis le démarrage** : le taux
+    /// d'occupation est une différence entre deux lectures. Sans mémoire du relevé
+    /// précédent, on ne pourrait rendre qu'un cumul dénué de sens — ou pire, un `0`
+    /// qui se lirait « machine au repos ».
+    ///
+    /// La toute première requête rend donc `None`, et c'est correct.
+    cpu_precedent: std::sync::Mutex<Option<hlb_agent::systeme::RelevéCpu>>,
 }
 
 #[tokio::main]
@@ -100,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hostname: hostname.clone(),
         watch: cli.watch.clone(),
         version: env!("CARGO_PKG_VERSION"),
+        cpu_precedent: std::sync::Mutex::new(None),
     });
 
     let app = Router::new()
@@ -186,6 +196,22 @@ async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
 
     let (total, available) = memory().await;
 
+    // Le taux d'occupation CPU : différence avec le relevé précédent, puis on garde
+    // celui-ci pour la prochaine fois.
+    let releve = hlb_agent::systeme::releve_cpu();
+    let occupation = match (&releve, s.cpu_precedent.lock()) {
+        (Some(maintenant), Ok(mut prec)) => {
+            let taux = prec.as_ref().and_then(|p| maintenant.occupation(p));
+            *prec = Some(*maintenant);
+            taux
+        }
+        // Un verrou empoisonné ne doit pas priver de TOUT le rapport : on perd le
+        // taux CPU, pas l'espace disque — qui est ce qui empêche un déploiement.
+        _ => None,
+    };
+
+    let (swap_total, swap_utilise) = hlb_agent::systeme::swap_mb();
+
     Json(NodeReport {
         hostname: s.hostname.clone(),
         at: std::time::SystemTime::now()
@@ -197,6 +223,13 @@ async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
         memory_available_mb: available,
         agent_version: s.version.to_string(),
         protocol: hlb_agent::PROTOCOL,
+        cpu_coeurs: hlb_agent::systeme::coeurs(),
+        charge: hlb_agent::systeme::charge(),
+        cpu_occupation: occupation,
+        swap_total_mb: swap_total,
+        swap_utilise_mb: swap_utilise,
+        interfaces: hlb_agent::systeme::interfaces(),
+        systeme: Some(hlb_agent::systeme::systeme()),
     })
 }
 

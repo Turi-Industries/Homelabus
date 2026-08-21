@@ -14,7 +14,7 @@ use bollard::models::{
     HealthConfig, Mount, MountTypeEnum, SwarmInitRequest, TaskSpecContainerSpecPrivileges,
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
     ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
-    TaskSpecContainerSpec, TaskSpecPlacement, TaskState,
+    TaskSpecContainerSpec, TaskSpecPlacement,
 };
 use bollard::query_parameters::{
     ListNodesOptions, ListServicesOptionsBuilder, ListTasksOptionsBuilder,
@@ -24,10 +24,40 @@ use bollard::Docker;
 
 use crate::cluster;
 use crate::{
-    Error, ExecOutput, Orchestrator, Result, ServiceSpec, ServiceStatus, UpdateState, VolumeInfo,
+    Error, ExecOutput, LigneLog, Orchestrator, Result, ServiceSpec, ServiceStatus, TaskInfo,
+    UpdateState, VolumeInfo,
 };
 
 const NS: i64 = 1_000_000_000;
+
+/// Un horodatage RFC 3339 tel que Docker les rend, en secondes Unix.
+///
+/// Analyse écrite à la main : `chrono` est déjà là mais pour d'autres raisons, et une
+/// date Docker a toujours la même forme (`2026-08-18T10:16:04.123456789Z`). Rend `None`
+/// sur tout ce qui ne colle pas — un horodatage à moitié lu placerait une ligne de
+/// journal en 1970, et on chercherait un problème d'horloge.
+fn horodatage_unix(s: &str) -> Option<i64> {
+    let (date, reste) = s.split_once('T')?;
+    let (a, reste_d) = date.split_once('-')?;
+    let (m, j) = reste_d.split_once('-')?;
+    let heure: String = reste.chars().take_while(|c| *c != '.' && *c != 'Z').collect();
+    let mut hms = heure.split(':');
+    let (h, mi, se) = (hms.next()?, hms.next()?, hms.next()?);
+
+    let (a, m, j): (i64, i64, i64) = (a.parse().ok()?, m.parse().ok()?, j.parse().ok()?);
+    let (h, mi, se): (i64, i64, i64) = (h.parse().ok()?, mi.parse().ok()?, se.parse().ok()?);
+
+    // Jours depuis l'époque, par l'algorithme des « jours civils » de Howard Hinnant.
+    // Il gère les années bissextiles séculaires, que la division naïve par 4 rate.
+    let a2 = a - i64::from(m <= 2);
+    let ere = if a2 >= 0 { a2 } else { a2 - 399 } / 400;
+    let annee_ere = a2 - ere * 400;
+    let jour_annee = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + j - 1;
+    let jour_ere = annee_ere * 365 + annee_ere / 4 - annee_ere / 100 + jour_annee;
+    let jours = ere * 146_097 + jour_ere - 719_468;
+
+    Some(jours * 86_400 + h * 3_600 + mi * 60 + se)
+}
 
 /// Marque les services que HomelabUS gère, pour ne jamais toucher au reste.
 pub const MANAGED_LABEL: &str = "hlb.managed";
@@ -183,25 +213,75 @@ impl SwarmOrchestrator {
 
     /// Compte les tâches réellement en cours d'exécution.
     ///
-    /// ⚠️ Swarm garde l'historique des tâches mortes : filtrer sur `desired_state`
-    /// **et** `state` est indispensable, sinon on compte des cadavres.
+    /// ⚠️ Swarm garde l'historique des tâches mortes : `TaskInfo::est_vivante` exige
+    /// `desired_state` **et** `state`, sinon on compte des cadavres. La règle vit là-bas
+    /// et pas ici — deux implémentations finiraient par diverger, et la divergence
+    /// donnerait un service qu'on croit debout.
     async fn running_tasks(&self, service: &str) -> Result<usize> {
+        Ok(self
+            .lire_taches(Some(service))
+            .await?
+            .iter()
+            .filter(|t| t.est_vivante())
+            .count())
+    }
+
+    /// Les tâches, telles que Swarm les rend.
+    ///
+    /// Sans filtre d'état : les tâches mortes sont ce qui explique une panne.
+    async fn lire_taches(&self, service: Option<&str>) -> Result<Vec<TaskInfo>> {
         let mut filters = HashMap::new();
-        filters.insert("service".to_string(), vec![service.to_string()]);
-        filters.insert("desired-state".to_string(), vec!["running".to_string()]);
+        match service {
+            Some(s) => {
+                filters.insert("service".to_string(), vec![s.to_string()]);
+            }
+            None => {
+                // Sans filtre de service, on se restreint à ce que HomelabUS gère :
+                // les autres services du Swarm ne nous regardent pas, et les afficher
+                // laisserait croire qu'on les pilote.
+                filters.insert("label".to_string(), vec![MANAGED_LABEL.to_string()]);
+            }
+        }
 
         let opts = ListTasksOptionsBuilder::default().filters(&filters).build();
         let tasks = self.docker.list_tasks(Some(opts)).await?;
 
-        Ok(tasks
-            .iter()
-            .filter(|t| {
-                t.status
-                    .as_ref()
-                    .and_then(|s| s.state)
-                    .is_some_and(|s| s == TaskState::RUNNING)
-            })
-            .count())
+        Ok(tasks.iter().map(Self::vers_task_info).collect())
+    }
+
+    fn vers_task_info(t: &bollard::models::Task) -> TaskInfo {
+        let statut = t.status.as_ref();
+        TaskInfo {
+            id: t.id.clone().unwrap_or_default(),
+            service: t
+                .service_id
+                .clone()
+                // Le nom du service est plus utile que son identifiant, mais Swarm ne
+                // le met pas dans la tâche : le label posé au déploiement le porte.
+                .or_else(|| t.labels.as_ref().and_then(|l| l.get("com.docker.swarm.service.name").cloned()))
+                .unwrap_or_default(),
+            slot: t.slot.map(|s| s as u64),
+            node_id: t.node_id.clone().filter(|n| !n.is_empty()),
+            desired_state: t
+                .desired_state
+                .map(|d| format!("{d:?}").to_lowercase())
+                .unwrap_or_default(),
+            state: statut
+                .and_then(|s| s.state)
+                .map(|s| format!("{s:?}").to_lowercase())
+                .unwrap_or_default(),
+            image: t
+                .spec
+                .as_ref()
+                .and_then(|sp| sp.container_spec.as_ref())
+                .and_then(|c| c.image.clone())
+                .unwrap_or_default(),
+            message: statut.and_then(|s| s.message.clone()).filter(|m| !m.is_empty()),
+            err: statut.and_then(|s| s.err.clone()).filter(|e| !e.is_empty()),
+            updated_at: statut
+                .and_then(|s| s.timestamp.as_deref())
+                .and_then(horodatage_unix),
+        }
     }
 
     fn parse_update_state(s: Option<&str>) -> Option<UpdateState> {
@@ -452,6 +532,13 @@ impl Orchestrator for SwarmOrchestrator {
                         .map(|a| format!("{a:?}").to_lowercase())
                         .unwrap_or_else(|| "inconnue".into()),
                     tier: spec.labels.as_ref().and_then(|l| l.get("tier").cloned()),
+                    // 🔴 Lu depuis l'étiquette, jamais deviné : Swarm ne sait pas que
+                    // deux VM partagent un fer. `None` = non déclaré, et ça doit se
+                    // VOIR plutôt que de faire supposer que le nœud est isolé.
+                    failure_domain: spec
+                        .labels
+                        .as_ref()
+                        .and_then(|l| l.get(cluster::LABEL_FAILURE_DOMAIN).cloned()),
                     is_leader: n
                         .manager_status
                         .and_then(|m| m.leader)
@@ -630,6 +717,58 @@ impl Orchestrator for SwarmOrchestrator {
         })
     }
 
+    async fn tasks(&self, service: Option<&str>) -> Result<Vec<TaskInfo>> {
+        self.lire_taches(service).await
+    }
+
+    async fn logs(&self, service: &str, lignes: u32) -> Result<Vec<LigneLog>> {
+        use futures::StreamExt as _;
+
+        // 🔴 Borné. Un service bavard laissé sans limite remplirait la mémoire du
+        // controller — et c'est le controller qui tomberait, pas le service qu'on
+        // cherchait à diagnostiquer.
+        const PLAFOND: u32 = 2_000;
+        let n = lignes.clamp(1, PLAFOND);
+
+        let opts = bollard::query_parameters::LogsOptionsBuilder::default()
+            .stdout(true)
+            .stderr(true)
+            // Sans horodatage, une ligne de journal ne se corrèle à rien : le seul
+            // usage réel des logs est de les rapprocher d'un événement daté.
+            .timestamps(true)
+            .tail(&n.to_string())
+            .build();
+
+        let mut flux = self.docker.logs(service, Some(opts));
+        let mut out = Vec::new();
+
+        while let Some(morceau) = flux.next().await {
+            let sortie = morceau?;
+            let (erreur, brut) = match &sortie {
+                LogOutput::StdErr { message } => (true, message),
+                LogOutput::StdOut { message }
+                | LogOutput::Console { message }
+                | LogOutput::StdIn { message } => (false, message),
+            };
+            // ⚠️ `from_utf8_lossy` : un journal applicatif contient parfois des octets
+            // qui ne sont pas de l'UTF-8 (couleurs ANSI tronquées, binaire). Échouer
+            // priverait de TOUT le journal à cause d'une seule ligne.
+            let texte = String::from_utf8_lossy(brut);
+            let texte = texte.trim_end_matches(['\n', '\r']);
+
+            // Docker préfixe chaque ligne de son horodatage RFC 3339 quand
+            // `timestamps` est actif.
+            let (at, ligne) = match texte.split_once(' ') {
+                Some((h, reste)) => (horodatage_unix(h), reste.to_string()),
+                None => (None, texte.to_string()),
+            };
+
+            out.push(LigneLog { at, erreur, ligne });
+        }
+
+        Ok(out)
+    }
+
     async fn wait_healthy(&self, name: &str, timeout_secs: u64) -> Result<ServiceStatus> {
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
         let mut last = self.status(name).await?;
@@ -653,5 +792,37 @@ impl Orchestrator for SwarmOrchestrator {
             running: last.running_replicas,
             desired: last.desired_replicas,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_timestamps_are_read_or_refused_never_guessed() {
+        // 🔴 Un horodatage à moitié lu placerait une ligne de journal en 1970, et on
+        // chercherait un problème d'horloge sur le nœud.
+        assert_eq!(horodatage_unix("1970-01-01T00:00:00Z"), Some(0));
+        // Valeurs de référence, calculées indépendamment (pas déduites du code testé).
+        assert_eq!(horodatage_unix("2026-08-18T10:16:04.123456789Z"), Some(1_787_048_164));
+        // Sans fraction ni « Z » : Docker varie selon les versions.
+        assert_eq!(horodatage_unix("2026-08-18T10:16:04"), Some(1_787_048_164));
+
+        // Une année bissextile séculaire : 2000 est bissextile, 1900 ne l'est pas.
+        // La division naïve par 4 se trompe ici.
+        assert_eq!(horodatage_unix("2000-03-01T00:00:00Z"), Some(951_868_800));
+
+        for mauvais in ["", "pas une date", "2026-08-18", "2026/08/18T10:16:04Z", "T10:16:04"] {
+            assert_eq!(horodatage_unix(mauvais), None, "{mauvais}");
+        }
+    }
+
+    #[test]
+    fn a_timestamp_round_trips_against_a_known_pair() {
+        // Un contrôle croisé : 86 400 s après l'époque, c'est le 2 janvier 1970.
+        assert_eq!(horodatage_unix("1970-01-02T00:00:00Z"), Some(86_400));
+        // Et un an plus tard, 1971 : 365 jours (1970 n'est pas bissextile).
+        assert_eq!(horodatage_unix("1971-01-01T00:00:00Z"), Some(31_536_000));
     }
 }

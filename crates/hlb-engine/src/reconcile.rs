@@ -71,6 +71,31 @@ impl Drift {
         )
     }
 
+    /// Pourquoi cet écart n'est **délibérément pas** corrigé.
+    ///
+    /// 🔴 Sans cette phrase, rien ne distingue « il n'y a rien à faire » de « il y a
+    /// quelque chose et j'ai choisi de ne pas y toucher ». Les deux se ressemblent à
+    /// l'écran, et la seconde fait douter du système — on finit par corriger à la main
+    /// ce qu'il a délibérément laissé, ou par croire qu'il n'a rien vu.
+    ///
+    /// Rend `None` quand l'écart EST corrigé : il n'y a alors aucun refus à expliquer.
+    pub fn refus(&self) -> Option<&'static str> {
+        match self {
+            Self::ServiceMissing { .. }
+            | Self::ReplicasDiverged { .. }
+            | Self::ImageDiverged { .. } => None,
+            Self::OrphanService { .. } => Some(
+                "un orphelin n'est JAMAIS supprimé automatiquement : ce service porte \
+                 peut-être des données, et un système qui corrige trop est plus \
+                 dangereux qu'un système qui ne corrige rien",
+            ),
+            Self::Converging { .. } => Some(
+                "Swarm est en train de converger : l'avancement est transitoire et se \
+                 laisse tranquille — seule la consigne se corrige",
+            ),
+        }
+    }
+
     pub fn app(&self) -> &str {
         match self {
             Self::ServiceMissing { app, .. }
@@ -90,7 +115,9 @@ impl std::fmt::Display for Drift {
             }
             Self::ReplicasDiverged { app, desired, actual } => write!(
                 f,
-                "{app} : {actual} réplique(s) configurée(s), le manifest en demande {desired}"
+                "{app} : {} {} en consigne, le manifest en demande {desired}",
+                actual,
+                if *actual > 1 { "réplicas" } else { "réplica" }
             ),
             Self::ImageDiverged { app, expected, actual } => {
                 write!(f, "{app} : tourne sous {actual}, attendu {expected}")
@@ -267,5 +294,67 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             // Volontairement inertes : voir l'en-tête du module.
             Drift::OrphanService { .. } | Drift::Converging { .. } => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_uncorrected_drift_explains_why_it_was_left_alone() {
+        // 🔴 L'invariant du lot 9.8. Un écart signalé sans raison de refus fait douter :
+        // on ne sait pas si le système ne sait pas faire, s'il a échoué, ou s'il a
+        // délibérément choisi de ne pas toucher. On corrige alors à la main ce qu'il
+        // protégeait — ou on croit qu'il n'a rien vu.
+        let tous = [
+            Drift::ServiceMissing {
+                app: "gitea".into(),
+                image: "a/b:1".into(),
+            },
+            Drift::ReplicasDiverged {
+                app: "gitea".into(),
+                desired: 2,
+                actual: 1,
+            },
+            Drift::ImageDiverged {
+                app: "gitea".into(),
+                expected: "a/b:2".into(),
+                actual: "a/b:1".into(),
+            },
+            Drift::OrphanService {
+                name: "vieux".into(),
+            },
+            Drift::Converging {
+                app: "gitea".into(),
+                running: 1,
+                desired: 2,
+            },
+        ];
+
+        for d in &tous {
+            // La règle exacte : corrigible ⇔ aucun refus à expliquer. Un écart qui
+            // serait les deux (ou ni l'un ni l'autre) laisserait un trou à l'écran.
+            assert_eq!(
+                d.is_correctable(),
+                d.refus().is_none(),
+                "{d} : corrigible et refus doivent être exactement complémentaires"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_replica_is_not_announced_in_the_plural() {
+        // Le tic « réplique(s) », relevé dans le message d'écart : c'est du texte
+        // affiché par le CLI, et bientôt par l'interface.
+        let d = Drift::ReplicasDiverged {
+            app: "gitea".into(),
+            desired: 2,
+            actual: 1,
+        };
+        let texte = d.to_string();
+        let tic = format!("({})", "s");
+        assert!(!texte.contains(&tic), "{texte}");
+        assert!(texte.contains("1 réplica en consigne"), "{texte}");
     }
 }

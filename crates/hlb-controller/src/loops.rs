@@ -38,6 +38,8 @@ pub struct ReconcileLoop<O: Orchestrator> {
     state: Arc<State>,
     /// Faux par défaut : on observe avant de corriger.
     apply: bool,
+    /// Là où la boucle publie ce qu'elle a vu — et ce qu'elle a refusé de toucher.
+    ecarts: Option<EtatEcarts>,
 }
 
 impl<O: Orchestrator> ReconcileLoop<O> {
@@ -46,11 +48,18 @@ impl<O: Orchestrator> ReconcileLoop<O> {
             orchestrator,
             state,
             apply: false,
+            ecarts: None,
         }
     }
 
     pub fn apply(mut self, yes: bool) -> Self {
         self.apply = yes;
+        self
+    }
+
+    /// Publier les écarts observés à chaque tour.
+    pub fn publie_dans(mut self, ecarts: EtatEcarts) -> Self {
+        self.ecarts = Some(ecarts);
         self
     }
 
@@ -66,6 +75,22 @@ impl<O: Orchestrator> ReconcileLoop<O> {
                 r.acted = report.corrected.len();
                 for d in &report.drifts {
                     tracing::info!("écart : {d}");
+                }
+
+                if let Some(partage) = &self.ecarts {
+                    // 🔴 Les écarts CORRIGÉS ne sont pas republiés : ils ne sont plus
+                    // des écarts. Les laisser ferait paraître le système en dérive
+                    // permanente alors qu'il vient précisément de faire son travail.
+                    *partage.write().await = report
+                        .drifts
+                        .iter()
+                        .map(|d| hlb_api::EcartSummary {
+                            cible: d.app().to_string(),
+                            description: d.to_string(),
+                            corrigible: d.is_correctable(),
+                            refus: d.refus().map(str::to_string),
+                        })
+                        .collect();
                 }
             }
             Err(e) => {
@@ -328,6 +353,166 @@ impl Heartbeat {
 ///
 /// Le premier tour a lieu immédiatement : au démarrage, on veut savoir tout de suite
 /// dans quel état est le cluster, pas dans un quart d'heure.
+/// L'évaluation périodique des règles d'alerte (§8bis).
+///
+/// ## Ce qui manquait
+///
+/// `hlb_metrics::regles_par_defaut()` existait, et n'était évalué **que par le CLI** —
+/// donc seulement quand quelqu'un tapait `hlb metrics check`. Il n'y avait aucune
+/// surveillance continue : les règles décrivaient ce qu'il fallait surveiller sans que
+/// personne ne le surveille.
+///
+/// ## 🔴 Une alerte en sourdine reste une alerte
+///
+/// La sourdine empêche la **notification**, pas l'**affichage**. Faire disparaître une
+/// alerte silencée de l'état donnerait un tableau de bord vert pour un problème connu
+/// et non résolu — la même famille d'erreur que `Freshness`.
+pub struct AlerteLoop {
+    metriques: Arc<crate::promql::Metriques>,
+    notif: Option<Arc<hlb_notify::NtfyClient>>,
+    /// L'état courant des alertes, partagé avec l'API.
+    ///
+    /// Même motif que `LastPoll` : la boucle écrit, l'API lit. Un `RwLock` parce que
+    /// plusieurs écrans peuvent lire pendant qu'un seul tour écrit.
+    pub actives: EtatAlertes,
+    regles: Vec<hlb_metrics::Regle>,
+}
+
+/// Ce qu'un tour d'évaluation a donné.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AlerteReport {
+    pub evaluees: usize,
+    pub declenchees: usize,
+    /// 🔴 Règles qu'on n'a **pas pu** évaluer. Ce n'est pas « zéro alerte » : c'est
+    /// une surveillance aveugle, et ça doit se compter séparément.
+    pub inconnues: usize,
+    pub notifiees: usize,
+}
+
+impl AlerteLoop {
+    pub fn new(
+        metriques: Arc<crate::promql::Metriques>,
+        notif: Option<Arc<hlb_notify::NtfyClient>>,
+    ) -> Self {
+        Self {
+            metriques,
+            notif,
+            actives: Default::default(),
+            regles: hlb_metrics::rules::regles_par_defaut(),
+        }
+    }
+
+    /// Un tour d'évaluation.
+    pub async fn tick(&self, maintenant: i64) -> AlerteReport {
+        let mut rapport = AlerteReport::default();
+        let mut nouvelles = Vec::new();
+
+        // Les sourdines et les dates d'apparition du tour précédent : une alerte qui
+        // persiste garde son ancienneté, sinon « depuis 3 jours » redeviendrait
+        // « à l'instant » à chaque tour, et on ne verrait jamais qu'elle dure.
+        let precedentes = self.actives.read().await.clone();
+
+        for r in &self.regles {
+            rapport.evaluees += 1;
+
+            let valeurs = self.mesurer(r.requete).await;
+            let e = match valeurs {
+                Ok(v) => r.juger(&v),
+                Err(raison) => hlb_metrics::Evaluation::Inconnu { raison },
+            };
+
+            let (niveau, valeur) = match &e {
+                hlb_metrics::Evaluation::Ok => continue,
+                hlb_metrics::Evaluation::Declenchee { valeur } => {
+                    rapport.declenchees += 1;
+                    (niveau_de(r.niveau), Some(*valeur))
+                }
+                hlb_metrics::Evaluation::Inconnu { .. } => {
+                    rapport.inconnues += 1;
+                    if !r.absence_alarmante {
+                        continue;
+                    }
+                    (hlb_api::NiveauAlerte::Inconnu, None)
+                }
+            };
+
+            let ancienne = precedentes.iter().find(|a| a.regle == r.nom);
+            let depuis_s = match ancienne {
+                Some(a) => a.depuis_s + INTERVALLE_DEFAUT_S,
+                None => 0,
+            };
+
+            let alerte = hlb_api::AlerteActive {
+                regle: r.nom.to_string(),
+                niveau,
+                explication: r.explication.to_string(),
+                valeur,
+                seuil: r.seuil,
+                depuis_s,
+                silencee_jusqu_a: ancienne.and_then(|a| a.silencee_jusqu_a),
+                silencee_par: ancienne.and_then(|a| a.silencee_par.clone()),
+            };
+
+            // 🔴 La notification, elle, respecte la sourdine — et pas seulement à la
+            // première occurrence : sans ça, une alerte persistante notifierait à
+            // chaque tour, et on couperait les notifications en bloc.
+            let deja_signalee = ancienne.is_some();
+            if !alerte.est_silencee(maintenant) && !deja_signalee {
+                if let Some(n) = r.notification(&e) {
+                    // `notify_or_log` : sans ntfy configuré, l'alerte part aux journaux
+                    // plutôt que nulle part. Une alerte qui disparaît faute de canal
+                    // est pire que pas d'alerte du tout.
+                    hlb_notify::ntfy::notify_or_log(self.notif.as_deref(), &n).await;
+                    rapport.notifiees += 1;
+                }
+            }
+
+            nouvelles.push(alerte);
+        }
+
+        // Trié par gravité : ce qui compte doit être en haut sans que l'interface ait
+        // à refaire ce tri.
+        nouvelles.sort_by(|a, b| b.niveau.cmp(&a.niveau).then_with(|| a.regle.cmp(&b.regle)));
+        *self.actives.write().await = nouvelles;
+        rapport
+    }
+
+    /// Interroge la base de séries et rend les valeurs courantes.
+    async fn mesurer(&self, requete: &str) -> Result<Vec<f64>, String> {
+        // On réutilise le relais : sa liste blanche s'applique aussi à nos propres
+        // règles, ce qui garantit qu'aucune règle livrée n'interroge autre chose que
+        // les métriques attendues.
+        match self
+            .metriques
+            .instant(requete)
+            .await
+        {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// L'état des alertes, partagé entre la boucle qui écrit et l'API qui lit.
+pub type EtatAlertes = Arc<tokio::sync::RwLock<Vec<hlb_api::AlerteActive>>>;
+
+/// Les écarts du dernier tour de réconciliation, refus délibérés compris.
+///
+/// Même motif que les alertes : la boucle écrit, l'API lit. Sans ce partage, les
+/// non-actions du système ne sortaient jamais des journaux — c'est-à-dire nulle part.
+pub type EtatEcarts = Arc<tokio::sync::RwLock<Vec<hlb_api::EcartSummary>>>;
+
+/// Intervalle par défaut entre deux évaluations.
+pub const INTERVALLE_DEFAUT_S: i64 = 60;
+
+fn niveau_de(l: hlb_notify::Level) -> hlb_api::NiveauAlerte {
+    match l {
+        hlb_notify::Level::Debug | hlb_notify::Level::Info => hlb_api::NiveauAlerte::Info,
+        hlb_notify::Level::Important => hlb_api::NiveauAlerte::Important,
+        hlb_notify::Level::Critical => hlb_api::NiveauAlerte::Critique,
+    }
+}
+
 pub async fn every<F, Fut>(interval: Duration, mut shutdown: tokio::sync::watch::Receiver<bool>, mut f: F)
 where
     F: FnMut() -> Fut + Send,
@@ -351,6 +536,172 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // AlerteLoop (lot 3.4)
+    // -----------------------------------------------------------------------
+
+    fn boucle_alertes() -> AlerteLoop {
+        // Pas de ntfy, pas de VictoriaMetrics : on exerce la logique d'état, pas le
+        // réseau. C'est justement ce que le découpage permet.
+        AlerteLoop::new(
+            Arc::new(crate::promql::Metriques::new("http://127.0.0.1:1")),
+            None,
+        )
+    }
+
+    fn alerte(regle: &str, niveau: hlb_api::NiveauAlerte, depuis: i64) -> hlb_api::AlerteActive {
+        hlb_api::AlerteActive {
+            regle: regle.into(),
+            niveau,
+            explication: "quelque chose".into(),
+            valeur: Some(1.0),
+            seuil: 0.0,
+            depuis_s: depuis,
+            silencee_jusqu_a: None,
+            silencee_par: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_metrics_base_produces_unknown_not_silence() {
+        // 🔴 Le cas qui compte : VictoriaMetrics est injoignable. Ne rien signaler
+        // donnerait un tableau de bord vert alors que TOUTE la surveillance est
+        // aveugle. Les règles marquées `absence_alarmante` doivent remonter.
+        let b = boucle_alertes();
+        let r = b.tick(1_000).await;
+
+        assert!(r.evaluees > 0, "aucune règle évaluée");
+        assert!(r.inconnues > 0, "une base injoignable doit produire des inconnues");
+
+        let actives = b.actives.read().await;
+        assert!(
+            actives.iter().any(|a| a.niveau == hlb_api::NiveauAlerte::Inconnu),
+            "aucune alerte « non évaluable » : la surveillance serait aveugle en silence"
+        );
+    }
+
+    #[tokio::test]
+    async fn alerts_are_sorted_worst_first() {
+        // L'interface ne doit pas avoir à retrier : ce qui compte est en haut.
+        let b = boucle_alertes();
+        b.tick(1_000).await;
+
+        let actives = b.actives.read().await;
+        for f in actives.windows(2) {
+            assert!(
+                f[0].niveau >= f[1].niveau,
+                "tri cassé : {:?} avant {:?}",
+                f[0].niveau,
+                f[1].niveau
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_persisting_alert_keeps_its_age() {
+        // 🔴 Une alerte qui dure depuis trois jours et une qui vient d'apparaître ne se
+        // traitent pas pareil : la première a été ignorée, ou son remède ne marche pas.
+        // Réinitialiser l'ancienneté à chaque tour effacerait cette information.
+        let b = boucle_alertes();
+        b.tick(1_000).await;
+        let apres_un = b.actives.read().await.clone();
+        assert!(!apres_un.is_empty());
+
+        b.tick(1_060).await;
+        let apres_deux = b.actives.read().await.clone();
+
+        let av = apres_un.first().expect("une alerte");
+        let ap = apres_deux
+            .iter()
+            .find(|a| a.regle == av.regle)
+            .expect("la même alerte");
+        assert!(ap.depuis_s > av.depuis_s, "l'ancienneté doit croître");
+    }
+
+    #[tokio::test]
+    async fn a_silence_survives_a_new_evaluation() {
+        // Une sourdine qui sauterait au tour suivant ne servirait à rien : on la
+        // reposerait toutes les minutes.
+        let b = boucle_alertes();
+        b.tick(1_000).await;
+
+        {
+            let mut w = b.actives.write().await;
+            for a in w.iter_mut() {
+                a.silencee_jusqu_a = Some(9_999);
+                a.silencee_par = Some("remy".into());
+            }
+        }
+
+        b.tick(1_060).await;
+        let actives = b.actives.read().await;
+        assert!(
+            actives.iter().all(|a| a.silencee_jusqu_a == Some(9_999)),
+            "la sourdine a été perdue au tour suivant"
+        );
+        assert!(actives.iter().all(|a| a.silencee_par.as_deref() == Some("remy")));
+    }
+
+    #[tokio::test]
+    async fn a_silenced_alert_stays_in_the_list() {
+        // 🔴 La sourdine empêche la NOTIFICATION, pas l'AFFICHAGE. La faire
+        // disparaître donnerait un tableau de bord vert pour un problème connu et non
+        // résolu.
+        let b = boucle_alertes();
+        b.tick(1_000).await;
+        let avant = b.actives.read().await.len();
+
+        {
+            let mut w = b.actives.write().await;
+            for a in w.iter_mut() {
+                a.silencee_jusqu_a = Some(9_999);
+            }
+        }
+        b.tick(1_060).await;
+
+        assert_eq!(
+            b.actives.read().await.len(),
+            avant,
+            "une alerte silencée a disparu de la liste"
+        );
+    }
+
+    #[test]
+    fn every_notify_level_maps_to_an_alert_level() {
+        // Un `match` exhaustif : ajouter un niveau à `hlb_notify` doit faire échouer la
+        // compilation ici plutôt que de retomber silencieusement sur « info ».
+        assert_eq!(niveau_de(hlb_notify::Level::Debug), hlb_api::NiveauAlerte::Info);
+        assert_eq!(niveau_de(hlb_notify::Level::Info), hlb_api::NiveauAlerte::Info);
+        assert_eq!(
+            niveau_de(hlb_notify::Level::Important),
+            hlb_api::NiveauAlerte::Important
+        );
+        assert_eq!(
+            niveau_de(hlb_notify::Level::Critical),
+            hlb_api::NiveauAlerte::Critique
+        );
+    }
+
+    #[test]
+    fn an_alert_report_counts_unknowns_separately() {
+        // « Zéro déclenchée » avec dix inconnues n'est pas « tout va bien ».
+        let r = AlerteReport {
+            evaluees: 10,
+            declenchees: 0,
+            inconnues: 10,
+            notifiees: 0,
+        };
+        assert_ne!(r.inconnues, 0);
+        assert_eq!(r.declenchees, 0);
+    }
+
+    #[test]
+    fn an_alert_that_has_never_been_seen_starts_at_zero() {
+        let a = alerte("x", hlb_api::NiveauAlerte::Critique, 0);
+        assert_eq!(a.depuis_s, 0);
+        assert!(!a.est_silencee(1_000));
+    }
 
     fn manifest(name: &str) -> hlb_types::Manifest {
         let y = format!(
