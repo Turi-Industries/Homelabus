@@ -1,38 +1,37 @@
-//! Versions et compatibilité agent ↔ controller (§7bis).
+//! Versions and agent ↔ controller compatibility.
 //!
-//! ## 🔴 Pourquoi la compatibilité est le cœur du problème
+//! ## 🔴 Why compatibility is the heart of the problem
 //!
-//! Mettre à jour Homelabus, c'est remplacer l'outil qui pilote tout **pendant qu'il
-//! pilote tout**. Le remplacement ne peut pas être atomique sur plusieurs machines :
-//! il existe forcément une fenêtre où des agents en version N parlent à un controller
-//! en N+1, ou l'inverse.
+//! Updating Homelabus means replacing the tool that drives everything **while it drives
+//! everything**. The replacement cannot be atomic across several machines: there is
+//! necessarily a window where agents on version N talk to a controller on N+1, or the
+//! other way round.
 //!
-//! Sans règle explicite, cette fenêtre casse le cluster — et elle le casse **au pire
-//! moment**, quand l'administrateur est en train de faire une manipulation délicate.
+//! Without an explicit rule that window breaks the cluster - and it breaks it at the
+//! **worst moment**, while the administrator is in the middle of a delicate operation.
 //!
-//! La règle retenue : **à l'intérieur d'une même version majeure, les deux sens
-//! fonctionnent**. Une majeure différente refuse, et le dit avant d'avoir touché à
-//! quoi que ce soit.
+//! The rule chosen: **within one major version, both directions work**. A different
+//! major refuses, and says so before touching anything.
 //!
-//! ## Le numéro de protocole, distinct du numéro de version
+//! ## The protocol number, distinct from the version number
 //!
-//! ⚠️ La version du binaire (`0.1.0`) et la version du **protocole** entre agent et
-//! controller sont deux choses différentes. Un correctif qui ne change rien au
-//! dialogue ne doit pas rendre les agents incompatibles ; à l'inverse, un changement
-//! de format de rapport dans une version de correctif doit le signaler.
+//! ⚠️ The binary's version (`0.1.0`) and the **protocol** version between agent and
+//! controller are two different things. A patch that changes nothing in the dialogue
+//! must not make agents incompatible; conversely, a report-format change inside a patch
+//! release must be signalled.
 //!
-//! D'où [`PROTOCOL`], incrémenté seulement quand le dialogue change.
+//! Hence [`PROTOCOL`], incremented only when the dialogue changes.
 
 use serde::{Deserialize, Serialize};
 
-/// Version du dialogue agent ↔ controller.
+/// The agent ↔ controller dialogue version.
 ///
-/// 🔴 À incrémenter **uniquement** quand le format des échanges change de façon
-/// incompatible. La confondre avec la version du binaire ferait refuser des agents
-/// parfaitement fonctionnels à chaque correctif.
+/// 🔴 To be incremented **only** when the exchange format changes incompatibly.
+/// Confusing it with the binary version would refuse perfectly working agents on every
+/// patch release.
 pub const PROTOCOL: u32 = 1;
 
-/// Une version sémantique.
+/// A semantic version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Version {
     pub major: u32,
@@ -55,11 +54,11 @@ impl Version {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        // On tolère un « v » de tête : les étiquettes Git en portent souvent un, et
-        // refuser « v0.2.0 » ferait échouer la mise à jour sur un détail cosmétique.
+        // A leading "v" is tolerated: Git tags often carry one, and refusing "v0.2.0"
+        // would fail the update over a cosmetic detail.
         let s = s.trim().trim_start_matches('v');
-        // Et un suffixe de pré-version : `0.2.0-rc1` reste la 0.2.0 pour la
-        // comparaison de compatibilité.
+        // And a pre-release suffix: `0.2.0-rc1` is still 0.2.0 for compatibility
+        // comparison.
         let s = s.split(['-', '+']).next()?;
 
         let mut it = s.split('.');
@@ -83,12 +82,12 @@ impl std::fmt::Display for Version {
     }
 }
 
-/// Le verdict de compatibilité entre deux composants.
+/// The compatibility verdict between two components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Compatibility {
     /// Les deux se comprennent.
     Ok,
-    /// 🔴 Incompatibles : la mise à jour doit s'arrêter avant de commencer.
+    /// 🔴 Incompatible: the update must stop before it starts.
     Incompatible { reason: String },
 }
 
@@ -105,36 +104,36 @@ impl Compatibility {
     }
 }
 
-/// Un agent en version `agent` peut-il dialoguer avec un controller en `controller` ?
+/// Can an agent on version `agent` talk to a controller on `controller`?
 ///
-/// 🔴 La question se pose **dans les deux sens**, parce que la mise à jour n'est pas
-/// atomique : les agents passent en premier (§7bis), donc pendant un moment on a des
-/// agents N+1 face à un controller N. Puis, si un nœud était éteint, on aura un agent
-/// N face à un controller N+1.
+/// 🔴 The question arises **in both directions**, because the update is not atomic:
+/// agents go first, so for a while there are N+1 agents facing an N controller. Then,
+/// if a node was powered off, an N agent will face an N+1 controller.
 ///
-/// Une règle qui ne couvrirait qu'un sens laisserait l'autre casser en silence.
+/// A rule covering only one direction would let the other break silently.
 pub fn compatible(agent: Version, controller: Version) -> Compatibility {
     if agent.major != controller.major {
         return Compatibility::Incompatible {
             reason: format!(
-                "agent {agent} et controller {controller} : versions MAJEURES \
-                 différentes. Une majeure change le dialogue de façon incompatible ; \
-                 mettre à jour l'un sans l'autre couperait le pilotage du cluster."
+                "agent {agent} and controller {controller}: different MAJOR \
+                 versions. A major changes the dialogue incompatibly; updating one \
+                 without the other would cut control of the cluster."
             ),
         };
     }
     Compatibility::Ok
 }
 
-/// Deux protocoles se comprennent-ils ?
+/// Do two protocols understand each other?
 pub fn protocol_compatible(agent: u32, controller: u32) -> Compatibility {
     if agent == controller {
         return Compatibility::Ok;
     }
     Compatibility::Incompatible {
         reason: format!(
-            "protocole {agent} côté agent, {controller} côté controller — le format \
-             des échanges a changé. Mets à jour l'agent avant le controller (§7bis)."
+            "protocol {agent} on the agent side, {controller} on the controller \
+             side - the exchange format changed. Update the agent before the \
+             controller."
         ),
     }
 }
@@ -142,15 +141,15 @@ pub fn protocol_compatible(agent: u32, controller: u32) -> Compatibility {
 /// Le type de saut entre deux versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Jump {
-    /// Rien à faire.
+    /// Nothing to do.
     None,
     /// Correctif : sans risque connu.
     Patch,
-    /// Mineure : fonctionnalités ajoutées, schéma possiblement migré.
+    /// Minor: features added, schema possibly migrated.
     Minor,
-    /// 🔴 Majeure : rupture assumée, validation manuelle indispensable.
+    /// 🔴 Major: a deliberate break, manual approval required.
     Major,
-    /// 🔴 Retour en arrière. Jamais fait par `update` — c'est `rollback`.
+    /// 🔴 A downgrade. Never done by `update` - that is `rollback`.
     Downgrade,
 }
 
@@ -166,18 +165,18 @@ impl Jump {
         }
     }
 
-    /// Faut-il une validation explicite au-delà de `--apply` ?
+    /// Is explicit approval needed beyond `--apply`?
     pub fn needs_confirmation(&self) -> bool {
         matches!(self, Self::Major | Self::Downgrade)
     }
 
     pub fn describe(&self) -> &'static str {
         match self {
-            Self::None => "aucun changement",
-            Self::Patch => "correctif",
-            Self::Minor => "version mineure",
-            Self::Major => "🔴 version MAJEURE — rupture assumée",
-            Self::Downgrade => "🔴 RETOUR EN ARRIÈRE",
+            Self::None => "no change",
+            Self::Patch => "patch",
+            Self::Minor => "minor version",
+            Self::Major => "🔴 MAJOR version - a deliberate break",
+            Self::Downgrade => "🔴 DOWNGRADE",
         }
     }
 }
@@ -189,10 +188,10 @@ mod tests {
     #[test]
     fn versions_parse_in_the_forms_that_exist_in_the_wild() {
         assert_eq!(Version::parse("1.2.3"), Some(Version::new(1, 2, 3)));
-        // Les étiquettes Git portent souvent un « v » : le refuser ferait échouer la
-        // mise à jour sur un détail cosmétique.
+        // Git tags often carry a "v": refusing it would fail the update over a
+        // cosmetic detail.
         assert_eq!(Version::parse("v1.2.3"), Some(Version::new(1, 2, 3)));
-        // Une pré-version reste la même version pour la compatibilité.
+        // A pre-release is still the same version for compatibility.
         assert_eq!(Version::parse("1.2.3-rc1"), Some(Version::new(1, 2, 3)));
         assert_eq!(Version::parse("1.2"), Some(Version::new(1, 2, 0)));
     }
@@ -213,9 +212,9 @@ mod tests {
 
     #[test]
     fn compatibility_is_checked_in_both_directions() {
-        // 🔴 La mise à jour n'est pas atomique : les agents passent d'abord, donc on
-        // a d'abord des agents N+1 face à un controller N, puis l'inverse si un nœud
-        // était éteint. Une règle à sens unique laisserait l'autre casser en silence.
+        // 🔴 The update is not atomic: agents go first, so there are N+1 agents facing
+        // an N controller, then the reverse if a node was powered off. A one-way rule
+        // would let the other direction break silently.
         let n = Version::new(0, 1, 0);
         let n_plus = Version::new(0, 2, 0);
 
@@ -227,23 +226,18 @@ mod tests {
     fn a_major_difference_is_refused_before_anything_is_touched() {
         let c = compatible(Version::new(1, 0, 0), Version::new(0, 9, 0));
         assert!(!c.is_ok());
-        assert!(c.describe().contains("MAJEURES"), "{}", c.describe());
-        // Le message doit dire la CONSÉQUENCE, pas juste le constat.
-        assert!(
-            c.describe().contains("couperait le pilotage"),
-            "{}",
-            c.describe()
-        );
+        assert!(c.describe().contains("MAJOR"), "{}", c.describe());
+        // The message must state the CONSEQUENCE, not merely the observation.
+        assert!(c.describe().contains("cut control"), "{}", c.describe());
     }
 
     #[test]
     fn the_protocol_number_is_not_the_binary_version() {
-        // ⚠️ Les confondre ferait refuser des agents parfaitement fonctionnels à
-        // chaque correctif.
+        // ⚠️ Confusing them would refuse perfectly working agents on every patch.
         assert!(protocol_compatible(1, 1).is_ok());
         assert!(!protocol_compatible(1, 2).is_ok());
 
-        // Deux binaires de versions différentes mais de même protocole s'entendent.
+        // Two binaries of different versions but the same protocol get along.
         assert!(compatible(Version::new(0, 1, 0), Version::new(0, 3, 5)).is_ok());
     }
 
@@ -251,7 +245,7 @@ mod tests {
     fn a_protocol_mismatch_says_what_to_do() {
         let c = protocol_compatible(1, 2);
         assert!(
-            c.describe().contains("agent avant le controller"),
+            c.describe().contains("agent before the"),
             "{}",
             c.describe()
         );
@@ -269,8 +263,8 @@ mod tests {
 
     #[test]
     fn only_risky_jumps_demand_extra_confirmation() {
-        // Un correctif ne doit pas demander trois validations : à force, on les
-        // enchaîne sans lire, et celle qui comptait passe aussi.
+        // A patch must not ask for three approvals: eventually you click through them
+        // without reading, and the one that mattered goes through too.
         assert!(!Jump::Patch.needs_confirmation());
         assert!(!Jump::Minor.needs_confirmation());
         assert!(Jump::Major.needs_confirmation());
@@ -279,20 +273,20 @@ mod tests {
 
     #[test]
     fn a_downgrade_is_never_an_update() {
-        // 🔴 Revenir en arrière passe par `rollback`, qui restaure AUSSI le schéma.
-        // Le faire passer pour une mise à jour laisserait la base en version N+1
-        // sous un binaire N — l'état dont on ne peut plus sortir.
+        // 🔴 Going back goes through `rollback`, which ALSO restores the schema.
+        // Passing it off as an update would leave the database on schema N+1 under an
+        // N binary - the state there is no way out of.
         assert_eq!(
             Jump::between(Version::new(0, 3, 0), Version::new(0, 2, 0)),
             Jump::Downgrade
         );
-        assert!(Jump::Downgrade.describe().contains("RETOUR EN ARRIÈRE"));
+        assert!(Jump::Downgrade.describe().contains("DOWNGRADE"));
     }
 
     #[test]
     fn the_current_version_is_readable() {
-        // Si ça échoue, `Version::current()` renverrait 0.0.0 et toute comparaison
-        // conclurait à une mise à jour disponible en permanence.
+        // If this failed, `Version::current()` would return 0.0.0 and every comparison
+        // would conclude an update is permanently available.
         let v = Version::current();
         assert_ne!(v, Version::new(0, 0, 0), "version du paquet illisible");
     }

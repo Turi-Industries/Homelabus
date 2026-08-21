@@ -1,43 +1,42 @@
-//! La séquence de mise à jour, et son retour arrière (§7bis).
+//! The update sequence, and its rollback.
 //!
-//! ## 🔴 La règle d'or
+//! ## 🔴 The golden rule
 //!
-//! > Le controller ne se met **jamais** à jour lui-même en une seule étape.
-//! > Il prépare, valide, bascule, et garde la possibilité de revenir en arrière.
+//! > The controller **never** updates itself in a single step.
+//! > It prepares, validates, switches, and keeps the ability to go back.
 //!
-//! ## Pourquoi l'ordre est celui-là et pas un autre
+//! ## Why the order is this one and not another
 //!
 //! ```text
-//! 1. Sauvegarde de l'état       ← sans elle, un échec en 4 est définitif
-//! 2. Compatibilité              ← avant d'avoir touché à quoi que ce soit
-//! 3. Agents, un nœud à la fois  ← un agent cassé ne casse pas les autres
-//! 4. Controller                 ← en dernier : c'est lui qui pilote les étapes 1-3
-//! 5. Vérification post-bascule  ← sinon on ne sait pas si ça a marché
+//! 1. State backup              ← without it, a failure at 4 is final
+//! 2. Compatibility             ← before touching anything at all
+//! 3. Agents, one node at a time ← a broken agent does not break the others
+//! 4. Controller                ← last: it is what drives steps 1-3
+//! 5. Post-switch verification  ← otherwise nobody knows whether it worked
 //! ```
 //!
-//! **Le controller en dernier**, parce que c'est lui qui exécute les étapes
-//! précédentes. Se remplacer d'abord reviendrait à scier la branche : si la nouvelle
-//! version ne démarre pas, il ne reste plus rien pour mettre à jour les agents ni
-//! pour revenir en arrière.
+//! **The controller last**, because it is what executes the preceding steps. Replacing
+//! itself first would be sawing off the branch: if the new version does not start,
+//! nothing is left to update the agents or to go back.
 //!
-//! **Un agent à la fois**, parce qu'un agent injoignable n'empêche pas le cluster de
-//! fonctionner (les services tournent sous Swarm, pas sous Homelabus), alors que dix
-//! agents cassés simultanément aveuglent complètement la supervision.
+//! **One agent at a time**, because an unreachable agent does not stop the cluster
+//! working (services run under Swarm, not under Homelabus), whereas ten broken agents
+//! at once blind the supervision completely.
 //!
-//! ## 🔴 Ce qui rend le retour arrière possible — ou impossible
+//! ## 🔴 What makes a rollback possible - or impossible
 //!
-//! Le binaire se remplace facilement. **Le schéma de base, non.** Si la version N+1
-//! migre la base et qu'on revient au binaire N, celui-ci lit un schéma qu'il ne
-//! comprend pas. C'est l'état dont on ne peut plus sortir.
+//! The binary is easy to replace. **The database schema is not.** If version N+1
+//! migrates the database and you go back to binary N, it reads a schema it does not
+//! understand. That is the state there is no way out of.
 //!
-//! D'où deux exigences non négociables, vérifiées par [`Preflight`] :
+//! Hence two non-negotiable requirements, checked by [`Preflight`]:
 //!
-//! - toute migration a son inverse (`down`), sinon la mise à jour est **refusée** ;
-//! - l'état est exporté avant la migration, pas après.
+//! - every migration has its inverse (`down`), or the update is **refused**;
+//! - the state is exported before the migration, not after.
 
 use crate::version::{compatible, Compatibility, Jump, Version};
 
-/// Un nœud du parc, avec la version de son agent.
+/// A node of the fleet, with its agent's version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentNode {
     pub node: String,
@@ -45,18 +44,18 @@ pub struct AgentNode {
     pub version: Option<Version>,
 }
 
-/// Ce qui empêche de commencer.
+/// What prevents starting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Blocker {
-    /// 🔴 Une migration ne sait pas revenir en arrière.
+    /// 🔴 A migration cannot be undone.
     IrreversibleMigration { name: String },
     /// Versions incompatibles.
     Incompatible { detail: String },
-    /// 🔴 Des agents ne répondent pas : on ne met pas à jour à l'aveugle.
+    /// 🔴 Some agents do not answer: no updating blind.
     UnreachableAgents { nodes: Vec<String> },
-    /// Aucune sauvegarde de l'état : un échec serait définitif.
+    /// No state backup: a failure would be final.
     NoStateBackup,
-    /// Rien à faire.
+    /// Nothing to do.
     AlreadyCurrent,
 }
 
@@ -64,61 +63,61 @@ impl Blocker {
     pub fn describe(&self) -> String {
         match self {
             Self::IrreversibleMigration { name } => format!(
-                "🔴 la migration « {name} » n'a pas d'inverse. Si la nouvelle version \
-                 échoue, le binaire précédent lira un schéma qu'il ne comprend pas — \
-                 et il n'y aura plus de retour possible. Écris le `down` d'abord."
+                "🔴 migration \"{name}\" has no inverse. If the new version fails, \
+                 the previous binary will read a schema it does not understand - and \
+                 there will be no way back. Write the `down` first."
             ),
             Self::Incompatible { detail } => detail.clone(),
             Self::UnreachableAgents { nodes } => format!(
-                "🔴 {} agent(s) injoignable(s) : {}. On ne met pas à jour un parc \
-                 qu'on ne voit pas — les nœuds muets resteraient en version N sans \
-                 qu'on sache s'ils fonctionnent.",
+                "🔴 {} unreachable {}: {}. A fleet you cannot see does not get \
+                 updated - silent nodes would stay on version N with no way to know \
+                 whether they work.",
                 nodes.len(),
+                if nodes.len() == 1 { "agent" } else { "agents" },
                 nodes.join(", ")
             ),
-            Self::NoStateBackup => "🔴 aucune sauvegarde de l'état : un échec en \
-                 cours de migration serait définitif. Lance `hlb backup run --force` \
-                 d'abord."
+            Self::NoStateBackup => "🔴 no state backup: a failure during migration \
+                 would be final. Run `hlb backup run --force` first."
                 .to_string(),
-            Self::AlreadyCurrent => "déjà à jour".to_string(),
+            Self::AlreadyCurrent => "already up to date".to_string(),
         }
     }
 
-    /// Est-ce un refus de sécurité, ou simplement « rien à faire » ?
+    /// Is this a safety refusal, or simply "nothing to do"?
     pub fn is_refusal(&self) -> bool {
         !matches!(self, Self::AlreadyCurrent)
     }
 }
 
-/// Une migration de schéma et son inverse.
+/// A schema migration and its inverse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Migration {
     pub name: String,
-    /// 🔴 `false` = pas de `down`. Bloque la mise à jour.
+    /// 🔴 `false` means no `down`. Blocks the update.
     pub reversible: bool,
 }
 
-/// Tout ce qu'on sait avant de décider.
+/// Everything known before deciding.
 #[derive(Debug, Clone)]
 pub struct Preflight {
     pub from: Version,
     pub to: Version,
     pub agents: Vec<AgentNode>,
     pub migrations: Vec<Migration>,
-    /// L'état a-t-il été sauvegardé récemment ?
+    /// Has the state been backed up recently?
     pub state_backed_up: bool,
 }
 
-/// La séquence à exécuter.
+/// The sequence to execute.
 #[derive(Debug, Clone)]
 pub struct UpdatePlan {
     pub from: Version,
     pub to: Version,
     pub jump: Jump,
-    /// Nœuds à mettre à jour, dans l'ordre.
+    /// Nodes to update, in order.
     ///
-    /// ⚠️ Trié par nom : une mise à jour qui prendrait les nœuds dans un ordre
-    /// variable rendrait un incident irreproductible.
+    /// ⚠️ Sorted by name: an update taking nodes in a varying order would make an
+    /// incident irreproducible.
     pub agents: Vec<String>,
     pub migrations: Vec<Migration>,
 }
@@ -126,43 +125,53 @@ pub struct UpdatePlan {
 impl UpdatePlan {
     pub fn describe(&self) -> String {
         let mut s = format!(
-            "Mise à jour {} → {} ({})\n",
+            "Update {} → {} ({})\n",
             self.from,
             self.to,
             self.jump.describe()
         );
         s.push_str(&format!(
-            "  1. sauvegarde de l'état\n  2. {} agent(s), un à la fois : {}\n",
+            "  1. state backup\n  2. {} {}, one at a time: {}\n",
             self.agents.len(),
+            if self.agents.len() == 1 {
+                "agent"
+            } else {
+                "agents"
+            },
             if self.agents.is_empty() {
-                "aucun".to_string()
+                "none".to_string()
             } else {
                 self.agents.join(", ")
             }
         ));
         s.push_str(&format!(
-            "  3. controller EN DERNIER ({} migration(s) réversible(s))\n",
-            self.migrations.len()
+            "  3. controller LAST ({} reversible {})\n",
+            self.migrations.len(),
+            if self.migrations.len() == 1 {
+                "migration"
+            } else {
+                "migrations"
+            }
         ));
-        s.push_str("  4. réconciliation à blanc pour vérifier\n");
+        s.push_str("  4. a dry-run reconciliation to check\n");
         s
     }
 }
 
-/// Décide si la mise à jour peut commencer, et comment.
+/// Decides whether the update can start, and how.
 ///
-/// 🔴 L'ordre des contrôles n'est pas indifférent : on vérifie ce qui rend le RETOUR
-/// impossible avant ce qui rend la mise à jour inutile. Découvrir qu'une migration est
-/// irréversible après avoir migré serait précisément trop tard.
+/// 🔴 The order of the checks matters: what makes a ROLLBACK impossible is checked
+/// before what makes the update pointless. Discovering a migration is irreversible
+/// after migrating would be precisely too late.
 pub fn plan(p: &Preflight) -> Result<UpdatePlan, Blocker> {
-    // 1. Ce qui condamne le retour arrière, d'abord.
+    // 1. What forecloses the rollback, first.
     if let Some(m) = p.migrations.iter().find(|m| !m.reversible) {
         return Err(Blocker::IrreversibleMigration {
             name: m.name.clone(),
         });
     }
 
-    // 2. Puis ce qui rend l'opération inutile ou dangereuse.
+    // 2. Then what makes the operation pointless or dangerous.
     let jump = Jump::between(p.from, p.to);
     if jump == Jump::None {
         return Err(Blocker::AlreadyCurrent);
@@ -170,9 +179,8 @@ pub fn plan(p: &Preflight) -> Result<UpdatePlan, Blocker> {
     if jump == Jump::Downgrade {
         return Err(Blocker::Incompatible {
             detail: format!(
-                "🔴 {} est ANTÉRIEURE à {} — ce n'est pas une mise à jour. Pour \
-                 revenir en arrière, utilise `hlb self rollback`, qui restaure aussi \
-                 le schéma.",
+                "🔴 {} is EARLIER than {} - this is not an update. To go back, use \
+                 `hlb self rollback`, which restores the schema as well.",
                 p.to, p.from
             ),
         });
@@ -182,7 +190,7 @@ pub fn plan(p: &Preflight) -> Result<UpdatePlan, Blocker> {
         return Err(Blocker::NoStateBackup);
     }
 
-    // 3. Les agents muets : on ne met pas à jour un parc qu'on ne voit pas.
+    // 3. The silent agents: a fleet you cannot see does not get updated.
     let muets: Vec<String> = p
         .agents
         .iter()
@@ -204,7 +212,7 @@ pub fn plan(p: &Preflight) -> Result<UpdatePlan, Blocker> {
     }
 
     let mut agents: Vec<String> = p.agents.iter().map(|a| a.node.clone()).collect();
-    // Ordre stable : un incident doit être reproductible.
+    // A stable order: an incident must be reproducible.
     agents.sort();
 
     Ok(UpdatePlan {
@@ -216,35 +224,35 @@ pub fn plan(p: &Preflight) -> Result<UpdatePlan, Blocker> {
     })
 }
 
-/// Ce qu'on garde pour pouvoir revenir.
+/// What is kept so that going back is possible.
 ///
-/// ⚠️ Le binaire précédent est **conservé sur disque**, pas retéléchargé : le jour où
-/// l'on a besoin d'un retour arrière, c'est souvent parce que quelque chose ne va pas
-/// — et le réseau peut en faire partie.
+/// ⚠️ The previous binary is **kept on disk**, not re-downloaded: the day you need a
+/// rollback is usually a day when something is wrong - and the network can be part of
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rollback {
     pub previous_version: Version,
     pub previous_binary: std::path::PathBuf,
-    /// Export de l'état avant migration.
+    /// The state export taken before the migration.
     pub state_export: std::path::PathBuf,
-    /// Migrations à défaire, **dans l'ordre inverse** de leur application.
+    /// Migrations to undo, **in reverse order** of their application.
     pub undo: Vec<Migration>,
 }
 
 impl Rollback {
-    /// Les migrations à défaire, dans le bon ordre.
+    /// The migrations to undo, in the right order.
     ///
-    /// 🔴 L'ordre inverse est obligatoire : une migration qui ajoute une colonne
-    /// référencée par la suivante doit être défaite **après** elle. Les défaire dans
-    /// l'ordre d'application échouerait sur une contrainte, à mi-chemin, laissant un
-    /// schéma qui n'est ni l'ancien ni le nouveau.
+    /// 🔴 Reverse order is mandatory: a migration adding a column referenced by the
+    /// next must be undone **after** it. Undoing them in application order would fail
+    /// on a constraint, halfway, leaving a schema that is neither the old nor the
+    /// new.
     pub fn undo_order(&self) -> Vec<&Migration> {
         self.undo.iter().rev().collect()
     }
 
     pub fn describe(&self) -> String {
         format!(
-            "Retour à {} :\n  binaire  : {}\n  état     : {}\n  {} migration(s) à défaire",
+            "Back to {}:\n  binary : {}\n  state  : {}\n  {} migrations to undo",
             self.previous_version,
             self.previous_binary.display(),
             self.state_export.display(),
@@ -285,9 +293,9 @@ mod tests {
 
     #[test]
     fn an_irreversible_migration_blocks_everything() {
-        // 🔴 LE contrôle qui compte. Sans `down`, un échec de la version N+1 laisse
-        // la base dans un état que le binaire N ne comprend pas — et il n'y a plus
-        // de sortie.
+        // 🔴 THE check that matters. Without a `down`, a failure of version N+1 leaves
+        // the database in a state binary N does not understand - and there is no way
+        // out.
         let mut p = preflight();
         p.migrations.push(migration("0008_sans_retour", false));
 
@@ -298,18 +306,13 @@ mod tests {
                 name: "0008_sans_retour".into()
             }
         );
-        assert!(
-            e.describe().contains("plus de retour possible"),
-            "{}",
-            e.describe()
-        );
+        assert!(e.describe().contains("no way back"), "{}", e.describe());
     }
 
     #[test]
     fn reversibility_is_checked_before_anything_else() {
-        // Découvrir qu'une migration est irréversible APRÈS avoir migré serait trop
-        // tard. Même avec une version identique et aucun agent, c'est ce contrôle
-        // qui doit parler en premier.
+        // Discovering a migration is irreversible AFTER migrating would be too late.
+        // Even with an identical version and no agents, this check must speak first.
         let p = Preflight {
             to: Version::new(0, 1, 0),
             agents: vec![],
@@ -325,7 +328,7 @@ mod tests {
 
     #[test]
     fn updating_without_a_state_backup_is_refused() {
-        // Un échec en cours de migration serait définitif.
+        // A failure during migration would be final.
         let p = Preflight {
             state_backed_up: false,
             ..preflight()
@@ -340,8 +343,8 @@ mod tests {
 
     #[test]
     fn a_mute_agent_stops_the_update() {
-        // 🔴 On ne met pas à jour un parc qu'on ne voit pas : les nœuds muets
-        // resteraient en version N sans qu'on sache s'ils fonctionnent.
+        // 🔴 A fleet you cannot see does not get updated: silent nodes would stay on
+        // version N with no way to know whether they work.
         let mut p = preflight();
         p.agents.push(AgentNode {
             node: "node3".into(),
@@ -355,13 +358,13 @@ mod tests {
                 nodes: vec!["node3".into()]
             }
         );
-        assert!(e.describe().contains("parc qu'on ne voit pas"));
+        assert!(e.describe().contains("fleet you cannot see"));
     }
 
     #[test]
     fn a_downgrade_is_redirected_to_rollback() {
-        // 🔴 Le faire passer pour une mise à jour laisserait la base en schéma N+1
-        // sous un binaire N — l'état dont on ne peut plus sortir.
+        // 🔴 Passing it off as an update would leave the database on schema N+1 under
+        // an N binary - the state there is no way out of.
         let p = Preflight {
             from: Version::new(0, 3, 0),
             to: Version::new(0, 2, 0),
@@ -377,8 +380,8 @@ mod tests {
 
     #[test]
     fn being_current_is_not_a_refusal() {
-        // « Rien à faire » ne doit pas ressembler à « on t'a empêché » : un code de
-        // sortie en échec ferait croire à un problème dans un script de mise à jour.
+        // "Nothing to do" must not look like "you were blocked": a failing exit code
+        // would suggest a problem inside an update script.
         let p = Preflight {
             to: Version::new(0, 1, 0),
             ..preflight()
@@ -390,8 +393,8 @@ mod tests {
 
     #[test]
     fn a_major_mismatch_names_the_node() {
-        // Sur un parc de dix machines, savoir LAQUELLE bloque évite de les
-        // inspecter une par une.
+        // On a ten-machine fleet, knowing WHICH one blocks saves inspecting them one
+        // by one.
         let mut p = preflight();
         p.to = Version::new(1, 0, 0);
         let e = plan(&p).unwrap_err();
@@ -400,32 +403,32 @@ mod tests {
 
     #[test]
     fn agents_are_updated_in_a_stable_order() {
-        // ⚠️ Un ordre variable rendrait un incident irreproductible : « ça a cassé
-        // au troisième nœud » ne veut rien dire si le troisième change.
+        // ⚠️ A varying order would make an incident irreproducible: "it broke on the
+        // third node" means nothing if the third changes.
         let p = plan(&preflight()).expect("plan");
         assert_eq!(p.agents, vec!["node1", "node2"]);
     }
 
     #[test]
     fn the_plan_puts_the_controller_last() {
-        // 🔴 Le controller exécute les étapes précédentes. Se remplacer d'abord
-        // reviendrait à scier la branche : si la nouvelle version ne démarre pas, il
-        // ne reste plus rien pour mettre à jour les agents ni pour revenir.
+        // 🔴 The controller executes the preceding steps. Replacing itself first would
+        // be sawing off the branch: if the new version does not start, nothing is left
+        // to update the agents or to go back.
         let d = plan(&preflight()).expect("plan").describe();
-        let i_agents = d.find("agent(s)").expect("agents");
+        let i_agents = d.find("agents").expect("agents");
         let i_ctrl = d.find("controller").expect("controller");
         assert!(
             i_agents < i_ctrl,
-            "les agents doivent précéder le controller :\n{d}"
+            "the agents must come before the controller:\n{d}"
         );
-        assert!(d.contains("EN DERNIER"), "{d}");
+        assert!(d.contains("LAST"), "{d}");
     }
 
     #[test]
     fn migrations_are_undone_in_reverse_order() {
-        // 🔴 Une migration qui ajoute une colonne référencée par la suivante doit
-        // être défaite APRÈS elle. L'ordre d'application échouerait à mi-chemin,
-        // laissant un schéma qui n'est ni l'ancien ni le nouveau.
+        // 🔴 A migration adding a column referenced by the next must be undone AFTER
+        // it. Application order would fail halfway, leaving a schema that is neither
+        // the old nor the new.
         let r = Rollback {
             previous_version: Version::new(0, 1, 0),
             previous_binary: "/opt/hlb/hlb-0.1.0".into(),
@@ -442,8 +445,8 @@ mod tests {
 
     #[test]
     fn the_previous_binary_is_kept_on_disk() {
-        // ⚠️ Le jour où l'on a besoin d'un retour arrière, c'est souvent parce que
-        // quelque chose ne va pas — et le réseau peut en faire partie.
+        // ⚠️ The day you need a rollback is usually a day when something is wrong -
+        // and the network can be part of it.
         let r = Rollback {
             previous_version: Version::new(0, 1, 0),
             previous_binary: "/opt/hlb/hlb-0.1.0".into(),

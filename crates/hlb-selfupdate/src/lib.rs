@@ -1,15 +1,15 @@
-//! Mise à jour de Homelabus lui-même (§7bis).
+//! Updating Homelabus itself.
 //!
-//! C'est l'opération la plus délicate du système : on remplace l'outil qui pilote
-//! tout, **pendant qu'il pilote tout**.
+//! This is the most delicate operation in the system: replacing the tool that drives
+//! everything, **while it drives everything**.
 //!
-//! Une propriété rend la chose supportable : le controller n'est **pas dans le chemin
-//! critique** du trafic (§7bis). Swarm continue de faire tourner les services déployés
-//! sans lui. L'arrêter fait perdre le pilotage, pas le service — ce qui transforme une
-//! opération terrifiante en opération simplement délicate.
+//! One property makes it bearable: the controller is **not in the critical path** of
+//! traffic. Swarm keeps the deployed services running without it. Stopping it loses
+//! control, not service - which turns a terrifying operation into a merely delicate
+//! one.
 //!
-//! 🔴 **Jamais automatique.** Le controller est le seul composant dont la panne
-//! t'empêche de réparer les autres. Notification, puis validation manuelle.
+//! 🔴 **Never automatic.** The controller is the one component whose failure stops you
+//! repairing the others. Notify, then wait for manual approval.
 
 pub mod plan;
 pub mod signature;

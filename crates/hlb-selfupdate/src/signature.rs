@@ -1,130 +1,128 @@
-//! Vérification des binaires téléchargés (§7bis).
+//! Verifying downloaded binaries.
 //!
-//! ## 🔴 Pourquoi c'est le point le plus sensible du système
+//! ## 🔴 Why this is the system's most sensitive point
 //!
-//! Une mise à jour remplace **le binaire qui a tous les droits** : il pilote Docker,
-//! détient la clé du coffre, s'authentifie auprès des agents. Un attaquant qui place
-//! son code ici n'a plus rien à contourner — il *est* Homelabus.
+//! An update replaces **the binary that holds every right**: it drives Docker, holds
+//! the vault key, authenticates to the agents. An attacker who places their code here
+//! has nothing left to bypass - they *are* Homelabus.
 //!
-//! Aucune des protections du reste du système ne s'applique : le RBAC, le mTLS, le
-//! journal d'audit sont tous *dans* le binaire qu'on remplace.
+//! None of the rest of the system's protections applies: the RBAC, the mTLS, the audit
+//! log all live *inside* the binary being replaced.
 //!
-//! C'est pour ça que `hlb self update` refusait jusqu'ici de télécharger quoi que ce
-//! soit. Ce module est ce qui lève ce refus.
+//! That is why `hlb self update` refused to download anything until now. This module is
+//! what lifts that refusal.
 //!
-//! ## Le modèle de confiance, en clair
+//! ## The trust model, stated plainly
 //!
-//! Une **clé publique unique**, compilée dans le binaire ou fournie explicitement.
-//! Pas de chaîne de certificats, pas d'autorité tierce, pas de TOFU.
+//! A **single public key**, compiled into the binary or supplied explicitly. No
+//! certificate chain, no third-party authority, no TOFU.
 //!
-//! Ce choix est délibérément le plus simple possible :
+//! The choice is deliberately the simplest possible:
 //!
-//! - une chaîne X.509 déplacerait la confiance vers une autorité, dont la
-//!   compromission ou l'expiration deviendrait un mode de panne de plus ;
-//! - le TOFU (« fais confiance à la première clé vue ») protège des attaques
-//!   *ultérieures*, pas de la première — or la première mise à jour est justement
-//!   celle où l'on n'a rien pour comparer.
+//! - an X.509 chain would move trust to an authority, whose compromise or expiry would
+//!   become one more failure mode;
+//! - TOFU ("trust the first key you see") protects against *later* attacks, not the
+//!   first - and the first update is precisely the one with nothing to compare against.
 //!
-//! ⚠️ Conséquence assumée : **perdre la clé privée oblige à redistribuer la clé
-//! publique à la main sur chaque machine.** C'est le prix de l'absence d'autorité, et
-//! il est faible sur un parc de quelques nœuds.
+//! ⚠️ An accepted consequence: **losing the private key means redistributing the public
+//! key by hand on every machine.** That is the price of having no authority, and it is
+//! low on a fleet of a few nodes.
 //!
-//! ## Ce que la signature ne prouve PAS
+//! ## What a signature does NOT prove
 //!
-//! Qu'un binaire est signé ne dit rien de ce qu'il fait. La signature prouve
-//! l'**origine**, pas l'innocuité : elle garantit que le fichier vient bien de qui
-//! détient la clé, et qu'il n'a pas été modifié en route. Si la machine de
-//! construction est compromise, elle signera du code malveillant sans que rien ici ne
-//! puisse le voir.
+//! That a binary is signed says nothing about what it does. A signature proves
+//! **origin**, not harmlessness: it guarantees the file comes from whoever holds the
+//! key, and that it was not modified in transit. If the build machine is compromised,
+//! it will sign malicious code and nothing here can see it.
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 use crate::version::Version;
 
-/// Ce qui accompagne un binaire publié.
+/// What accompanies a published binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub version: Version,
-    /// Empreinte SHA-256 du binaire, en hexadécimal.
+    /// The binary's SHA-256 fingerprint, in hexadecimal.
     pub sha256: String,
-    /// Signature Ed25519 du manifeste, en hexadécimal.
+    /// The manifest's Ed25519 signature, in hexadecimal.
     pub signature: String,
 }
 
-/// Pourquoi un binaire est refusé.
+/// Why a binary is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejected {
-    /// 🔴 Signature absente. Un binaire non signé n'est pas « moins sûr », il est
-    /// inutilisable : rien ne dit d'où il vient.
+    /// 🔴 No signature. An unsigned binary is not "less safe", it is unusable:
+    /// nothing says where it came from.
     Unsigned,
-    /// 🔴 Signature invalide : le fichier a été modifié, ou vient d'ailleurs.
+    /// 🔴 Invalid signature: the file was modified, or comes from elsewhere.
     BadSignature,
-    /// 🔴 L'empreinte ne correspond pas au fichier téléchargé.
+    /// 🔴 The fingerprint does not match the downloaded file.
     ChecksumMismatch { expected: String, actual: String },
-    /// Le manifeste annonce une autre version que celle demandée.
+    /// The manifest announces a different version from the one requested.
     WrongVersion { expected: Version, found: Version },
-    /// Clé publique illisible.
+    /// Unreadable public key.
     BadKey { detail: String },
 }
 
 impl Rejected {
     pub fn describe(&self) -> String {
         match self {
-            Self::Unsigned => "🔴 binaire NON SIGNÉ. Ce n'est pas « moins sûr », c'est \
-                 inutilisable : rien ne dit d'où il vient. Une mise à jour remplace le \
-                 binaire qui détient la clé du coffre et pilote Docker."
+            Self::Unsigned => "🔴 UNSIGNED binary. This is not \"less safe\", it is \
+                 unusable: nothing says where it came from. An update replaces the \
+                 binary that holds the vault key and drives Docker."
                 .to_string(),
-            Self::BadSignature => "🔴 SIGNATURE INVALIDE. Le fichier a été modifié après \
-                 signature, ou il ne vient pas de qui tu crois. N'installe rien et \
-                 vérifie d'où vient ce téléchargement."
+            Self::BadSignature => "🔴 INVALID SIGNATURE. The file was modified after \
+                 signing, or it does not come from who you think. Install nothing and \
+                 check where this download came from."
                 .to_string(),
             Self::ChecksumMismatch { expected, actual } => format!(
-                "🔴 EMPREINTE DIFFÉRENTE. Attendue {}…, obtenue {}…\n\
-                 Le manifeste est signé mais ne décrit pas ce fichier : téléchargement \
-                 tronqué, ou substitution du binaire seul.",
+                "🔴 DIFFERENT FINGERPRINT. Expected {}..., got {}...\n\
+                 The manifest is signed but does not describe this file: a truncated \
+                 download, or the binary alone was substituted.",
                 &expected[..8.min(expected.len())],
                 &actual[..8.min(actual.len())]
             ),
             Self::WrongVersion { expected, found } => format!(
-                "le manifeste annonce {found}, on demandait {expected}. Un manifeste \
-                 signé d'une AUTRE version reste valide cryptographiquement — c'est \
-                 comme ça qu'on fait rejouer une vieille version vulnérable."
+                "the manifest announces {found}, {expected} was requested. A manifest \
+                 signed for ANOTHER version stays cryptographically valid - that is how \
+                 an old vulnerable version gets replayed."
             ),
-            Self::BadKey { detail } => format!("clé publique illisible : {detail}"),
+            Self::BadKey { detail } => format!("unreadable public key: {detail}"),
         }
     }
 }
 
-/// Le contenu signé.
+/// The signed content.
 ///
-/// 🔴 La version fait partie du message signé. Sans elle, un manifeste signé pour la
-/// 0.1.0 resterait valide pour une prétendue 0.9.0 : un attaquant rejouerait une
-/// ancienne version vulnérable, avec une signature authentique.
+/// 🔴 The version is part of the signed message. Without it, a manifest signed for
+/// 0.1.0 would stay valid for a claimed 0.9.0: an attacker would replay an old
+/// vulnerable version, with an authentic signature.
 pub fn signed_payload(version: Version, sha256: &str) -> String {
     format!("hlb-release\nversion={version}\nsha256={sha256}\n")
 }
 
-/// Charge une clé publique depuis son hexadécimal.
+/// Loads a public key from its hexadecimal form.
 pub fn parse_key(hex: &str) -> Result<VerifyingKey, Rejected> {
-    let octets = from_hex(hex.trim()).ok_or_else(|| Rejected::BadKey {
-        detail: "hexadécimal invalide".into(),
+    let bytes = from_hex(hex.trim()).ok_or_else(|| Rejected::BadKey {
+        detail: "invalid hexadecimal".into(),
     })?;
 
-    let tableau: [u8; 32] = octets.try_into().map_err(|_| Rejected::BadKey {
-        detail: "une clé Ed25519 fait exactement 32 octets".into(),
+    let array: [u8; 32] = bytes.try_into().map_err(|_| Rejected::BadKey {
+        detail: "an Ed25519 key is exactly 32 bytes".into(),
     })?;
 
-    VerifyingKey::from_bytes(&tableau).map_err(|e| Rejected::BadKey {
+    VerifyingKey::from_bytes(&array).map_err(|e| Rejected::BadKey {
         detail: e.to_string(),
     })
 }
 
-/// Vérifie qu'un binaire téléchargé est bien celui qu'annonce un manifeste signé.
+/// Checks a downloaded binary is the one a signed manifest announces.
 ///
-/// L'ordre des contrôles n'est pas indifférent : on vérifie la **signature avant
-/// l'empreinte**. Comparer d'abord l'empreinte ferait confiance à un manifeste dont
-/// on ne sait rien — un attaquant fournirait simplement l'empreinte de son propre
-/// binaire.
+/// The order of the checks matters: the **signature is verified before the
+/// fingerprint**. Comparing the fingerprint first would trust a manifest we know
+/// nothing about - an attacker would simply supply the fingerprint of their own
+/// binary.
 pub fn verify(
     key: &VerifyingKey,
     manifest: &Manifest,
@@ -144,8 +142,8 @@ pub fn verify(
     key.verify(message.as_bytes(), &signature)
         .map_err(|_| Rejected::BadSignature)?;
 
-    // 2. La version, ensuite : un manifeste signé d'une AUTRE version est
-    //    cryptographiquement valide et néanmoins inacceptable.
+    // 2. The version next: a manifest signed for ANOTHER version is
+    //    cryptographically valid and nonetheless unacceptable.
     if manifest.version != expected_version {
         return Err(Rejected::WrongVersion {
             expected: expected_version,
@@ -153,7 +151,7 @@ pub fn verify(
         });
     }
 
-    // 3. Enfin, le fichier correspond-il à ce que le manifeste décrit ?
+    // 3. Finally, does the file match what the manifest describes?
     let reelle = sha256_hex(binary);
     if !constant_eq(&reelle, &manifest.sha256) {
         return Err(Rejected::ChecksumMismatch {
@@ -165,7 +163,7 @@ pub fn verify(
     Ok(())
 }
 
-/// Comparaison à temps constant.
+/// Constant-time comparison.
 fn constant_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -187,7 +185,7 @@ fn from_hex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// L'empreinte d'un binaire, en hexadécimal.
+/// A binary's fingerprint, in hexadecimal.
 pub fn sha256_hex(data: &[u8]) -> String {
     hlb_types::token::sha256_hex(data)
 }
@@ -198,14 +196,14 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     fn paire() -> (SigningKey, VerifyingKey) {
-        // Graine fixe : un test doit être reproductible.
+        // A fixed seed: a test must be reproducible.
         let sk = SigningKey::from_bytes(&[7u8; 32]);
         let vk = sk.verifying_key();
         (sk, vk)
     }
 
-    fn manifeste_signe(sk: &SigningKey, version: Version, binaire: &[u8]) -> Manifest {
-        let sha = sha256_hex(binaire);
+    fn manifeste_signe(sk: &SigningKey, version: Version, binary: &[u8]) -> Manifest {
+        let sha = sha256_hex(binary);
         let sig = sk.sign(signed_payload(version, &sha).as_bytes());
         Manifest {
             version,
@@ -218,15 +216,15 @@ mod tests {
     fn a_correctly_signed_binary_passes() {
         let (sk, vk) = paire();
         let v = Version::new(0, 2, 0);
-        let binaire = b"le vrai binaire";
-        let m = manifeste_signe(&sk, v, binaire);
+        let binary = b"le vrai binary";
+        let m = manifeste_signe(&sk, v, binary);
 
-        assert!(verify(&vk, &m, v, binaire).is_ok());
+        assert!(verify(&vk, &m, v, binary).is_ok());
     }
 
     #[test]
     fn an_unsigned_binary_is_refused() {
-        // 🔴 Non signé n'est pas « moins sûr » : c'est inutilisable.
+        // 🔴 Unsigned is not "less safe": it is unusable.
         let (sk, vk) = paire();
         let v = Version::new(0, 2, 0);
         let mut m = manifeste_signe(&sk, v, b"x");
@@ -234,12 +232,12 @@ mod tests {
 
         let e = verify(&vk, &m, v, b"x").unwrap_err();
         assert_eq!(e, Rejected::Unsigned);
-        assert!(e.describe().contains("clé du coffre"), "{}", e.describe());
+        assert!(e.describe().contains("vault key"), "{}", e.describe());
     }
 
     #[test]
     fn a_binary_from_another_key_is_refused() {
-        // Le cas de base : un attaquant signe avec SA clé.
+        // The basic case: an attacker signs with THEIR key.
         let (attaquant, _) = (SigningKey::from_bytes(&[9u8; 32]), ());
         let (_, notre_vk) = paire();
         let v = Version::new(0, 2, 0);
@@ -253,36 +251,36 @@ mod tests {
 
     #[test]
     fn a_substituted_binary_is_caught() {
-        // 🔴 Le manifeste est authentique, mais le fichier a été remplacé. C'est
-        // l'attaque qu'une signature seule, sans empreinte, ne verrait pas.
+        // 🔴 The manifest is authentic, but the file was replaced. This is the attack
+        // a signature alone, with no fingerprint, would not see.
         let (sk, vk) = paire();
         let v = Version::new(0, 2, 0);
-        let m = manifeste_signe(&sk, v, b"le vrai binaire");
+        let m = manifeste_signe(&sk, v, b"le vrai binary");
 
-        let e = verify(&vk, &m, v, b"un AUTRE binaire").unwrap_err();
+        let e = verify(&vk, &m, v, b"ANOTHER binary").unwrap_err();
         assert!(matches!(e, Rejected::ChecksumMismatch { .. }), "{e:?}");
-        assert!(e.describe().contains("substitution"), "{}", e.describe());
+        assert!(e.describe().contains("substituted"), "{}", e.describe());
     }
 
     #[test]
     fn a_replayed_old_version_is_refused() {
-        // 🔴 L'attaque du rejeu : un manifeste signé pour la 0.1.0 est
-        // cryptographiquement PARFAIT. Sans le contrôle de version, on installerait
-        // une ancienne version vulnérable avec une signature authentique.
+        // 🔴 The replay attack: a manifest signed for 0.1.0 is cryptographically
+        // PERFECT. Without the version check, an old vulnerable version would be
+        // installed with an authentic signature.
         let (sk, vk) = paire();
         let ancienne = Version::new(0, 1, 0);
-        let binaire = b"vieux binaire vulnerable";
-        let m = manifeste_signe(&sk, ancienne, binaire);
+        let binary = b"vieux binary vulnerable";
+        let m = manifeste_signe(&sk, ancienne, binary);
 
-        let e = verify(&vk, &m, Version::new(0, 2, 0), binaire).unwrap_err();
+        let e = verify(&vk, &m, Version::new(0, 2, 0), binary).unwrap_err();
         assert!(matches!(e, Rejected::WrongVersion { .. }), "{e:?}");
-        assert!(e.describe().contains("rejouer"), "{}", e.describe());
+        assert!(e.describe().contains("replayed"), "{}", e.describe());
     }
 
     #[test]
     fn the_version_is_part_of_what_is_signed() {
-        // C'est ce qui rend le rejeu détectable : changer la version invalide la
-        // signature, elle ne peut donc pas être « corrigée » par un attaquant.
+        // This is what makes a replay detectable: changing the version invalidates the
+        // signature, so it cannot be "fixed" by an attacker.
         let a = signed_payload(Version::new(0, 1, 0), "abc");
         let b = signed_payload(Version::new(0, 2, 0), "abc");
         assert_ne!(a, b);
@@ -291,13 +289,13 @@ mod tests {
 
     #[test]
     fn the_signature_is_checked_before_the_checksum() {
-        // 🔴 L'inverse ferait confiance à un manifeste dont on ne sait rien :
-        // l'attaquant fournirait simplement l'empreinte de SON binaire.
+        // 🔴 The reverse would trust a manifest we know nothing about: the attacker
+        // would simply supply the fingerprint of THEIR binary.
         let (attaquant, _) = (SigningKey::from_bytes(&[9u8; 32]), ());
         let (_, notre_vk) = paire();
         let v = Version::new(0, 2, 0);
 
-        // Manifeste d'attaquant, DONT l'empreinte est juste pour son binaire.
+        // Manifeste d'attaquant, DONT l'empreinte est juste pour son binary.
         let m = manifeste_signe(&attaquant, v, b"malveillant");
         let e = verify(&notre_vk, &m, v, b"malveillant").unwrap_err();
 
@@ -311,20 +309,20 @@ mod tests {
         assert!(parse_key("aabb").is_err(), "trop courte");
 
         let e = parse_key("aabb").unwrap_err();
-        assert!(e.describe().contains("32 octets"), "{}", e.describe());
+        assert!(e.describe().contains("32 bytes"), "{}", e.describe());
     }
 
     #[test]
     fn a_valid_key_round_trips() {
         let (_, vk) = paire();
         let hex: String = vk.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(parse_key(&hex).expect("clé").to_bytes(), vk.to_bytes());
+        assert_eq!(parse_key(&hex).expect("key").to_bytes(), vk.to_bytes());
     }
 
     #[test]
     fn a_truncated_signature_is_refused_not_panicking() {
-        // Une signature de mauvaise longueur ne doit pas faire paniquer le binaire
-        // qui se met à jour — c'est le pire moment pour un plantage.
+        // A signature of the wrong length must not panic the binary that is updating
+        // itself - the worst possible moment for a crash.
         let (sk, vk) = paire();
         let v = Version::new(0, 2, 0);
         let mut m = manifeste_signe(&sk, v, b"x");
