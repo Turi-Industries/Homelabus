@@ -1,33 +1,32 @@
-//! Autorité de certification interne pour le mTLS agent ↔ controller (§2).
+//! The internal certificate authority for agent ↔ controller mTLS.
 //!
-//! ## Ce que ça remplace
+//! ## What this replaces
 //!
-//! L'API de l'agent était en HTTP clair, protégée seulement par le chiffrement de
-//! l'overlay Swarm. Ça suppose que **tout ce qui est sur l'overlay est de confiance** —
-//! or n'importe quel conteneur compromis y est aussi. Un Gitea vérolé pouvait
-//! interroger tous les agents du parc et cartographier les disques du cluster.
+//! The agent's API was plain HTTP, protected only by the Swarm overlay's encryption.
+//! That assumes **everything on the overlay is trusted** - and any compromised
+//! container is on it too. An infected Gitea could query every agent in the fleet and
+//! map the cluster's disks.
 //!
-//! Le mTLS règle les deux sens à la fois :
+//! mTLS settles both directions at once:
 //!
-//! - l'agent n'accepte que des clients porteurs d'un certificat signé par notre CA ;
-//! - le controller vérifie qu'il parle bien à un agent, pas à un imposteur qui aurait
-//!   pris la place dans le DNS de l'overlay.
+//! - the agent accepts only clients presenting a certificate signed by our CA;
+//! - the controller checks it is talking to an agent, not to an impostor that took its
+//!   place in the overlay's DNS.
 //!
-//! ## 🔴 Pourquoi `openssl` plutôt qu'une bibliothèque Rust
+//! ## 🔴 Why `openssl` rather than a Rust library
 //!
-//! Même raisonnement que pour `ssh-keygen` (§2ter phase 0bis) : X.509 est un format
-//! où une erreur d'encodage produit un certificat que les outils acceptent et que la
-//! pile TLS rejette — ou pire, l'inverse. `openssl` est présent sur toute machine qui
-//! fait tourner un serveur, et le déléguer évite d'ajouter une dépendance dont on
-//! auditerait mal la sortie.
+//! Same reasoning as for `ssh-keygen`: X.509 is a format where an encoding mistake
+//! produces a certificate the tools accept and the TLS stack rejects - or worse, the
+//! reverse. `openssl` is present on every machine running a server, and delegating to
+//! it avoids adding a dependency whose output would be poorly audited.
 //!
-//! ## Ce qui n'est PAS géré ici, et pourquoi c'est dit
+//! ## What is NOT handled here, and why that is said
 //!
-//! Il n'y a **pas de révocation** (ni CRL, ni OCSP). Sur un parc de quelques machines,
-//! une CRL qu'il faut distribuer et rafraîchir ajoute un mécanisme qui échoue en
-//! silence ; on préfère des certificats **courts** qu'on renouvelle. Retirer un nœud
-//! du parc se fait en révoquant son accès SSH (§2ter) et en le retirant du Swarm, pas
-//! en espérant qu'une liste de révocation soit arrivée partout.
+//! There is **no revocation** (no CRL, no OCSP). On a fleet of a few machines, a CRL
+//! that has to be distributed and refreshed adds a mechanism that fails silently;
+//! **short** certificates that get renewed are preferred. Removing a node from the
+//! fleet means revoking its SSH access and taking it out of the Swarm, not hoping a
+//! revocation list reached everywhere.
 
 use std::path::Path;
 
@@ -35,22 +34,22 @@ use crate::Error;
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// Durée de vie de la CA, en jours.
+/// The CA's lifetime, in days.
 ///
-/// Longue **délibérément** : la remplacer impose de redéployer tous les certificats du
-/// parc en même temps. Une CA qui expire au bout d'un an transforme une panne
-/// silencieuse en panne totale, un matin, sans que personne n'ait rien changé.
+/// **Deliberately** long: replacing it means redeploying every certificate in the fleet
+/// at once. A CA expiring after a year turns a silent failure into a total one, one
+/// morning, with nobody having changed anything.
 pub const CA_DAYS: u32 = 3650;
 
-/// Durée de vie des certificats de feuille.
+/// The lifetime of leaf certificates.
 ///
-/// Courte **délibérément** : c'est ce qui remplace la révocation. Un certificat volé
-/// cesse de servir tout seul, et le renouvellement automatique est exercé assez
-/// souvent pour qu'on sache qu'il fonctionne — au lieu de le découvrir le jour où il
-/// est cassé depuis six mois.
+/// **Deliberately** short: this is what replaces revocation. A stolen certificate stops
+/// being useful on its own, and automatic renewal is exercised often enough that we
+/// know it works - instead of finding out on the day it has been broken for six
+/// months.
 pub const LEAF_DAYS: u32 = 90;
 
-/// Une paire certificat + clé privée, au format PEM.
+/// A certificate + private key pair, in PEM format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertPair {
     pub cert_pem: String,
@@ -58,10 +57,10 @@ pub struct CertPair {
 }
 
 impl CertPair {
-    /// Le certificat porte-t-il bien une clé privée à part ?
+    /// Does the certificate really keep its private key separate?
     ///
-    /// 🔴 Garde-fou contre l'erreur la plus coûteuse du domaine : coller la clé privée
-    /// dans le fichier de certificat, qui est distribué à tout le monde.
+    /// 🔴 A guard against the most expensive mistake in this area: pasting the private
+    /// key into the certificate file, which is handed to everyone.
     pub fn looks_valid(&self) -> bool {
         self.cert_pem.contains("BEGIN CERTIFICATE")
             && !self.cert_pem.contains("PRIVATE KEY")
@@ -69,22 +68,22 @@ impl CertPair {
     }
 }
 
-/// Le rôle que le certificat autorise.
+/// The role the certificate authorises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
-    /// L'agent, qui présente son certificat aux clients.
+    /// The agent, presenting its certificate to clients.
     Server,
-    /// Le controller, qui prouve son identité à l'agent.
+    /// The controller, proving its identity to the agent.
     Client,
 }
 
 impl Purpose {
-    /// L'extension d'usage étendu correspondante.
+    /// The matching extended key usage extension.
     ///
-    /// ⚠️ Elle n'est pas décorative : une pile TLS refuse un certificat serveur
-    /// présenté comme client, et réciproquement. Un certificat sans `extendedKeyUsage`
-    /// passe chez certains clients et pas chez d'autres — donc marche en test et
-    /// échoue en production.
+    /// ⚠️ It is not decorative: a TLS stack refuses a server certificate presented as a
+    /// client one, and the reverse. A certificate with no `extendedKeyUsage` passes
+    /// with some clients and not others - so it works in testing and fails in
+    /// production.
     fn ext_key_usage(&self) -> &'static str {
         match self {
             Self::Server => "serverAuth",
@@ -93,7 +92,7 @@ impl Purpose {
     }
 }
 
-/// Génère l'autorité de certification du cluster.
+/// Generates the cluster's certificate authority.
 pub async fn generate_ca(common_name: &str) -> Result<CertPair> {
     let dir = tempdir()?;
     let key = dir.path().join("ca.key");
@@ -104,8 +103,8 @@ pub async fn generate_ca(common_name: &str) -> Result<CertPair> {
         "-x509",
         "-newkey",
         "ed25519",
-        // Sans phrase de passe : la clé est protégée par le coffre, et une invite
-        // interactive bloquerait tout automatisme.
+        // No passphrase: the key is protected by the vault, and an interactive prompt
+        // would block every automation.
         "-nodes",
         "-keyout",
         &key.to_string_lossy(),
@@ -115,8 +114,8 @@ pub async fn generate_ca(common_name: &str) -> Result<CertPair> {
         &CA_DAYS.to_string(),
         "-subj",
         &format!("/CN={common_name}"),
-        // `critical` : un client qui ne comprend pas cette extension doit REFUSER,
-        // pas l'ignorer. Sans ça, un certificat de feuille pourrait en signer d'autres.
+        // `critical`: a client that does not understand this extension must REFUSE,
+        // not ignore it. Without that, a leaf certificate could sign others.
         "-addext",
         "basicConstraints=critical,CA:TRUE,pathlen:0",
         "-addext",
@@ -127,10 +126,10 @@ pub async fn generate_ca(common_name: &str) -> Result<CertPair> {
     lire_paire(&crt, &key).await
 }
 
-/// Émet un certificat signé par la CA.
+/// Issues a certificate signed by the CA.
 ///
-/// `names` liste les noms sous lesquels le porteur sera joint. Pour un agent, c'est
-/// son nom d'hôte **et** l'entrée DNS de l'overlay.
+/// `names` lists the names the bearer will be reached under. For an agent, that is its
+/// hostname **and** the overlay's DNS entry.
 pub async fn issue(
     ca: &CertPair,
     common_name: &str,
@@ -186,19 +185,18 @@ pub async fn issue(
     lire_paire(&crt, &key).await
 }
 
-/// Le fichier d'extensions passé à la signature.
+/// The extensions file passed to the signing step.
 ///
-/// 🔴 **Le `subjectAltName` est obligatoire, pas le `CN`.** Toutes les piles TLS
-/// modernes ignorent le Common Name depuis des années : un certificat sans SAN est
-/// rejeté avec un message qui parle de nom d'hôte, ce qui envoie chercher un problème
-/// de DNS pendant des heures.
+/// 🔴 **`subjectAltName` is mandatory, `CN` is not.** Every modern TLS stack has
+/// ignored the Common Name for years: a certificate with no SAN is rejected with a
+/// message about a hostname, which sends you hunting for a DNS problem for hours.
 pub fn extensions(names: &[String], purpose: Purpose) -> String {
     let san: Vec<String> = names
         .iter()
         .enumerate()
         .map(|(i, n)| {
-            // Une IP doit être déclarée en `IP:`, pas en `DNS:` : déclarée en DNS,
-            // elle ne correspond jamais, et l'erreur ne dit pas pourquoi.
+            // An IP must be declared as `IP:`, not `DNS:`: declared as DNS it never
+            // matches, and the error does not say why.
             if n.parse::<std::net::IpAddr>().is_ok() {
                 format!("IP.{} = {n}", i + 1)
             } else {
@@ -220,18 +218,17 @@ pub fn extensions(names: &[String], purpose: Purpose) -> String {
     )
 }
 
-/// Les noms sous lesquels un agent doit être joignable.
+/// The names an agent must be reachable under.
 ///
-/// ⚠️ L'entrée `tasks.<service>` est indispensable : c'est par elle que le controller
-/// interroge **chaque** tâche plutôt que la VIP. Un certificat qui ne la porte pas
-/// fait échouer toutes les connexions avec une erreur de nom, alors que le nom d'hôte
-/// est pourtant correct.
+/// ⚠️ The `tasks.<service>` entry is essential: it is how the controller queries
+/// **each** task rather than the VIP. A certificate lacking it fails every connection
+/// with a name error, even though the hostname is correct.
 pub fn agent_names(hostname: &str, service: &str) -> Vec<String> {
     let mut v = vec![
         hostname.to_string(),
         service.to_string(),
         format!("tasks.{service}"),
-        // Le controller se connecte parfois à l'adresse résolue plutôt qu'au nom.
+        // The controller sometimes connects to the resolved address rather than the name.
         "localhost".to_string(),
     ];
     v.dedup();
@@ -256,13 +253,13 @@ async fn openssl(args: &[&str]) -> Result<String> {
 }
 
 fn tempdir() -> Result<tempfile::TempDir> {
-    tempfile::tempdir().map_err(|e| Error::Pki(format!("répertoire temporaire : {e}")))
+    tempfile::tempdir().map_err(|e| Error::Pki(format!("temporary directory: {e}")))
 }
 
 async fn ecrire(p: &Path, contenu: &str) -> Result<()> {
     tokio::fs::write(p, contenu)
         .await
-        .map_err(|e| Error::Pki(format!("écriture de {} : {e}", p.display())))
+        .map_err(|e| Error::Pki(format!("writing {}: {e}", p.display())))
 }
 
 async fn lire_paire(crt: &Path, key: &Path) -> Result<CertPair> {
@@ -271,12 +268,12 @@ async fn lire_paire(crt: &Path, key: &Path) -> Result<CertPair> {
         .map_err(|e| Error::Pki(format!("lecture du certificat : {e}")))?;
     let key_pem = tokio::fs::read_to_string(key)
         .await
-        .map_err(|e| Error::Pki(format!("lecture de la clé : {e}")))?;
+        .map_err(|e| Error::Pki(format!("reading the key: {e}")))?;
 
     let p = CertPair { cert_pem, key_pem };
     if !p.looks_valid() {
         return Err(Error::Pki(
-            "openssl a produit une paire inattendue — clé privée dans le certificat ?".into(),
+            "openssl produced an unexpected pair - private key inside the certificate?".into(),
         ));
     }
     Ok(p)
@@ -288,9 +285,9 @@ mod tests {
 
     #[test]
     fn a_server_and_a_client_are_not_interchangeable() {
-        // ⚠️ Une pile TLS refuse un certificat serveur présenté comme client. Sans
-        // extendedKeyUsage, ça marche chez certains clients et pas chez d'autres —
-        // donc en test et pas en production.
+        // ⚠️ A TLS stack refuses a server certificate presented as a client one.
+        // Without extendedKeyUsage it works with some clients and not others - so in
+        // testing and not in production.
         let s = extensions(&["agent".into()], Purpose::Server);
         let c = extensions(&["controller".into()], Purpose::Client);
 
@@ -309,9 +306,9 @@ mod tests {
 
     #[test]
     fn names_are_declared_as_subject_alt_names() {
-        // 🔴 Le CN est ignoré par toutes les piles TLS modernes. Un certificat sans
-        // SAN échoue sur une erreur de nom d'hôte, ce qui fait chercher un problème
-        // de DNS pendant des heures.
+        // 🔴 The CN is ignored by every modern TLS stack. A certificate with no SAN
+        // fails on a hostname error, which sends you hunting for a DNS problem for
+        // hours.
         let e = extensions(&["node1".into(), "tasks.hlb-agent".into()], Purpose::Server);
         assert!(e.contains("subjectAltName = @noms"), "{e}");
         assert!(e.contains("DNS.1 = node1"), "{e}");
@@ -320,8 +317,8 @@ mod tests {
 
     #[test]
     fn an_ip_is_declared_as_an_ip_not_a_dns_name() {
-        // Une IP déclarée en DNS ne correspond jamais, et le message d'erreur ne dit
-        // pas pourquoi.
+        // An IP declared as DNS never matches, and the error message does not say
+        // why.
         let e = extensions(&["10.42.0.2".into(), "node1".into()], Purpose::Server);
         assert!(e.contains("IP.1 = 10.42.0.2"), "{e}");
         assert!(e.contains("DNS.2 = node1"), "{e}");
@@ -330,8 +327,8 @@ mod tests {
 
     #[test]
     fn an_agent_is_reachable_by_its_overlay_name() {
-        // ⚠️ `tasks.<service>` est le nom par lequel le controller atteint CHAQUE
-        // tâche. Sans lui au certificat, toutes les connexions échouent.
+        // ⚠️ `tasks.<service>` is the name by which the controller reaches EVERY task.
+        // Without it on the certificate, every connection fails.
         let n = agent_names("node1", "hlb-agent");
         assert!(n.contains(&"tasks.hlb-agent".to_string()), "{n:?}");
         assert!(n.contains(&"node1".to_string()));
@@ -340,8 +337,8 @@ mod tests {
 
     #[test]
     fn a_private_key_inside_a_certificate_is_refused() {
-        // 🔴 L'erreur la plus coûteuse du domaine : le certificat est distribué à
-        // tout le monde, la clé privée ne doit jamais y être.
+        // 🔴 The most expensive mistake in this area: the certificate is handed to
+        // everyone, so the private key must never be in it.
         let mauvais = CertPair {
             cert_pem: "-----BEGIN CERTIFICATE-----\nx\n-----BEGIN PRIVATE KEY-----".into(),
             key_pem: "-----BEGIN PRIVATE KEY-----".into(),
@@ -357,11 +354,11 @@ mod tests {
 
     #[test]
     fn leaves_expire_long_before_the_authority() {
-        // La durée courte REMPLACE la révocation : un certificat volé cesse de servir
-        // tout seul. La CA, elle, doit survivre — la remplacer impose de redéployer
-        // tout le parc le même jour.
-        // `const` : la contrainte est vérifiée à la COMPILATION, donc changer une
-        // constante sans y penser ne compile même pas.
+        // The short lifetime REPLACES revocation: a stolen certificate stops being
+        // useful on its own. The CA must survive - replacing it means redeploying the
+        // whole fleet the same day.
+        // `const`: the constraint is checked at COMPILE time, so changing a constant
+        // without thinking does not even compile.
         const _: () = assert!(LEAF_DAYS * 10 < CA_DAYS);
         const _: () = assert!(
             LEAF_DAYS >= 30,

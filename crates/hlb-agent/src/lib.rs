@@ -1,22 +1,22 @@
-//! L'agent de nœud (§2).
+//! The node agent.
 //!
-//! Déployé comme service Swarm **`global`** : automatiquement présent sur chaque
-//! nœud, y compris ceux ajoutés plus tard. C'est ce qui le distingue d'un démon
-//! qu'il faudrait installer à la main partout.
+//! Deployed as a **`global`** Swarm service: automatically present on every node,
+//! including those added later. That is what separates it from a daemon you would have
+//! to install by hand everywhere.
 //!
-//! Il fait ce que le controller ne peut pas faire à distance :
+//! It does what the controller cannot do remotely:
 //!
-//! | Besoin | Pourquoi ça doit être local |
+//! | Need | Why it must be local |
 //! |---|---|
-//! | Espace disque par nœud | `df` d'un nœud ne dit rien des autres (§9bis) |
-//! | Sauvegarde des volumes | restic doit tourner **où sont les données** (§8) |
-//! | Purge d'images | le stockage d'images est local à chaque nœud |
+//! | Per-node disk space | one node's `df` says nothing about the others |
+//! | Volume backups | restic must run **where the data is** |
+//! | Image pruning | image storage is local to each node |
 //!
-//! ## Ce que l'agent ne fait pas
+//! ## What the agent does not do
 //!
-//! Il ne décide rien. Il **observe et exécute**, le controller décide. Un agent qui
-//! prendrait des décisions locales produirait un cluster incohérent, où chaque nœud
-//! agirait selon sa vue partielle.
+//! It decides nothing. It **observes and executes**; the controller decides. An agent
+//! making local decisions would produce an incoherent cluster, where each node acted on
+//! its own partial view.
 
 pub mod disk;
 pub mod pki;
@@ -34,23 +34,22 @@ pub enum Error {
 }
 pub use report::NodeReport;
 
-/// Version du dialogue agent ↔ controller (§7bis).
+/// The agent ↔ controller dialogue version.
 ///
-/// 🔴 À incrémenter **uniquement** quand le format des échanges change de façon
-/// incompatible — pas à chaque version du binaire. Les confondre ferait refuser des
-/// agents parfaitement fonctionnels à chaque correctif.
+/// 🔴 To be incremented **only** when the exchange format changes incompatibly - not on
+/// every binary version. Confusing them would refuse perfectly working agents on every
+/// patch release.
 ///
-/// | Version | Ce qu'elle apporte |
+/// | Version | What it adds |
 /// |---|---|
-/// | 1 | disques, mémoire |
-/// | 2 | charge, occupation CPU, swap, interfaces réseau, noyau/distro, uptime |
+/// | 1 | disks, memory |
+/// | 2 | load, CPU usage, swap, network interfaces, kernel/distro, uptime |
 ///
-/// ⚠️ Le passage de 1 à 2 est **compatible dans les deux sens** : tous les champs
-/// ajoutés sont `Option` + `serde(default)`. Un controller à jour lit un agent
-/// ancien (les nouvelles mesures valent `None`), et un controller ancien lit un
-/// agent à jour (il ignore ce qu'il ne connaît pas).
+/// ⚠️ Moving from 1 to 2 is **compatible in both directions**: every added field is
+/// `Option` + `serde(default)`. An up-to-date controller reads an old agent (the new
+/// measurements are `None`), and an old controller reads an up-to-date agent (it
+/// ignores what it does not know).
 ///
-/// C'est ce qui permet de mettre à jour le parc dans n'importe quel ordre. Sans cela,
-/// la première mise à jour rendrait tous les agents « injoignables » — précisément au
-/// moment où l'on a besoin de les voir.
+/// That is what allows updating the fleet in any order. Without it, the first update
+/// would make every agent "unreachable" - precisely when you need to see them.
 pub const PROTOCOL: u32 = 2;

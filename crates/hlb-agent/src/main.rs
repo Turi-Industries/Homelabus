@@ -1,25 +1,25 @@
-//! `hlb-agent` — le démon présent sur chaque nœud.
+//! `hlb-agent` - the daemon present on every node.
 //!
-//! Déployé comme service Swarm `global`. Il expose son état sur HTTP ; le controller
-//! l'interroge.
+//! Deployed as a `global` Swarm service. It exposes its state over HTTP; the controller
+//! polls it.
 //!
-//! ## Pourquoi le controller interroge, et pas l'inverse
+//! ## Why the controller polls, rather than the reverse
 //!
-//! Un agent qui pousserait ses rapports devrait connaître l'adresse du controller,
-//! la retrouver après un redémarrage, et gérer sa propre file d'attente en cas
-//! d'indisponibilité. En sens inverse, le DNS de l'overlay Swarm résout déjà le nom
-//! du service et **un agent injoignable est en soi l'information utile** : le nœud
-//! ne répond pas.
+//! An agent pushing its reports would need to know the controller's address, find it
+//! again after a restart, and manage its own queue when the controller is unavailable.
+//! The other way round, the Swarm overlay's DNS already resolves the service name and
+//! **an unreachable agent is itself the useful information**: the node is not
+//! answering.
 //!
-//! ## Sur le chiffrement
+//! ## On encryption
 //!
-//! 🔴 **mTLS par défaut** (§2) : l'agent n'accepte que des clients porteurs d'un
-//! certificat signé par la CA du cluster. Sans ça, tout conteneur de l'overlay —
-//! y compris une app compromise — pourrait cartographier les disques du parc.
+//! 🔴 **mTLS by default**: the agent accepts only clients presenting a certificate
+//! signed by the cluster's CA. Without it, any container on the overlay - including a
+//! compromised app - could map the fleet's disks.
 //!
-//! Le mode clair reste possible via `--insecure-plaintext`, mais il l'annonce
-//! bruyamment à chaque démarrage : un déploiement qui l'utilise par accident ne doit
-//! pas pouvoir passer inaperçu.
+//! Plaintext mode stays possible through `--insecure-plaintext`, but it announces
+//! itself loudly on every start: a deployment using it by accident must not be able to
+//! go unnoticed.
 
 use std::sync::Arc;
 
@@ -32,37 +32,37 @@ use hlb_agent::disk::DiskUsage;
 use hlb_agent::NodeReport;
 
 #[derive(Parser)]
-#[command(name = "hlb-agent", version, about = "Agent de nœud Homelabus")]
+#[command(name = "hlb-agent", version, about = "Homelabus node agent")]
 struct Cli {
     #[arg(long, default_value = "0.0.0.0:8421", env = "HLB_AGENT_LISTEN")]
     listen: String,
 
-    /// Certificat de l'agent, signé par la CA du cluster.
+    /// The agent's certificate, signed by the cluster's CA.
     #[arg(long, env = "HLB_AGENT_CERT")]
     cert: Option<std::path::PathBuf>,
 
-    /// Clé privée correspondante.
+    /// The matching private key.
     #[arg(long, env = "HLB_AGENT_KEY")]
     key: Option<std::path::PathBuf>,
 
-    /// CA du cluster : c'est elle qui décide quels CLIENTS sont acceptés.
+    /// The cluster's CA: it decides which CLIENTS are accepted.
     #[arg(long, env = "HLB_AGENT_CA")]
     ca: Option<std::path::PathBuf>,
 
-    /// 🔴 Servir en HTTP clair. À n'utiliser que pour un diagnostic local.
+    /// 🔴 Serve plain HTTP. Only for a local diagnosis.
     #[arg(long, env = "HLB_AGENT_INSECURE")]
     insecure_plaintext: bool,
 
-    /// Chemins à surveiller.
+    /// Paths to watch.
     ///
-    /// `/var/lib/docker` sature en premier : images, volumes, journaux.
+    /// `/var/lib/docker` fills first: images, volumes, logs.
     ///
-    /// 🔴 `/archive/wal` est là pour une raison précise (§8.1) : un `archive_command`
-    /// qui échoue ne PERD pas les journaux, il les garde. `pg_wal` grossit alors sans
-    /// limite jusqu'à arrêter PostgreSQL. Sans ce chemin surveillé, la panne est
-    /// totalement silencieuse jusqu'à ce que la base tombe.
+    /// 🔴 `/archive/wal` is there for a precise reason: a failing `archive_command`
+    /// does not LOSE the journals, it keeps them. `pg_wal` then grows without limit
+    /// until it stops PostgreSQL. Without this path watched, the failure is completely
+    /// silent until the database falls over.
     ///
-    /// Un chemin inexistant est ignoré sans bruit : tous les nœuds n'archivent pas.
+    /// A non-existent path is ignored quietly: not every node archives.
     #[arg(
         long,
         default_values = ["/", "/var/lib/docker", "/archive/wal", "/archive/base"],
@@ -75,15 +75,15 @@ struct AgentState {
     hostname: String,
     watch: Vec<String>,
     version: &'static str,
-    /// Le relevé CPU précédent.
+    /// The previous CPU reading.
     ///
-    /// 🔴 Les compteurs de `/proc/stat` sont **cumulés depuis le démarrage** : le taux
-    /// d'occupation est une différence entre deux lectures. Sans mémoire du relevé
-    /// précédent, on ne pourrait rendre qu'un cumul dénué de sens — ou pire, un `0`
-    /// qui se lirait « machine au repos ».
+    /// 🔴 `/proc/stat`'s counters are **cumulative since boot**: the usage rate is a
+    /// difference between two reads. Without remembering the previous reading we could
+    /// only return a meaningless total - or worse, a `0` that would read as "idle
+    /// machine".
     ///
-    /// La toute première requête rend donc `None`, et c'est correct.
-    cpu_precedent: std::sync::Mutex<Option<hlb_agent::systeme::RelevéCpu>>,
+    /// So the very first request returns `None`, and that is correct.
+    previous_cpu: std::sync::Mutex<Option<hlb_agent::systeme::CpuReading>>,
 }
 
 #[tokio::main]
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hostname: hostname.clone(),
         watch: cli.watch.clone(),
         version: env!("CARGO_PKG_VERSION"),
-        cpu_precedent: std::sync::Mutex::new(None),
+        previous_cpu: std::sync::Mutex::new(None),
     });
 
     let app = Router::new()
@@ -121,25 +121,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let arret = || async {
         let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("arrêt de l'agent");
+        tracing::info!("agent shutting down");
     };
 
     match charger_tls(&cli).await? {
         Some(config) => {
-            tracing::info!(hôte = %hostname, adresse = %cli.listen, "agent en écoute (mTLS)");
+            tracing::info!(host = %hostname, address = %cli.listen, "agent listening (mTLS)");
             let tls = hlb_agent::tls::TlsListener::new(listener, config);
             axum::serve(tls, app)
                 .with_graceful_shutdown(arret())
                 .await?;
         }
         None => {
-            // 🔴 Répété à chaque démarrage, et en `error` : un déploiement qui tourne
-            // en clair par accident ne doit pas pouvoir passer inaperçu.
+            // 🔴 Repeated on every start, and at `error` level: a deployment running in
+            // plaintext by accident must not be able to go unnoticed.
             tracing::error!(
                 "🔴 API en HTTP CLAIR — tout conteneur de l'overlay peut interroger \
                  cet agent. Fournis --cert/--key/--ca."
             );
-            tracing::info!(hôte = %hostname, adresse = %cli.listen, "agent en écoute (clair)");
+            tracing::info!(host = %hostname, address = %cli.listen, "agent listening (plaintext)");
             axum::serve(listener, app)
                 .with_graceful_shutdown(arret())
                 .await?;
@@ -149,23 +149,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Charge la configuration TLS, ou explique précisément ce qui manque.
+/// Loads the TLS configuration, or says precisely what is missing.
 ///
-/// ⚠️ On refuse de démarrer sur une configuration TLS **partielle**. Deux fichiers
-/// sur trois donneraient un agent qui démarre en clair alors que l'opérateur croit
-/// l'avoir sécurisé — l'échec silencieux le plus coûteux du lot.
+/// ⚠️ Starting on a **partial** TLS configuration is refused. Two files out of three
+/// would give an agent starting in plaintext while the operator believes it is secured
+/// - the most expensive silent failure of the lot.
 async fn charger_tls(
     cli: &Cli,
 ) -> Result<Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>, Box<dyn std::error::Error>>
 {
-    let fournis = [&cli.cert, &cli.key, &cli.ca]
+    let supplied = [&cli.cert, &cli.key, &cli.ca]
         .iter()
         .filter(|o| o.is_some())
         .count();
 
     if cli.insecure_plaintext {
-        if fournis > 0 {
-            tracing::warn!("--insecure-plaintext l'emporte : les certificats fournis sont ignorés");
+        if supplied > 0 {
+            tracing::warn!("--insecure-plaintext wins: the supplied certificates are ignored");
         }
         return Ok(None);
     }
@@ -179,10 +179,10 @@ async fn charger_tls(
             let ca = tokio::fs::read_to_string(a).await?;
             Ok(Some(hlb_agent::tls::server_config(&paire, &ca)?))
         }
-        _ if fournis > 0 => Err(format!(
-            "configuration TLS incomplète : {fournis}/3 fichiers fournis. \
-             Il faut --cert, --key ET --ca — sinon l'agent démarrerait en clair \
-             alors que tu le crois protégé."
+        _ if supplied > 0 => Err(format!(
+            "incomplete TLS configuration: {supplied}/3 files supplied. \
+             --cert, --key AND --ca are all required - otherwise the agent would start \
+             in plaintext while you believe it is protected."
         )
         .into()),
         _ => Ok(None),
@@ -199,17 +199,17 @@ async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
 
     let (total, available) = memory().await;
 
-    // Le taux d'occupation CPU : différence avec le relevé précédent, puis on garde
-    // celui-ci pour la prochaine fois.
-    let releve = hlb_agent::systeme::releve_cpu();
-    let occupation = match (&releve, s.cpu_precedent.lock()) {
+    // The CPU usage rate: a difference against the previous reading, then this one is
+    // kept for next time.
+    let reading = hlb_agent::systeme::read_cpu();
+    let occupation = match (&reading, s.previous_cpu.lock()) {
         (Some(maintenant), Ok(mut prec)) => {
             let taux = prec.as_ref().and_then(|p| maintenant.occupation(p));
             *prec = Some(*maintenant);
             taux
         }
-        // Un verrou empoisonné ne doit pas priver de TOUT le rapport : on perd le
-        // taux CPU, pas l'espace disque — qui est ce qui empêche un déploiement.
+        // A poisoned lock must not cost the WHOLE report: the CPU rate is lost, not
+        // the disk space - which is what blocks a deployment.
         _ => None,
     };
 
@@ -236,10 +236,10 @@ async fn report(State(s): State<Arc<AgentState>>) -> Json<NodeReport> {
     })
 }
 
-/// Lit l'occupation d'un système de fichiers via `df`.
+/// Reads a filesystem's usage through `df`.
 ///
-/// `-P` force le format POSIX : sans lui, un nom de périphérique long passe à la
-/// ligne et décale toutes les colonnes.
+/// `-P` forces the POSIX format: without it, a long device name wraps onto the next
+/// line and shifts every column.
 async fn disk_usage(path: &str) -> Option<DiskUsage> {
     let out = tokio::process::Command::new("df")
         .args(["-Pm", path])
@@ -270,8 +270,8 @@ async fn memory() -> (Option<u64>, Option<u64>) {
     };
     (
         parse_meminfo(&m, "MemTotal:"),
-        // `MemAvailable` est bien plus juste que `MemFree` : il tient compte du cache
-        // récupérable, qui représente souvent l'essentiel de la mémoire « occupée ».
+        // `MemAvailable` is far more accurate than `MemFree`: it accounts for
+        // reclaimable cache, which is often most of the "used" memory.
         parse_meminfo(&m, "MemAvailable:"),
     )
 }
@@ -297,8 +297,8 @@ mod tests {
         assert_eq!(u.total_mb, 102_400);
         assert_eq!(u.used_mb, 20_480);
         assert_eq!(u.free_mb, 76_800);
-        // 20480 / (20480 + 76800) = 21,05 % — calculé sur l'espace UTILISABLE,
-        // pas sur `total`, qui inclut la réserve root (cf. DiskUsage::used_percent).
+        // 20480 / (20480 + 76800) = 21.05 % - computed over USABLE space, not over
+        // `total`, which includes the root reserve (see DiskUsage::used_percent).
         assert!(
             (u.used_percent() - 21.05).abs() < 0.1,
             "{:.2} %",
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn available_memory_is_preferred_over_free() {
-        // `MemFree` sous-estime massivement : le cache est récupérable.
+        // `MemFree` massively underestimates: the cache is reclaimable.
         let m = "MemTotal:       16311456 kB\n\
                  MemFree:          204800 kB\n\
                  MemAvailable:   12000000 kB\n";

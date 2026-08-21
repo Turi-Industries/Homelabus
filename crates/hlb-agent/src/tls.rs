@@ -1,30 +1,28 @@
-//! Transport mTLS pour l'API de l'agent (§2).
+//! mTLS transport for the agent's API.
 //!
-//! ## Ce que « mutuel » change
+//! ## What "mutual" changes
 //!
-//! En TLS ordinaire, seul le serveur prouve son identité : n'importe qui peut se
-//! connecter. C'est suffisant pour un site web, pas pour une API qui expose l'état
-//! des disques de tout un parc.
+//! In ordinary TLS only the server proves its identity: anyone can connect. That is
+//! enough for a website, not for an API exposing the disk state of a whole fleet.
 //!
-//! En **mTLS**, le client doit lui aussi présenter un certificat signé par notre CA.
-//! Un conteneur compromis sur l'overlay ne peut donc plus interroger les agents : il
-//! n'a pas de certificat, et il ne peut pas s'en fabriquer un — la CA ne quitte jamais
-//! le coffre.
+//! In **mTLS** the client must also present a certificate signed by our CA. A
+//! compromised container on the overlay can therefore no longer query the agents: it
+//! has no certificate, and it cannot forge one - the CA never leaves the vault.
 //!
-//! ## 🔴 Le piège : exiger sans vérifier
+//! ## 🔴 The trap: requiring without verifying
 //!
-//! `rustls` distingue trois postures, et deux d'entre elles ne protègent rien :
+//! `rustls` distinguishes three postures, and two of them protect nothing:
 //!
-//! | Configuration | Ce que ça fait |
+//! | Configuration | What it does |
 //! |---|---|
-//! | `with_no_client_auth()` | n'importe qui entre |
-//! | vérificateur qui accepte tout | le client présente un certificat, on ne le lit pas |
-//! | `WebPkiClientVerifier` sur notre CA | **seuls nos certificats passent** |
+//! | `with_no_client_auth()` | anyone gets in |
+//! | a verifier that accepts everything | the client presents a certificate, we do not read it |
+//! | `WebPkiClientVerifier` over our CA | **only our certificates pass** |
 //!
-//! La deuxième est la plus dangereuse : le client présente bien un certificat, la
-//! poignée de main réussit, tout paraît sécurisé — et un certificat auto-signé passe.
-//! On n'utilise donc que la troisième, et un test le vérifie en tentant une connexion
-//! avec un certificat d'une autre autorité.
+//! The second is the most dangerous: the client does present a certificate, the
+//! handshake succeeds, everything looks secure - and a self-signed certificate passes.
+//! Only the third is used, and a test checks it by attempting a connection with a
+//! certificate from another authority.
 
 use std::sync::Arc;
 
@@ -36,11 +34,10 @@ use crate::Error;
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// Installe le fournisseur cryptographique.
+/// Installs the cryptographic provider.
 ///
-/// ⚠️ Sans ça, la première construction de configuration TLS **panique** avec un
-/// message sur un « process-level CryptoProvider ». C'est idempotent : les appels
-/// suivants ne font rien.
+/// ⚠️ Without this, the first TLS configuration build **panics** with a message about a
+/// "process-level CryptoProvider". It is idempotent: later calls do nothing.
 pub fn install_crypto_provider() {
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
 }
@@ -51,8 +48,8 @@ fn parse_certs(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
     let v = v.map_err(|e| Error::Pki(format!("certificat illisible : {e}")))?;
 
     if v.is_empty() {
-        // Un PEM vide produirait une configuration TLS « valide » qui refuse toutes
-        // les connexions avec une erreur de poignée de main incompréhensible.
+        // An empty PEM would produce a "valid" TLS configuration refusing every
+        // connection with an incomprehensible handshake error.
         return Err(Error::Pki("aucun certificat dans le PEM fourni".into()));
     }
     Ok(v)
@@ -61,8 +58,8 @@ fn parse_certs(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
 fn parse_key(pem: &str) -> Result<PrivateKeyDer<'static>> {
     let mut c = std::io::Cursor::new(pem.as_bytes());
     rustls_pemfile::private_key(&mut c)
-        .map_err(|e| Error::Pki(format!("clé privée illisible : {e}")))?
-        .ok_or_else(|| Error::Pki("aucune clé privée dans le PEM fourni".into()))
+        .map_err(|e| Error::Pki(format!("unreadable private key: {e}")))?
+        .ok_or_else(|| Error::Pki("no private key in the supplied PEM".into()))
 }
 
 fn root_store(ca_pem: &str) -> Result<RootCertStore> {
@@ -70,7 +67,7 @@ fn root_store(ca_pem: &str) -> Result<RootCertStore> {
     for c in parse_certs(ca_pem)? {
         store
             .add(c)
-            .map_err(|e| Error::Pki(format!("CA refusée : {e}")))?;
+            .map_err(|e| Error::Pki(format!("CA refused: {e}")))?;
     }
     Ok(store)
 }
@@ -81,11 +78,11 @@ pub fn server_config(agent: &CertPair, ca_pem: &str) -> Result<Arc<ServerConfig>
 
     let verifier =
         tokio_rustls::rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store(ca_pem)?))
-            // 🔴 `build()` et NON `allow_unauthenticated()` : ce dernier laisse passer les
-            // clients sans certificat, ce qui annule tout l'intérêt du mTLS tout en donnant
-            // l'apparence d'une configuration sécurisée.
+            // 🔴 `build()` and NOT `allow_unauthenticated()`: the latter lets clients
+            // through without a certificate, which cancels the whole point of mTLS while
+            // looking like a secure configuration.
             .build()
-            .map_err(|e| Error::Pki(format!("vérificateur client : {e}")))?;
+            .map_err(|e| Error::Pki(format!("client verifier: {e}")))?;
 
     let cfg = ServerConfig::builder()
         .with_client_cert_verifier(verifier)
@@ -95,7 +92,7 @@ pub fn server_config(agent: &CertPair, ca_pem: &str) -> Result<Arc<ServerConfig>
     Ok(Arc::new(cfg))
 }
 
-/// La configuration client du controller : présente son certificat et vérifie l'agent.
+/// The controller's client configuration: presents its certificate and verifies the agent.
 pub fn client_config(controller: &CertPair, ca_pem: &str) -> Result<Arc<ClientConfig>> {
     install_crypto_provider();
 
@@ -110,10 +107,10 @@ pub fn client_config(controller: &CertPair, ca_pem: &str) -> Result<Arc<ClientCo
     Ok(Arc::new(cfg))
 }
 
-/// Un écouteur TCP qui enveloppe chaque connexion dans TLS.
+/// A TCP listener wrapping each connection in TLS.
 ///
-/// Implémente `axum::serve::Listener`, ce qui permet de servir la même application
-/// qu'en clair sans la modifier.
+/// Implements `axum::serve::Listener`, which allows serving the same application as in
+/// plaintext without modifying it.
 pub struct TlsListener {
     inner: tokio::net::TcpListener,
     acceptor: tokio_rustls::TlsAcceptor,
@@ -135,20 +132,19 @@ impl axum::serve::Listener for TlsListener {
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
             let Ok((flux, adresse)) = self.inner.accept().await else {
-                // Une erreur d'`accept` est transitoire (descripteurs épuisés,
-                // connexion abandonnée avant la poignée de main). Rendre la main
-                // arrêterait tout le serveur pour un incident passager.
+                // An `accept` error is transient (exhausted descriptors, a connection
+                // abandoned before the handshake). Returning would stop the whole
+                // server over a passing incident.
                 continue;
             };
 
             match self.acceptor.accept(flux).await {
                 Ok(tls) => return (tls, adresse),
                 Err(e) => {
-                    // 🔴 Le cas nominal du refus : un client sans certificat valide.
-                    // C'est le mTLS qui fait son travail, PAS une panne — d'où
-                    // `debug` et non `error`, sinon les journaux se rempliraient à
-                    // chaque scan de port.
-                    tracing::debug!(%adresse, "poignée de main TLS refusée : {e}");
+                    // 🔴 The nominal refusal case: a client with no valid certificate.
+                    // That is mTLS doing its job, NOT a failure - hence `debug` and not
+                    // `error`, or the logs would fill on every port scan.
+                    tracing::debug!(%adresse, "TLS handshake refused: {e}");
                     continue;
                 }
             }
@@ -175,21 +171,21 @@ mod tests {
 
     #[test]
     fn installing_the_provider_twice_is_harmless() {
-        // ⚠️ Sans installation, la première construction PANIQUE. Et elle peut être
-        // appelée depuis plusieurs points d'entrée.
+        // ⚠️ Without installation, the first build PANICS. And it can be called from
+        // several entry points.
         install_crypto_provider();
         install_crypto_provider();
     }
 
     #[test]
     fn an_empty_pem_is_refused_up_front() {
-        // 🔴 Un PEM vide donnerait une configuration TLS « valide » qui refuse toutes
-        // les connexions avec une erreur de poignée de main incompréhensible.
+        // 🔴 An empty PEM would give a "valid" TLS configuration refusing every
+        // connection with an incomprehensible handshake error.
         let e = parse_certs("").unwrap_err().to_string();
         assert!(e.contains("aucun certificat"), "{e}");
 
         let e = parse_key("").unwrap_err().to_string();
-        assert!(e.contains("aucune clé"), "{e}");
+        assert!(e.contains("no private key"), "{e}");
     }
 
     #[test]
@@ -201,8 +197,8 @@ mod tests {
 
     #[test]
     fn an_unparsable_ca_is_refused() {
-        // Une CA illisible doit échouer À LA CONSTRUCTION, pas produire un serveur
-        // qui refuse silencieusement tout le monde.
+        // An unreadable CA must fail AT BUILD TIME, not produce a server that silently
+        // refuses everyone.
         assert!(server_config(&pem_bidon(), "pas du PEM du tout").is_err());
     }
 }

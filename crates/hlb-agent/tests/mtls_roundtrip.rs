@@ -1,4 +1,4 @@
-//! Le mTLS refuse-t-il réellement les intrus ? (§2)
+//! Does mTLS actually refuse intruders?
 //!
 //! 🔴 Une configuration mTLS mal faite donne exactement les mêmes apparences qu'une
 //! bonne : la poignée de main réussit, les journaux sont propres, et un certificat
@@ -13,7 +13,7 @@ use hlb_agent::pki::{self, Purpose};
 use hlb_agent::tls;
 use tokio_rustls::rustls::pki_types::ServerName;
 
-/// Démarre un serveur mTLS minimal et renvoie son adresse.
+/// Starts a minimal mTLS server and returns its address.
 async fn serveur(config: Arc<tokio_rustls::rustls::ServerConfig>) -> std::net::SocketAddr {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -28,8 +28,8 @@ async fn serveur(config: Arc<tokio_rustls::rustls::ServerConfig>) -> std::net::S
             };
             let a = acceptor.clone();
             tokio::spawn(async move {
-                // Le résultat importe peu côté serveur : c'est le client qui doit
-                // constater le refus.
+                // The result matters little server-side: it is the client that must
+                // observe the refusal.
                 if let Ok(mut tls) = a.accept(flux).await {
                     use tokio::io::AsyncWriteExt;
                     let _ = tls.write_all(b"ok").await;
@@ -41,7 +41,7 @@ async fn serveur(config: Arc<tokio_rustls::rustls::ServerConfig>) -> std::net::S
     addr
 }
 
-/// Tente une poignée de main complète et dit si elle a abouti.
+/// Attempts a full handshake and says whether it succeeded.
 async fn se_connecte(
     addr: std::net::SocketAddr,
     config: Arc<tokio_rustls::rustls::ClientConfig>,
@@ -57,10 +57,10 @@ async fn se_connecte(
     let mut tls = connector
         .connect(sni, flux)
         .await
-        .map_err(|e| format!("poignée de main : {e}"))?;
+        .map_err(|e| format!("handshake: {e}"))?;
 
-    // 🔴 Lire vraiment : rustls termine la poignée de main paresseusement, et une
-    // connexion « réussie » sans lecture ne prouve rien.
+    // 🔴 Actually read: rustls completes the handshake lazily, and a "successful"
+    // connection with no read proves nothing.
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 2];
     tls.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
@@ -97,7 +97,7 @@ async fn the_controller_gets_in() {
 
     se_connecte(addr, client, "localhost")
         .await
-        .expect("le controller légitime doit entrer");
+        .expect("the legitimate controller must get in");
 }
 
 #[tokio::test]
@@ -112,7 +112,7 @@ async fn a_client_without_any_certificate_is_refused() {
     for c in rustls_pemfile::certs(&mut std::io::Cursor::new(p.ca.cert_pem.as_bytes())) {
         store.add(c.expect("certificat")).expect("ajout");
     }
-    // Il fait confiance à notre CA, mais ne présente RIEN.
+    // It trusts our CA, but presents NOTHING.
     let anonyme = Arc::new(
         tokio_rustls::rustls::ClientConfig::builder()
             .with_root_certificates(store)
@@ -120,13 +120,13 @@ async fn a_client_without_any_certificate_is_refused() {
     );
 
     let r = se_connecte(addr, anonyme, "localhost").await;
-    assert!(r.is_err(), "un client sans certificat doit être REFUSÉ");
+    assert!(r.is_err(), "a client with no certificate must be REFUSED");
 }
 
 #[tokio::test]
 async fn a_certificate_from_another_authority_is_refused() {
-    // Forger son propre certificat ne doit servir à rien : c'est la signature par
-    // NOTRE CA qui compte, pas la présence d'un certificat.
+    // Forging your own certificate must achieve nothing: what counts is the signature
+    // by OUR CA, not the presence of a certificate.
     let p = parc().await;
     let addr = serveur(tls::server_config(&p.agent, &p.ca.cert_pem).expect("serveur")).await;
 
@@ -135,12 +135,12 @@ async fn a_certificate_from_another_authority_is_refused() {
         .await
         .expect("intrus");
 
-    // L'intrus fait confiance à NOTRE CA pour vérifier le serveur, et présente son
-    // propre certificat : c'est exactement ce que ferait un attaquant.
+    // The intruder trusts OUR CA to verify the server, and presents its own
+    // certificate: exactly what an attacker would do.
     let config = tls::client_config(&intrus, &p.ca.cert_pem).expect("client");
 
     let r = se_connecte(addr, config, "localhost").await;
-    assert!(r.is_err(), "un certificat d'une autre CA doit être REFUSÉ");
+    assert!(r.is_err(), "a certificate from another CA must be REFUSED");
 }
 
 #[tokio::test]

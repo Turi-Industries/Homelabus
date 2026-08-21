@@ -1,44 +1,44 @@
-//! Surveillance de l'espace disque (§9bis).
+//! Disk space monitoring.
 //!
-//! > « C'est la panne numéro un des homelabs, loin devant les défaillances
-//! > matérielles : les logs remplissent le disque, et *tout* s'arrête d'un coup —
-//! > y compris les bases de données, souvent avec corruption à la clé. »
+//! This is the number one homelab failure, well ahead of hardware faults: the logs fill
+//! the disk, and *everything* stops at once - databases included, often with corruption
+//! along the way.
 //!
-//! Deux idées structurent ce module :
+//! Two ideas structure this module:
 //!
-//! 1. **Des seuils progressifs**, pas une alerte unique à 95 %. À ce stade il est
-//!    déjà trop tard pour faire quoi que ce soit de propre.
-//! 2. **Une projection**, pas seulement un pourcentage. « 71 % » ne dit rien ;
-//!    « plein dans 6 jours au rythme actuel » dit quoi faire et quand.
+//! 1. **Progressive thresholds**, not a single alert at 95 %. By then it is already too
+//!    late to do anything clean.
+//! 2. **A projection**, not just a percentage. "71 %" says nothing; "full in 6 days at
+//!    the current rate" says what to do and when.
 
 use serde::{Deserialize, Serialize};
 
-/// Ce que le système doit s'autoriser à faire, selon le remplissage.
+/// What the system should allow itself to do, given how full the disk is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DiskPressure {
-    /// Rien à signaler.
+    /// Nothing to report.
     Normal,
-    /// On prévient, sans rien changer.
+    /// Warn, without changing anything.
     Notice,
-    /// On purge ce qui est jetable : images inutilisées, caches.
+    /// Prune what is disposable: unused images, caches.
     Reclaim,
-    /// 🔴 On refuse tout nouveau déploiement et toute mise à jour.
+    /// 🔴 Refuse every new deployment and every update.
     Freeze,
-    /// 🔴 Mode dégradé : on arrête le non-essentiel pour protéger les bases.
+    /// 🔴 Degraded mode: stop the non-essential to protect the databases.
     Critical,
 }
 
 impl DiskPressure {
-    /// Peut-on encore déployer ou mettre à jour ?
+    /// Can we still deploy or update?
     ///
-    /// 🔴 Refuser tôt vaut mieux que remplir le disque au milieu d'un `docker pull`
-    /// et laisser la machine dans un état à moitié cassé.
+    /// 🔴 Refusing early beats filling the disk in the middle of a `docker pull` and
+    /// leaving the machine half broken.
     pub fn allows_deploy(&self) -> bool {
         *self < Self::Freeze
     }
 
-    /// Faut-il libérer de la place automatiquement ?
+    /// Should space be freed automatically?
     pub fn should_reclaim(&self) -> bool {
         *self >= Self::Reclaim
     }
@@ -46,10 +46,10 @@ impl DiskPressure {
     pub fn describe(&self) -> &'static str {
         match self {
             Self::Normal => "normal",
-            Self::Notice => "à surveiller",
-            Self::Reclaim => "purge automatique des images inutilisées",
-            Self::Freeze => "🔴 déploiements et mises à jour refusés",
-            Self::Critical => "🔴 mode dégradé — protection des bases de données",
+            Self::Notice => "worth watching",
+            Self::Reclaim => "automatic pruning of unused images",
+            Self::Freeze => "🔴 deployments and updates refused",
+            Self::Critical => "🔴 degraded mode - protecting the databases",
         }
     }
 }
@@ -91,7 +91,7 @@ impl Thresholds {
     }
 }
 
-/// L'état d'un système de fichiers, à un instant donné.
+/// A filesystem's state at a given instant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiskUsage {
     pub path: String,
@@ -101,18 +101,18 @@ pub struct DiskUsage {
 }
 
 impl DiskUsage {
-    /// Le taux d'occupation **réel**, calculé sur l'espace utilisable.
+    /// The **real** usage rate, computed over usable space.
     ///
-    /// 🔴 Ce n'est PAS `used / total`. Sur presque tout système de fichiers,
-    /// `used + free < total` :
+    /// 🔴 This is NOT `used / total`. On almost every filesystem,
+    /// `used + free < total`:
     ///
-    /// - ext4 réserve 5 % à root par défaut ;
-    /// - APFS et btrfs comptent des métadonnées hors des deux colonnes.
+    /// - ext4 reserves 5 % for root by default;
+    /// - APFS and btrfs count metadata outside both columns.
     ///
-    /// Utiliser `total` comme dénominateur sous-estime donc l'occupation — de 5 %
-    /// sur une machine Linux ordinaire, bien davantage ailleurs. Les seuils du
-    /// §9bis se déclencheraient d'autant trop tard, c'est-à-dire quand il est déjà
-    /// trop tard. C'est aussi ce que `df` affiche dans sa colonne « Capacity ».
+    /// Using `total` as the denominator therefore underestimates usage - by 5 % on an
+    /// ordinary Linux machine, far more elsewhere. The thresholds would fire that much
+    /// too late, which is to say when it is already too late. This is also what `df`
+    /// shows in its "Capacity" column.
     pub fn used_percent(&self) -> f64 {
         let utilisable = self.used_mb + self.free_mb;
         if utilisable == 0 {
@@ -126,11 +126,11 @@ impl DiskUsage {
     }
 }
 
-/// Projection à partir de deux mesures espacées dans le temps.
+/// A projection from two measurements spaced apart in time.
 ///
-/// C'est ce qui transforme « 71 % » en information exploitable. Un disque à 71 %
-/// stable depuis six mois n'appelle aucune action ; le même à 71 % qui gagne 3 %
-/// par jour en appelle une aujourd'hui.
+/// This is what turns "71 %" into usable information. A disk at 71 % that has been
+/// stable for six months calls for no action; the same 71 % gaining 3 % a day calls for
+/// one today.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Projection {
     pub days_until_full: Option<f64>,
@@ -138,7 +138,7 @@ pub struct Projection {
 }
 
 impl Projection {
-    /// `elapsed_hours` doit être > 0 ; deux mesures au même instant ne projettent rien.
+    /// `elapsed_hours` must be > 0; two measurements at the same instant project nothing.
     pub fn between(older: &DiskUsage, newer: &DiskUsage, elapsed_hours: f64) -> Option<Self> {
         if elapsed_hours <= 0.0 {
             return None;
@@ -147,8 +147,8 @@ impl Projection {
         let croissance_mb = newer.used_mb as f64 - older.used_mb as f64;
         let mb_per_day = croissance_mb / elapsed_hours * 24.0;
 
-        // Un disque qui se vide ou reste stable ne se remplira jamais : ne pas
-        // annoncer une date, plutôt que d'en inventer une absurde.
+        // A disk that is emptying or holding steady will never fill: announce no date
+        // rather than inventing an absurd one.
         let days_until_full = if mb_per_day > 0.0 {
             Some(newer.free_mb as f64 / mb_per_day)
         } else {
@@ -161,14 +161,14 @@ impl Projection {
         })
     }
 
-    /// Faut-il alerter ? Une semaine laisse le temps d'agir sans réveiller personne.
+    /// Should this alert? A week leaves time to act without waking anyone.
     pub fn is_concerning(&self) -> bool {
         self.days_until_full.is_some_and(|d| d < 7.0)
     }
 
     pub fn describe(&self) -> String {
         match self.days_until_full {
-            None => "stable ou en décroissance".into(),
+            None => "stable or shrinking".into(),
             Some(d) if d < 1.0 => format!(
                 "🔴 plein dans moins de 24 h au rythme actuel (+{:.0} Mo/jour)",
                 self.mb_per_day
@@ -181,10 +181,10 @@ impl Projection {
     }
 }
 
-/// Plafond de journalisation appliqué à tout conteneur (§9bis).
+/// The logging cap applied to every container.
 ///
-/// 🔴 Sans ça, un conteneur bavard écrit indéfiniment. **C'est le défaut de Docker,
-/// et c'est un piège** : la configuration par défaut n'a aucune limite de taille.
+/// 🔴 Without it, a chatty container writes forever. **This is Docker's default, and it
+/// is a trap**: the default configuration has no size limit at all.
 pub const LOG_MAX_SIZE: &str = "10m";
 pub const LOG_MAX_FILES: &str = "3";
 
@@ -213,8 +213,8 @@ mod tests {
 
     #[test]
     fn deployment_is_refused_before_the_disk_is_full() {
-        // 🔴 Refuser à 90 % vaut mieux que remplir le disque au milieu d'un
-        // `docker pull` et laisser la machine à moitié cassée.
+        // 🔴 Refusing at 90 % beats filling the disk in the middle of a `docker pull`
+        // and leaving the machine half broken.
         assert!(DiskPressure::Normal.allows_deploy());
         assert!(DiskPressure::Notice.allows_deploy());
         assert!(DiskPressure::Reclaim.allows_deploy());
@@ -237,12 +237,12 @@ mod tests {
 
     #[test]
     fn reserved_space_does_not_hide_the_real_pressure() {
-        // 🔴 Bug trouvé en lançant l'agent pour de vrai : `used + free < total`
-        // presque partout (réserve root d'ext4, métadonnées APFS). Calculer sur
-        // `total` sous-estimait l'occupation et retardait tous les seuils.
+        // 🔴 A bug found by running the agent for real: `used + free < total` almost
+        // everywhere (ext4's root reserve, APFS metadata). Computing over `total`
+        // underestimated usage and delayed every threshold.
         //
-        // Cas observé sur la machine de développement : 12 Go utilisés, 7 Go
-        // libres, mais 233 Go de « total ». Le disque est plein à 63 %, pas à 5 %.
+        // Observed on the development machine: 12 GB used, 7 GB free, but 233 GB of
+        // "total". The disk is 63 % full, not 5 %.
         let d = DiskUsage {
             path: "/".into(),
             total_mb: 233_752,
@@ -250,17 +250,20 @@ mod tests {
             free_mb: 6_964,
         };
         let p = d.used_percent();
-        assert!(p > 60.0 && p < 70.0, "occupation calculée : {p:.1} %");
+        assert!(p > 60.0 && p < 70.0, "computed usage: {p:.1} %");
 
-        // Le calcul naïf aurait donné 5 % et masqué complètement la situation.
-        let naif = d.used_mb as f64 / d.total_mb as f64 * 100.0;
-        assert!(naif < 10.0, "témoin du calcul erroné : {naif:.1} %");
+        // The naive computation would have given 5 % and hidden the situation entirely.
+        let naive = d.used_mb as f64 / d.total_mb as f64 * 100.0;
+        assert!(
+            naive < 10.0,
+            "witness to the wrong computation: {naive:.1} %"
+        );
     }
 
     #[test]
     fn ext4_root_reserve_changes_the_decision() {
-        // 100 Go déclarés, 88 utilisés, 5 libres — les 7 Go manquants sont la
-        // réserve root d'ext4.
+        // 100 GB declared, 88 used, 5 free - the missing 7 GB are ext4's root
+        // reserve.
         let d = DiskUsage {
             path: "/".into(),
             total_mb: 100_000,
@@ -269,13 +272,13 @@ mod tests {
         };
         let t = Thresholds::default();
 
-        // Le calcul naïf dit 88 % → « purge les images » : on continue à déployer.
-        let naif = t.pressure_for(88.0);
-        assert_eq!(naif, DiskPressure::Reclaim);
-        assert!(naif.allows_deploy());
+        // The naive computation says 88 % → "prune images": deployment continues.
+        let naive = t.pressure_for(88.0);
+        assert_eq!(naive, DiskPressure::Reclaim);
+        assert!(naive.allows_deploy());
 
-        // Le calcul juste dit 94,6 % → on refuse les déploiements. Ce n'est pas un
-        // écart cosmétique : c'est une décision opposée.
+        // The correct computation says 94.6 % → deployments are refused. That is not a
+        // cosmetic difference: it is the opposite decision.
         assert!(d.used_percent() > 94.0, "{:.1} %", d.used_percent());
         assert_eq!(d.pressure(&t), DiskPressure::Freeze);
         assert!(!d.pressure(&t).allows_deploy());
@@ -295,7 +298,7 @@ mod tests {
 
     #[test]
     fn growth_is_projected_into_a_date() {
-        // 1 Go consommé en 24 h, 7 Go libres → une semaine.
+        // 1 GB consumed in 24 h, 7 GB free → one week.
         let p = Projection::between(&usage(100_000, 90_000), &usage(100_000, 91_000), 24.0)
             .expect("projection");
         assert!((p.mb_per_day - 1000.0).abs() < 1.0);
@@ -344,7 +347,7 @@ mod tests {
 
     #[test]
     fn a_week_is_the_alerting_horizon() {
-        // Assez tôt pour agir, assez tard pour ne pas réveiller pour rien.
+        // Early enough to act, late enough not to wake anyone for nothing.
         let dans_dix_jours = Projection {
             days_until_full: Some(10.0),
             mb_per_day: 100.0,
@@ -359,8 +362,8 @@ mod tests {
 
     #[test]
     fn the_log_cap_is_declared() {
-        // Le défaut de Docker n'a AUCUNE limite : un conteneur bavard écrit jusqu'à
-        // saturation. C'est la cause la plus fréquente du problème qu'on surveille.
+        // Docker's default has NO limit: a chatty container writes until saturation.
+        // That is the most frequent cause of the problem being watched.
         assert_eq!(LOG_MAX_SIZE, "10m");
         assert_eq!(LOG_MAX_FILES, "3");
     }

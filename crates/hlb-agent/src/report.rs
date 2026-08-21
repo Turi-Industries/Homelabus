@@ -1,8 +1,7 @@
-//! Ce que l'agent rapporte au controller.
+//! What the agent reports to the controller.
 //!
-//! Volontairement minimal : un rapport qu'on ne sait pas exploiter est du bruit qui
-//! coûte de la bande passante et de l'attention. Chaque champ ici alimente une
-//! décision concrète.
+//! Deliberately minimal: a report nobody knows how to use is noise costing bandwidth
+//! and attention. Every field here feeds a concrete decision.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,40 +10,38 @@ use crate::disk::{DiskPressure, DiskUsage, Thresholds};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct NodeReport {
     pub hostname: String,
-    /// Horodatage Unix. Sert à détecter un agent muet, pas seulement à dater.
+    /// Unix timestamp. Used to detect a silent agent, not merely to date the report.
     pub at: u64,
     pub disks: Vec<DiskUsage>,
     pub memory_total_mb: Option<u64>,
     pub memory_available_mb: Option<u64>,
-    /// Version de l'agent : un cluster avec des agents dépareillés est un piège
-    /// (§7bis, compatibilité N/N+1).
+    /// The agent's version: a cluster with mismatched agents is a trap.
     pub agent_version: String,
-    /// Version du DIALOGUE, distincte de celle du binaire (§7bis).
+    /// The DIALOGUE version, distinct from the binary's.
     ///
-    /// ⚠️ `serde(default)` : un agent antérieur à ce champ ne l'envoie pas, et sa
-    /// réponse doit rester lisible. Sans ça, la première mise à jour rendrait tous
-    /// les agents « injoignables » — exactement au moment où on en a besoin.
+    /// ⚠️ `serde(default)`: an agent predating this field does not send it, and its
+    /// reply must stay readable. Without that, the first update would make every agent
+    /// "unreachable" - exactly when they are needed.
     #[serde(default)]
     pub protocol: u32,
 
-    // ─── Protocole 2 ────────────────────────────────────────────────────────
+    // ─── Protocol 2 ─────────────────────────────────────────────────────────
     //
-    // 🔴 TOUS `Option` + `serde(default)`. Un agent de protocole 1 ne les envoie pas,
-    // et son rapport doit rester lisible : c'est ce qui permet de mettre à jour le
-    // controller avant les agents, ou l'inverse, sans que le parc devienne
-    // « injoignable » en bloc.
+    // 🔴 ALL `Option` + `serde(default)`. A protocol 1 agent does not send them, and its
+    // report must stay readable: that is what allows updating the controller before the
+    // agents, or the other way round, without the whole fleet going "unreachable".
     //
-    // Et `Option` plutôt que `0` : « je ne sais pas » et « zéro » ne se lisent pas
-    // pareil. Un CPU à 0 % dit « au repos », une case vide dit « à vérifier ».
-    /// Nombre de cœurs. Sans lui, la charge n'est pas comparable entre machines.
+    // And `Option` rather than `0`: "I do not know" and "zero" do not read the same. A
+    // CPU at 0 % says "idle", an empty cell says "check this".
+    /// Core count. Without it, load is not comparable between machines.
     #[serde(default)]
     pub cpu_coeurs: Option<u32>,
     #[serde(default)]
     pub charge: Option<crate::systeme::Charge>,
-    /// Taux d'occupation CPU dans `[0, 1]`.
+    /// CPU usage rate in `[0, 1]`.
     ///
-    /// ⚠️ `None` au tout premier relevé : il faut deux lectures de `/proc/stat` pour
-    /// calculer une différence.
+    /// ⚠️ `None` on the very first reading: computing a difference needs two reads of
+    /// `/proc/stat`.
     #[serde(default)]
     pub cpu_occupation: Option<f64>,
     #[serde(default)]
@@ -58,10 +55,10 @@ pub struct NodeReport {
 }
 
 impl NodeReport {
-    /// La pression la plus forte parmi tous les systèmes de fichiers.
+    /// The strongest pressure across every filesystem.
     ///
-    /// C'est le pire qui compte : un `/var/lib/docker` saturé casse tout, même si
-    /// `/` est à moitié vide.
+    /// The worst is what counts: a saturated `/var/lib/docker` breaks everything, even
+    /// with `/` half empty.
     pub fn worst_pressure(&self, t: &Thresholds) -> DiskPressure {
         self.disks
             .iter()
@@ -70,12 +67,12 @@ impl NodeReport {
             .unwrap_or(DiskPressure::Normal)
     }
 
-    /// Ce nœud peut-il accueillir un déploiement ?
+    /// Can this node host a deployment?
     pub fn allows_deploy(&self, t: &Thresholds) -> bool {
         self.worst_pressure(t).allows_deploy()
     }
 
-    /// Les systèmes de fichiers qui posent problème, du pire au moins grave.
+    /// The filesystems in trouble, worst first.
     pub fn problems(&self, t: &Thresholds) -> Vec<(&DiskUsage, DiskPressure)> {
         let mut p: Vec<_> = self
             .disks
@@ -83,34 +80,33 @@ impl NodeReport {
             .map(|d| (d, d.pressure(t)))
             .filter(|(_, pr)| *pr > DiskPressure::Normal)
             .collect();
-        // Décroissant : le plus critique en premier, c'est ce qu'on lit d'abord.
+        // Descending: the most critical first, because that is what gets read first.
         p.sort_by_key(|(_, pression)| std::cmp::Reverse(*pression));
         p
     }
 
-    /// La charge rapportée au nombre de cœurs — le seul chiffre comparable entre
-    /// machines d'un parc hétérogène.
+    /// The load divided by the core count - the only comparable figure across a
+    /// heterogeneous fleet.
     pub fn charge_par_coeur(&self) -> Option<f64> {
         self.charge?.par_coeur(self.cpu_coeurs?)
     }
 
-    /// La mémoire utilisée, en fraction de `[0, 1]`.
+    /// Memory used, as a fraction in `[0, 1]`.
     ///
-    /// ⚠️ Calculée sur la mémoire **disponible**, pas sur « total moins libre » :
-    /// Linux garde en cache tout ce qu'il peut, et « libre » y est presque toujours
-    /// proche de zéro sur une machine saine. Se fier à « libre » ferait crier au
-    /// manque de mémoire en permanence.
+    /// ⚠️ Computed over **available** memory, not "total minus free": Linux caches
+    /// everything it can, and "free" is almost always near zero on a healthy machine.
+    /// Trusting "free" would cry out-of-memory permanently.
     pub fn memoire_utilisee(&self) -> Option<f64> {
         let t = self.memory_total_mb?;
         let d = self.memory_available_mb?;
         (t > 0).then(|| ((t.saturating_sub(d)) as f64 / t as f64).clamp(0.0, 1.0))
     }
 
-    /// La machine échange-t-elle sur le disque ?
+    /// Is the machine swapping to disk?
     ///
-    /// 🔴 Un swap qui commence à servir est un signal AVANT-COUREUR : la machine
-    /// ralentit sans être encore en panne, et c'est le moment d'agir. Le seuil est bas
-    /// (5 %) pour cette raison — attendre la saturation serait attendre trop tard.
+    /// 🔴 Swap starting to be used is an EARLY signal: the machine slows without having
+    /// failed yet, and that is the moment to act. The threshold is low (5 %) for that
+    /// reason - waiting for saturation would be waiting too long.
     pub fn echange_sur_disque(&self) -> bool {
         match (self.swap_total_mb, self.swap_utilise_mb) {
             (Some(t), Some(u)) if t > 0 => (u as f64 / t as f64) > 0.05,
@@ -118,10 +114,10 @@ impl NodeReport {
         }
     }
 
-    /// L'agent a-t-il donné signe de vie récemment ?
+    /// Has the agent shown signs of life recently?
     ///
-    /// Un agent silencieux est une information : le nœud est peut-être injoignable,
-    /// et ses données ne sont donc plus sauvegardées.
+    /// A silent agent is information: the node may be unreachable, and its data is
+    /// therefore no longer being backed up.
     pub fn is_stale(&self, now: u64, max_age_secs: u64) -> bool {
         now.saturating_sub(self.at) > max_age_secs
     }
@@ -155,10 +151,10 @@ mod tests {
 
     #[test]
     fn the_worst_filesystem_decides() {
-        // 🔴 Un /var/lib/docker saturé casse tout, même si / est à moitié vide.
+        // 🔴 A saturated /var/lib/docker breaks everything, even with / half empty.
         let r = rapport(vec![
             disque("/", 100_000, 30_000),
-            // 48/50 Go = 96 %, au-delà du seuil critique.
+            // 48/50 GB = 96 %, past the critical threshold.
             disque("/var/lib/docker", 50_000, 48_000),
         ]);
         assert_eq!(
@@ -200,8 +196,8 @@ mod tests {
 
     #[test]
     fn a_silent_agent_is_detected() {
-        // Un agent muet signifie peut-être un nœud injoignable — dont les données ne
-        // sont donc plus sauvegardées.
+        // A silent agent may mean an unreachable node - whose data is therefore no
+        // longer being backed up.
         let r = rapport(vec![disque("/", 100, 10)]);
         assert!(!r.is_stale(1_000_060, 120));
         assert!(r.is_stale(1_000_300, 120));
@@ -209,16 +205,15 @@ mod tests {
 
     #[test]
     fn a_clock_going_backwards_does_not_panic() {
-        // Deux machines mal synchronisées peuvent donner un « maintenant » antérieur.
+        // Two badly synchronised machines can produce a "now" that is in the past.
         let r = rapport(vec![disque("/", 100, 10)]);
         assert!(!r.is_stale(999_000, 120));
     }
 
     #[test]
     fn a_protocol_1_agent_stays_readable() {
-        // 🔴 LE test de compatibilité (§7bis). Sans lui, la première mise à jour du
-        // controller rendrait tous les agents « injoignables » — exactement au moment
-        // où l'on a besoin de les voir.
+        // 🔴 THE compatibility test. Without it, the first controller update would make
+        // every agent "unreachable" - exactly when they need to be seen.
         let ancien = r#"{
             "hostname": "small-01",
             "at": 1000,
@@ -242,24 +237,24 @@ mod tests {
 
     #[test]
     fn a_controller_that_predates_a_field_ignores_it() {
-        // L'autre sens : un rapport v2 doit rester lisible par un code qui n'en connaît
-        // qu'une partie. `deny_unknown_fields` ici casserait la mise à jour dans
-        // l'ordre inverse.
+        // The other direction: a v2 report must stay readable by code that knows only
+        // part of it. `deny_unknown_fields` here would break updating in the reverse
+        // order.
         let futur = r#"{
             "hostname": "n1", "at": 1, "disks": [],
             "memory_total_mb": null, "memory_available_mb": null,
             "agent_version": "9.9.9", "protocol": 99,
             "un_champ_du_futur": {"quelconque": true}
         }"#;
-        let r: NodeReport = serde_json::from_str(futur).expect("un champ inconnu est ignoré");
+        let r: NodeReport = serde_json::from_str(futur).expect("an unknown field is ignored");
         assert_eq!(r.protocol, 99);
     }
 
     #[test]
     fn memory_pressure_is_measured_on_available_not_free() {
-        // ⚠️ Linux garde en cache tout ce qu'il peut : « libre » est presque toujours
-        // proche de zéro sur une machine saine. S'y fier ferait crier au manque de
-        // mémoire en permanence, et on cesserait d'écouter.
+        // ⚠️ Linux caches everything it can: "free" is almost always near zero on a
+        // healthy machine. Trusting it would cry out-of-memory permanently, and people
+        // would stop listening.
         let mut r = rapport(Vec::new());
         r.memory_total_mb = Some(16_000);
         r.memory_available_mb = Some(4_000);
@@ -271,9 +266,8 @@ mod tests {
 
     #[test]
     fn swapping_is_detected_before_the_machine_is_stuck() {
-        // 🔴 Un swap qui commence à servir est un signal avant-coureur : la machine
-        // ralentit sans être encore en panne. Attendre la saturation serait attendre
-        // trop tard.
+        // 🔴 Swap starting to be used is an early signal: the machine slows without
+        // having failed yet. Waiting for saturation would be waiting too long.
         let mut r = rapport(Vec::new());
         r.swap_total_mb = Some(2_000);
 
@@ -282,17 +276,17 @@ mod tests {
         r.swap_utilise_mb = Some(50);
         assert!(!r.echange_sur_disque(), "2,5 % : du bruit");
         r.swap_utilise_mb = Some(200);
-        assert!(r.echange_sur_disque(), "10 % : ça commence");
+        assert!(r.echange_sur_disque(), "10 %: it is starting");
 
-        // Sans swap configuré, aucune alerte — et surtout pas de division par zéro.
+        // With no swap configured, no alert - and above all no division by zero.
         r.swap_total_mb = Some(0);
         assert!(!r.echange_sur_disque());
     }
 
     #[test]
     fn load_without_a_core_count_is_not_reported() {
-        // Une charge brute sans nombre de cœurs n'est pas comparable : mieux vaut ne
-        // rien dire que d'afficher un chiffre qu'on interprétera de travers.
+        // A raw load with no core count is not comparable: better to say nothing than
+        // to show a figure that will be read wrongly.
         let mut r = rapport(Vec::new());
         r.charge = Some(crate::systeme::Charge {
             une_min: 8.0,
@@ -307,10 +301,10 @@ mod tests {
 
     #[test]
     fn a_report_survives_a_json_roundtrip() {
-        // L'agent et le controller peuvent avoir des versions différentes : le
-        // format doit rester lisible des deux côtés (§7bis).
+        // The agent and the controller can be on different versions: the format must
+        // stay readable on both sides.
         let r = rapport(vec![disque("/", 100_000, 50_000)]);
-        let j = serde_json::to_string(&r).expect("sérialisable");
+        let j = serde_json::to_string(&r).expect("serialisable");
         let relu: NodeReport = serde_json::from_str(&j).expect("relisible");
         assert_eq!(relu, r);
     }

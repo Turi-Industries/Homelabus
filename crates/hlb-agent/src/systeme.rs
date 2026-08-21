@@ -1,26 +1,26 @@
-//! Ce que le nœud sait de lui-même : charge, mémoire, réseau, versions.
+//! What the node knows about itself: load, memory, network, versions.
 //!
-//! ## 🔴 `Option` partout, et jamais un zéro
+//! ## 🔴 `Option` everywhere, and never a zero
 //!
-//! Chaque mesure peut manquer : un `/proc` absent (macOS en développement), un fichier
-//! illisible, une première lecture qui n'a pas de précédente à comparer. Dans **tous**
-//! ces cas la valeur est `None`, jamais `0.0`.
+//! Any measurement can be missing: an absent `/proc` (macOS during development), an
+//! unreadable file, a first reading with no previous one to compare against. In **all**
+//! those cases the value is `None`, never `0.0`.
 //!
-//! C'est la même règle qu'ailleurs dans le projet : une métrique absente vaut mieux
-//! qu'un zéro. Un CPU à « 0 % » se lit « machine au repos », soit exactement le
-//! contraire de « je ne sais pas ». Sur un tableau de bord, c'est la différence entre
-//! une case vide qu'on va vérifier et un voyant vert qui rassure à tort.
+//! Same rule as elsewhere in the project: an absent metric beats a zero. A CPU at "0 %"
+//! reads as "idle machine", the exact opposite of "I do not know". On a dashboard, that
+//! is the difference between an empty cell you go and check and a green light that
+//! reassures you wrongly.
 //!
-//! ## Pourquoi `/proc` et pas Docker
+//! ## Why `/proc` and not Docker
 //!
-//! L'agent ne parle **jamais** à Docker. Lui donner le socket ferait de chaque nœud une
-//! porte d'entrée vers le démon, avec les privilèges que cela suppose. Les statistiques
-//! par conteneur viennent de cadvisor, déployé comme une app du catalogue et scrapé par
-//! VictoriaMetrics — pas de notre agent.
+//! The agent **never** talks to Docker. Giving it the socket would turn every node into
+//! a door onto the daemon, with the privileges that implies. Per-container statistics
+//! come from cadvisor, deployed as a catalog app and scraped by VictoriaMetrics - not
+//! from our agent.
 
 use serde::{Deserialize, Serialize};
 
-/// La charge moyenne du système.
+/// The system's load average.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Charge {
     pub une_min: f64,
@@ -29,22 +29,21 @@ pub struct Charge {
 }
 
 impl Charge {
-    /// La charge rapportée au nombre de cœurs.
+    /// The load divided by the core count.
     ///
-    /// 🔴 C'est **le seul chiffre comparable** entre machines. Une charge de 4 est
-    /// dramatique sur un cœur et confortable sur seize ; afficher la valeur brute
-    /// côte à côte pour des nœuds hétérogènes — ce qu'est un homelab — ne veut rien
-    /// dire.
+    /// 🔴 This is **the only comparable figure** between machines. A load of 4 is
+    /// dramatic on one core and comfortable on sixteen; showing the raw value side by
+    /// side for heterogeneous nodes - which is what a homelab is - means nothing.
     pub fn par_coeur(&self, coeurs: u32) -> Option<f64> {
         (coeurs > 0).then(|| self.une_min / f64::from(coeurs))
     }
 }
 
-/// Le compteur d'une interface réseau.
+/// A network interface's counters.
 ///
-/// ⚠️ Des compteurs **cumulés depuis le démarrage**, pas un débit. Le débit se calcule
-/// par différence entre deux relevés, et c'est au consommateur de le faire : l'agent ne
-/// sait pas quand il sera interrogé la prochaine fois.
+/// ⚠️ Counters **cumulative since boot**, not a rate. The rate is computed as a
+/// difference between two readings, and that is the consumer's job: the agent does not
+/// know when it will next be polled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interface {
     pub nom: String,
@@ -52,40 +51,40 @@ pub struct Interface {
     pub tx_octets: u64,
 }
 
-/// L'identité du système.
+/// The system's identity.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Systeme {
     #[serde(default)]
     pub noyau: Option<String>,
     #[serde(default)]
     pub distro: Option<String>,
-    /// Depuis combien de temps la machine tourne.
+    /// How long the machine has been running.
     ///
-    /// Utile pour une raison précise : un nœud qui vient de redémarrer explique
-    /// beaucoup de choses, et on ne pense pas toujours à le vérifier.
+    /// Useful for a precise reason: a node that just rebooted explains a lot, and
+    /// checking that does not always come to mind.
     #[serde(default)]
     pub uptime_s: Option<u64>,
 }
 
-/// L'état du CPU au moment de la lecture.
+/// The CPU's state at the moment of reading.
 ///
-/// Les compteurs de `/proc/stat` sont cumulés : le taux d'occupation est une
-/// **différence** entre deux relevés. Cette structure porte le relevé brut.
+/// `/proc/stat`'s counters are cumulative: the usage rate is a **difference** between
+/// two readings. This structure carries the raw reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RelevéCpu {
+pub struct CpuReading {
     pub total: u64,
     pub inactif: u64,
 }
 
-impl RelevéCpu {
-    /// Le taux d'occupation entre deux relevés, dans `[0, 1]`.
+impl CpuReading {
+    /// The usage rate between two readings, in `[0, 1]`.
     ///
-    /// 🔴 Rend `None` quand le calcul n'a pas de sens — pas de relevé précédent,
-    /// compteurs qui ont reculé (redémarrage), aucun temps écoulé. Un `0.0` dans ces
-    /// cas ferait passer une machine dont on ne sait rien pour une machine au repos.
-    pub fn occupation(&self, precedent: &RelevéCpu) -> Option<f64> {
-        let dt = self.total.checked_sub(precedent.total)?;
-        let di = self.inactif.checked_sub(precedent.inactif)?;
+    /// 🔴 Returns `None` when the computation makes no sense - no previous reading,
+    /// counters that went backwards (a reboot), no elapsed time. A `0.0` in those cases
+    /// would make a machine we know nothing about look idle.
+    pub fn occupation(&self, previous: &CpuReading) -> Option<f64> {
+        let dt = self.total.checked_sub(previous.total)?;
+        let di = self.inactif.checked_sub(previous.inactif)?;
         if dt == 0 {
             return None;
         }
@@ -104,24 +103,24 @@ pub fn charge() -> Option<Charge> {
     })
 }
 
-/// Le nombre de cœurs vus par le noyau.
+/// The number of cores the kernel sees.
 pub fn coeurs() -> Option<u32> {
     std::thread::available_parallelism()
         .ok()
         .map(|n| n.get() as u32)
 }
 
-/// Lit la ligne `cpu` agrégée de `/proc/stat`.
-pub fn releve_cpu() -> Option<RelevéCpu> {
+/// Reads the aggregated `cpu` line from `/proc/stat`.
+pub fn read_cpu() -> Option<CpuReading> {
     let s = std::fs::read_to_string("/proc/stat").ok()?;
-    parser_cpu(&s)
+    parse_cpu(&s)
 }
 
-/// Extrait le relevé de la première ligne `cpu ` (agrégée, avec l'espace).
+/// Extracts the reading from the first `cpu ` line (aggregated, with the space).
 ///
-/// ⚠️ « cpu » **avec l'espace** : sans lui, on attraperait `cpu0`, le premier cœur, et
-/// on rapporterait la charge d'un seul cœur pour celle de la machine.
-pub fn parser_cpu(proc_stat: &str) -> Option<RelevéCpu> {
+/// ⚠️ "cpu" **with the space**: without it we would match `cpu0`, the first core, and
+/// report one core's load as the machine's.
+pub fn parse_cpu(proc_stat: &str) -> Option<CpuReading> {
     let ligne = proc_stat.lines().find(|l| l.starts_with("cpu "))?;
     let champs: Vec<u64> = ligne
         .split_whitespace()
@@ -131,10 +130,10 @@ pub fn parser_cpu(proc_stat: &str) -> Option<RelevéCpu> {
     if champs.len() < 4 {
         return None;
     }
-    // Ordre de /proc/stat : user, nice, system, idle, iowait, irq, softirq, steal…
-    // `iowait` compte comme inactif : le CPU y attend un disque, il n'est pas occupé.
+    // /proc/stat order: user, nice, system, idle, iowait, irq, softirq, steal...
+    // `iowait` counts as idle: the CPU is waiting on a disk there, it is not busy.
     let inactif = champs[3] + champs.get(4).copied().unwrap_or(0);
-    Some(RelevéCpu {
+    Some(CpuReading {
         total: champs.iter().sum(),
         inactif,
     })
@@ -147,14 +146,14 @@ pub fn interfaces() -> Vec<Interface> {
         .unwrap_or_default()
 }
 
-/// Extrait les interfaces de `/proc/net/dev`.
+/// Extracts the interfaces from `/proc/net/dev`.
 ///
-/// ⚠️ `lo` est écartée : le trafic de boucle locale gonfle les chiffres sans rien dire
-/// du réseau réel — sur un nœud Swarm, il représente l'essentiel du volume.
+/// ⚠️ `lo` is excluded: loopback traffic inflates the figures without saying anything
+/// about the real network - on a Swarm node it is most of the volume.
 pub fn parser_interfaces(proc_net_dev: &str) -> Vec<Interface> {
     proc_net_dev
         .lines()
-        .skip(2) // Deux lignes d'en-tête.
+        .skip(2) // Two header lines.
         .filter_map(|l| {
             let (nom, reste) = l.split_once(':')?;
             let nom = nom.trim();
@@ -208,7 +207,7 @@ pub fn pretty_name(os_release: &str) -> Option<String> {
     })
 }
 
-/// La mémoire d'échange, en mégaoctets.
+/// Swap memory, in megabytes.
 pub fn swap_mb() -> (Option<u64>, Option<u64>) {
     let Ok(s) = std::fs::read_to_string("/proc/meminfo") else {
         return (None, None);
@@ -223,8 +222,8 @@ pub fn swap_mb() -> (Option<u64>, Option<u64>) {
     };
     let total = ko("SwapTotal:").map(|v| v / 1024);
     let libre = ko("SwapFree:").map(|v| v / 1024);
-    // L'utilisé se calcule ; l'exposer directement évite que chaque consommateur
-    // refasse la soustraction, et se trompe de sens une fois sur deux.
+    // Used is computed; exposing it directly stops every consumer redoing the
+    // subtraction and getting the sign wrong half the time.
     let utilise = match (total, libre) {
         (Some(t), Some(l)) => Some(t.saturating_sub(l)),
         _ => None,
@@ -238,39 +237,39 @@ mod tests {
 
     #[test]
     fn cpu_usage_needs_two_readings() {
-        // 🔴 La toute première lecture n'a rien à comparer. Rendre 0 % ferait passer un
-        // nœud dont on ne sait rien pour un nœud au repos.
-        let a = RelevéCpu {
+        // 🔴 The very first reading has nothing to compare against. Returning 0 % would
+        // make a node we know nothing about look idle.
+        let a = CpuReading {
             total: 1000,
             inactif: 800,
         };
-        let b = RelevéCpu {
+        let b = CpuReading {
             total: 1100,
             inactif: 850,
         };
-        // 100 ticks écoulés, 50 inactifs → 50 % occupé.
+        // 100 ticks elapsed, 50 idle → 50 % busy.
         assert_eq!(b.occupation(&a), Some(0.5));
     }
 
     #[test]
     fn a_reboot_does_not_produce_an_absurd_figure() {
-        // Après un redémarrage, les compteurs repartent de zéro : la soustraction
-        // déborderait, et un `wrapping_sub` donnerait un taux aberrant.
-        let avant = RelevéCpu {
+        // After a reboot the counters restart from zero: the subtraction would
+        // overflow, and a `wrapping_sub` would give a nonsensical rate.
+        let before = CpuReading {
             total: 1_000_000,
             inactif: 900_000,
         };
-        let apres = RelevéCpu {
+        let after = CpuReading {
             total: 500,
             inactif: 400,
         };
-        assert_eq!(apres.occupation(&avant), None);
+        assert_eq!(after.occupation(&before), None);
     }
 
     #[test]
     fn two_identical_readings_yield_nothing_rather_than_idle() {
-        // Aucun temps écoulé : on ne sait rien. « 0 % » dirait « au repos ».
-        let a = RelevéCpu {
+        // No elapsed time: we know nothing. "0 %" would say "idle".
+        let a = CpuReading {
             total: 1000,
             inactif: 800,
         };
@@ -279,37 +278,37 @@ mod tests {
 
     #[test]
     fn the_aggregate_cpu_line_is_read_not_the_first_core() {
-        // ⚠️ « cpu » AVEC l'espace : sans lui, on attrape `cpu0` et on rapporte la
-        // charge d'un seul cœur pour celle de la machine.
+        // ⚠️ "cpu" WITH the space: without it we match `cpu0` and report one core's
+        // load as the machine's.
         let proc_stat = "cpu  100 20 30 800 50 0 0 0 0 0\n\
                          cpu0 10 2 3 80 5 0 0 0 0 0\n\
                          cpu1 90 18 27 720 45 0 0 0 0 0\n\
                          intr 12345\n";
-        let r = parser_cpu(proc_stat).expect("relevé");
-        assert_eq!(r.total, 1000, "la ligne agrégée, pas cpu0");
+        let r = parse_cpu(proc_stat).expect("reading");
+        assert_eq!(r.total, 1000, "the aggregated line, not cpu0");
         assert_eq!(r.inactif, 850, "idle + iowait");
     }
 
     #[test]
     fn iowait_counts_as_idle() {
-        // Le CPU y attend un disque : il n'est pas occupé. Le compter comme du travail
-        // ferait paraître saturée une machine qui attend son NAS.
-        let sans = parser_cpu("cpu  100 0 0 900 0 0 0 0\n").expect("relevé");
-        let avec = parser_cpu("cpu  100 0 0 400 500 0 0 0\n").expect("relevé");
-        assert_eq!(sans.inactif, avec.inactif);
+        // The CPU is waiting on a disk there: it is not busy. Counting it as work
+        // would make a machine waiting on its NAS look saturated.
+        let without = parse_cpu("cpu  100 0 0 900 0 0 0 0\n").expect("reading");
+        let with = parse_cpu("cpu  100 0 0 400 500 0 0 0\n").expect("reading");
+        assert_eq!(without.inactif, with.inactif);
     }
 
     #[test]
     fn a_missing_proc_file_yields_nothing_rather_than_zero() {
-        assert_eq!(parser_cpu(""), None);
-        assert_eq!(parser_cpu("intr 12345\n"), None);
-        assert_eq!(parser_cpu("cpu  1 2\n"), None, "champs insuffisants");
+        assert_eq!(parse_cpu(""), None);
+        assert_eq!(parse_cpu("intr 12345\n"), None);
+        assert_eq!(parse_cpu("cpu  1 2\n"), None, "champs insuffisants");
     }
 
     #[test]
     fn loopback_traffic_is_excluded() {
-        // 🔴 Sur un nœud Swarm, `lo` représente l'essentiel du volume : l'inclure
-        // rendrait le chiffre réseau inutilisable.
+        // 🔴 On a Swarm node, `lo` is most of the volume: including it would make the
+        // network figure useless.
         let dev = "Inter-|   Receive                    |  Transmit\n\
                    face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets\n\
                    \x20 lo: 999999 100 0 0 0 0 0 0 999999 100 0 0 0 0 0 0\n\
@@ -323,9 +322,9 @@ mod tests {
 
     #[test]
     fn load_is_comparable_only_once_divided_by_cores() {
-        // 🔴 Une charge de 4 est dramatique sur un cœur et confortable sur seize. Un
-        // homelab est fait de machines hétérogènes : la valeur brute côte à côte ne
-        // veut rien dire.
+        // 🔴 A load of 4 is dramatic on one core and comfortable on sixteen. A homelab
+        // is made of heterogeneous machines: the raw value side by side means
+        // nothing.
         let c = Charge {
             une_min: 4.0,
             cinq_min: 3.0,
@@ -333,7 +332,7 @@ mod tests {
         };
         assert_eq!(c.par_coeur(1), Some(4.0));
         assert_eq!(c.par_coeur(16), Some(0.25));
-        assert_eq!(c.par_coeur(0), None, "aucune division par zéro");
+        assert_eq!(c.par_coeur(0), None, "no division by zero");
     }
 
     #[test]
