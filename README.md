@@ -377,6 +377,9 @@ destination, mettre à l'échelle, ainsi que tous les réglages et la gestion de
   tant qu'ils n'existent pas : proposer un écran vide serait pire que ne rien proposer.
 - **`hlb user mailbox add` n'ouvre pas le compte Stalwart**, il l'enregistre seulement.
   Les ACL IMAP — plusieurs boîtes sous une seule connexion — ne sont pas câblées.
+- **`hlb secrets rekey` n'existe pas** : tourner la clé maîtresse d'un coffre peuplé
+  demanderait de déchiffrer chaque entrée avec l'ancienne et de la ré-écrire avec la
+  nouvelle. Engendrer une clé neuve, en revanche, se fait au premier usage.
 - **`hlb db failover`** n'existe pas : la réplication fonctionne et est vérifiée, mais
   la bascule reste manuelle. Elle demande un second nœud `heavy` réel.
 - **Le déploiement multi-nœuds de Garage** passe par `garage layout`, pas par

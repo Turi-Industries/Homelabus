@@ -1090,6 +1090,10 @@ vérifiée contre un vrai couple.
 - **`hlb user mailbox add` n'ouvre pas le compte Stalwart** — il l'enregistre
   seulement. Et les **ACL IMAP** (que Stalwart implémente) permettraient de voir
   plusieurs boîtes sous UNE seule connexion, au lieu d'en configurer trois.
+- **`hlb secrets rekey` n'existe pas.** Tourner la clé maîtresse d'un coffre peuplé
+  demande de déchiffrer chaque entrée avec l'ancienne et de la ré-écrire avec la
+  nouvelle. Voir « Hygiène du dépôt » plus bas — le cas s'est présenté le 21/08/2026,
+  avec un coffre vide.
 - **`hlb self update`** attend une URL de distribution. La vérification Ed25519 et la
   bascule du binaire sont faites et testées (`hlb-selfupdate`, 44 tests).
 - **Le catalogue** : 11 apps et 12 services de plateforme aujourd'hui, ~30 candidates
@@ -1112,12 +1116,26 @@ vérifiée contre un vrai couple.
 
 ## Hygiène du dépôt
 
-🔴 **`hlb-master.key` a été suivi par git du 16/08/2026 (commit `2d2ea0f`) jusqu'au
-21/08/2026.** Le fichier porte pourtant « NE PAS COMMITER » dans son propre en-tête. Il
-est maintenant dans `.gitignore` et retiré de l'index, **mais il reste dans
-l'historique** : `git log -- hlb-master.key` le montre encore. Avant toute publication
-du dépôt, il faut soit purger l'historique, soit tourner la clé — sa fuite expose tous
-les secrets du coffre et toutes les sauvegardes.
+🔴 **`hlb-master.key` a été suivi par git du 16/08/2026 au 21/08/2026**, alors que le
+fichier porte « NE PAS COMMITER » dans son propre en-tête. Réglé le 21/08/2026, avant
+toute publication :
 
-Rien d'autre de sensible n'est suivi : les seules autres occurrences de clés dans
-l'historique (`hlb-agent/src/pki.rs`, `hlb-agent/src/tls.rs`) sont des données de test.
+1. Retiré de l'index et ajouté à `.gitignore` (avec `*.key`).
+2. **Historique purgé** (`git-filter-repo --invert-paths`) : 65 commits réécrits, plus
+   aucun blob du dépôt ne contient `AGE-SECRET-KEY-1`. Les hashes ont changé — sans
+   conséquence, le dépôt n'avait pas encore de remote.
+3. **Clé tournée.** L'ancienne (`age1hqumt4a…`) est considérée compromise ; la nouvelle
+   est `age1tsfkkw5…`. Le coffre local était vide, donc rien à re-chiffrer.
+
+⚠️ **Si cette ancienne clé a servi ailleurs qu'ici** — une installation réelle, un dépôt
+restic — la rotation doit y être faite aussi : purger l'historique n'atteint pas ce qui
+est déjà déployé.
+
+⚠️ **Il n'existe pas de `hlb secrets rekey`.** Le coffre était vide, la rotation s'est
+donc réduite à engendrer une clé. Avec un coffre peuplé, il faudrait déchiffrer chaque
+entrée avec l'ancienne clé et la ré-écrire avec la nouvelle — à écrire le jour où ça se
+présente, et à traiter comme une procédure ordonnée (§ « une rotation est une PROCÉDURE
+ORDONNÉE »), pas comme une écriture de fichier.
+
+Rien d'autre de sensible n'est suivi : les seules autres occurrences de clés dans le
+source (`hlb-agent/src/pki.rs`, `hlb-agent/src/tls.rs`) sont des données de test.
