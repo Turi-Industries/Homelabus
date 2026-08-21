@@ -1,25 +1,25 @@
-//! Client de l'API PocketID (§5.2 du plan).
+//! PocketID API client.
 //!
-//! C'est ce qui rend le SSO réellement automatique : installer une app crée son client
-//! OIDC, calcule ses URI de rappel depuis le domaine choisi, et récupère le secret —
-//! sans qu'on ouvre jamais l'interface de PocketID.
+//! This is what makes SSO genuinely automatic: installing an app creates its OIDC
+//! client, computes its callback URIs from the chosen domain, and fetches the secret -
+//! without ever opening PocketID's interface.
 //!
-//! ## L'API, telle qu'elle est
+//! ## The API, as it is
 //!
-//! Vérifiée contre une instance réelle, faute de spécification publiée :
+//! Established against a real instance, there being no published specification:
 //!
-//! | Opération | Appel |
+//! | Operation | Call |
 //! |---|---|
-//! | Lister / rechercher | `GET /api/oidc/clients?search=<nom>` |
-//! | Créer | `POST /api/oidc/clients` |
-//! | Obtenir le secret | `POST /api/oidc/clients/{id}/secret` |
-//! | Supprimer | `DELETE /api/oidc/clients/{id}` |
+//! | List / search | `GET /api/oidc/clients?search=<name>` |
+//! | Create | `POST /api/oidc/clients` |
+//! | Get the secret | `POST /api/oidc/clients/{id}/secret` |
+//! | Delete | `DELETE /api/oidc/clients/{id}` |
 //!
-//! Authentification par en-tête `X-API-KEY`.
+//! Authentication through the `X-API-KEY` header.
 //!
-//! ⚠️ **Le secret n'est pas renvoyé à la création** : il faut un second appel, et
-//! chaque appel en **régénère un nouveau**, invalidant le précédent. D'où
-//! [`OidcClient::ensure`], qui ne le régénère jamais pour un client existant.
+//! ⚠️ **The secret is not returned at creation**: it takes a second call, and each call
+//! **regenerates a new one**, invalidating the previous. Hence [`OidcClient::ensure`],
+//! which never regenerates it for an existing client.
 
 pub mod oidc;
 
@@ -34,23 +34,23 @@ pub enum Error {
         context: String,
     },
 
-    #[error("PocketID a répondu {status} — {detail}")]
+    #[error("PocketID answered {status} - {detail}")]
     Api { status: u16, detail: String },
 
-    #[error("clé d'API refusée par PocketID")]
+    #[error("API key refused by PocketID")]
     Unauthorized,
 
-    #[error("réponse inattendue de PocketID : {0}")]
+    #[error("unexpected response from PocketID: {0}")]
     Unexpected(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Un compte HUMAIN, tel que PocketID le rend.
+/// A HUMAN account, as PocketID returns it.
 ///
-/// ⚠️ À ne pas confondre avec [`OidcClient`] : l'un est une personne, l'autre une
-/// application. Les deux vivent dans le même service, et c'est la source de confusion
-/// principale de cette API.
+/// ⚠️ Not to be confused with [`OidcClient`]: one is a person, the other an
+/// application. Both live in the same service, and that is this API's main source of
+/// confusion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
@@ -65,7 +65,7 @@ pub struct User {
     pub disabled: bool,
 }
 
-/// Un client OIDC tel que PocketID le décrit — une APPLICATION, pas une personne.
+/// An OIDC client as PocketID describes it - an APPLICATION, not a person.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct OidcClient {
     pub id: String,
@@ -99,11 +99,11 @@ struct SecretResponse {
     secret: String,
 }
 
-/// Ce qu'on obtient après provisionnement : de quoi configurer l'app.
+/// What provisioning returns: enough to configure the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credentials {
     pub client_id: String,
-    /// Absent si le client existait déjà : on ne régénère jamais un secret en service.
+    /// Absent when the client already existed: a secret in service is never regenerated.
     pub client_secret: Option<String>,
 }
 
@@ -150,7 +150,7 @@ impl PocketId {
         Ok(resp)
     }
 
-    /// L'endpoint de découverte, à donner aux apps.
+    /// The discovery endpoint, to hand to apps.
     pub fn issuer(&self) -> &str {
         &self.base_url
     }
@@ -159,7 +159,7 @@ impl PocketId {
         Ok(self.list(None).await?.len())
     }
 
-    /// Liste les clients, éventuellement filtrés par nom.
+    /// Lists the clients, optionally filtered by name.
     pub async fn list(&self, search: Option<&str>) -> Result<Vec<OidcClient>> {
         let mut url = self.url("/api/oidc/clients");
         if let Some(s) = search {
@@ -173,10 +173,10 @@ impl PocketId {
         Ok(page.data)
     }
 
-    /// Retrouve un client par son nom exact.
+    /// Finds a client by its exact name.
     ///
-    /// `search` fait une correspondance partielle : on filtre donc nous-mêmes, sinon
-    /// « gitea » retrouverait « gitea-runner ».
+    /// `search` does a partial match, so the filtering happens here: otherwise "gitea"
+    /// would also match "gitea-runner".
     pub async fn find_by_name(&self, name: &str) -> Result<Option<OidcClient>> {
         Ok(self
             .list(Some(name))
@@ -202,27 +202,27 @@ impl PocketId {
         let resp = self
             .send(
                 self.http.post(self.url("/api/oidc/clients")).json(&body),
-                "création du client",
+                "client creation",
             )
             .await?;
 
         let c: OidcClient = resp
             .json()
             .await
-            .map_err(|e| Error::Unexpected(format!("réponse de création illisible : {e}")))?;
-        tracing::info!(client = %c.name, id = %c.id, "client OIDC créé");
+            .map_err(|e| Error::Unexpected(format!("unreadable creation response: {e}")))?;
+        tracing::info!(client = %c.name, id = %c.id, "OIDC client created");
         Ok(c)
     }
 
-    /// ⚠️ Génère un **nouveau** secret et invalide l'ancien.
-    /// Crée un compte HUMAIN dans PocketID.
+    /// ⚠️ Generates a **new** secret and invalidates the old one.
+    /// Creates a HUMAN account in PocketID.
     ///
-    /// ⚠️ À ne pas confondre avec [`Self::create`], qui enregistre une *application*.
-    /// Les deux vivent dans le même service et n'ont rien à voir : l'un décrit qui a le
-    /// droit de se connecter, l'autre à quoi.
+    /// ⚠️ Not to be confused with [`Self::create`], which registers an *application*.
+    /// Both live in the same service and have nothing to do with each other: one says
+    /// who may sign in, the other says to what.
     ///
-    /// Vérifié contre le code amont (`UserCreateDto`) : `username` est requis, `email`
-    /// facultatif mais validé, et `userGroupIds` porte les groupes.
+    /// Checked against the upstream code (`UserCreateDto`): `username` is required,
+    /// `email` optional but validated, and `userGroupIds` carries the groups.
     pub async fn create_user(
         &self,
         username: &str,
@@ -234,9 +234,9 @@ impl PocketId {
             "username": username,
             "displayName": display_name,
             "firstName": display_name,
-            // 🔴 Jamais administrateur par défaut. Un compte créé en une commande ne
-            // doit pas pouvoir en créer d'autres ni supprimer le cluster : l'élévation
-            // se demande explicitement.
+            // 🔴 Never an administrator by default. An account created in one command
+            // must not be able to create others or delete the cluster: elevation is
+            // asked for explicitly.
             "isAdmin": false,
             "disabled": false,
             "userGroupIds": groups,
@@ -244,29 +244,29 @@ impl PocketId {
 
         if let Some(e) = email {
             corps["email"] = serde_json::Value::String(e.to_string());
-            // ⚠️ L'adresse vient d'être créée PAR NOUS dans Stalwart : elle est vérifiée
-            // par construction. La laisser « non vérifiée » enverrait un courriel de
-            // confirmation dans une boîte à laquelle la personne n'a pas encore accès.
+            // ⚠️ The address was just created BY US in Stalwart: it is verified by
+            // construction. Leaving it "unverified" would send a confirmation email to a
+            // mailbox the person cannot reach yet.
             corps["emailVerified"] = serde_json::Value::Bool(true);
         }
 
         let resp = self
             .send(
                 self.http.post(self.url("/api/users")).json(&corps),
-                "création d'utilisateur",
+                "user creation",
             )
             .await?;
 
-        resp.json().await.map_err(|e| {
-            Error::Unexpected(format!("réponse de création d'utilisateur illisible : {e}"))
-        })
+        resp.json()
+            .await
+            .map_err(|e| Error::Unexpected(format!("unreadable user creation response: {e}")))
     }
 
-    /// Le compte portant ce nom, s'il existe.
+    /// The account with this name, if it exists.
     ///
-    /// 🔴 Sert à rendre la création **reprenable**. Sans cette recherche, relancer
-    /// `hlb user add` après un échec à mi-parcours produirait un doublon — ou une
-    /// erreur « déjà pris » qui bloquerait la reprise au lieu de la permettre.
+    /// 🔴 This is what makes creation **resumable**. Without the lookup, rerunning
+    /// `hlb user add` after a failure halfway would produce a duplicate - or an
+    /// "already taken" error that blocks the resume instead of allowing it.
     pub async fn find_user(&self, username: &str) -> Result<Option<User>> {
         let resp = self
             .send(
@@ -281,9 +281,9 @@ impl PocketId {
             .await
             .map_err(|e| Error::Unexpected(format!("liste d'utilisateurs illisible : {e}")))?;
 
-        // ⚠️ La forme varie selon la version : liste nue ou page `{data: [...]}`. On
-        // accepte les deux plutôt que de figer celle qu'on n'a pas vérifiée partout —
-        // une reprise qui échouerait ici recréerait un doublon.
+        // ⚠️ The shape varies with the version: a bare list, or a `{data: [...]}` page.
+        // Both are accepted rather than freezing the one not verified everywhere - a
+        // resume failing here would recreate a duplicate.
         let items = brut
             .get("data")
             .and_then(|d| d.as_array())
@@ -297,15 +297,15 @@ impl PocketId {
             .find(|u| u.username == username))
     }
 
-    /// Un jeton d'accès à usage unique, pour l'inscription.
+    /// A single-use access token, for sign-up.
     ///
-    /// 🔴 C'est ce qui remplace un mot de passe initial. PocketID s'authentifie par
-    /// clé d'accès (passkey) : il n'y a **pas** de mot de passe à transmettre, et
-    /// vouloir en inventer un serait à la fois impossible et moins sûr.
+    /// 🔴 This is what replaces an initial password. PocketID authenticates with
+    /// passkeys: there is **no** password to hand over, and inventing one would be both
+    /// impossible and less safe.
     ///
-    /// ⚠️ Le jeton est à usage unique et expire. Le noter dans un journal ou le passer
-    /// en argument de commande reviendrait à publier une session : il est affiché une
-    /// fois, sur la sortie standard, et jamais enregistré.
+    /// ⚠️ The token is single-use and expires. Writing it to a log or passing it as a
+    /// command argument would amount to publishing a session: it is displayed once, on
+    /// standard output, and never recorded.
     pub async fn one_time_token(&self, user_id: &str, ttl: &str) -> Result<String> {
         let resp = self
             .send(
@@ -326,7 +326,7 @@ impl PocketId {
             .map(str::to_string)
             .ok_or_else(|| Error::Api {
                 status: 200,
-                detail: "aucun jeton dans la réponse — la personne ne pourrait pas \
+                detail: "no token in the response - the person could not \
                          s'inscrire, et le compte resterait inutilisable"
                     .into(),
             })
@@ -337,7 +337,7 @@ impl PocketId {
             .send(
                 self.http
                     .post(self.url(&format!("/api/oidc/clients/{id}/secret"))),
-                "génération du secret",
+                "secret generation",
             )
             .await?;
 
@@ -355,16 +355,17 @@ impl PocketId {
             "suppression du client",
         )
         .await?;
-        tracing::info!(id, "client OIDC supprimé");
+        tracing::info!(id, "OIDC client deleted");
         Ok(())
     }
 
-    /// Provisionnement idempotent : crée le client s'il manque, ne touche à rien sinon.
+    /// Idempotent provisioning: creates the client if missing, touches nothing
+    /// otherwise.
     ///
-    /// 🔴 **Ne régénère jamais le secret d'un client existant.** Chaque appel à
-    /// `/secret` en produit un nouveau et invalide le précédent — celui qui est déjà
-    /// injecté dans l'app tournante. Relancer une installation casserait donc le SSO
-    /// de l'app qu'on croyait simplement re-vérifier.
+    /// 🔴 **Never regenerates the secret of an existing client.** Each call to
+    /// `/secret` produces a new one and invalidates the previous - the one already
+    /// injected into the running app. Rerunning an install would therefore break the
+    /// SSO of the app you thought you were merely re-checking.
     pub async fn ensure(
         &self,
         name: &str,
@@ -372,7 +373,7 @@ impl PocketId {
         pkce: bool,
     ) -> Result<Credentials> {
         if let Some(existing) = self.find_by_name(name).await? {
-            tracing::debug!(client = name, "client OIDC déjà présent, conservé");
+            tracing::debug!(client = name, "OIDC client already present, kept");
             return Ok(Credentials {
                 client_id: existing.id,
                 client_secret: None,
@@ -404,7 +405,7 @@ mod tests {
 
     #[test]
     fn clients_deserialize_from_the_real_shape() {
-        // Capturé sur une instance réelle.
+        // Captured from a real instance.
         let json = r#"{"id":"88e0-c62d","name":"vikunja","hasLogo":false,
                        "callbackURLs":["https://tasks.example.fr/auth/openid/pocketid"],
                        "logoutCallbackURLs":[],"isPublic":false,"pkceEnabled":true,
@@ -426,8 +427,8 @@ mod tests {
 
     #[test]
     fn the_creation_body_uses_the_expected_field_names() {
-        // Les noms sont en camelCase côté PocketID : une faute ici passerait
-        // silencieusement, le champ étant simplement ignoré.
+        // The names are camelCase on the PocketID side: a typo here would pass
+        // silently, the field simply being ignored.
         let urls = vec!["https://x.fr/cb".to_string()];
         let body = CreateRequest {
             name: "gitea",
@@ -435,7 +436,7 @@ mod tests {
             is_public: false,
             pkce_enabled: true,
         };
-        let j = serde_json::to_value(&body).expect("sérialisable");
+        let j = serde_json::to_value(&body).expect("serialisable");
         assert!(j.get("callbackURLs").is_some(), "{j}");
         assert!(j.get("isPublic").is_some());
         assert!(j.get("pkceEnabled").is_some());

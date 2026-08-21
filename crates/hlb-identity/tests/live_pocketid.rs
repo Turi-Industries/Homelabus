@@ -1,14 +1,14 @@
-//! Tests contre une vraie instance PocketID.
+//! Tests against a real PocketID instance.
 //!
-//! PocketID ne publie pas de spécification OpenAPI : la forme de son API a été
-//! établie en la sondant. Ces tests sont donc la seule garantie que le client reste
-//! juste — un bouchon écrit d'après mes propres suppositions ne prouverait rien.
+//! PocketID publishes no OpenAPI specification: the shape of its API was established
+//! by probing it. These tests are therefore the only guarantee the client stays correct
+//! - a stub written from my own assumptions would prove nothing.
 //!
-//! ## Amorçage
+//! ## Bootstrapping
 //!
-//! PocketID est *passkey-only* : impossible d'obtenir une clé d'API par l'interface
-//! dans un test automatisé. On en insère donc une directement en base. Les clés y sont
-//! stockées en **SHA-256 hexadécimal** du secret présenté.
+//! PocketID is *passkey-only*: obtaining an API key through the interface is impossible
+//! in an automated test. So one is inserted straight into the database. Keys are stored
+//! there as the **hexadecimal SHA-256** of the presented secret.
 //!
 //! ```sh
 //! export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
@@ -60,11 +60,11 @@ fn start() -> PocketId {
     ]);
     assert!(
         out.status.success(),
-        "démarrage : {}",
+        "startup: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Attendre que le service réponde et que le schéma soit migré.
+    // Wait for the service to answer and the schema to be migrated.
     let mut pret = false;
     for _ in 0..60 {
         let c = std::process::Command::new("curl")
@@ -84,9 +84,9 @@ fn start() -> PocketId {
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    assert!(pret, "PocketID n'a pas démarré à temps");
+    assert!(pret, "PocketID did not start in time");
 
-    // `sqlite3` n'est pas dans l'image : on l'ajoute pour l'amorçage.
+    // `sqlite3` is not in the image: it is added for the bootstrap.
     let _ = docker(&["exec", CONTAINER, "apk", "add", "--no-cache", "sqlite"]);
 
     sql(&format!(
@@ -104,38 +104,38 @@ fn stop() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 async fn the_whole_client_lifecycle_works() {
     let p = start();
 
-    // La clé d'API est acceptée, et l'instance est vierge.
+    // The API key is accepted, and the instance is empty.
     assert_eq!(p.ping().await.expect("ping"), 0);
-    println!("✓ clé d'API acceptée, instance vierge");
+    println!("✓ API key accepted, instance empty");
 
-    // Création avec les URI calculées depuis le domaine choisi (§5.2).
+    // Creation with the URIs computed from the chosen domain.
     let urls = vec!["https://git.example.fr/user/oauth2/PocketID/callback".to_string()];
-    let c = p.create("gitea", &urls, true).await.expect("création");
+    let c = p.create("gitea", &urls, true).await.expect("creation");
     assert_eq!(c.name, "gitea");
     assert_eq!(
         c.callback_urls, urls,
-        "les URI de rappel doivent être enregistrées"
+        "the callback URIs must be registered"
     );
     assert!(c.pkce_enabled);
     assert!(!c.is_public, "une app serveur garde son secret");
-    println!("✓ client créé : {}", c.id);
+    println!("✓ client created: {}", c.id);
 
-    // Le secret arrive par un appel séparé.
+    // The secret arrives through a separate call.
     let secret = p.regenerate_secret(&c.id).await.expect("secret");
     assert!(
         secret.len() >= 24,
         "secret suspicieusement court : {}",
         secret.len()
     );
-    println!("✓ secret obtenu ({} caractères)", secret.len());
+    println!("✓ secret obtained ({} characters)", secret.len());
 
     // Recherche par nom.
     let trouve = p.find_by_name("gitea").await.expect("recherche");
-    assert_eq!(trouve.expect("présent").id, c.id);
+    assert_eq!(trouve.expect("present").id, c.id);
 
     // Suppression : pas de client orphelin après désinstallation (§5.2).
     p.delete(&c.id).await.expect("suppression");
@@ -146,7 +146,7 @@ async fn the_whole_client_lifecycle_works() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 async fn ensure_never_regenerates_an_existing_secret() {
     // 🔴 Le test le plus important de ce module.
     //
@@ -160,21 +160,21 @@ async fn ensure_never_regenerates_an_existing_secret() {
         .ensure("vikunja", &urls, true)
         .await
         .expect("premier ensure");
-    let secret = premier.client_secret.expect("secret à la création");
-    println!("✓ premier appel : client créé avec un secret");
+    let secret = premier.client_secret.expect("secret at creation");
+    println!("✓ first call: client created with a secret");
 
     let second = p
         .ensure("vikunja", &urls, true)
         .await
         .expect("second ensure");
-    assert_eq!(second.client_id, premier.client_id, "même client");
+    assert_eq!(second.client_id, premier.client_id, "same client");
     assert!(
         second.client_secret.is_none(),
-        "aucun nouveau secret ne doit être généré pour un client existant"
+        "no new secret must be generated for an existing client"
     );
-    println!("✓ second appel : client réutilisé, secret intact");
+    println!("✓ second call: client reused, secret intact");
 
-    // Et le premier secret fonctionne toujours : il n'a pas été invalidé.
+    // And the first secret still works: it was not invalidated.
     assert!(!secret.is_empty());
     assert_eq!(
         p.list(None).await.expect("liste").len(),
@@ -186,20 +186,20 @@ async fn ensure_never_regenerates_an_existing_secret() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 async fn a_partial_name_does_not_match_the_wrong_client() {
-    // `search` fait une correspondance partielle : sans filtrage exact, « gitea »
-    // retrouverait « gitea-runner » et on écraserait la configuration du mauvais.
+    // `search` does a partial match: without exact filtering, "gitea" would also find
+    // "gitea-runner" and the wrong one's configuration would be overwritten.
     let p = start();
     let urls = vec!["https://x.fr/cb".to_string()];
 
     p.create("gitea-runner", &urls, false)
         .await
-        .expect("création");
+        .expect("creation");
 
     assert!(
         p.find_by_name("gitea").await.expect("recherche").is_none(),
-        "« gitea » ne doit PAS correspondre à « gitea-runner »"
+        "\"gitea\" must NOT match \"gitea-runner\""
     );
     assert!(p
         .find_by_name("gitea-runner")
@@ -212,7 +212,7 @@ async fn a_partial_name_does_not_match_the_wrong_client() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 async fn a_bad_api_key_is_reported_as_such() {
     let _ = start();
     let p = PocketId::new(format!("http://localhost:{PORT}"), "mauvaise-cle");
@@ -222,7 +222,7 @@ async fn a_bad_api_key_is_reported_as_such() {
         matches!(err, hlb_identity::Error::Unauthorized),
         "erreur inattendue : {err}"
     );
-    println!("✓ clé refusée, erreur typée : {err}");
+    println!("✓ key refused, typed error: {err}");
 
     stop();
 }

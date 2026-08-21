@@ -1,60 +1,58 @@
-//! Connexion des personnes par PocketID (OpenID Connect, code d'autorisation + PKCE).
+//! Human sign-in through PocketID (OpenID Connect, authorisation code + PKCE).
 //!
-//! ## Pourquoi ce module existe
+//! ## Why this module exists
 //!
-//! Jusqu'ici, Homelabus n'authentifiait que des **machines** : un jeton d'API porté par
-//! un en-tête `Authorization`. C'est le bon outil pour le CLI, pour Bitwarden et pour un
-//! scrape de métriques. C'est le mauvais pour vingt personnes — il faudrait leur faire
-//! conserver et coller une valeur de 52 caractères, sans déconnexion possible et sans
-//! savoir qui est connecté.
+//! Until now Homelabus only authenticated **machines**: an API token in an
+//! `Authorization` header. That is the right tool for the CLI, for Bitwarden and for a
+//! metrics scrape. It is the wrong one for twenty people - they would have to keep and
+//! paste a 52-character value, with no way to sign out and no way to know who is signed
+//! in.
 //!
-//! Ici, la personne va s'authentifier chez PocketID (par clé d'accès, il n'y a pas de
-//! mot de passe), et revient avec un code que le controller échange **lui-même**, de
-//! serveur à serveur.
+//! Here the person authenticates at PocketID (with a passkey; there is no password) and
+//! comes back with a code the controller exchanges **itself**, server to server.
 //!
-//! ## 🔴 Pourquoi on ne vérifie PAS la signature de l'`id_token`
+//! ## 🔴 Why the `id_token` signature is NOT verified
 //!
-//! C'est le point qui surprend en relecture, donc il est écrit ici plutôt que d'être
-//! découvert dans six mois.
+//! This is the point that surprises on review, so it is written here rather than
+//! discovered in six months.
 //!
-//! L'`id_token` n'arrive **jamais par le navigateur**. Il est récupéré par un appel
-//! direct du controller au point de terminaison `token` de PocketID, sur une connexion
-//! TLS dont le certificat authentifie déjà l'émetteur. C'est exactement le cas prévu par
-//! OpenID Connect Core §3.1.3.7 point 6, qui dispense alors de la validation de
-//! signature : le canal fait le travail que ferait la signature.
+//! The `id_token` **never arrives through the browser**. It is fetched by a direct call
+//! from the controller to PocketID's `token` endpoint, over a TLS connection whose
+//! certificate already authenticates the issuer. That is exactly the case OpenID
+//! Connect Core §3.1.3.7 point 6 provides for, which then waives signature validation:
+//! the channel does the work the signature would.
 //!
-//! ⚠️ **Ce raisonnement ne tiendrait pas** pour un jeton reçu du navigateur (flux
-//! implicite ou hybride), où n'importe qui peut en fabriquer un. Le type
-//! [`DemandeEnCours`] est donc conçu pour que la seule façon d'obtenir une [`Identite`]
-//! soit de passer par [`Oidc::terminer`], qui fait l'échange lui-même.
+//! ⚠️ **This reasoning would NOT hold** for a token received from the browser (implicit
+//! or hybrid flow), where anyone can forge one. The [`DemandeEnCours`] type is therefore
+//! built so that the only way to obtain an [`Identite`] is through [`Oidc::terminer`],
+//! which performs the exchange itself.
 //!
-//! L'identité elle-même est lue au point de terminaison `userinfo`, également appelé de
-//! serveur à serveur. La charge utile de l'`id_token` n'est décodée que pour confronter
-//! le `nonce`.
+//! The identity itself is read from the `userinfo` endpoint, also called server to
+//! server. The `id_token` payload is only decoded to check the `nonce`.
 //!
-//! ## Ce qui protège réellement l'échange
+//! ## What actually protects the exchange
 //!
-//! | Attaque | Ce qui l'arrête |
+//! | Attack | What stops it |
 //! |---|---|
-//! | Requête forgée depuis un autre site | le paramètre `state`, comparé en temps constant |
-//! | Interception du code d'autorisation | PKCE `S256` : le code seul ne suffit pas |
-//! | Rejeu d'une réponse ancienne | l'échéance de [`DemandeEnCours`] et le `nonce` |
-//! | Serveur d'autorisation usurpé | TLS vers l'émetteur découvert |
+//! | A request forged from another site | the `state` parameter, compared in constant time |
+//! | Interception of the authorisation code | PKCE `S256`: the code alone is not enough |
+//! | Replay of an old response | [`DemandeEnCours`]'s deadline and the `nonce` |
+//! | A spoofed authorisation server | TLS to the discovered issuer |
 
 use serde::Deserialize;
 
 use crate::{Error, Result};
 
-/// Durée de validité d'une demande de connexion entamée.
+/// How long a sign-in request stays valid once started.
 ///
-/// Assez pour enregistrer une clé d'accès sans se presser, trop court pour qu'une URL
-/// de retour retrouvée dans un historique serve encore.
+/// Long enough to register a passkey without rushing, short enough that a return URL
+/// found in a browser history is no longer useful.
 pub const DELAI_DEMANDE_S: i64 = 600;
 
-/// Les points de terminaison, découverts plutôt que devinés.
+/// The endpoints, discovered rather than guessed.
 ///
-/// Les coder en dur marcherait aujourd'hui et casserait le jour où PocketID les
-/// déplace, avec un `404` qui ne dirait pas que c'est la découverte qu'il fallait faire.
+/// Hard-coding them would work today and break the day PocketID moves them, with a
+/// `404` that would not say discovery was the thing to do.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Endpoints {
     pub issuer: String,
@@ -65,19 +63,19 @@ pub struct Endpoints {
     pub end_session_endpoint: Option<String>,
 }
 
-/// Une demande de connexion entamée, en attente du retour du navigateur.
+/// A sign-in request in flight, waiting for the browser to come back.
 ///
-/// 🔴 Elle contient le **vérificateur** PKCE, qui est un secret : il ne doit jamais
-/// partir vers le navigateur, sans quoi PKCE ne protège plus de rien. C'est pourquoi
-/// elle vit côté controller et que seul le `state` circule.
+/// 🔴 It holds the PKCE **verifier**, which is a secret: it must never go out to the
+/// browser, or PKCE protects nothing. That is why it lives on the controller side and
+/// only the `state` travels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DemandeEnCours {
     pub state: String,
     verifier: String,
     nonce: String,
     pub cree_a: i64,
-    /// Où renvoyer la personne une fois connectée (une route de l'UI, jamais une URL
-    /// absolue : cf. [`Self::retour_sur`]).
+    /// Where to send the person once signed in (a UI route, never an absolute URL:
+    /// see [`Self::retour_sur`]).
     pub retour: Option<String>,
 }
 
@@ -86,13 +84,13 @@ impl DemandeEnCours {
         maintenant.saturating_sub(self.cree_a) > DELAI_DEMANDE_S
     }
 
-    /// La destination après connexion, filtrée.
+    /// The post-sign-in destination, filtered.
     ///
-    /// 🔴 Seul un chemin relatif commençant par `/` est accepté. Sans ce filtre, un lien
-    /// `…/auth/connexion?retour=https://ailleurs.example` transformerait l'écran de
-    /// connexion en tremplin de redirection — utilisable pour faire croire à un
-    /// hameçonnage qu'il vient de chez nous. Un `//` initial est refusé aussi : c'est
-    /// une URL absolue déguisée (`//evil.example`).
+    /// 🔴 Only a relative path starting with `/` is accepted. Without this filter, a
+    /// link `.../auth/connexion?retour=https://elsewhere.example` would turn the sign-in
+    /// screen into an open redirect - usable to make a phishing page look like it came
+    /// from us. A leading `//` is refused too: that is an absolute URL in disguise
+    /// (`//evil.example`).
     pub fn retour_sur(&self) -> &str {
         match self.retour.as_deref() {
             Some(r) if r.starts_with('/') && !r.starts_with("//") => r,
@@ -104,8 +102,8 @@ impl DemandeEnCours {
 /// Qui vient de se connecter.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct Identite {
-    /// L'identifiant stable chez PocketID. C'est LUI qui fait foi, pas le nom
-    /// d'utilisateur : ce dernier peut être renommé, et on perdrait le lien.
+    /// The stable identifier at PocketID. THIS is authoritative, not the username:
+    /// the latter can be renamed, and the link would be lost.
     pub sub: String,
     #[serde(default)]
     pub preferred_username: Option<String>,
@@ -113,17 +111,17 @@ pub struct Identite {
     pub email: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
-    /// Les groupes PocketID, conservés pour qui préfère l'ancien schéma du §5.9
-    /// (`Role::from_groups`). Homelabus ne s'en sert pas par défaut.
+    /// The PocketID groups, kept for anyone preferring the group-driven scheme
+    /// (`Role::from_groups`). Homelabus does not use them by default.
     #[serde(default)]
     pub groups: Vec<String>,
 }
 
 impl Identite {
-    /// Le nom de compte à chercher côté Homelabus.
+    /// The account name to look up on the Homelabus side.
     ///
-    /// `preferred_username` d'abord, `sub` en dernier recours : un identifiant opaque
-    /// vaut mieux qu'un compte impossible à rattacher.
+    /// `preferred_username` first, `sub` as a last resort: an opaque identifier is
+    /// better than an account that cannot be linked at all.
     pub fn nom_de_compte(&self) -> &str {
         self.preferred_username.as_deref().unwrap_or(&self.sub)
     }
@@ -151,7 +149,7 @@ pub struct Oidc {
 }
 
 impl Oidc {
-    /// Découvre les points de terminaison chez l'émetteur.
+    /// Discovers the endpoints at the issuer.
     pub async fn decouvrir(
         issuer: &str,
         client_id: impl Into<String>,
@@ -172,22 +170,20 @@ impl Oidc {
         );
         let r = http.get(&url).send().await.map_err(|source| Error::Http {
             source,
-            context: format!("découverte OIDC sur {url}"),
+            context: format!("OIDC discovery at {url}"),
         })?;
 
         let status = r.status();
         if !status.is_success() {
             return Err(Error::Api {
                 status: status.as_u16(),
-                detail: format!(
-                    "découverte OIDC impossible sur {url} — l'émetteur est-il bien PocketID ?"
-                ),
+                detail: format!("OIDC discovery failed at {url} - is the issuer really PocketID?"),
             });
         }
 
         let endpoints: Endpoints = r.json().await.map_err(|source| Error::Http {
             source,
-            context: "découverte OIDC illisible".into(),
+            context: "unreadable OIDC discovery".into(),
         })?;
 
         Ok(Self {
@@ -199,7 +195,7 @@ impl Oidc {
         })
     }
 
-    /// Variante pour les tests et pour un émetteur qui ne publie pas sa découverte.
+    /// Variant for tests and for an issuer that does not publish discovery.
     pub fn avec_endpoints(
         endpoints: Endpoints,
         client_id: impl Into<String>,
@@ -219,14 +215,13 @@ impl Oidc {
         &self.endpoints
     }
 
-    /// Construit l'URL vers laquelle envoyer le navigateur, et la demande à retenir.
+    /// Builds the URL to send the browser to, and the request to remember.
     ///
-    /// `alea` fournit l'entropie des trois valeurs (état, vérificateur PKCE, nonce) — en
-    /// paramètre plutôt que tiré ici, pour que la fonction soit **pure et testable** :
-    /// c'est la même discipline que `Genere::pour` pour les aliases.
+    /// `alea` supplies the entropy for all three values (state, PKCE verifier, nonce) -
+    /// passed in rather than drawn here, so the function stays **pure and testable**.
     ///
-    /// 🔴 96 octets, découpés en trois tiers. Les partager rendrait le `state`
-    /// déductible du vérificateur, et réciproquement.
+    /// 🔴 96 bytes, split into three thirds. Sharing them would make the `state`
+    /// derivable from the verifier, and the other way round.
     pub fn demarrer(
         &self,
         alea: &[u8; 96],
@@ -269,12 +264,11 @@ impl Oidc {
         )
     }
 
-    /// Échange le code contre une identité.
+    /// Exchanges the code for an identity.
     ///
-    /// Vérifie, dans cet ordre : l'état, l'échéance, puis le `nonce` de l'`id_token`.
-    /// L'ordre compte — un état qui ne correspond pas signale une requête forgée, et on
-    /// ne veut surtout pas avoir déjà appelé le point de terminaison `token` à ce
-    /// moment-là.
+    /// Checks, in this order: the state, the deadline, then the `id_token`'s `nonce`.
+    /// The order matters - a state that does not match signals a forged request, and we
+    /// definitely do not want to have already called the `token` endpoint by then.
     pub async fn terminer(
         &self,
         demande: &DemandeEnCours,
@@ -284,14 +278,14 @@ impl Oidc {
     ) -> Result<Identite> {
         if !hlb_types::token::constant_eq(&demande.state, state_recu) {
             return Err(Error::Unexpected(
-                "état de connexion invalide : la réponse ne correspond pas à une demande \
-                 partie d'ici (requête forgée, ou connexion entamée dans un autre onglet)"
+                "invalid sign-in state: the response does not match a request \
+                 started here (a forged request, or a sign-in begun in another tab)"
                     .into(),
             ));
         }
         if demande.est_expiree(maintenant) {
             return Err(Error::Unexpected(format!(
-                "demande de connexion expirée (au-delà de {DELAI_DEMANDE_S} s) — relance la connexion"
+                "sign-in request expired (beyond {DELAI_DEMANDE_S} s) - start again"
             )));
         }
 
@@ -312,7 +306,7 @@ impl Oidc {
             .await
             .map_err(|source| Error::Http {
                 source,
-                context: "échange du code d'autorisation".into(),
+                context: "authorisation code exchange".into(),
             })?;
 
         let status = r.status();
@@ -323,32 +317,32 @@ impl Oidc {
             let detail = r.text().await.unwrap_or_default();
             return Err(Error::Api {
                 status: status.as_u16(),
-                detail: format!("échange du code refusé : {detail}"),
+                detail: format!("code exchange refused: {detail}"),
             });
         }
 
         let jeton: ReponseJeton = r.json().await.map_err(|source| Error::Http {
             source,
-            context: "réponse du point de terminaison token illisible".into(),
+            context: "unreadable token endpoint response".into(),
         })?;
 
-        // Le nonce, s'il y a un id_token. Voir la note de sécurité en tête de module :
-        // la charge utile est lue sans vérifier la signature parce que le jeton vient
-        // d'être récupéré directement, sur TLS — jamais du navigateur.
+        // The nonce, when there is an id_token. See the security note at the top of
+        // this module: the payload is read without verifying the signature because the
+        // token was just fetched directly, over TLS - never from the browser.
         if let Some(id) = &jeton.id_token {
             match nonce_de(id) {
                 Some(n) if hlb_types::token::constant_eq(&demande.nonce, &n) => {}
                 Some(_) => {
                     return Err(Error::Unexpected(
-                        "le nonce de l'id_token ne correspond pas : réponse rejouée".into(),
+                        "the id_token nonce does not match: replayed response".into(),
                     ))
                 }
-                // Un id_token sans nonce n'est pas une preuve de rejeu : certains
-                // émetteurs ne le répercutent pas. On ne bloque pas là-dessus, mais on
-                // le dit, parce qu'une protection absente ne doit pas être silencieuse.
+                // An id_token with no nonce is not proof of a replay: some issuers do
+                // not echo it back. We do not block on that, but we say so, because an
+                // absent protection must not be silent.
                 None => tracing::warn!(
                     "id_token sans nonce : la protection contre le rejeu repose \
-                     uniquement sur l'échéance de la demande"
+                     only on the request deadline"
                 ),
             }
         }
@@ -369,7 +363,7 @@ impl Oidc {
             let detail = r.text().await.unwrap_or_default();
             return Err(Error::Api {
                 status: status.as_u16(),
-                detail: format!("userinfo refusé : {detail}"),
+                detail: format!("userinfo refused: {detail}"),
             });
         }
 
@@ -380,7 +374,7 @@ impl Oidc {
 
         if identite.sub.is_empty() {
             return Err(Error::Unexpected(
-                "userinfo sans « sub » : impossible de rattacher un compte à une identité \
+                "userinfo with no \"sub\": an account cannot be linked to an identity \
                  stable"
                     .into(),
             ));
@@ -390,11 +384,11 @@ impl Oidc {
     }
 }
 
-/// Le `nonce` porté par la charge utile d'un JWT.
+/// The `nonce` carried in a JWT's payload.
 ///
-/// Décodage sans vérification de signature : voir la note de sécurité en tête de module.
-/// Rend `None` dès que quoi que ce soit ne colle pas — un JWT mal formé n'est pas
-/// « presque bon ».
+/// Decoded without verifying the signature: see the security note at the top of this
+/// module. Returns `None` as soon as anything does not fit - a malformed JWT is not
+/// "nearly right".
 fn nonce_de(jwt: &str) -> Option<String> {
     let charge = jwt.split('.').nth(1)?;
     let brut = hlb_types::token::base64url_decode(charge)?;
@@ -402,11 +396,10 @@ fn nonce_de(jwt: &str) -> Option<String> {
     v.get("nonce")?.as_str().map(str::to_string)
 }
 
-/// Encodage pour-cent d'un paramètre de requête (RFC 3986 §2.3, caractères non
-/// réservés).
+/// Percent-encoding for a query parameter (RFC 3986 §2.3, unreserved characters).
 ///
-/// Écrit à la main pour la même raison que le base64url : c'est dix lignes contre une
-/// dépendance de plus dans un chemin qui manipule des secrets.
+/// Written by hand for the same reason as the base64url: ten lines against one more
+/// dependency in a path that handles secrets.
 fn pourcent(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -449,12 +442,12 @@ mod tests {
 
     #[test]
     fn the_verifier_never_leaves_the_controller() {
-        // 🔴 Si le vérificateur PKCE partait dans l'URL, PKCE ne protégerait plus rien :
-        // qui intercepte le code intercepterait aussi de quoi l'échanger.
+        // 🔴 If the PKCE verifier went out in the URL, PKCE would protect nothing:
+        // whoever intercepts the code would also intercept the means to exchange it.
         let (url, d) = oidc().demarrer(&alea(1), None, 0);
         assert!(
             !url.contains(&d.verifier),
-            "le vérificateur est dans l'URL : {url}"
+            "the verifier is in the URL: {url}"
         );
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
@@ -462,7 +455,7 @@ mod tests {
 
     #[test]
     fn the_three_secrets_are_independent() {
-        // Les tirer du même tiers d'entropie rendrait l'état déductible du vérificateur.
+        // Drawing them from the same third of entropy would make the state derivable.
         let (_, d) = oidc().demarrer(&alea(7), None, 0);
         assert_ne!(d.state, d.verifier);
         assert_ne!(d.state, d.nonce);
@@ -478,16 +471,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_forged_state_is_refused_before_any_network_call() {
-        // 🔴 L'ordre compte : on ne veut pas avoir déjà appelé le point de terminaison
-        // token quand on découvre que la requête est forgée. Le test le vérifie de fait,
-        // puisque l'URL de test n'existe pas — un appel réseau ferait échouer sur une
-        // erreur de transport, pas sur le message d'état invalide.
+        // 🔴 Order matters: we do not want to have already called the token endpoint
+        // when discovering the request is forged. The test checks this in effect, since
+        // the test URL does not exist - a network call would fail on a transport error,
+        // not on the invalid-state message.
         let d = oidc().demarrer(&alea(3), None, 0).1;
         let e = oidc()
             .terminer(&d, "un-autre-etat", "code", 0)
             .await
-            .expect_err("un état différent doit être refusé");
-        assert!(format!("{e}").contains("état de connexion invalide"), "{e}");
+            .expect_err("a different state must be refused");
+        assert!(format!("{e}").contains("invalid sign-in state"), "{e}");
     }
 
     #[tokio::test]
@@ -496,14 +489,14 @@ mod tests {
         let e = oidc()
             .terminer(&d, &d.state, "code", DELAI_DEMANDE_S + 1)
             .await
-            .expect_err("une demande périmée doit être refusée");
-        assert!(format!("{e}").contains("expirée"), "{e}");
+            .expect_err("an expired request must be refused");
+        assert!(format!("{e}").contains("expired"), "{e}");
     }
 
     #[test]
     fn an_absolute_return_url_is_never_honoured() {
-        // 🔴 Sans ce filtre, l'écran de connexion devient un tremplin de redirection :
-        // un lien d'hameçonnage passerait par notre domaine pour se rendre crédible.
+        // 🔴 Without this filter the sign-in screen becomes an open redirect: a
+        // phishing link would route through our domain to look credible.
         for mechant in [
             "https://ailleurs.example",
             "//ailleurs.example",
@@ -535,8 +528,8 @@ mod tests {
 
     #[test]
     fn the_nonce_is_read_from_a_jwt_payload() {
-        // Charge utile seule : ni en-tête ni signature ne sont nécessaires pour la lire,
-        // et c'est précisément ce que le module assume et documente.
+        // Payload only: neither header nor signature is needed to read it, and that is
+        // precisely what this module assumes and documents.
         let charge = hlb_types::token::base64url(br#"{"nonce":"abc","sub":"u1"}"#);
         assert_eq!(
             nonce_de(&format!("entete.{charge}.signature")),
@@ -554,8 +547,8 @@ mod tests {
 
     #[test]
     fn query_parameters_are_escaped() {
-        // Un `redirect_uri` non échappé couperait l'URL au premier `&`, et le serveur
-        // d'autorisation renverrait vers une adresse tronquée.
+        // An unescaped `redirect_uri` would cut the URL at the first `&`, and the
+        // authorisation server would redirect to a truncated address.
         assert_eq!(
             pourcent("https://a/b?c=d&e"),
             "https%3A%2F%2Fa%2Fb%3Fc%3Dd%26e"
@@ -595,6 +588,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(i.nom_de_compte(), "remy");
-        assert_eq!(i.nom_affiche(), "remy", "à défaut de nom affiché");
+        assert_eq!(i.nom_affiche(), "remy", "falling back when no display name");
     }
 }
