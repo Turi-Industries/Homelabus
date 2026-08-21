@@ -1,28 +1,27 @@
-//! Observabilité : collecte, règles d'alerte et deadman switch (§8bis).
+//! Observability: scraping, alert rules and the deadman switch.
 //!
-//! ## Ce que ce crate ajoute, et ce qui existait déjà
+//! ## What this crate adds, and what already existed
 //!
-//! Le controller exposait `/metrics` depuis longtemps, et `hlb-notify` savait pousser
-//! des notifications à quatre niveaux avec des heures calmes. Il manquait tout le
-//! milieu : **personne ne lisait ces métriques**. `hlb_backup_age_seconds` était émise
-//! correctement et n'était consommée par rien, aucun historique n'était conservé, et
-//! aucun seuil n'était évalué.
+//! The controller had exposed `/metrics` for a long time, and `hlb-notify` knew how to
+//! push four-level notifications with quiet hours. The whole middle was missing:
+//! **nobody read those metrics**. `hlb_backup_age_seconds` was emitted correctly and
+//! consumed by nothing, no history was kept, and no threshold was evaluated.
 //!
-//! Trois pièces comblent ce vide :
+//! Three pieces fill that gap:
 //!
-//! - [`scrape`] — la configuration de collecte de VictoriaMetrics, qui stocke.
-//! - [`rules`] — les seuils, évalués par Homelabus et routés vers `hlb-notify`.
-//! - [`deadman`] — le veilleur externe, pour le cas où Homelabus lui-même est mort.
+//! - [`scrape`] - VictoriaMetrics' scrape configuration, which stores.
+//! - [`rules`] - the thresholds, evaluated by Homelabus and routed to `hlb-notify`.
+//! - [`deadman`] - the external watchdog, for when Homelabus itself is dead.
 //!
-//! ## 🔴 Pourquoi les deux derniers ne se remplacent pas
+//! ## 🔴 Why the last two do not replace each other
 //!
-//! [`rules`] tourne **sur** le controller. Si le controller meurt, aucune de ses
-//! règles ne s'évalue plus, et le silence est indiscernable du bon fonctionnement.
-//! [`deadman`] existe précisément pour cette panne-là, et il est le seul dispositif qui
-//! ne partage pas le sort de ce qu'il surveille.
+//! [`rules`] runs **on** the controller. If the controller dies, none of its rules is
+//! evaluated any more, and the silence is indistinguishable from everything being fine.
+//! [`deadman`] exists precisely for that failure, and it is the only mechanism that
+//! does not share the fate of what it watches.
 //!
-//! Inversement, le deadman ne dit rien d'un disque à 90 % ou d'une sauvegarde manquée
-//! sur un système par ailleurs vivant. Les deux couvrent des moitiés disjointes.
+//! Conversely, the deadman says nothing about a disk at 90 % or a missed backup on an
+//! otherwise living system. The two cover disjoint halves.
 
 pub mod deadman;
 pub mod rules;
@@ -38,32 +37,32 @@ pub enum Error {
     #[error("VictoriaMetrics injoignable : {0}")]
     Injoignable(String),
 
-    #[error("réponse illisible : {0}")]
+    #[error("unreadable response: {0}")]
     Reponse(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Extrait les valeurs d'une réponse PromQL `/api/v1/query`.
+/// Extracts the values from a PromQL `/api/v1/query` response.
 ///
-/// 🔴 Une réponse **valide mais vide** (`"result": []`) rend un vecteur vide, jamais
-/// une erreur. C'est un état légitime — la métrique n'existe pas — et c'est
-/// [`Regle::juger`] qui décidera que « pas de donnée » n'est pas « tout va bien ».
-/// Renvoyer une erreur ici confondrait « la requête a échoué » avec « la réponse est
-/// vide », deux situations qui n'appellent pas la même conduite.
+/// 🔴 A **valid but empty** response (`"result": []`) returns an empty vector, never an
+/// error. That is a legitimate state - the metric does not exist - and it is
+/// [`Regle::juger`] that decides "no data" is not "all is well". Returning an error
+/// here would confuse "the query failed" with "the response is empty", two situations
+/// that call for different responses.
 ///
-/// Analyse volontairement minimale : on ne veut pas d'une dépendance JSON pour lire un
-/// tableau de nombres, et la forme de cette réponse est stable depuis Prometheus 2.0.
+/// Deliberately minimal parsing: no JSON dependency for reading an array of numbers,
+/// and the shape of this response has been stable since Prometheus 2.0.
 pub fn valeurs_promql(json: &str) -> Result<Vec<f64>> {
     if !json.contains("\"status\"") {
-        return Err(Error::Reponse("ce n'est pas une réponse PromQL".into()));
+        return Err(Error::Reponse("this is not a PromQL response".into()));
     }
     if json.contains("\"status\":\"error\"") || json.contains("\"status\": \"error\"") {
         return Err(Error::Reponse(json.chars().take(200).collect()));
     }
 
     let mut v = Vec::new();
-    // Chaque échantillon est `"value":[<horodatage>,"<valeur>"]`.
+    // Each sample is `"value":[<timestamp>,"<value>"]`.
     for morceau in json.split("\"value\"").skip(1) {
         let Some(apres) = morceau.split(',').nth(1) else {
             continue;
@@ -87,12 +86,12 @@ mod tests {
 
     #[test]
     fn an_empty_result_is_not_an_error() {
-        // 🔴 « La métrique n'existe pas » et « la requête a échoué » n'appellent pas la
-        // même conduite : la première est un fait à interpréter, la seconde une panne
-        // de la collecte. Les confondre ici priverait les règles de la distinction.
+        // 🔴 "The metric does not exist" and "the query failed" call for different
+        // responses: the first is a fact to interpret, the second a scrape failure.
+        // Confusing them here would deny the rules that distinction.
         let vide = r#"{"status":"success","data":{"resultType":"vector","result":[]}}"#;
         assert_eq!(
-            valeurs_promql(vide).expect("réponse valide"),
+            valeurs_promql(vide).expect("valid response"),
             Vec::<f64>::new()
         );
     }
@@ -114,8 +113,8 @@ mod tests {
 
     #[test]
     fn garbage_is_not_read_as_zero() {
-        // 🔴 Une page HTML d'erreur de proxy analysée en « 0 » serait lue comme une
-        // mesure valide — et `0` est justement la valeur qui rassure partout ici.
+        // 🔴 A proxy's HTML error page parsed as "0" would read as a valid
+        // measurement - and `0` is precisely the reassuring value everywhere here.
         assert!(valeurs_promql("<html>502 Bad Gateway</html>").is_err());
         assert!(valeurs_promql("").is_err());
     }
@@ -132,10 +131,10 @@ mod tests {
 
     #[test]
     fn a_missing_metric_reaches_the_rules_as_unknown() {
-        // Le chemin complet, de la réponse vide à la conclusion : c'est l'enchaînement
-        // qui compte, et c'est lui qui a été cassé dans d'autres systèmes.
+        // The full path, from empty response to conclusion: the chain is what matters,
+        // and it is the chain that breaks in other systems.
         let vide = r#"{"status":"success","data":{"result":[]}}"#;
-        let valeurs = valeurs_promql(vide).expect("réponse valide");
+        let valeurs = valeurs_promql(vide).expect("valid response");
 
         let regle = &rules::regles_par_defaut()[0];
         let e = regle.juger(&valeurs);

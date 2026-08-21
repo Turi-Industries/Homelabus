@@ -1,79 +1,77 @@
-//! Les règles d'alerte (§8bis).
+//! The alert rules.
 //!
-//! ## 🔴 Pourquoi Homelabus évalue lui-même, plutôt qu'Alertmanager
+//! ## 🔴 Why Homelabus evaluates them itself rather than using Alertmanager
 //!
-//! La chaîne canonique est `vmalert → Alertmanager → webhook → ntfy`. On ne la prend
-//! pas, pour une raison précise : `hlb-notify` porte déjà les quatre niveaux du §8bis
-//! et les heures calmes, testés. Confier le routage à Alertmanager obligerait à
-//! **redire** ces règles dans sa configuration, dans une autre syntaxe, sans test — et
-//! deux définitions de « qu'est-ce qui mérite de réveiller quelqu'un » finissent
-//! toujours par diverger. On garde donc une seule autorité, et VictoriaMetrics ne sert
-//! qu'à ce qu'il fait le mieux : stocker et répondre.
+//! The canonical chain is `vmalert → Alertmanager → webhook → ntfy`. It is not taken
+//! here, for a precise reason: `hlb-notify` already carries the four levels and the
+//! quiet hours, tested. Handing routing to Alertmanager would mean **restating** those
+//! rules in its configuration, in another syntax, untested - and two definitions of
+//! "what deserves waking someone" always end up diverging. So there is one authority,
+//! and VictoriaMetrics only does what it does best: store and answer.
 //!
-//! ## 🔴 L'invariant central : une métrique absente n'est pas une métrique à zéro
+//! ## 🔴 The central invariant: an absent metric is not a metric at zero
 //!
-//! C'est le même piège que `hlb_backup_age_seconds` (§8.1) : émettre `0` pour une app
-//! jamais sauvegardée signifierait « sauvegardée à l'instant », et l'alerte ne partirait
-//! jamais pour les apps les plus à risque. La métrique est donc **absente**.
+//! Same trap as `hlb_backup_age_seconds`: emitting `0` for an app that was never backed
+//! up would mean "backed up just now", and the alert would never fire for the apps most
+//! at risk. So the metric is **absent**.
 //!
-//! Conséquence directe ici : une règle qui ne trouve rien ne doit **jamais** conclure
-//! « tout va bien ». Elle conclut « je ne sais pas », ce qui est un état distinct et
-//! visible — voir [`Evaluation::Inconnu`]. Un tableau de bord tout vert parce que la
-//! collecte est tombée est exactement la panne que ce module existe pour empêcher.
+//! Direct consequence here: a rule that finds nothing must **never** conclude "all is
+//! well". It concludes "I do not know", which is a distinct and visible state - see
+//! [`Evaluation::Inconnu`]. An all-green dashboard because the scrape died is exactly
+//! the failure this module exists to prevent.
 
 use hlb_notify::{Level, Notification};
 
-/// Ce qu'une règle conclut après interrogation.
+/// What a rule concludes after querying.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Evaluation {
-    /// Le seuil est respecté.
+    /// The threshold is respected.
     Ok,
-    /// Le seuil est franchi, avec la valeur observée.
+    /// The threshold is breached, with the observed value.
     Declenchee { valeur: f64 },
-    /// 🔴 Aucune donnée. **Ce n'est pas `Ok`.**
+    /// 🔴 No data. **This is not `Ok`.**
     ///
-    /// La collecte est peut-être tombée, la cible peut-être injoignable. Confondre
-    /// avec `Ok` produit un tableau de bord vert pendant que le cluster brûle.
+    /// The scrape may have died, the target may be unreachable. Confusing this with
+    /// `Ok` produces a green dashboard while the cluster burns.
     Inconnu { raison: String },
 }
 
-/// La comparaison qui décide du déclenchement.
+/// The comparison that decides whether to fire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparaison {
-    /// Déclenche au-dessus du seuil (âge de sauvegarde, remplissage disque…).
+    /// Fires above the threshold (backup age, disk usage...).
     Depasse,
-    /// Déclenche en dessous (nœuds joignables, réplicas vivants…).
+    /// Fires below it (reachable nodes, live replicas...).
     TombeSous,
 }
 
-/// Une règle d'alerte.
+/// An alert rule.
 #[derive(Debug, Clone)]
 pub struct Regle {
     /// Identifiant court, stable — sert de sujet de notification.
     pub nom: &'static str,
-    /// La requête PromQL à poser.
+    /// The PromQL query to run.
     pub requete: &'static str,
     pub comparaison: Comparaison,
     pub seuil: f64,
     pub niveau: Level,
     /// Ce que la personne doit comprendre, en une phrase.
     pub explication: &'static str,
-    /// 🔴 L'absence de donnée est-elle en soi une alerte ?
+    /// 🔴 Is the absence of data itself an alert?
     ///
-    /// Pour la plupart des règles, oui : si `hlb_app_up` disparaît, c'est que le
-    /// controller ou la collecte est tombé, ce qui est plus grave que la plupart des
-    /// seuils. Voir [`Regle::juger`].
+    /// For most rules, yes: if `hlb_app_up` disappears, the controller or the scrape
+    /// has died, which is more serious than most thresholds. See [`Regle::juger`].
     pub absence_alarmante: bool,
 }
 
 impl Regle {
-    /// Traduit un résultat de requête en évaluation.
+    /// Turns a query result into an evaluation.
     ///
-    /// `valeurs` est vide quand la requête n'a rien rendu.
+    /// `valeurs` is empty when the query returned nothing.
     pub fn juger(&self, valeurs: &[f64]) -> Evaluation {
         let Some(pire) = (match self.comparaison {
-            // On juge sur le cas le plus défavorable : une seule app sans sauvegarde
-            // suffit à mériter l'alerte, la moyenne la noierait.
+            // Judged on the worst case: a single app with no backup deserves the
+            // alert, and an average would drown it.
             Comparaison::Depasse => valeurs
                 .iter()
                 .cloned()
@@ -84,7 +82,7 @@ impl Regle {
                 .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.min(v)))),
         }) else {
             return Evaluation::Inconnu {
-                raison: "aucune donnée".into(),
+                raison: "no data".into(),
             };
         };
 
@@ -100,11 +98,11 @@ impl Regle {
         }
     }
 
-    /// La notification à envoyer, ou `None` s'il n'y a rien à dire.
+    /// The notification to send, or `None` when there is nothing to say.
     ///
-    /// 🔴 Une évaluation `Inconnu` sur une règle `absence_alarmante` produit une
-    /// notification **de son propre chef**, distincte du déclenchement normal : « je ne
-    /// sais pas » et « tout va bien » ne doivent jamais donner la même sortie.
+    /// 🔴 An `Inconnu` evaluation on an `absence_alarmante` rule produces a
+    /// notification **of its own**, distinct from a normal firing: "I do not know" and
+    /// "all is well" must never produce the same output.
     pub fn notification(&self, e: &Evaluation) -> Option<Notification> {
         match e {
             Evaluation::Ok => None,
@@ -114,23 +112,23 @@ impl Regle {
                 self.nom,
                 self.nom,
                 &format!(
-                    "{} (mesuré : {valeur:.2}, seuil : {})",
+                    "{} (measured: {valeur:.2}, threshold: {})",
                     self.explication, self.seuil
                 ),
             )),
 
             Evaluation::Inconnu { raison } if self.absence_alarmante => Some(Notification::new(
-                // 🔴 Le niveau n'est PAS celui de la règle : ne pas savoir est un
-                // problème d'observabilité, pas le problème que la règle surveille.
-                // Le dire au niveau de la règle laisserait croire que le seuil est
-                // franchi, alors qu'on ignore s'il l'est.
+                // 🔴 The level is NOT the rule's: not knowing is an observability
+                // problem, not the problem the rule watches. Reporting it at the rule's
+                // level would suggest the threshold is breached, when we do not know
+                // whether it is.
                 Level::Important,
                 self.nom,
-                &format!("{} : plus de données", self.nom),
+                &format!("{}: no more data", self.nom),
                 &format!(
-                    "La règle « {} » ne peut plus être évaluée ({raison}). \
-                     Ce n'est PAS « tout va bien » : la collecte ou la cible est \
-                     probablement tombée, et cette surveillance est aveugle depuis.",
+                    "Rule \"{}\" can no longer be evaluated ({raison}). \
+                     This is NOT \"all is well\": the scrape or the target has \
+                     probably died, and this check has been blind ever since.",
                     self.nom
                 ),
             )),
@@ -140,24 +138,24 @@ impl Regle {
     }
 }
 
-/// Les règles livrées avec Homelabus.
+/// The rules shipped with Homelabus.
 ///
-/// Elles portent sur les métriques que le controller expose déjà : rien à instrumenter
-/// de plus, et chacune correspond à une panne qu'on a réellement vue coûter cher.
+/// They query metrics the controller already exposes: nothing more to instrument, and
+/// each corresponds to a failure that really cost something.
 pub fn regles_par_defaut() -> Vec<Regle> {
     vec![
         Regle {
             nom: "sauvegarde-absente",
-            // 🔴 Pas de seuil sur `hlb_backup_age_seconds` : la métrique est ABSENTE
-            // quand rien n'a jamais réussi. C'est le compte d'apps connues moins le
-            // compte d'apps ayant une sauvegarde qui révèle le trou.
+            // 🔴 No threshold on `hlb_backup_age_seconds`: the metric is ABSENT when
+            // nothing ever succeeded. It is the count of known apps minus the count of
+            // apps with a backup that reveals the gap.
             requete: "count(hlb_app_up) - count(hlb_backup_age_seconds)",
             comparaison: Comparaison::Depasse,
             seuil: 0.0,
             niveau: Level::Critical,
-            explication: "Des apps n'ont AUCUNE sauvegarde réussie. \
-                          Elles tournent peut-être parfaitement — c'est le pire état \
-                          du système, et celui qui paraît le plus sain.",
+            explication: "Some apps have NO successful backup. \
+                          They may be running perfectly - which is the worst state \
+                          of the system, and the one that looks healthiest.",
             absence_alarmante: true,
         },
         Regle {
@@ -173,28 +171,27 @@ pub fn regles_par_defaut() -> Vec<Regle> {
         },
         Regle {
             nom: "copie-unique",
-            // 🔴 Le nombre de destinations CONFIGURÉES ne dit rien du nombre de copies.
-            // Trois destinations dont deux en échec, ce n'est pas du 3-2-1 — et c'est
-            // exactement l'état qu'un tableau de bord agrégé ferait passer pour sain.
+            // 🔴 The number of CONFIGURED destinations says nothing about the number
+            // of copies. Three destinations with two failing is not 3-2-1 - and it is
+            // exactly the state an aggregated dashboard would pass off as healthy.
             requete: "min(hlb_backup_copies)",
             comparaison: Comparaison::TombeSous,
             seuil: 2.0,
             niveau: Level::Important,
-            explication: "Une app n'a plus qu'UNE copie à jour. Les autres \
-                          destinations sont configurées mais en échec — configuré \
-                          n'est pas protégé.",
+            explication: "An app has only ONE up-to-date copy left. The other \
+                          destinations are configured but failing - configured \
+                          is not protected.",
             absence_alarmante: false,
         },
         Regle {
             nom: "verification-perimee",
-            // 🔴 Une sauvegarde jamais restaurée n'est pas une sauvegarde, c'est une
-            // hypothèse. §8.3.
+            // 🔴 A backup never restored is not a backup, it is a hypothesis.
             requete: "max(hlb_backup_verification_age_seconds)",
             comparaison: Comparaison::Depasse,
             seuil: 2_678_400.0, // 31 jours
             niveau: Level::Important,
-            explication: "Aucune restauration vérifiée depuis plus d'un mois. \
-                          Une sauvegarde jamais restaurée est une hypothèse.",
+            explication: "No verified restore for over a month. \
+                          A backup never restored is a hypothesis.",
             absence_alarmante: false,
         },
         Regle {
@@ -203,7 +200,7 @@ pub fn regles_par_defaut() -> Vec<Regle> {
             comparaison: Comparaison::TombeSous,
             seuil: 1.0,
             niveau: Level::Critical,
-            explication: "Une app est en échec.",
+            explication: "An app has failed.",
             absence_alarmante: true,
         },
         Regle {
@@ -212,21 +209,20 @@ pub fn regles_par_defaut() -> Vec<Regle> {
             comparaison: Comparaison::TombeSous,
             seuil: 1.0,
             niveau: Level::Critical,
-            explication: "Un nœud ne répond plus.",
+            explication: "A node has stopped answering.",
             absence_alarmante: true,
         },
         Regle {
             nom: "disque-plein",
             requete: "max(hlb_disk_used_ratio)",
             comparaison: Comparaison::Depasse,
-            // 🔴 85 % et non 95 % : au-delà, PostgreSQL et restic n'ont plus la place
-            // de travailler, et c'est précisément le moment où l'on voudrait
-            // sauvegarder avant d'intervenir. Alerter trop tard revient à ne pas
-            // alerter.
+            // 🔴 85 % and not 95 %: beyond that, PostgreSQL and restic have no room
+            // left to work, and that is precisely when you would want to back up before
+            // intervening. Alerting too late amounts to not alerting.
             seuil: 0.85,
             niveau: Level::Important,
-            explication: "Un disque dépasse 85 %. Au-delà, sauvegardes et dumps \
-                          n'ont plus la place de s'exécuter.",
+            explication: "A disk is over 85 %. Beyond that, backups and dumps \
+                          have no room left to run.",
             absence_alarmante: false,
         },
         Regle {
@@ -259,9 +255,9 @@ mod tests {
 
     #[test]
     fn no_data_is_never_ok() {
-        // 🔴 L'invariant du module. Une règle sans donnée ne conclut PAS « tout va
-        // bien » : la collecte est peut-être tombée, et un tableau de bord vert
-        // pendant que le cluster brûle est la panne qu'on cherche à éviter.
+        // 🔴 The module's invariant. A rule with no data does NOT conclude "all is
+        // well": the scrape may have died, and a green dashboard while the cluster
+        // burns is the failure being avoided.
         let e = regle(Comparaison::Depasse, 10.0, true).juger(&[]);
         assert!(matches!(e, Evaluation::Inconnu { .. }), "{e:?}");
         assert_ne!(e, Evaluation::Ok);
@@ -269,51 +265,51 @@ mod tests {
 
     #[test]
     fn missing_data_alerts_on_its_own() {
-        // Et cette ignorance se DIT, au lieu d'être avalée en silence.
+        // And that ignorance is SAID, instead of being swallowed silently.
         let r = regle(Comparaison::Depasse, 10.0, true);
         let n = r
             .notification(&r.juger(&[]))
-            .expect("l'absence de donnée doit produire une notification");
+            .expect("absent data must produce a notification");
 
-        assert!(n.body.contains("PAS « tout va bien »"), "{}", n.body);
-        assert!(n.body.contains("aveugle"), "{}", n.body);
+        assert!(n.body.contains("NOT \"all is well\""), "{}", n.body);
+        assert!(n.body.contains("blind"), "{}", n.body);
     }
 
     #[test]
     fn not_knowing_is_not_reported_as_the_threshold_being_crossed() {
-        // 🔴 Le niveau d'une absence de donnée n'est pas celui de la règle. Envoyer un
-        // « critique » ferait croire que le seuil est franchi, alors qu'on ignore
-        // justement s'il l'est. C'est un problème d'observabilité, pas de seuil.
+        // 🔴 The level of absent data is not the rule's. Sending a "critical" would
+        // suggest the threshold is breached, when whether it is is precisely what we do
+        // not know. This is an observability problem, not a threshold one.
         let r = regle(Comparaison::Depasse, 10.0, true);
         assert_eq!(r.niveau, Level::Critical);
 
         let n = r.notification(&r.juger(&[])).expect("notification");
         assert_eq!(n.level, Level::Important);
 
-        // Le vrai franchissement, lui, garde bien le niveau de la règle.
+        // A real breach, on the other hand, keeps the rule's own level.
         let d = r.notification(&r.juger(&[42.0])).expect("notification");
         assert_eq!(d.level, Level::Critical);
     }
 
     #[test]
     fn silence_is_allowed_only_when_it_was_declared_harmless() {
-        // Certaines règles n'ont légitimement rien à dire quand la métrique manque —
-        // mais c'est un choix EXPLICITE, jamais le défaut.
+        // Some rules legitimately have nothing to say when the metric is missing - but
+        // that is an EXPLICIT choice, never the default.
         let r = regle(Comparaison::Depasse, 10.0, false);
         assert!(r.notification(&r.juger(&[])).is_none());
     }
 
     #[test]
     fn the_worst_case_decides_never_the_average() {
-        // 🔴 Une seule app sans sauvegarde mérite l'alerte. Une moyenne la noierait
-        // sous les apps saines — d'autant plus efficacement qu'il y en a beaucoup.
+        // 🔴 A single app with no backup deserves the alert. An average would drown it
+        // under the healthy ones - the more of them there are, the more effectively.
         let haut = regle(Comparaison::Depasse, 10.0, false);
         assert_eq!(
             haut.juger(&[1.0, 2.0, 99.0]),
             Evaluation::Declenchee { valeur: 99.0 }
         );
 
-        // Et symétriquement pour les seuils bas : un seul nœud tombé suffit.
+        // And symmetrically for low thresholds: a single downed node is enough.
         let bas = regle(Comparaison::TombeSous, 1.0, false);
         assert_eq!(
             bas.juger(&[1.0, 1.0, 0.0]),
@@ -324,8 +320,8 @@ mod tests {
 
     #[test]
     fn the_threshold_is_strict() {
-        // Pile au seuil, on ne déclenche pas : sinon un disque à exactement 85 %
-        // alerterait en permanence sans que rien n'empire.
+        // Exactly at the threshold nothing fires: otherwise a disk at exactly 85 %
+        // would alert permanently without anything getting worse.
         let r = regle(Comparaison::Depasse, 0.85, false);
         assert_eq!(r.juger(&[0.85]), Evaluation::Ok);
         assert!(matches!(r.juger(&[0.8501]), Evaluation::Declenchee { .. }));
@@ -333,45 +329,45 @@ mod tests {
 
     #[test]
     fn never_backed_up_outranks_everything_else() {
-        // 🔴 La même hiérarchie que dans l'UI : une app qui tourne parfaitement et n'a
-        // aucune sauvegarde est le pire état du système, et celui qui paraît le plus
-        // sain sur un tableau de bord.
+        // 🔴 The same hierarchy as in the UI: an app running perfectly with no backup
+        // is the worst state of the system, and the one that looks healthiest on a
+        // dashboard.
         let r = regles_par_defaut();
         let absente = r
             .iter()
             .find(|x| x.nom == "sauvegarde-absente")
-            .expect("règle présente");
+            .expect("rule present");
 
         assert_eq!(absente.niveau, Level::Critical);
         assert!(
             absente.absence_alarmante,
-            "si cette règle elle-même devient muette, il faut le savoir"
+            "if this rule itself goes quiet, that must be known"
         );
 
         let retard = r
             .iter()
             .find(|x| x.nom == "sauvegarde-en-retard")
-            .expect("règle présente");
+            .expect("rule present");
         assert!(
             absente.niveau > retard.niveau,
-            "jamais sauvegardée est plus grave qu'en retard"
+            "never backed up is more serious than overdue"
         );
     }
 
     #[test]
     fn the_never_backed_up_rule_does_not_read_an_absent_metric() {
-        // 🔴 Le cœur du piège : `hlb_backup_age_seconds` est ABSENTE pour une app
-        // jamais sauvegardée. Un seuil posé dessus ne verrait donc jamais ces
-        // apps-là — exactement celles qu'on veut détecter. Il faut compter l'écart.
+        // 🔴 The heart of the trap: `hlb_backup_age_seconds` is ABSENT for an app that
+        // was never backed up. A threshold over it would therefore never see those apps
+        // - exactly the ones to detect. The gap has to be counted.
         let r = regles_par_defaut();
         let absente = r
             .iter()
             .find(|x| x.nom == "sauvegarde-absente")
-            .expect("règle présente");
+            .expect("rule present");
 
         assert!(
             absente.requete.contains("count("),
-            "la règle doit COMPTER, pas comparer une métrique absente : {}",
+            "the rule must COUNT, not compare an absent metric: {}",
             absente.requete
         );
         assert!(absente.requete.contains("hlb_app_up"));
@@ -379,8 +375,8 @@ mod tests {
 
     #[test]
     fn every_rule_explains_itself() {
-        // Une alerte qui ne dit pas ce qu'elle veut est une alerte qu'on finit par
-        // ignorer, et une alerte ignorée ne protège de rien.
+        // An alert that does not say what it wants is an alert people end up ignoring,
+        // and an ignored alert protects nothing.
         for r in regles_par_defaut() {
             assert!(!r.explication.is_empty(), "{} sans explication", r.nom);
             assert!(
@@ -388,17 +384,17 @@ mod tests {
                 "{} : explication trop courte pour agir",
                 r.nom
             );
-            assert!(!r.requete.is_empty(), "{} sans requête", r.nom);
+            assert!(!r.requete.is_empty(), "{} has no query", r.nom);
         }
     }
 
     #[test]
     fn a_disk_alert_leaves_room_to_act() {
-        // 🔴 Alerter à 95 % revient à ne pas alerter : PostgreSQL et restic n'ont
-        // alors plus la place de travailler, et c'est précisément le moment où l'on
-        // voudrait sauvegarder avant d'intervenir.
+        // 🔴 Alerting at 95 % amounts to not alerting: PostgreSQL and restic then have
+        // no room left to work, and that is precisely when you would want to back up
+        // before intervening.
         let r = regles_par_defaut();
-        let d = r.iter().find(|x| x.nom == "disque-plein").expect("règle");
+        let d = r.iter().find(|x| x.nom == "disque-plein").expect("rule");
         assert!(d.seuil <= 0.85, "seuil trop tardif : {}", d.seuil);
     }
 }

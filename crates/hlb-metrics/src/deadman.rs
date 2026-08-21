@@ -1,74 +1,71 @@
-//! Le deadman switch (§8bis).
+//! The deadman switch.
 //!
-//! ## 🔴 Le problème que rien d'autre ne résout
+//! ## 🔴 The problem nothing else solves
 //!
-//! Toutes les alertes de [`crate::rules`] partagent un défaut fatal : **elles tournent
-//! sur le controller**. Si le controller meurt, se fige, perd son réseau ou voit son
-//! disque saturer, il n'émet plus aucune alerte — et le silence est indiscernable du
-//! bon fonctionnement. Le tableau de bord reste au vert, le téléphone reste muet, et
-//! l'on apprend la panne en essayant d'utiliser un service, parfois des semaines après.
+//! Every alert rule shares one fatal flaw: **it runs on the controller**. If the
+//! controller dies, freezes, loses its network or fills its disk, it emits no alert at
+//! all - and silence is indistinguishable from everything being fine. The dashboard
+//! stays green, the phone stays quiet, and you learn about the outage by trying to use
+//! a service, sometimes weeks later.
 //!
-//! Un deadman switch inverse la charge de la preuve. Au lieu d'attendre un message
-//! disant « ça va mal », on attend un message disant « ça va » — et c'est **son
-//! absence** qui déclenche l'alerte. Le silence devient un signal.
+//! A deadman switch inverts the burden of proof. Instead of waiting for a message
+//! saying "something is wrong", you wait for one saying "all is well" - and it is
+//! **its absence** that raises the alert. Silence becomes a signal.
 //!
-//! ## 🔴 Trois règles, dont chacune annule le dispositif si on l'oublie
+//! ## 🔴 Three rules, each of which voids the whole thing if forgotten
 //!
-//! **1. Le veilleur ne tourne PAS sur la machine qu'il surveille.** C'est toute
-//! l'idée. Un deadman hébergé par le controller meurt avec lui, et l'on a construit
-//! une élaborate machinerie qui ne détecte rien. Le NAS est le veilleur naturel : il
-//! est déjà la cible des sauvegardes, donc déjà une autre machine, déjà allumée en
-//! permanence.
+//! **1. The watchdog does NOT run on the machine it watches.** That is the entire
+//! idea. A deadman hosted by the controller dies with it, and you have built elaborate
+//! machinery that detects nothing. The NAS is the natural watchdog: it is already the
+//! backup target, therefore already another machine, already always on.
 //!
-//! **2. L'alerte du veilleur ne passe PAS par le système surveillé.** Si le NAS
-//! constate le silence puis demande au controller de notifier, il n'y a pas d'alerte —
-//! le controller est précisément ce qui est mort. Le veilleur doit avoir sa propre
-//! voie de sortie (ses propres identifiants ntfy), et [`script_veilleur`] la lui donne.
+//! **2. The watchdog's alert does NOT go through the watched system.** If the NAS
+//! notices the silence and then asks the controller to notify, there is no alert - the
+//! controller is precisely what died. The watchdog needs its own way out (its own ntfy
+//! credentials), and [`script_veilleur`] gives it one.
 //!
-//! **3. Le battement n'est PAS un minuteur.** C'est le point le plus facile à rater.
-//! Un battement émis par une simple boucle temporelle prouve seulement qu'un fil
-//! d'exécution vit encore : le controller peut avoir une boucle de réconciliation
-//! bloquée, un Docker injoignable et une base illisible, et continuer à battre
-//! joyeusement. Le battement doit être **conditionné à une vérification réussie** —
-//! voir [`Battement::emettre_si`].
+//! **3. The heartbeat is NOT a timer.** This is the easiest point to miss. A heartbeat
+//! emitted by a plain time loop proves only that a thread is still alive: the
+//! controller can have a stuck reconciliation loop, an unreachable Docker and an
+//! unreadable database, and keep beating happily. The beat must be **conditional on a
+//! successful check** - see [`Battement::emettre_si`].
 //!
-//! ## Ce que ça ne résout pas, et qu'il vaut mieux savoir
+//! ## What this does not solve, and is better known
 //!
-//! Le veilleur peut mourir à son tour, et son silence à lui n'est surveillé par
-//! personne. On ne supprime donc pas le point unique de défaillance : on le **déplace**
-//! d'un système complexe (le controller, qui orchestre, sauvegarde, met à jour) vers un
-//! script trivial qui ne fait qu'une chose. C'est un gain réel, et ce n'est pas une
-//! garantie. Le dire est plus utile que de laisser croire à une preuve.
+//! The watchdog can die in turn, and nobody watches its silence. So the single point
+//! of failure is not removed: it is **moved** from a complex system (the controller,
+//! which orchestrates, backs up, updates) to a trivial script that does one thing.
+//! That is a real gain, and it is not a guarantee. Saying so is more useful than
+//! letting anyone believe in a proof.
 
 use std::fmt::Write as _;
 
-/// Intervalle recommandé entre deux battements.
+/// Recommended interval between two heartbeats.
 ///
-/// Cinq minutes : assez court pour que la panne se voie dans l'heure, assez long pour
-/// qu'une reprise de service ou un redémarrage n'émette pas de fausse alerte.
+/// Five minutes: short enough for an outage to show within the hour, long enough that
+/// a service restart does not raise a false alert.
 pub const INTERVALLE_BATTEMENT_S: u64 = 300;
 
-/// Au-delà de ce silence, le veilleur alerte.
+/// Beyond this much silence, the watchdog alerts.
 ///
-/// 🔴 Trois battements manqués, pas un. Un seul battement raté est le fonctionnement
-/// normal d'un réseau domestique : redémarrage, mise à jour, Wi-Fi qui hoquette. Une
-/// alerte à chaque hoquet est une alerte qu'on finit par couper — et un deadman coupé
-/// ne protège de rien.
+/// 🔴 Three missed beats, not one. A single missed beat is normal behaviour on a home
+/// network: a reboot, an update, Wi-Fi hiccupping. An alert on every hiccup is an alert
+/// people eventually turn off - and a turned-off deadman protects nothing.
 pub const SILENCE_MAX_S: u64 = INTERVALLE_BATTEMENT_S * 3 + 60;
 
-/// Ce qui doit être vrai pour qu'un battement parte.
+/// What must be true for a heartbeat to go out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sante {
-    /// La base d'état répond.
+    /// The state database answers.
     pub etat_lisible: bool,
-    /// L'orchestrateur répond.
+    /// The orchestrator answers.
     pub orchestrateur_joignable: bool,
-    /// La dernière boucle de réconciliation est allée au bout.
+    /// The last reconciliation loop ran to completion.
     pub reconciliation_recente: bool,
 }
 
 impl Sante {
-    /// Le système est-il en état de prétendre qu'il va bien ?
+    /// Is the system in a state to claim it is fine?
     pub fn est_saine(&self) -> bool {
         self.etat_lisible && self.orchestrateur_joignable && self.reconciliation_recente
     }
@@ -77,31 +74,31 @@ impl Sante {
     pub fn manquements(&self) -> Vec<&'static str> {
         let mut v = Vec::new();
         if !self.etat_lisible {
-            v.push("base d'état illisible");
+            v.push("unreadable state database");
         }
         if !self.orchestrateur_joignable {
             v.push("orchestrateur injoignable");
         }
         if !self.reconciliation_recente {
-            v.push("réconciliation bloquée");
+            v.push("reconciliation stuck");
         }
         v
     }
 }
 
-/// Le battement émis par le système surveillé.
+/// The heartbeat emitted by the watched system.
 pub struct Battement {
-    /// Où pousser le battement. Sur le NAS, hors du système surveillé.
+    /// Where to push the heartbeat. On the NAS, outside the watched system.
     pub url: String,
 }
 
 /// Ce qu'il faut faire d'un battement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Emission {
-    /// À envoyer.
+    /// To be sent.
     Envoyer,
-    /// 🔴 À **taire**. Le silence est le signal : se taire déclenchera l'alerte du
-    /// veilleur, et c'est exactement ce qu'on veut quand le système va mal.
+    /// 🔴 To be **withheld**. Silence is the signal: staying quiet will trigger the
+    /// watchdog's alert, which is exactly what is wanted when the system is unwell.
     Taire { manquements: Vec<&'static str> },
 }
 
@@ -110,14 +107,13 @@ impl Battement {
         Self { url: url.into() }
     }
 
-    /// Décide d'émettre, ou de se taire.
+    /// Decides whether to emit or to stay quiet.
     ///
-    /// 🔴 **Le battement est conditionnel, jamais périodique.** Un battement émis par
-    /// un simple minuteur prouve qu'un fil d'exécution vit, rien de plus : le
-    /// controller peut avoir sa boucle de réconciliation bloquée, son Docker
-    /// injoignable et sa base illisible, et battre imperturbablement. Le deadman
-    /// resterait vert sur un système inutilisable, ce qui est pire que pas de deadman
-    /// du tout — parce qu'on lui fait confiance.
+    /// 🔴 **The heartbeat is conditional, never periodic.** A beat emitted by a plain
+    /// timer proves a thread is alive and nothing more: the controller can have a stuck
+    /// reconciliation loop, an unreachable Docker and an unreadable database, and keep
+    /// beating imperturbably. The deadman would stay green over an unusable system,
+    /// which is worse than no deadman at all - because it is trusted.
     pub fn emettre_si(sante: &Sante) -> Emission {
         if sante.est_saine() {
             Emission::Envoyer
@@ -129,27 +125,27 @@ impl Battement {
     }
 }
 
-/// L'état constaté par le veilleur.
+/// The state the watchdog observes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Veille {
     /// Battement frais.
     Vivant { depuis_s: u64 },
-    /// 🔴 Silence prolongé : le système surveillé est probablement mort.
+    /// 🔴 Prolonged silence: the watched system is probably dead.
     Silencieux { depuis_s: u64 },
-    /// 🔴 **Aucun battement n'a JAMAIS été reçu.**
+    /// 🔴 **No heartbeat has EVER been received.**
     ///
-    /// Distinct de `Silencieux`, et pour la même raison que `NeverSucceeded` l'est de
-    /// `Stale` dans l'UI : un deadman jamais armé n'a jamais rien protégé. Le
-    /// confondre avec un silence récent laisserait croire à une panne fraîche, alors
-    /// que le dispositif n'a tout simplement jamais fonctionné — l'installation était
-    /// mauvaise depuis le premier jour, et personne ne l'a su.
+    /// Distinct from `Silencieux`, for the same reason `NeverSucceeded` is distinct
+    /// from `Stale` in the UI: a deadman that was never armed has never protected
+    /// anything. Confusing it with a recent silence would suggest a fresh outage, when
+    /// the mechanism simply never worked - the installation was wrong from day one, and
+    /// nobody knew.
     JamaisArme,
 }
 
 impl Veille {
-    /// Juge la fraîcheur du dernier battement.
+    /// Judges the freshness of the last heartbeat.
     ///
-    /// `dernier_s` est `None` quand aucun battement n'a jamais été reçu.
+    /// `dernier_s` is `None` when no heartbeat has ever been received.
     pub fn juger(dernier_s: Option<u64>, maintenant_s: u64) -> Self {
         let Some(dernier) = dernier_s else {
             return Self::JamaisArme;
@@ -167,70 +163,61 @@ impl Veille {
         !matches!(self, Self::Vivant { .. })
     }
 
-    /// Le message à pousser, ou `None` si tout va bien.
+    /// The message to push, or `None` when all is well.
     pub fn message(&self) -> Option<String> {
         match self {
             Self::Vivant { .. } => None,
 
             Self::Silencieux { depuis_s } => Some(format!(
-                "🔴 Homelabus ne donne plus signe de vie depuis {} minutes.\n\n\
-                 Le controller est probablement arrêté, figé, ou coupé du réseau. \
-                 Tant qu'il l'est, AUCUNE autre alerte ne peut partir : ni sauvegarde \
-                 manquée, ni app tombée, ni disque plein. Ce silence est donc le seul \
-                 signal disponible.",
+                "🔴 Homelabus has shown no sign of life for {} minutes.\n\n\
+                 The controller is probably stopped, frozen, or cut off from the \
+                 network. While it is, NO other alert can go out: not a missed backup, \
+                 not a downed app, not a full disk. This silence is therefore the only \
+                 signal available.",
                 depuis_s / 60
             )),
 
             Self::JamaisArme => Some(
-                "🔴 Le deadman switch n'a JAMAIS reçu de battement.\n\n\
-                 Ce n'est pas une panne récente : le dispositif n'a jamais fonctionné, \
-                 donc il n'a jamais rien protégé. Vérifie que le controller connaît \
-                 bien l'URL du veilleur, et qu'il peut l'atteindre."
+                "🔴 The deadman switch has NEVER received a heartbeat.\n\n\
+                 This is not a recent outage: the mechanism never worked, so it has \
+                 never protected anything. Check that the controller knows the \
+                 watchdog's URL, and that it can reach it."
                     .into(),
             ),
         }
     }
 }
 
-/// Le script à poser sur le NAS.
+/// The script to install on the NAS.
 ///
-/// 🔴 Délibérément trivial : `curl`, `date`, une comparaison. Ce script est le dernier
-/// maillon, celui que personne ne surveille — chaque ligne qu'on y ajoute est une ligne
-/// qui peut le faire échouer en silence. Sa bêtise est une propriété, pas une limite.
+/// 🔴 Deliberately trivial: `curl`, `date`, a comparison. This script is the last link,
+/// the one nobody watches - every line added to it is a line that can make it fail
+/// silently. Its stupidity is a property, not a limitation.
 ///
-/// ⚠️ Il pousse vers ntfy **directement**, sans passer par Homelabus : demander au
-/// système surveillé de relayer l'alerte de sa propre mort ne peut pas marcher.
+/// ⚠️ It pushes to ntfy **directly**, not through Homelabus: asking the watched system
+/// to relay the alert about its own death cannot work.
 ///
-/// 🔴 **Et si ntfy est injoignable ?** Constaté en exécutant réellement le script : un
-/// `curl` en échec est avalé par la redirection, et l'alerte disparaît sans laisser de
-/// trace — le veilleur ne peut pas signaler qu'il n'a pas pu signaler. D'où le repli
-/// sur **stderr**, que cron envoie par courriel : une seconde voie qui ne partage ni le
-/// réseau ni le service de la première, pour une ligne de shell.
+/// 🔴 **And if ntfy is unreachable?** Found by actually running the script: a failing
+/// `curl` is swallowed by the redirection, and the alert disappears without a trace -
+/// the watchdog cannot report that it could not report. Hence the fallback to
+/// **stderr**, which cron mails out: a second path sharing neither the network nor the
+/// service of the first, for one line of shell.
 pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "#!/bin/sh");
-    let _ = writeln!(
-        s,
-        "# Veilleur Homelabus (§8bis) — à lancer par cron sur le NAS."
-    );
+    let _ = writeln!(s, "# Homelabus watchdog - to be run by cron on the NAS.");
     let _ = writeln!(s, "#");
-    let _ = writeln!(s, "# 🔴 Ce script NE DOIT PAS tourner sur la machine qu'il");
-    let _ = writeln!(
-        s,
-        "#    surveille : il mourrait avec elle, et ne détecterait rien."
-    );
+    let _ = writeln!(s, "# 🔴 This script MUST NOT run on the machine it");
+    let _ = writeln!(s, "#    watches: it would die with it and detect nothing.");
     let _ = writeln!(s, "#");
     let _ = writeln!(
         s,
-        "# 🔴 Il pousse vers ntfy DIRECTEMENT. Passer par Homelabus pour"
+        "# 🔴 It pushes to ntfy DIRECTLY. Going through Homelabus to"
     );
-    let _ = writeln!(
-        s,
-        "#    signaler que Homelabus est mort ne peut pas fonctionner."
-    );
+    let _ = writeln!(s, "#    report that Homelabus is dead cannot work.");
     let _ = writeln!(s, "#");
-    let _ = writeln!(s, "# Pose-le en cron toutes les 5 minutes :");
-    let _ = writeln!(s, "#   */5 * * * * /chemin/veilleur.sh");
+    let _ = writeln!(s, "# Install it in cron every 5 minutes:");
+    let _ = writeln!(s, "#   */5 * * * * /path/watchdog.sh");
     let _ = writeln!(s);
     let _ = writeln!(s, "set -u");
     let _ = writeln!(s, "BATTEMENT='{fichier_battement}'");
@@ -239,24 +226,21 @@ pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> 
     let _ = writeln!(s, "if [ ! -f \"$BATTEMENT\" ]; then");
     let _ = writeln!(
         s,
-        "  # Jamais armé : distinct d'un silence récent. Le dispositif"
+        "  # Never armed: distinct from a recent silence. The mechanism"
+    );
+    let _ = writeln!(s, "  # never worked, so it never protected anything.");
+    let _ = writeln!(
+        s,
+        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} never armed' \\"
     );
     let _ = writeln!(
         s,
-        "  # n'a jamais fonctionné, donc n'a jamais rien protégé."
-    );
-    let _ = writeln!(
-        s,
-        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} jamais armé' \\"
-    );
-    let _ = writeln!(
-        s,
-        "    -d 'Aucun battement reçu, jamais. Le deadman ne protège rien.' \\"
+        "    -d 'No heartbeat received, ever. The deadman protects nothing.' \\"
     );
     let _ = writeln!(s, "    '{ntfy_url}' >/dev/null 2>&1 \\");
     let _ = writeln!(
         s,
-        "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2"
+        "    || echo 'WATCHDOG: ntfy unreachable, alert LOST' >&2"
     );
     let _ = writeln!(s, "  exit 1");
     let _ = writeln!(s, "fi");
@@ -268,20 +252,17 @@ pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> 
     let _ = writeln!(s, "if [ \"$AGE\" -gt \"$SILENCE_MAX\" ]; then");
     let _ = writeln!(
         s,
-        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} silencieux' \\"
+        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} silent' \\"
     );
+    let _ = writeln!(s, "    -d \"No sign of life for $((AGE / 60)) minutes. \\");
     let _ = writeln!(
         s,
-        "    -d \"Aucun signe de vie depuis $((AGE / 60)) minutes. \\"
-    );
-    let _ = writeln!(
-        s,
-        "Tant que dure ce silence, AUCUNE autre alerte ne peut partir.\" \\"
+        "While this silence lasts, NO other alert can go out.\" \\"
     );
     let _ = writeln!(s, "    '{ntfy_url}' >/dev/null 2>&1 \\");
     let _ = writeln!(
         s,
-        "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2"
+        "    || echo 'WATCHDOG: ntfy unreachable, alert LOST' >&2"
     );
     let _ = writeln!(s, "  exit 1");
     let _ = writeln!(s, "fi");
@@ -304,10 +285,10 @@ mod tests {
 
     #[test]
     fn a_sick_system_stays_silent() {
-        // 🔴 LE point du module. Un battement périodique prouve qu'un fil vit, pas que
-        // le système marche : le controller peut avoir sa réconciliation bloquée et
-        // son Docker injoignable, et battre imperturbablement. Le deadman resterait
-        // vert sur un système inutilisable — pire que pas de deadman, car on s'y fie.
+        // 🔴 THE point of this module. A periodic beat proves a thread is alive, not
+        // that the system works: the controller can have a stuck reconciliation and an
+        // unreachable Docker, and beat imperturbably. The deadman would stay green over
+        // an unusable system - worse than no deadman, because it is trusted.
         assert_eq!(Battement::emettre_si(&saine()), Emission::Envoyer);
 
         for casser in [
@@ -319,7 +300,7 @@ mod tests {
             casser(&mut s);
             assert!(
                 matches!(Battement::emettre_si(&s), Emission::Taire { .. }),
-                "un système en panne ne doit PAS battre : {s:?}"
+                "a broken system must NOT beat: {s:?}"
             );
         }
     }
@@ -339,28 +320,28 @@ mod tests {
 
     #[test]
     fn never_armed_is_distinct_from_recently_silent() {
-        // 🔴 Même distinction que `NeverSucceeded` / `Stale` dans l'UI. Un deadman
-        // jamais armé n'a jamais rien protégé : le confondre avec une panne fraîche
-        // ferait chercher un incident récent, alors que l'installation était mauvaise
-        // depuis le premier jour.
+        // 🔴 Same distinction as `NeverSucceeded` / `Stale` in the UI. A deadman that
+        // was never armed never protected anything: confusing it with a fresh outage
+        // would send you looking for a recent incident, when the installation was wrong
+        // from day one.
         assert_eq!(Veille::juger(None, 1_000_000), Veille::JamaisArme);
 
         let silencieux = Veille::juger(Some(0), SILENCE_MAX_S + 100);
         assert!(matches!(silencieux, Veille::Silencieux { .. }));
         assert_ne!(silencieux, Veille::JamaisArme);
 
-        // Et les deux messages doivent être différents, pas seulement les variantes.
+        // And the two messages must differ, not only the variants.
         let m_jamais = Veille::JamaisArme.message().expect("message");
         let m_silence = silencieux.message().expect("message");
-        assert!(m_jamais.contains("JAMAIS"), "{m_jamais}");
-        assert!(m_jamais.contains("jamais rien protégé"), "{m_jamais}");
+        assert!(m_jamais.contains("NEVER"), "{m_jamais}");
+        assert!(m_jamais.contains("never protected anything"), "{m_jamais}");
         assert_ne!(m_jamais, m_silence);
     }
 
     #[test]
     fn one_missed_beat_is_not_an_alert() {
-        // 🔴 Une alerte à chaque hoquet du Wi-Fi est une alerte qu'on finit par
-        // couper. Un deadman coupé ne protège de rien.
+        // 🔴 An alert on every Wi-Fi hiccup is an alert people eventually turn off. A
+        // turned-off deadman protects nothing.
         let un_rate = INTERVALLE_BATTEMENT_S + 30;
         assert!(!Veille::juger(Some(0), un_rate).est_alarmant());
 
@@ -381,17 +362,16 @@ mod tests {
 
     #[test]
     fn a_clock_going_backwards_does_not_panic() {
-        // Un NAS qui resynchronise son horloge peut rendre un battement « futur ».
-        // Une soustraction qui déborde ferait planter le veilleur — donc plus de
-        // surveillance du tout, en silence.
+        // A NAS resyncing its clock can return a "future" heartbeat. An overflowing
+        // subtraction would crash the watchdog - so no monitoring at all, silently.
         let v = Veille::juger(Some(2000), 1000);
         assert_eq!(v, Veille::Vivant { depuis_s: 0 });
     }
 
     #[test]
     fn the_watcher_never_routes_through_the_watched_system() {
-        // 🔴 Demander au système surveillé de signaler sa propre mort ne peut pas
-        // marcher. Le veilleur doit pousser vers ntfy directement.
+        // 🔴 Asking the watched system to report its own death cannot work. The
+        // watchdog must push to ntfy directly.
         let s = script_veilleur(
             "/var/lib/hlb/battement",
             "https://ntfy.sh/mon-sujet",
@@ -401,17 +381,17 @@ mod tests {
         assert!(s.contains("https://ntfy.sh/mon-sujet"), "{s}");
         assert!(
             !s.contains("hlb ") && !s.contains("localhost"),
-            "le veilleur ne doit dépendre de rien du système surveillé : {s}"
+            "the watchdog must depend on nothing from the watched system: {s}"
         );
-        assert!(s.contains("NE DOIT PAS tourner sur la machine"), "{s}");
+        assert!(s.contains("MUST NOT run on the machine"), "{s}");
     }
 
     #[test]
     fn the_watcher_distinguishes_never_armed_too() {
-        // La distinction doit survivre jusque dans le script, sinon elle ne sert à
-        // rien : c'est lui qui parle à l'humain.
+        // The distinction must survive into the script, or it is worthless: the
+        // script is what speaks to the human.
         let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
-        assert!(s.contains("jamais armé"), "{s}");
+        assert!(s.contains("never armed"), "{s}");
         assert!(
             s.contains("if [ ! -f"),
             "il doit tester l'absence du fichier : {s}"
@@ -420,27 +400,29 @@ mod tests {
 
     #[test]
     fn a_lost_alert_leaves_a_trace() {
-        // 🔴 Constaté en exécutant le script pour de vrai : `curl … >/dev/null 2>&1`
-        // avale son propre échec. Si ntfy est injoignable — panne réseau, sujet
-        // supprimé, service tombé — l'alerte disparaît sans laisser de trace, et le
-        // veilleur ne peut pas signaler qu'il n'a pas pu signaler.
+        // 🔴 Found by actually running the script: `curl ... >/dev/null 2>&1` swallows
+        // its own failure. If ntfy is unreachable - network outage, deleted topic,
+        // service down - the alert disappears without a trace, and the watchdog cannot
+        // report that it could not report.
         //
-        // stderr est le repli : cron l'envoie par courriel, et cette voie-là ne partage
-        // ni le réseau ni le service de ntfy.
+        // stderr is the fallback: cron mails it out, and that path shares neither the
+        // network nor the service with ntfy.
         let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         assert_eq!(
-            s.matches("alerte PERDUE").count(),
+            s.matches("alert LOST").count(),
             2,
-            "les DEUX chemins d'alerte doivent avoir leur repli : {s}"
+            "BOTH alert paths must have their fallback: {s}"
         );
-        assert!(s.contains(">&2"), "le repli doit passer par stderr : {s}");
+        assert!(
+            s.contains(">&2"),
+            "the fallback must go through stderr: {s}"
+        );
     }
 
     #[test]
     fn the_watcher_stays_trivial() {
-        // 🔴 C'est le dernier maillon, celui que personne ne surveille. Chaque ligne
-        // ajoutée est une ligne qui peut le faire échouer en silence. Sa bêtise est
-        // une propriété.
+        // 🔴 This is the last link, the one nobody watches. Every added line is a line
+        // that can make it fail silently. Its stupidity is a property.
         let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         let code: Vec<&str> = s
             .lines()
@@ -452,6 +434,6 @@ mod tests {
             "le veilleur doit rester trivial, {} lignes de code",
             code.len()
         );
-        assert!(s.starts_with("#!/bin/sh"), "pas de dépendance à bash");
+        assert!(s.starts_with("#!/bin/sh"), "no dependency on bash");
     }
 }
