@@ -452,7 +452,10 @@ mod tests {
         // 🔴 Si le vérificateur PKCE partait dans l'URL, PKCE ne protégerait plus rien :
         // qui intercepte le code intercepterait aussi de quoi l'échanger.
         let (url, d) = oidc().demarrer(&alea(1), None, 0);
-        assert!(!url.contains(&d.verifier), "le vérificateur est dans l'URL : {url}");
+        assert!(
+            !url.contains(&d.verifier),
+            "le vérificateur est dans l'URL : {url}"
+        );
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
     }
@@ -535,7 +538,10 @@ mod tests {
         // Charge utile seule : ni en-tête ni signature ne sont nécessaires pour la lire,
         // et c'est précisément ce que le module assume et documente.
         let charge = hlb_types::token::base64url(br#"{"nonce":"abc","sub":"u1"}"#);
-        assert_eq!(nonce_de(&format!("entete.{charge}.signature")), Some("abc".into()));
+        assert_eq!(
+            nonce_de(&format!("entete.{charge}.signature")),
+            Some("abc".into())
+        );
     }
 
     #[test]
@@ -550,7 +556,10 @@ mod tests {
     fn query_parameters_are_escaped() {
         // Un `redirect_uri` non échappé couperait l'URL au premier `&`, et le serveur
         // d'autorisation renverrait vers une adresse tronquée.
-        assert_eq!(pourcent("https://a/b?c=d&e"), "https%3A%2F%2Fa%2Fb%3Fc%3Dd%26e");
+        assert_eq!(
+            pourcent("https://a/b?c=d&e"),
+            "https%3A%2F%2Fa%2Fb%3Fc%3Dd%26e"
+        );
         assert_eq!(pourcent("openid profile"), "openid%20profile");
         assert_eq!(pourcent("aZ0-._~"), "aZ0-._~");
     }

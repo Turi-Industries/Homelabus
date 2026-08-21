@@ -106,7 +106,12 @@ pub fn grouper_par_domaine(noeuds: &[NodeInfo]) -> Vec<FailureDomain> {
         .collect();
 
     // Le plus concentré d'abord : c'est celui dont la perte fait le plus de dégâts.
-    out.sort_by(|a, b| b.noeuds.len().cmp(&a.noeuds.len()).then_with(|| a.nom.cmp(&b.nom)));
+    out.sort_by(|a, b| {
+        b.noeuds
+            .len()
+            .cmp(&a.noeuds.len())
+            .then_with(|| a.nom.cmp(&b.nom))
+    });
 
     if !inconnus.is_empty() {
         out.push(FailureDomain {
@@ -171,8 +176,10 @@ pub fn violations_anti_affinite(
         .collect();
 
     // service → (domaine → nombre), et le total par service.
-    let mut par_service: std::collections::BTreeMap<&str, std::collections::BTreeMap<Option<&str>, usize>> =
-        Default::default();
+    let mut par_service: std::collections::BTreeMap<
+        &str,
+        std::collections::BTreeMap<Option<&str>, usize>,
+    > = Default::default();
     for (service, noeud) in placements {
         let d = domaine_de.get(noeud.as_str()).copied().flatten();
         *par_service
@@ -276,10 +283,16 @@ impl QuorumHealth {
                 "🔴 {managers} managers — PIRE qu'un seul : perdre l'un des deux bloque \
                  tout le cluster. Passe à 3, ou redescends à 1."
             ),
-            Self::Healthy { managers, tolerates } => {
+            Self::Healthy {
+                managers,
+                tolerates,
+            } => {
                 format!("{managers} managers — tolère {tolerates} panne(s)")
             }
-            Self::Wasteful { managers, tolerates } => format!(
+            Self::Wasteful {
+                managers,
+                tolerates,
+            } => format!(
                 "{managers} managers — tolère {tolerates} panne(s), soit autant qu'avec \
                  {}. Le manager en trop n'apporte rien.",
                 managers - 1
@@ -376,9 +389,16 @@ mod tests {
         let d = grouper_par_domaine(&noeuds);
 
         assert_eq!(d.len(), 2, "trois nœuds, deux fers");
-        assert_eq!(d[0].nom.as_deref(), Some("big-01"), "le plus concentré d'abord");
+        assert_eq!(
+            d[0].nom.as_deref(),
+            Some("big-01"),
+            "le plus concentré d'abord"
+        );
         assert_eq!(d[0].noeuds.len(), 2);
-        assert!(d[0].concentre(3), "deux nœuds sur trois : sa perte emporte le quorum");
+        assert!(
+            d[0].concentre(3),
+            "deux nœuds sur trois : sa perte emporte le quorum"
+        );
         assert!(!d[1].concentre(3));
     }
 
@@ -387,10 +407,17 @@ mod tests {
         // ⚠️ Supposer qu'un nœud sans domaine déclaré est isolé serait l'hypothèse
         // optimiste qui produit exactement l'illusion qu'on cherche à dissiper. On ne
         // sait pas, et il faut que ça se voie.
-        let noeuds = [noeud("a", None), noeud("b", None), noeud("c", Some("fer-1"))];
+        let noeuds = [
+            noeud("a", None),
+            noeud("b", None),
+            noeud("c", Some("fer-1")),
+        ];
         let d = grouper_par_domaine(&noeuds);
 
-        let inconnu = d.iter().find(|x| x.nom.is_none()).expect("un groupe inconnu");
+        let inconnu = d
+            .iter()
+            .find(|x| x.nom.is_none())
+            .expect("un groupe inconnu");
         assert_eq!(inconnu.noeuds.len(), 2, "regroupés, pas un domaine chacun");
         // Et il vient en dernier : ce n'est pas une violation prouvée.
         assert!(d.last().is_some_and(|x| x.nom.is_none()));
@@ -522,11 +549,17 @@ mod tests {
     fn three_managers_tolerate_one_failure() {
         assert_eq!(
             QuorumHealth::assess(3),
-            QuorumHealth::Healthy { managers: 3, tolerates: 1 }
+            QuorumHealth::Healthy {
+                managers: 3,
+                tolerates: 1
+            }
         );
         assert_eq!(
             QuorumHealth::assess(5),
-            QuorumHealth::Healthy { managers: 5, tolerates: 2 }
+            QuorumHealth::Healthy {
+                managers: 5,
+                tolerates: 2
+            }
         );
     }
 

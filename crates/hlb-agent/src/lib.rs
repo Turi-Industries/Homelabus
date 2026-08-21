@@ -20,9 +20,9 @@
 
 pub mod disk;
 pub mod pki;
-pub mod tls;
 pub mod report;
 pub mod systeme;
+pub mod tls;
 
 pub use disk::{DiskPressure, DiskUsage, Projection, Thresholds};
 pub use pki::{CertPair, Purpose};

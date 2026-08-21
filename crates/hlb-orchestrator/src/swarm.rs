@@ -11,10 +11,10 @@ use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
 use bollard::models::{
-    HealthConfig, Mount, MountTypeEnum, SwarmInitRequest, TaskSpecContainerSpecPrivileges,
-    ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig, ServiceSpecUpdateConfig,
-    ServiceSpecUpdateConfigFailureActionEnum, ServiceSpecUpdateConfigOrderEnum, TaskSpec,
-    TaskSpecContainerSpec, TaskSpecPlacement,
+    HealthConfig, Mount, MountTypeEnum, ServiceSpecMode, ServiceSpecModeReplicated,
+    ServiceSpecRollbackConfig, ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
+    ServiceSpecUpdateConfigOrderEnum, SwarmInitRequest, TaskSpec, TaskSpecContainerSpec,
+    TaskSpecContainerSpecPrivileges, TaskSpecPlacement,
 };
 use bollard::query_parameters::{
     ListNodesOptions, ListServicesOptionsBuilder, ListTasksOptionsBuilder,
@@ -40,7 +40,10 @@ fn horodatage_unix(s: &str) -> Option<i64> {
     let (date, reste) = s.split_once('T')?;
     let (a, reste_d) = date.split_once('-')?;
     let (m, j) = reste_d.split_once('-')?;
-    let heure: String = reste.chars().take_while(|c| *c != '.' && *c != 'Z').collect();
+    let heure: String = reste
+        .chars()
+        .take_while(|c| *c != '.' && *c != 'Z')
+        .collect();
     let mut hms = heure.split(':');
     let (h, mi, se) = (hms.next()?, hms.next()?, hms.next()?);
 
@@ -127,12 +130,7 @@ impl SwarmOrchestrator {
                     } else {
                         Some(spec.command.clone())
                     },
-                    env: Some(
-                        spec.env
-                            .iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect(),
-                    ),
+                    env: Some(spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect()),
 
                     // §9 — durcissement effectivement transmis à Swarm, pas
                     // seulement déclaré dans le manifest.
@@ -258,7 +256,11 @@ impl SwarmOrchestrator {
                 .clone()
                 // Le nom du service est plus utile que son identifiant, mais Swarm ne
                 // le met pas dans la tâche : le label posé au déploiement le porte.
-                .or_else(|| t.labels.as_ref().and_then(|l| l.get("com.docker.swarm.service.name").cloned()))
+                .or_else(|| {
+                    t.labels
+                        .as_ref()
+                        .and_then(|l| l.get("com.docker.swarm.service.name").cloned())
+                })
                 .unwrap_or_default(),
             slot: t.slot.map(|s| s as u64),
             node_id: t.node_id.clone().filter(|n| !n.is_empty()),
@@ -276,7 +278,9 @@ impl SwarmOrchestrator {
                 .and_then(|sp| sp.container_spec.as_ref())
                 .and_then(|c| c.image.clone())
                 .unwrap_or_default(),
-            message: statut.and_then(|s| s.message.clone()).filter(|m| !m.is_empty()),
+            message: statut
+                .and_then(|s| s.message.clone())
+                .filter(|m| !m.is_empty()),
             err: statut.and_then(|s| s.err.clone()).filter(|e| !e.is_empty()),
             updated_at: statut
                 .and_then(|s| s.timestamp.as_deref())
@@ -298,7 +302,10 @@ impl SwarmOrchestrator {
 
     async fn inspect(&self, name: &str) -> Result<bollard::models::Service> {
         self.docker
-            .inspect_service(name, None::<bollard::query_parameters::InspectServiceOptions>)
+            .inspect_service(
+                name,
+                None::<bollard::query_parameters::InspectServiceOptions>,
+            )
             .await
             .map_err(|e| match e {
                 bollard::errors::Error::DockerResponseServerError {
@@ -311,9 +318,7 @@ impl SwarmOrchestrator {
     fn to_status(svc: &bollard::models::Service, running: usize) -> ServiceStatus {
         let spec = svc.spec.as_ref();
         ServiceStatus {
-            name: spec
-                .and_then(|s| s.name.clone())
-                .unwrap_or_default(),
+            name: spec.and_then(|s| s.name.clone()).unwrap_or_default(),
             id: svc.id.clone().unwrap_or_default(),
             desired_replicas: spec
                 .and_then(|s| s.mode.as_ref())
@@ -502,10 +507,7 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn nodes(&self) -> Result<Vec<cluster::NodeInfo>> {
-        let nodes = self
-            .docker
-            .list_nodes(None::<ListNodesOptions>)
-            .await?;
+        let nodes = self.docker.list_nodes(None::<ListNodesOptions>).await?;
 
         Ok(nodes
             .into_iter()
@@ -539,10 +541,7 @@ impl Orchestrator for SwarmOrchestrator {
                         .labels
                         .as_ref()
                         .and_then(|l| l.get(cluster::LABEL_FAILURE_DOMAIN).cloned()),
-                    is_leader: n
-                        .manager_status
-                        .and_then(|m| m.leader)
-                        .unwrap_or(false),
+                    is_leader: n.manager_status.and_then(|m| m.leader).unwrap_or(false),
                     memory_mb: desc
                         .resources
                         .and_then(|r| r.memory_bytes)
@@ -564,7 +563,9 @@ impl Orchestrator for SwarmOrchestrator {
         labels.insert(key.to_string(), value.to_string());
         spec.labels = Some(labels);
 
-        let opts = UpdateNodeOptionsBuilder::default().version(version as i64).build();
+        let opts = UpdateNodeOptionsBuilder::default()
+            .version(version as i64)
+            .build();
         self.docker.update_node(node, spec, opts).await?;
 
         tracing::info!(node, key, value, "étiquette posée");
@@ -619,8 +620,10 @@ impl Orchestrator for SwarmOrchestrator {
         let mut stdout = String::new();
         let mut stderr = String::new();
 
-        if let StartExecResults::Attached { mut output, .. } =
-            self.docker.start_exec(&exec.id, None::<StartExecOptions>).await?
+        if let StartExecResults::Attached { mut output, .. } = self
+            .docker
+            .start_exec(&exec.id, None::<StartExecOptions>)
+            .await?
         {
             use futures::StreamExt;
             while let Some(Ok(msg)) = output.next().await {
@@ -691,7 +694,9 @@ impl Orchestrator for SwarmOrchestrator {
     async fn list(&self) -> Result<Vec<ServiceStatus>> {
         let mut filters = HashMap::new();
         filters.insert("label".to_string(), vec![format!("{MANAGED_LABEL}=true")]);
-        let opts = ListServicesOptionsBuilder::default().filters(&filters).build();
+        let opts = ListServicesOptionsBuilder::default()
+            .filters(&filters)
+            .build();
 
         let services = self.docker.list_services(Some(opts)).await?;
 
@@ -805,7 +810,10 @@ mod tests {
         // chercherait un problème d'horloge sur le nœud.
         assert_eq!(horodatage_unix("1970-01-01T00:00:00Z"), Some(0));
         // Valeurs de référence, calculées indépendamment (pas déduites du code testé).
-        assert_eq!(horodatage_unix("2026-08-18T10:16:04.123456789Z"), Some(1_787_048_164));
+        assert_eq!(
+            horodatage_unix("2026-08-18T10:16:04.123456789Z"),
+            Some(1_787_048_164)
+        );
         // Sans fraction ni « Z » : Docker varie selon les versions.
         assert_eq!(horodatage_unix("2026-08-18T10:16:04"), Some(1_787_048_164));
 
@@ -813,7 +821,13 @@ mod tests {
         // La division naïve par 4 se trompe ici.
         assert_eq!(horodatage_unix("2000-03-01T00:00:00Z"), Some(951_868_800));
 
-        for mauvais in ["", "pas une date", "2026-08-18", "2026/08/18T10:16:04Z", "T10:16:04"] {
+        for mauvais in [
+            "",
+            "pas une date",
+            "2026-08-18",
+            "2026/08/18T10:16:04Z",
+            "T10:16:04",
+        ] {
             assert_eq!(horodatage_unix(mauvais), None, "{mauvais}");
         }
     }

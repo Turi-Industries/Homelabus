@@ -126,13 +126,15 @@ impl Token {
     /// côté du mot de passe, pas du manifest.
     pub fn requires(&self) -> Option<&'static str> {
         match self {
-            Self::DbHost | Self::DbPort | Self::DbName | Self::DbUser
-            | Self::DbPassword | Self::DbUrl => Some("database"),
+            Self::DbHost
+            | Self::DbPort
+            | Self::DbName
+            | Self::DbUser
+            | Self::DbPassword
+            | Self::DbUrl => Some("database"),
             Self::CacheHost | Self::CachePort | Self::CacheUrl => Some("cache"),
             Self::OidcIssuer | Self::OidcClientId | Self::OidcClientSecret => Some("sso"),
-            Self::SmtpHost | Self::SmtpPort | Self::SmtpUser | Self::SmtpPassword => {
-                Some("smtp")
-            }
+            Self::SmtpHost | Self::SmtpPort | Self::SmtpUser | Self::SmtpPassword => Some("smtp"),
             // Toujours disponible : le domaine vient des paramètres d'installation.
             Self::Domain => None,
         }

@@ -61,18 +61,38 @@ impl PackageManager {
         let p: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
         match self {
             Self::Apt => [
-                vec!["env".into(), "DEBIAN_FRONTEND=noninteractive".into(),
-                     "apt-get".into(), "install".into(), "-y".into(), "--no-install-recommends".into()],
+                vec![
+                    "env".into(),
+                    "DEBIAN_FRONTEND=noninteractive".into(),
+                    "apt-get".into(),
+                    "install".into(),
+                    "-y".into(),
+                    "--no-install-recommends".into(),
+                ],
                 p,
-            ].concat(),
+            ]
+            .concat(),
             Self::Dnf => [vec!["dnf".into(), "install".into(), "-y".into()], p].concat(),
             Self::Apk => [vec!["apk".into(), "add".into(), "--no-cache".into()], p].concat(),
-            Self::Pacman => {
-                [vec!["pacman".into(), "-S".into(), "--noconfirm".into(), "--needed".into()], p].concat()
-            }
-            Self::Zypper => {
-                [vec!["zypper".into(), "--non-interactive".into(), "install".into()], p].concat()
-            }
+            Self::Pacman => [
+                vec![
+                    "pacman".into(),
+                    "-S".into(),
+                    "--noconfirm".into(),
+                    "--needed".into(),
+                ],
+                p,
+            ]
+            .concat(),
+            Self::Zypper => [
+                vec![
+                    "zypper".into(),
+                    "--non-interactive".into(),
+                    "install".into(),
+                ],
+                p,
+            ]
+            .concat(),
         }
     }
 
@@ -81,17 +101,26 @@ impl PackageManager {
     pub fn refresh_command(&self) -> Option<Vec<String>> {
         match self {
             Self::Apt => Some(vec!["apt-get".into(), "update".into()]),
-            Self::Dnf => None,   // dnf rafraîchit selon ses métadonnées.
-            Self::Apk => None,   // `--no-cache` s'en charge.
+            Self::Dnf => None, // dnf rafraîchit selon ses métadonnées.
+            Self::Apk => None, // `--no-cache` s'en charge.
             Self::Pacman => Some(vec!["pacman".into(), "-Sy".into(), "--noconfirm".into()]),
-            Self::Zypper => Some(vec!["zypper".into(), "--non-interactive".into(), "refresh".into()]),
+            Self::Zypper => Some(vec![
+                "zypper".into(),
+                "--non-interactive".into(),
+                "refresh".into(),
+            ]),
         }
     }
 
     /// Comment savoir si un paquet est présent.
     pub fn query_command(&self, package: &str) -> Vec<String> {
         match self {
-            Self::Apt => vec!["dpkg-query".into(), "-W".into(), "-f=${Status}".into(), package.into()],
+            Self::Apt => vec![
+                "dpkg-query".into(),
+                "-W".into(),
+                "-f=${Status}".into(),
+                package.into(),
+            ],
             Self::Dnf => vec!["rpm".into(), "-q".into(), package.into()],
             Self::Apk => vec!["apk".into(), "info".into(), "-e".into(), package.into()],
             Self::Pacman => vec!["pacman".into(), "-Q".into(), package.into()],
@@ -227,8 +256,14 @@ PRETTY_NAME="Alpine Linux v3.20"
     #[test]
     fn a_derivative_falls_back_to_its_family() {
         // ubuntu est connue directement, mais la logique doit aussi marcher via ID_LIKE.
-        assert_eq!(Distro::parse(UBUNTU_24).expect("analysable").family, Family::Debian);
-        assert_eq!(Distro::parse(ROCKY_9).expect("analysable").family, Family::RedHat);
+        assert_eq!(
+            Distro::parse(UBUNTU_24).expect("analysable").family,
+            Family::Debian
+        );
+        assert_eq!(
+            Distro::parse(ROCKY_9).expect("analysable").family,
+            Family::RedHat
+        );
     }
 
     #[test]
@@ -282,7 +317,13 @@ PRETTY_NAME="Alpine Linux v3.20"
             let cmd = pm.install_command(&["restic"]).join(" ");
             // Chaque famille a son propre drapeau : -y, --noconfirm,
             // --non-interactive, DEBIAN_FRONTEND, ou l'absence d'invite (apk).
-            let non_interactif = ["-y", "noninteractive", "--no-cache", "--noconfirm", "--non-interactive"];
+            let non_interactif = [
+                "-y",
+                "noninteractive",
+                "--no-cache",
+                "--noconfirm",
+                "--non-interactive",
+            ];
             assert!(
                 non_interactif.iter().any(|f| cmd.contains(f)),
                 "{pm:?} : commande interactive → {cmd}"

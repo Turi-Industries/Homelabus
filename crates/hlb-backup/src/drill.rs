@@ -258,10 +258,16 @@ pub async fn run_postgres(
     // be running » parce que le serveur tourne sous un autre utilisateur que celui
     // qui l'arrête.
     let demarrage = docker(&[
-        "run", "-d", "--name", &target.container,
-        "--entrypoint", "sleep",
-        "-v", &format!("{source}:/sauvegarde:ro"),
-        image, "600",
+        "run",
+        "-d",
+        "--name",
+        &target.container,
+        "--entrypoint",
+        "sleep",
+        "-v",
+        &format!("{source}:/sauvegarde:ro"),
+        image,
+        "600",
     ])
     .await;
 
@@ -281,7 +287,10 @@ pub async fn run_postgres(
     // répertoire de données accessible à d'autres, avec un message qui parle de
     // permissions sans dire lesquelles.
     let restauration = docker(&[
-        "exec", &target.container, "sh", "-c",
+        "exec",
+        &target.container,
+        "sh",
+        "-c",
         "set -e; \
          mkdir -p /var/lib/postgresql/data; \
          rm -rf /var/lib/postgresql/data/*; \
@@ -355,7 +364,9 @@ async fn docker(args: &[&str]) -> std::result::Result<String, String> {
 /// impossible à confondre avec un service réel.
 pub fn container_name(at: i64) -> Result<String> {
     let (y, m, d, hh, mm, ss) = crate::pitr::civil_public(at);
-    Ok(format!("hlb-exercice-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z"))
+    Ok(format!(
+        "hlb-exercice-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z"
+    ))
 }
 
 #[allow(dead_code)]
@@ -391,7 +402,13 @@ mod tests {
     fn a_production_looking_name_is_refused_even_when_declared_disposable() {
         // 🔴 L'ordre des contrôles fait que --disposable ne peut PAS contourner ça :
         // une faute de frappe sur un nom de conteneur ne doit pas coûter une base.
-        for nom in ["postgres-prod", "db-production", "pg-main", "PRIMARY-db", "live-pg"] {
+        for nom in [
+            "postgres-prod",
+            "db-production",
+            "pg-main",
+            "PRIMARY-db",
+            "live-pg",
+        ] {
             let t = Target {
                 container: nom.into(),
                 disposable: true,
@@ -411,7 +428,10 @@ mod tests {
 
     #[test]
     fn without_a_backup_there_is_nothing_to_prove() {
-        assert_eq!(authorize(&jetable(), false).unwrap_err(), Refused::NothingToRestore);
+        assert_eq!(
+            authorize(&jetable(), false).unwrap_err(),
+            Refused::NothingToRestore
+        );
     }
 
     #[test]
@@ -420,7 +440,10 @@ mod tests {
         assert!(n.starts_with("hlb-exercice-"), "{n}");
         // Et il ne déclenche aucun des garde-fous de nom.
         assert!(authorize(
-            &Target { container: n, disposable: true },
+            &Target {
+                container: n,
+                disposable: true
+            },
             true
         )
         .is_ok());
@@ -439,8 +462,16 @@ mod tests {
             detail: String::new(),
         };
         assert!(!o.succeeded());
-        assert!(o.describe().contains("ne contient RIEN"), "{}", o.describe());
-        assert!(o.describe().contains("ressemble à un succès"), "{}", o.describe());
+        assert!(
+            o.describe().contains("ne contient RIEN"),
+            "{}",
+            o.describe()
+        );
+        assert!(
+            o.describe().contains("ressemble à un succès"),
+            "{}",
+            o.describe()
+        );
     }
 
     #[test]
@@ -466,7 +497,10 @@ mod tests {
             detail: "could not read file pg_control".into(),
         };
         assert!(!o.succeeded());
-        assert!(o.describe().contains("pg_control"), "la cause doit être visible");
+        assert!(
+            o.describe().contains("pg_control"),
+            "la cause doit être visible"
+        );
     }
 
     #[test]
@@ -484,7 +518,10 @@ mod tests {
         // de diverger.
         assert_eq!(Readiness::from_days(Some(5)), Readiness::Ready { days: 5 });
         assert_eq!(Readiness::from_days(Some(45)), Readiness::Due { days: 45 });
-        assert_eq!(Readiness::from_days(Some(120)), Readiness::Overdue { days: 120 });
+        assert_eq!(
+            Readiness::from_days(Some(120)),
+            Readiness::Overdue { days: 120 }
+        );
 
         assert!(!Readiness::from_days(Some(5)).needs_attention());
         assert!(Readiness::from_days(Some(45)).needs_attention());

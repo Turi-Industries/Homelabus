@@ -158,7 +158,10 @@ async fn charger_tls(
     cli: &Cli,
 ) -> Result<Option<std::sync::Arc<tokio_rustls::rustls::ServerConfig>>, Box<dyn std::error::Error>>
 {
-    let fournis = [&cli.cert, &cli.key, &cli.ca].iter().filter(|o| o.is_some()).count();
+    let fournis = [&cli.cert, &cli.key, &cli.ca]
+        .iter()
+        .filter(|o| o.is_some())
+        .count();
 
     if cli.insecure_plaintext {
         if fournis > 0 {
@@ -296,7 +299,11 @@ mod tests {
         assert_eq!(u.free_mb, 76_800);
         // 20480 / (20480 + 76800) = 21,05 % — calculé sur l'espace UTILISABLE,
         // pas sur `total`, qui inclut la réserve root (cf. DiskUsage::used_percent).
-        assert!((u.used_percent() - 21.05).abs() < 0.1, "{:.2} %", u.used_percent());
+        assert!(
+            (u.used_percent() - 21.05).abs() < 0.1,
+            "{:.2} %",
+            u.used_percent()
+        );
     }
 
     #[test]

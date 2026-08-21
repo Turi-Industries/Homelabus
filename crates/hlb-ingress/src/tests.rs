@@ -38,7 +38,10 @@ fn after_guide_stays_internal_until_the_guide_is_done() {
     assert!(!before[0].public, "la route doit rester interne");
 
     let after = routes_from_manifest(&manifest(GITEA), Some("git.example.fr"), true);
-    assert!(after[0].public, "une fois le guide traité, la route s'ouvre");
+    assert!(
+        after[0].public,
+        "une fois le guide traité, la route s'ouvre"
+    );
 }
 
 #[test]
@@ -53,7 +56,10 @@ fn anubis_is_deduced_from_the_chain() {
     assert!(!without[0].through_anubis);
 
     let with = routes_from_manifest(
-        &manifest(&GITEA.replace("[caddy-front, caddy-back]", "[caddy-front, anubis, caddy-back]")),
+        &manifest(&GITEA.replace(
+            "[caddy-front, caddy-back]",
+            "[caddy-front, anubis, caddy-back]",
+        )),
         Some("x.fr"),
         true,
     );

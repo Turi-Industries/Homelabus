@@ -142,11 +142,10 @@ fn load_one(path: &Path) -> Result<Entry> {
         source,
     })?;
 
-    let manifest: Manifest =
-        serde_yaml_ng::from_str(&raw).map_err(|e| Error::Parse {
-            path: path.to_path_buf(),
-            source: hlb_types::Error::Parse(e),
-        })?;
+    let manifest: Manifest = serde_yaml_ng::from_str(&raw).map_err(|e| Error::Parse {
+        path: path.to_path_buf(),
+        source: hlb_types::Error::Parse(e),
+    })?;
 
     // Le nom du dossier fait foi : sans ça, deux apps peuvent se marcher dessus
     // silencieusement en déclarant le même `metadata.name`.
@@ -201,7 +200,14 @@ mod tests {
     fn loads_the_bundled_catalog() {
         let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
         assert!(c.len() >= 6, "{} entrées trouvées", c.len());
-        for expected in ["postgres", "valkey", "pocket-id", "gitea", "vikunja", "vaultwarden"] {
+        for expected in [
+            "postgres",
+            "valkey",
+            "pocket-id",
+            "gitea",
+            "vikunja",
+            "vaultwarden",
+        ] {
             assert!(c.get(expected).is_ok(), "{expected} manquant");
         }
     }

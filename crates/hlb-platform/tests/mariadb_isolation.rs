@@ -69,7 +69,10 @@ async fn an_app_cannot_reach_another_apps_database() {
     // Gitea se connecte avec SES identifiants et tente de lire la base de Vaultwarden.
     let url = admin_url();
     let hote = url.split('@').nth(1).expect("hôte dans l'URL");
-    let gitea_url = format!("mysql://giteatest:mdp-gitea@{}", hote.replace("/mysql", "/giteatest"));
+    let gitea_url = format!(
+        "mysql://giteatest:mdp-gitea@{}",
+        hote.replace("/mysql", "/giteatest")
+    );
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(1)
@@ -100,7 +103,9 @@ async fn the_grant_is_scoped_to_one_database_not_all() {
     nettoyer(&["scopetest"], &["scopetest"]).await;
     let p = provisioner().await;
 
-    p.provision("scopetest", "scopetest", "mdp").await.expect("provisionnement");
+    p.provision("scopetest", "scopetest", "mdp")
+        .await
+        .expect("provisionnement");
 
     let accordees = p.granted_databases("scopetest").await.expect("droits");
     assert_eq!(
@@ -121,7 +126,9 @@ async fn the_user_can_connect_from_another_container() {
     nettoyer(&["hosttest"], &["hosttest"]).await;
     let p = provisioner().await;
 
-    p.provision("hosttest", "hosttest", "mdp").await.expect("provisionnement");
+    p.provision("hosttest", "hosttest", "mdp")
+        .await
+        .expect("provisionnement");
     assert!(
         p.user_exists("hosttest").await.expect("lecture"),
         "l'utilisateur doit exister en '@%', pas en '@localhost'"
@@ -136,9 +143,14 @@ async fn provisioning_is_idempotent() {
     nettoyer(&["idemtest"], &["idemtest"]).await;
     let p = provisioner().await;
 
-    assert!(p.provision("idemtest", "idemtest", "mdp").await.expect("1er"));
+    assert!(p
+        .provision("idemtest", "idemtest", "mdp")
+        .await
+        .expect("1er"));
     assert!(
-        !p.provision("idemtest", "idemtest", "mdp").await.expect("2e"),
+        !p.provision("idemtest", "idemtest", "mdp")
+            .await
+            .expect("2e"),
         "le second passage ne doit rien créer"
     );
 
@@ -151,12 +163,19 @@ async fn password_rotation_works() {
     nettoyer(&["rottest"], &["rottest"]).await;
     let p = provisioner().await;
 
-    p.provision("rottest", "rottest", "ancien").await.expect("provisionnement");
-    p.set_password("rottest", "nouveau").await.expect("rotation");
+    p.provision("rottest", "rottest", "ancien")
+        .await
+        .expect("provisionnement");
+    p.set_password("rottest", "nouveau")
+        .await
+        .expect("rotation");
 
     let url = admin_url();
     let hote = url.split('@').nth(1).expect("hôte");
-    let nouvelle = format!("mysql://rottest:nouveau@{}", hote.replace("/mysql", "/rottest"));
+    let nouvelle = format!(
+        "mysql://rottest:nouveau@{}",
+        hote.replace("/mysql", "/rottest")
+    );
 
     sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(1)
@@ -174,5 +193,8 @@ async fn a_wildcard_name_is_refused_before_reaching_sql() {
     // sur `monXapp` et toutes ses variantes.
     let p = provisioner().await;
     assert!(p.provision("mon_app", "mon_app", "mdp").await.is_err());
-    assert!(p.provision("ok", "a; DROP DATABASE x", "mdp").await.is_err());
+    assert!(p
+        .provision("ok", "a; DROP DATABASE x", "mdp")
+        .await
+        .is_err());
 }

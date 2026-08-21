@@ -41,14 +41,12 @@ impl SourceCouverture for EtatSource<'_> {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(
-                |(nom, location, classes, credentials_secret)| Destination {
-                    nom,
-                    location,
-                    classes: classes.split(',').filter_map(Classe::parse).collect(),
-                    credentials_secret,
-                },
-            )
+            .map(|(nom, location, classes, credentials_secret)| Destination {
+                nom,
+                location,
+                classes: classes.split(',').filter_map(Classe::parse).collect(),
+                credentials_secret,
+            })
             .collect()
     }
 
@@ -79,11 +77,7 @@ pub async fn toutes(state: &State, seuil_s: i64) -> Vec<Couverture> {
 ///
 /// ⚠️ Même raison d'être que l'adaptateur ci-dessus : le calcul vit dans `hlb-backup`,
 /// et seule la collecte des ingrédients est ici.
-pub async fn restaurabilite(
-    state: &State,
-    app: &str,
-    seuil_s: i64,
-) -> hlb_backup::Restaurabilite {
+pub async fn restaurabilite(state: &State, app: &str, seuil_s: i64) -> hlb_backup::Restaurabilite {
     let source = EtatSource(state);
     let couverture = hlb_backup::couverture_de(&source, app, seuil_s).await;
 

@@ -298,7 +298,11 @@ mod tests {
                 name: "0008_sans_retour".into()
             }
         );
-        assert!(e.describe().contains("plus de retour possible"), "{}", e.describe());
+        assert!(
+            e.describe().contains("plus de retour possible"),
+            "{}",
+            e.describe()
+        );
     }
 
     #[test]
@@ -328,7 +332,10 @@ mod tests {
         };
         let e = plan(&p).unwrap_err();
         assert_eq!(e, Blocker::NoStateBackup);
-        assert!(e.describe().contains("backup run"), "l'erreur doit dire quoi faire");
+        assert!(
+            e.describe().contains("backup run"),
+            "l'erreur doit dire quoi faire"
+        );
     }
 
     #[test]
@@ -361,7 +368,11 @@ mod tests {
             ..preflight()
         };
         let e = plan(&p).unwrap_err();
-        assert!(e.describe().contains("hlb self rollback"), "{}", e.describe());
+        assert!(
+            e.describe().contains("hlb self rollback"),
+            "{}",
+            e.describe()
+        );
     }
 
     #[test]
@@ -403,7 +414,10 @@ mod tests {
         let d = plan(&preflight()).expect("plan").describe();
         let i_agents = d.find("agent(s)").expect("agents");
         let i_ctrl = d.find("controller").expect("controller");
-        assert!(i_agents < i_ctrl, "les agents doivent précéder le controller :\n{d}");
+        assert!(
+            i_agents < i_ctrl,
+            "les agents doivent précéder le controller :\n{d}"
+        );
         assert!(d.contains("EN DERNIER"), "{d}");
     }
 

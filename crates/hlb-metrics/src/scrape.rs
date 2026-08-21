@@ -62,9 +62,15 @@ pub const INTERVALLE_S: u32 = 30;
 /// (rôle `metrics`), ce qui limite les dégâts d'une fuite sans les annuler.
 pub fn config_collecte(cibles: &[Cible]) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "# Généré par Homelabus (§8bis). Ne pas modifier à la main.");
+    let _ = writeln!(
+        s,
+        "# Généré par Homelabus (§8bis). Ne pas modifier à la main."
+    );
     let _ = writeln!(s, "#");
-    let _ = writeln!(s, "# ⚠️ Ce fichier contient un jeton en clair : pose-le en secret");
+    let _ = writeln!(
+        s,
+        "# ⚠️ Ce fichier contient un jeton en clair : pose-le en secret"
+    );
     let _ = writeln!(s, "#    Docker, jamais dans un dépôt Git.");
     let _ = writeln!(s, "global:");
     let _ = writeln!(s, "  scrape_interval: {INTERVALLE_S}s");

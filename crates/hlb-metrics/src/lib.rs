@@ -91,7 +91,10 @@ mod tests {
         // même conduite : la première est un fait à interpréter, la seconde une panne
         // de la collecte. Les confondre ici priverait les règles de la distinction.
         let vide = r#"{"status":"success","data":{"resultType":"vector","result":[]}}"#;
-        assert_eq!(valeurs_promql(vide).expect("réponse valide"), Vec::<f64>::new());
+        assert_eq!(
+            valeurs_promql(vide).expect("réponse valide"),
+            Vec::<f64>::new()
+        );
     }
 
     #[test]

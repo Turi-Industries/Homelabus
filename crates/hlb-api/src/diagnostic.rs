@@ -246,7 +246,11 @@ mod tests {
             service: "svc".into(),
             slot: Some(1),
             noeud: noeud.map(str::to_string),
-            etat: if echouee { "failed".into() } else { "running".into() },
+            etat: if echouee {
+                "failed".into()
+            } else {
+                "running".into()
+            },
             etat_voulu: "running".into(),
             vivante: !echouee,
             echouee,
@@ -298,7 +302,11 @@ mod tests {
     #[test]
     fn a_healthy_app_gets_no_fabricated_chain() {
         // Une chaîne inventée pour une app saine ferait chercher un problème inexistant.
-        let a = app("gitea", "running", vec![tache("t1", Some("n1"), false, None)]);
+        let a = app(
+            "gitea",
+            "running",
+            vec![tache("t1", Some("n1"), false, None)],
+        );
         let c = expliquer(&a, &[noeud("n1", true, 0)], &[]);
         assert!(!c.a_quelque_chose_a_dire());
         assert!(!c.cause_inconnue);
@@ -311,7 +319,12 @@ mod tests {
         let a = app(
             "immich",
             "failed",
-            vec![tache("t1", Some("n1"), true, Some("no space left on device"))],
+            vec![tache(
+                "t1",
+                Some("n1"),
+                true,
+                Some("no space left on device"),
+            )],
         );
         let c = expliquer(&a, &[noeud("n1", true, 4)], &[alerte("disque-plein")]);
 
@@ -321,7 +334,11 @@ mod tests {
         assert!(c.maillons[2].constat.contains("manque d'espace"));
         // ⚠️ Le pourcentage, pas la fraction : « 1 % occupés » sur un disque plein
         // ferait chercher ailleurs.
-        assert!(c.maillons[2].constat.contains("96 %"), "{:?}", c.maillons[2]);
+        assert!(
+            c.maillons[2].constat.contains("96 %"),
+            "{:?}",
+            c.maillons[2]
+        );
         assert!(c.maillons[3].constat.contains("disque-plein"));
         assert!(!c.cause_inconnue);
         assert!(c.remede.is_some());
@@ -359,14 +376,21 @@ mod tests {
         assert!(!c.cause_inconnue);
         assert!(c.maillons.iter().any(|m| m.constat.contains("injoignable")));
         assert!(c.maillons.iter().any(|m| m.constat.contains("agent muet")));
-        assert!(c.remede.as_deref().is_some_and(|r| r.contains("hlb node show")));
+        assert!(c
+            .remede
+            .as_deref()
+            .is_some_and(|r| r.contains("hlb node show")));
     }
 
     #[test]
     fn nothing_to_explain_is_not_the_same_as_cannot_explain() {
         // Deux réponses opposées que le même « chaîne vide » confondrait.
         let saine = expliquer(
-            &app("gitea", "running", vec![tache("t", Some("n1"), false, None)]),
+            &app(
+                "gitea",
+                "running",
+                vec![tache("t", Some("n1"), false, None)],
+            ),
             &[noeud("n1", true, 0)],
             &[],
         );
@@ -395,7 +419,11 @@ mod tests {
         );
         let c = expliquer(&a, &[noeud("n1", true, 0)], &[]);
         assert!(c.a_quelque_chose_a_dire());
-        assert!(c.maillons[0].constat.contains("1 réplica"), "{:?}", c.maillons[0]);
+        assert!(
+            c.maillons[0].constat.contains("1 réplica"),
+            "{:?}",
+            c.maillons[0]
+        );
         assert!(c.maillons[1].constat.contains("OOMKilled"));
     }
 
@@ -403,7 +431,11 @@ mod tests {
     fn an_unknown_node_never_invents_a_cause() {
         // Le nœud a disparu de l'inventaire : on ne peut rien en dire, et le supposer
         // sain comme le supposer mort serait également faux.
-        let a = app("gitea", "failed", vec![tache("t1", Some("parti"), true, None)]);
+        let a = app(
+            "gitea",
+            "failed",
+            vec![tache("t1", Some("parti"), true, None)],
+        );
         let c = expliquer(&a, &[noeud("n1", true, 0)], &[]);
         assert!(c.cause_inconnue);
         assert!(c.remede.is_none());

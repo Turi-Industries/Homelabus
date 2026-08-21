@@ -117,7 +117,10 @@ impl Decision {
             Presence::Satisfied { version } => format!(
                 "✓ {} déjà présent{} — laissé tel quel",
                 self.dependency.name,
-                version.as_ref().map(|v| format!(" ({v})")).unwrap_or_default()
+                version
+                    .as_ref()
+                    .map(|v| format!(" ({v})"))
+                    .unwrap_or_default()
             ),
             Presence::Missing => format!(
                 "+ {} ({}) — {}",
@@ -284,7 +287,11 @@ mod tests {
             .expect("docker");
 
         assert!(matches!(docker.presence, Presence::TooOld { .. }));
-        assert!(docker.describe().contains("20.10.5"), "{}", docker.describe());
+        assert!(
+            docker.describe().contains("20.10.5"),
+            "{}",
+            docker.describe()
+        );
         assert!(docker.describe().contains("24.0"));
     }
 

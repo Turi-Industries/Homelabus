@@ -16,7 +16,9 @@ pub struct HostRunner {
 
 impl Default for HostRunner {
     fn default() -> Self {
-        Self { binary: "restic".into() }
+        Self {
+            binary: "restic".into(),
+        }
     }
 }
 

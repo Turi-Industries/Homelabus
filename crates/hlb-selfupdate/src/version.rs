@@ -42,7 +42,11 @@ pub struct Version {
 
 impl Version {
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// La version de ce binaire, lue au moment de la compilation.
@@ -65,7 +69,11 @@ impl Version {
         if it.next().is_some() {
             return None;
         }
-        Some(Self { major, minor, patch })
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
     }
 }
 
@@ -221,7 +229,11 @@ mod tests {
         assert!(!c.is_ok());
         assert!(c.describe().contains("MAJEURES"), "{}", c.describe());
         // Le message doit dire la CONSÉQUENCE, pas juste le constat.
-        assert!(c.describe().contains("couperait le pilotage"), "{}", c.describe());
+        assert!(
+            c.describe().contains("couperait le pilotage"),
+            "{}",
+            c.describe()
+        );
     }
 
     #[test]
@@ -238,7 +250,11 @@ mod tests {
     #[test]
     fn a_protocol_mismatch_says_what_to_do() {
         let c = protocol_compatible(1, 2);
-        assert!(c.describe().contains("agent avant le controller"), "{}", c.describe());
+        assert!(
+            c.describe().contains("agent avant le controller"),
+            "{}",
+            c.describe()
+        );
     }
 
     #[test]

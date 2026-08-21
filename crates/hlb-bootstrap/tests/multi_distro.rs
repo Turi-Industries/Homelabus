@@ -76,7 +76,9 @@ fn start(nom: &str, image: &str) -> DockerRunner {
         "démarrage de {image} : {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    DockerRunner { container: nom.into() }
+    DockerRunner {
+        container: nom.into(),
+    }
 }
 
 fn stop(nom: &str) {
@@ -150,14 +152,21 @@ async fn preflight_only_blocks_on_real_problems() {
     assert!(
         rapport.can_proceed(),
         "blocages inattendus : {:?}",
-        rapport.blocking().iter().map(|c| c.name).collect::<Vec<_>>()
+        rapport
+            .blocking()
+            .iter()
+            .map(|c| c.name)
+            .collect::<Vec<_>>()
     );
 
     // Le conteneur tourne en root, donc les privilèges passent.
     assert!(obs.is_root);
     // Et la mémoire est bien lue depuis /proc.
     assert!(obs.total_memory_mb.unwrap_or(0) > 0);
-    println!("✓ préchecks : {} Mo de RAM, aucun blocage", obs.total_memory_mb.unwrap_or(0));
+    println!(
+        "✓ préchecks : {} Mo de RAM, aucun blocage",
+        obs.total_memory_mb.unwrap_or(0)
+    );
 
     stop("hlb-pf-debian");
 }

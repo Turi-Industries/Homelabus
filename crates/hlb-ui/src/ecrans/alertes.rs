@@ -34,7 +34,10 @@ pub fn afficher(
         return;
     };
 
-    let silencees = alertes.iter().filter(|a| a.est_silencee(maintenant)).count();
+    let silencees = alertes
+        .iter()
+        .filter(|a| a.est_silencee(maintenant))
+        .count();
     let aveugles = alertes
         .iter()
         .filter(|a| a.niveau == NiveauAlerte::Inconnu)
@@ -90,12 +93,7 @@ pub fn afficher(
     }
 }
 
-fn carte_alerte(
-    ui: &mut egui::Ui,
-    a: &AlerteActive,
-    maintenant: i64,
-    p: crate::design::Palette,
-) {
+fn carte_alerte(ui: &mut egui::Ui, a: &AlerteActive, maintenant: i64, p: crate::design::Palette) {
     let att = a.attention(maintenant);
     c::carte_attention(ui, att, |ui| {
         ui.horizontal(|ui| {
@@ -159,7 +157,11 @@ mod tests {
         let a = alerte(NiveauAlerte::Critique, Some(10_000));
         let l = a.libelle(5_000);
         assert!(l.contains("SOURDINE"), "{l}");
-        assert_ne!(a.attention(5_000), Attention::Ok, "silencée n'est pas résolue");
+        assert_ne!(
+            a.attention(5_000),
+            Attention::Ok,
+            "silencée n'est pas résolue"
+        );
     }
 
     #[test]

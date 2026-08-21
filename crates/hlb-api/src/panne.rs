@@ -379,10 +379,7 @@ mod tests {
     fn undeclared_nodes_are_never_simulated_as_falling_together() {
         // Ils ne sont pas corrélés : ils sont seulement non classés. Les faire tomber
         // ensemble inventerait une corrélation, et le pire cas affiché serait faux.
-        let t = topo(vec![(
-            None,
-            vec![noeud("a", &["x"]), noeud("b", &["y"])],
-        )]);
+        let t = topo(vec![(None, vec![noeud("a", &["x"]), noeud("b", &["y"])])]);
         let sims = simuler_tout(&t, &[]);
         assert_eq!(sims.len(), 2, "un par nœud, pas un pour le groupe");
         for s in &sims {

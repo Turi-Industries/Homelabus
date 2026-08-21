@@ -142,7 +142,11 @@ impl Theme {
     /// liste tenue à la main finirait par oublier un thème — qu'on ne pourrait alors
     /// plus choisir.
     pub fn livres() -> Vec<Theme> {
-        vec![Self::turi_sombre(), Self::turi_clair(), Self::contraste_eleve()]
+        vec![
+            Self::turi_sombre(),
+            Self::turi_clair(),
+            Self::contraste_eleve(),
+        ]
     }
 
     /// Le thème nommé, ou le défaut.
@@ -280,7 +284,11 @@ mod tests {
         // des trois couleurs qui portent l'état du système.
         for t in Theme::livres() {
             let p = &t.palette;
-            for (nom, c) in [("ok", p.ok), ("attention", p.attention), ("critique", p.critique)] {
+            for (nom, c) in [
+                ("ok", p.ok),
+                ("attention", p.attention),
+                ("critique", p.critique),
+            ] {
                 let d = crate::design::palette::distance_deuteranope(p.accent, c);
                 assert!(
                     d > 40.0,
@@ -306,8 +314,7 @@ mod tests {
 
         let ici: Vec<String> = Theme::livres().into_iter().map(|t| t.nom).collect();
         assert_eq!(
-            ici,
-            CONTROLLER,
+            ici, CONTROLLER,
             "les listes de thèmes du controller et de l'interface ont divergé"
         );
     }
@@ -316,7 +323,10 @@ mod tests {
     fn an_unknown_theme_name_does_not_lock_anyone_out() {
         // ⚠️ Un nom gardé dans le localStorage d'un navigateur peut survivre à la
         // suppression du thème. Échouer laisserait l'interface refuser de s'ouvrir.
-        assert_eq!(Theme::par_nom("un-theme-supprime").nom, Theme::turi_sombre().nom);
+        assert_eq!(
+            Theme::par_nom("un-theme-supprime").nom,
+            Theme::turi_sombre().nom
+        );
         assert_eq!(Theme::par_nom("turi clair").nom, "Turi clair");
         assert_eq!(Theme::par_nom("TURI SOMBRE").nom, "Turi sombre");
     }
@@ -325,7 +335,10 @@ mod tests {
     fn the_high_contrast_theme_earns_its_name() {
         let p = Theme::contraste_eleve().palette;
         let c = crate::design::palette::contraste(p.texte, p.fond);
-        assert!(c > 15.0, "contraste seulement {c:.1}:1 pour un thème dit « élevé »");
+        assert!(
+            c > 15.0,
+            "contraste seulement {c:.1}:1 pour un thème dit « élevé »"
+        );
     }
 
     #[test]
@@ -359,6 +372,8 @@ mod tests {
         let pbs = p.valider();
         assert!(pbs.len() > 3, "une seule erreur remontée : {pbs:?}");
         assert!(pbs.iter().any(|x| matches!(x, Probleme::Contraste { .. })));
-        assert!(pbs.iter().any(|x| matches!(x, Probleme::EtatsConfondus { .. })));
+        assert!(pbs
+            .iter()
+            .any(|x| matches!(x, Probleme::EtatsConfondus { .. })));
     }
 }

@@ -279,7 +279,9 @@ mod tests {
         base(&src, 10).await;
 
         let avant = std::fs::metadata(&src).expect("stat").len();
-        snapshot(&src, &d.path().join("s.db")).await.expect("instantané");
+        snapshot(&src, &d.path().join("s.db"))
+            .await
+            .expect("instantané");
         let apres = std::fs::metadata(&src).expect("stat").len();
 
         assert_eq!(avant, apres, "la base source ne doit pas bouger");
@@ -350,7 +352,10 @@ mod tests {
         let staging = tempfile::tempdir().expect("transit");
         std::fs::write(d.path().join("notes.txt"), b"rien").expect("écriture");
 
-        let e = snapshot_all(d.path(), staging.path()).await.unwrap_err().to_string();
+        let e = snapshot_all(d.path(), staging.path())
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("aucune base SQLite"), "{e}");
         assert!(e.contains("chemin erroné"), "l'erreur doit orienter : {e}");
     }
@@ -362,7 +367,9 @@ mod tests {
         base(&d.path().join("a.db"), 4).await;
         base(&d.path().join("b.sqlite"), 7).await;
 
-        let v = snapshot_all(d.path(), staging.path()).await.expect("instantanés");
+        let v = snapshot_all(d.path(), staging.path())
+            .await
+            .expect("instantanés");
         assert_eq!(v.len(), 2, "{v:?}");
         for p in &v {
             assert!(p.exists(), "{} manquant", p.display());

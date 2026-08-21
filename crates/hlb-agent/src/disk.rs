@@ -155,7 +155,10 @@ impl Projection {
             None
         };
 
-        Some(Self { days_until_full, mb_per_day })
+        Some(Self {
+            days_until_full,
+            mb_per_day,
+        })
     }
 
     /// Faut-il alerter ? Une semaine laisse le temps d'agir sans réveiller personne.
@@ -280,7 +283,12 @@ mod tests {
 
     #[test]
     fn an_empty_disk_does_not_divide_by_zero() {
-        let u = DiskUsage { path: "/".into(), total_mb: 0, used_mb: 0, free_mb: 0 };
+        let u = DiskUsage {
+            path: "/".into(),
+            total_mb: 0,
+            used_mb: 0,
+            free_mb: 0,
+        };
         assert_eq!(u.used_percent(), 0.0);
         assert_eq!(u.pressure(&Thresholds::default()), DiskPressure::Normal);
     }
@@ -337,8 +345,14 @@ mod tests {
     #[test]
     fn a_week_is_the_alerting_horizon() {
         // Assez tôt pour agir, assez tard pour ne pas réveiller pour rien.
-        let dans_dix_jours = Projection { days_until_full: Some(10.0), mb_per_day: 100.0 };
-        let dans_trois_jours = Projection { days_until_full: Some(3.0), mb_per_day: 100.0 };
+        let dans_dix_jours = Projection {
+            days_until_full: Some(10.0),
+            mb_per_day: 100.0,
+        };
+        let dans_trois_jours = Projection {
+            days_until_full: Some(3.0),
+            mb_per_day: 100.0,
+        };
         assert!(!dans_dix_jours.is_concerning());
         assert!(dans_trois_jours.is_concerning());
     }

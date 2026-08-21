@@ -64,19 +64,12 @@ pub fn afficher(
                 c::pastille(ui, p.attention());
                 ui.add_space(mesures::ESPACE_SERRE);
                 c::texte_libre(ui, &p.nom);
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        c::legende(
-                            ui,
-                            &format!(
-                                "par {} il y a {}",
-                                p.cree_par,
-                                hlb_api::humanise(p.age_s)
-                            ),
-                        );
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    c::legende(
+                        ui,
+                        &format!("par {} il y a {}", p.cree_par, hlb_api::humanise(p.age_s)),
+                    );
+                });
             });
 
             ui.add_space(mesures::ESPACE_SERRE);

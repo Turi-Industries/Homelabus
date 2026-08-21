@@ -51,8 +51,10 @@ pub enum Error {
     #[error("« {0} » : identifiant inutilisable — minuscules, chiffres, point, tiret")]
     NomInvalide(String),
 
-    #[error("la boîte par défaut « {0} » ne peut pas être supprimée : c'est l'identité \
-             du compte. Change-la d'abord, ou supprime l'utilisateur entier")]
+    #[error(
+        "la boîte par défaut « {0} » ne peut pas être supprimée : c'est l'identité \
+             du compte. Change-la d'abord, ou supprime l'utilisateur entier"
+    )]
     BoiteParDefaut(String),
 }
 
@@ -195,7 +197,11 @@ impl Compte {
     pub fn promesses_rompues(&self, maintenant: i64) -> Vec<(&Boite, &Alias)> {
         self.boites
             .iter()
-            .flat_map(|b| b.promesses_rompues(maintenant).into_iter().map(move |a| (b, a)))
+            .flat_map(|b| {
+                b.promesses_rompues(maintenant)
+                    .into_iter()
+                    .map(move |a| (b, a))
+            })
             .collect()
     }
 
@@ -287,7 +293,10 @@ mod tests {
 
         let d = c.coherence().describe();
         assert!(d.contains("ne reçoit rien"), "{d}");
-        assert!(d.contains("réinitialisation"), "la conséquence concrète : {d}");
+        assert!(
+            d.contains("réinitialisation"),
+            "la conséquence concrète : {d}"
+        );
         assert!(d.contains("hlb user add"), "la reprise : {d}");
 
         c.boites.push(boite("remy", true));
@@ -312,9 +321,13 @@ mod tests {
 
         let e = c.peut_supprimer_boite("remy").unwrap_err().to_string();
         assert!(e.contains("remy@example.fr"), "{e}");
-        assert!(e.contains("Change-la d'abord"), "la sortie de secours : {e}");
+        assert!(
+            e.contains("Change-la d'abord"),
+            "la sortie de secours : {e}"
+        );
 
-        c.peut_supprimer_boite("photo").expect("une boîte ordinaire se supprime");
+        c.peut_supprimer_boite("photo")
+            .expect("une boîte ordinaire se supprime");
     }
 
     #[test]
@@ -362,8 +375,19 @@ mod tests {
         valider_nom("remy.durand").expect("point");
         valider_nom("remy-2").expect("tiret et chiffre");
 
-        for mauvais in ["", "Remy", "remy@example.fr", ".remy", "remy-", "rémy", "a b"] {
-            assert!(valider_nom(mauvais).is_err(), "« {mauvais} » aurait dû être refusé");
+        for mauvais in [
+            "",
+            "Remy",
+            "remy@example.fr",
+            ".remy",
+            "remy-",
+            "rémy",
+            "a b",
+        ] {
+            assert!(
+                valider_nom(mauvais).is_err(),
+                "« {mauvais} » aurait dû être refusé"
+            );
         }
     }
 
@@ -374,10 +398,7 @@ mod tests {
         c.boites.push(boite("invite", true));
 
         let p = Profil::invite();
-        let e = p
-            .autorise(&c.usage(T), Demande::Boite)
-            .unwrap_err()
-            .raison;
+        let e = p.autorise(&c.usage(T), Demande::Boite).unwrap_err().raison;
         assert!(e.contains("1/1"), "{e}");
     }
 }

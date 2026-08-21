@@ -8,9 +8,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use hlb_catalog::Catalog;
-use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_engine::{Executor, Reconciler};
 use hlb_ingress::{CaddyAdmin, Route};
+use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_resolver::{DependencyGraph, InstallParams};
 use hlb_secrets::Vault;
 use hlb_state::State;
@@ -27,7 +27,12 @@ struct Cli {
     state: PathBuf,
 
     /// Clé maîtresse age. Créée au besoin ; sa perte rend tout irrécupérable.
-    #[arg(long, global = true, default_value = "hlb-master.key", env = "HLB_MASTER_KEY")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "hlb-master.key",
+        env = "HLB_MASTER_KEY"
+    )]
     master_key: PathBuf,
 
     /// URL d'administration PostgreSQL. Sans elle, le provisionnement est ignoré.
@@ -64,7 +69,12 @@ struct Cli {
     /// ⚠️ Les outils clients (pg_dump, pg_basebackup) tournent dans des conteneurs
     /// jetables : sans ce réseau, ils ne résolvent pas « postgres » et échouent sur
     /// une erreur de DNS qui ne dit pas que c'est le réseau le problème.
-    #[arg(long, global = true, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "hlb_platform",
+        env = "HLB_PLATFORM_NETWORK"
+    )]
     platform_network: String,
 
     /// Domaine de base pour le certificat wildcard (§6.4), ex. example.fr
@@ -81,11 +91,21 @@ struct Cli {
     acme_staging: bool,
 
     /// Portail d'authentification pour les apps sans SSO natif (§5.0).
-    #[arg(long, global = true, default_value = "oauth2-proxy:4180", env = "HLB_FORWARD_AUTH")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "oauth2-proxy:4180",
+        env = "HLB_FORWARD_AUTH"
+    )]
     forward_auth_upstream: String,
 
     /// API locale de CrowdSec. Sans elle, le Caddyfile est généré sans videur.
-    #[arg(long, global = true, default_value = "http://crowdsec:8080", env = "HLB_CROWDSEC_URL")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "http://crowdsec:8080",
+        env = "HLB_CROWDSEC_URL"
+    )]
     crowdsec_url: String,
 
     /// URL de Stalwart. Sans elle, les boîtes mail ne sont pas provisionnées.
@@ -905,16 +925,26 @@ enum CatalogCmd {
 /// qui n'a pas lieu — ou pire, tairait celle qui a lieu.
 fn consequence_migration(nom: &str) -> Vec<String> {
     let detail: &[&str] = match nom {
-        "0005_audit" => &["le JOURNAL D'AUDIT est effacé (§9 : il est append-only,",
-                          "c'est le seul chemin qui l'efface)"],
-        "0004_backup_runs" => &["l'historique des sauvegardes est effacé — toutes les apps",
-                                "repasseront en « jamais sauvegardée » et seront dues"],
-        "0003_volumes" => &["l'inventaire des volumes est effacé ; les données Docker",
-                            "survivent, mais la sauvegarde ne saura plus quoi sauvegarder"],
-        "0002_secrets" => &["les secrets chiffrés sont effacés, dont ceux déposés à la",
-                            "main : jeton DNS, clé du videur CrowdSec"],
-        "0006_volumes_sqlite" => &["le drapeau « base SQLite » des volumes est perdu — leurs",
-                                   "bases repasseraient en copie à chaud, donc corrompues"],
+        "0005_audit" => &[
+            "le JOURNAL D'AUDIT est effacé (§9 : il est append-only,",
+            "c'est le seul chemin qui l'efface)",
+        ],
+        "0004_backup_runs" => &[
+            "l'historique des sauvegardes est effacé — toutes les apps",
+            "repasseront en « jamais sauvegardée » et seront dues",
+        ],
+        "0003_volumes" => &[
+            "l'inventaire des volumes est effacé ; les données Docker",
+            "survivent, mais la sauvegarde ne saura plus quoi sauvegarder",
+        ],
+        "0002_secrets" => &[
+            "les secrets chiffrés sont effacés, dont ceux déposés à la",
+            "main : jeton DNS, clé du videur CrowdSec",
+        ],
+        "0006_volumes_sqlite" => &[
+            "le drapeau « base SQLite » des volumes est perdu — leurs",
+            "bases repasseraient en copie à chaud, donc corrompues",
+        ],
         "0001_initial" => &["TOUT l'état : apps, plans, guides"],
         _ => &[],
     };
@@ -962,15 +992,15 @@ async fn recuperer(url: &str) -> Result<Vec<u8>, String> {
 ///
 /// Format volontairement trivial — `clé=valeur` par ligne — pour qu'il puisse être
 /// produit par trois lignes de shell dans une chaîne de publication, et relu à l'œil.
-fn analyser_manifeste(
-    texte: &str,
-) -> Result<hlb_selfupdate::ReleaseManifest, String> {
+fn analyser_manifeste(texte: &str) -> Result<hlb_selfupdate::ReleaseManifest, String> {
     let mut version = None;
     let mut sha256 = None;
     let mut signature = None;
 
     for l in texte.lines() {
-        let Some((k, v)) = l.split_once('=') else { continue };
+        let Some((k, v)) = l.split_once('=') else {
+            continue;
+        };
         match k.trim() {
             "version" => version = hlb_selfupdate::Version::parse(v.trim()),
             "sha256" => sha256 = Some(v.trim().to_string()),
@@ -1083,7 +1113,10 @@ async fn pitr(
             if !apply {
                 println!("Produirait une sauvegarde de base :");
                 println!("  destination : {dest}/{nom}");
-                println!("  serveur     : {user}@{host}:{} (réseau {network})", creds.port);
+                println!(
+                    "  serveur     : {user}@{host}:{} (réseau {network})",
+                    creds.port
+                );
                 println!();
                 println!("  Elle streame le WAL pendant la copie, sinon le résultat");
                 println!("  serait incohérent et PostgreSQL refuserait de démarrer.");
@@ -1275,11 +1308,17 @@ async fn charger_bases(
     let mut out = Vec::new();
     for (app, _) in state.installed_apps().await? {
         for (id, at) in state.base_backups(&app).await? {
-            out.push(hlb_backup::pitr::BaseBackup { id, finished_at: at });
+            out.push(hlb_backup::pitr::BaseBackup {
+                id,
+                finished_at: at,
+            });
         }
     }
     for (id, at) in state.base_backups("postgres").await? {
-        out.push(hlb_backup::pitr::BaseBackup { id, finished_at: at });
+        out.push(hlb_backup::pitr::BaseBackup {
+            id,
+            finished_at: at,
+        });
     }
     out.sort_by_key(|b| b.finished_at);
     out.dedup_by(|a, b| a.id == b.id);
@@ -1345,7 +1384,10 @@ async fn build_backup_provider(
     repo: Option<&str>,
     state: &State,
     vault: &Vault,
-) -> Result<Option<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>>, Box<dyn std::error::Error>> {
+) -> Result<
+    Option<hlb_backup::ResticBackupProvider<hlb_backup::ContainerRunner>>,
+    Box<dyn std::error::Error>,
+> {
     let Some(location) = repo else {
         return Ok(None);
     };
@@ -1368,8 +1410,7 @@ async fn build_backup_provider(
 
         // Chaque volume de l'app est monté dans le conteneur restic, sous un chemin
         // prévisible. Le dépôt lui-même est monté séparément.
-        let mut runner = hlb_backup::ContainerRunner::default()
-            .mount(&location, "/depot");
+        let mut runner = hlb_backup::ContainerRunner::default().mount(&location, "/depot");
         let mut paths = Vec::new();
         for (name, _mountpoint) in volumes {
             // On monte le volume Docker par son nom : le point de montage de l'hôte
@@ -1443,8 +1484,7 @@ async fn archiver_partout(
     dump: &hlb_backup::pgdump::scheduled::Dump,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let password = restic_password(state, vault).await?;
-    let dests =
-        destinations_effectives(state, app, hlb_backup::Classe::Critique, repli).await?;
+    let dests = destinations_effectives(state, app, hlb_backup::Classe::Critique, repli).await?;
 
     if dests.is_empty() {
         eprintln!("⚠️  {app} : aucune destination critique — le dump n'est allé NULLE PART.");
@@ -1538,8 +1578,7 @@ async fn provider_pour(
         }
 
         Some((
-            hlb_backup::Repository::new(runner, chemin, password.clone())
-                .extra_env(env.clone()),
+            hlb_backup::Repository::new(runner, chemin, password.clone()).extra_env(env.clone()),
             paths,
         ))
     }))
@@ -1587,7 +1626,15 @@ async fn gerer_alias(
     use hlb_users::{generation::Genere, Demande, Profil};
 
     match cmd {
-        AliasCmd::Add { nom, boite, nom_alias, pour, pendant, note, dossier } => {
+        AliasCmd::Add {
+            nom,
+            boite,
+            nom_alias,
+            pour,
+            pendant,
+            note,
+            dossier,
+        } => {
             let c = charger_compte(state, nom).await?;
             let p = Profil::par_nom(&c.profil).unwrap_or_else(Profil::standard);
             let maintenant = maintenant();
@@ -1597,7 +1644,9 @@ async fn gerer_alias(
                 None => match c.boite_par_defaut() {
                     Some(b) => b.local.clone(),
                     None => {
-                        eprintln!("🔴 {nom} n'a aucune boîte : l'alias n'aurait nulle part où aller.");
+                        eprintln!(
+                            "🔴 {nom} n'a aucune boîte : l'alias n'aurait nulle part où aller."
+                        );
                         return Ok(ExitCode::FAILURE);
                     }
                 },
@@ -1607,8 +1656,11 @@ async fn gerer_alias(
             let expire_le = match pendant {
                 Some(d) => {
                     let s = parse_duree(d)?;
-                    p.autorise(&c.usage(maintenant), Demande::AliasTemporaire { duree_s: s })
-                        .map_err(|r| r.to_string())?;
+                    p.autorise(
+                        &c.usage(maintenant),
+                        Demande::AliasTemporaire { duree_s: s },
+                    )
+                    .map_err(|r| r.to_string())?;
                     Some(maintenant + s)
                 }
                 None => {
@@ -1662,7 +1714,14 @@ async fn gerer_alias(
             }
 
             state
-                .add_alias(nom, &cible, &local, expire_le, indice.as_deref(), note.as_deref())
+                .add_alias(
+                    nom,
+                    &cible,
+                    &local,
+                    expire_le,
+                    indice.as_deref(),
+                    note.as_deref(),
+                )
                 .await?;
 
             // Le dossier de tri : celui demandé, ou le défaut dérivé de l'indice.
@@ -1688,9 +1747,12 @@ async fn gerer_alias(
             println!("✓ {local}@{dom}  →  {cible}@{dom}");
             match expire_le {
                 Some(e) => {
-                    println!("  temporaire, expire dans {}", fmt_age(
-                        std::time::Duration::from_secs((e - maintenant).max(0) as u64)
-                    ));
+                    println!(
+                        "  temporaire, expire dans {}",
+                        fmt_age(std::time::Duration::from_secs(
+                            (e - maintenant).max(0) as u64
+                        ))
+                    );
                     // 🔴 La promesse ne tient que si la purge tourne. Le dire ici,
                     // au moment où on la fait, plutôt que de le découvrir six mois
                     // plus tard sur une adresse qu'on croyait fermée.
@@ -1736,11 +1798,14 @@ async fn gerer_alias(
                 }
             }
             if rien {
-                println!("{}", if *problemes {
-                    "Aucune promesse rompue."
-                } else {
-                    "Aucun alias."
-                });
+                println!(
+                    "{}",
+                    if *problemes {
+                        "Aucune promesse rompue."
+                    } else {
+                        "Aucun alias."
+                    }
+                );
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1755,7 +1820,11 @@ async fn gerer_alias(
             Ok(ExitCode::SUCCESS)
         }
 
-        AliasCmd::Folder { nom, alias, dossier } => {
+        AliasCmd::Folder {
+            nom,
+            alias,
+            dossier,
+        } => {
             // 🔴 Une chaîne vide est un choix EXPLICITE — « je ne veux pas de tri » —
             // et non l'absence de choix. Les confondre réimposerait un dossier à
             // chaque régénération, à quelqu'un qui n'en veut pas.
@@ -1830,8 +1899,14 @@ async fn gerer_alias(
                 })
                 .await?;
 
-            println!("✓ script posé sur {cible}@{dom} ({} règle(s))", regles.len());
-            println!("  {} octets au total, règles personnelles comprises.", final_.len());
+            println!(
+                "✓ script posé sur {cible}@{dom} ({} règle(s))",
+                regles.len()
+            );
+            println!(
+                "  {} octets au total, règles personnelles comprises.",
+                final_.len()
+            );
             println!();
             println!("  Relis-le dans Roundcube → Paramètres → Filtres (greffon managesieve).");
             Ok(ExitCode::SUCCESS)
@@ -1846,10 +1921,7 @@ async fn gerer_alias(
                 return Ok(ExitCode::SUCCESS);
             }
 
-            println!(
-                "{} alias expiré(s) et TOUJOURS ACTIF(S) :",
-                a_purger.len()
-            );
+            println!("{} alias expiré(s) et TOUJOURS ACTIF(S) :", a_purger.len());
             for (u, b, l) in &a_purger {
                 println!("  {l}  ({u} → {b})");
             }
@@ -2120,7 +2192,6 @@ async fn dump_databases(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use hlb_backup::pgdump::{scheduled, PgDumper, PgTarget};
 
-
     let Some(creds) = hlb_backup::parse_pg_url(admin_url) else {
         eprintln!("🔴 URL PostgreSQL illisible : dumps ignorés.");
         return Ok(0);
@@ -2149,9 +2220,7 @@ async fn dump_databases(
             password: creds.password.clone(),
         };
 
-        let dumper = PgDumper::new(
-            hlb_backup::PgContainerRunner::default().network(network),
-        );
+        let dumper = PgDumper::new(hlb_backup::PgContainerRunner::default().network(network));
 
         match scheduled::produce(&dumper, app, &cible, at).await {
             Ok(d) => {
@@ -2165,7 +2234,9 @@ async fn dump_databases(
                 }
             }
             Err(e) => {
-                state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                state
+                    .record_backup(app, "sql-dump", None, Some(&e.to_string()))
+                    .await?;
                 println!("✗ {e}");
             }
         }
@@ -2194,7 +2265,6 @@ async fn dump_mariadb_databases(
     bases: &[(String, String, String, String)],
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use hlb_backup::mariadump::{self, Coherence, MariaDumper, MariaTarget};
-
 
     let Some(creds) = hlb_backup::parse_maria_url(admin_url) else {
         eprintln!("🔴 URL MariaDB illisible : dumps ignorés.");
@@ -2245,12 +2315,11 @@ async fn dump_mariadb_databases(
             print!("[verrou] ");
         }
 
-        let dumper = MariaDumper::new(
-            hlb_backup::MariaContainerRunner::default().network(network),
-        );
+        let dumper = MariaDumper::new(hlb_backup::MariaContainerRunner::default().network(network));
 
         match mariadump::scheduled::produce(&dumper, app, &cible, coherence, at).await {
-            Ok(d) => match archiver_partout(state, vault, app, "sql-dump", network, repo, &d).await {
+            Ok(d) => match archiver_partout(state, vault, app, "sql-dump", network, repo, &d).await
+            {
                 Ok(n) if n > 0 => {
                     println!("({} Ko)", d.bytes.len() / 1024);
                     ok += 1;
@@ -2259,7 +2328,9 @@ async fn dump_mariadb_databases(
                 Err(e) => println!("✗ archivage : {e}"),
             },
             Err(e) => {
-                state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await?;
+                state
+                    .record_backup(app, "sql-dump", None, Some(&e.to_string()))
+                    .await?;
                 println!("✗ {e}");
             }
         }
@@ -2400,14 +2471,17 @@ async fn node_add(
         .iter()
         .filter(|n| n.role == hlb_orchestrator::NodeRole::Manager)
         .count();
-    let role_final = role
-        .map(|r| r.to_string())
-        .unwrap_or_else(|| {
-            // 🔴 Deux managers sont PIRES qu'un seul : le quorum d'un cluster à deux
-            // managers est de 2, donc la panne de l'un bloque tout le cluster, alors
-            // qu'avec un seul manager la panne n'en bloque qu'un (§10.3).
-            if managers == 0 || managers + 1 >= 3 { "manager" } else { "worker" }.to_string()
-        });
+    let role_final = role.map(|r| r.to_string()).unwrap_or_else(|| {
+        // 🔴 Deux managers sont PIRES qu'un seul : le quorum d'un cluster à deux
+        // managers est de 2, donc la panne de l'un bloque tout le cluster, alors
+        // qu'avec un seul manager la panne n'en bloque qu'un (§10.3).
+        if managers == 0 || managers + 1 >= 3 {
+            "manager"
+        } else {
+            "worker"
+        }
+        .to_string()
+    });
 
     let tier_final = obs
         .total_memory_mb
@@ -2416,12 +2490,26 @@ async fn node_add(
 
     if !apply {
         println!("Rattacherait cette machine au cluster :");
-        println!("  rôle    : {role_final}{}", if role.is_some() { " (imposé)" } else { " (déduit)" });
+        println!(
+            "  rôle    : {role_final}{}",
+            if role.is_some() {
+                " (imposé)"
+            } else {
+                " (déduit)"
+            }
+        );
         match &tier_final {
-            Some(t) => println!("  tier    : {t} (déduit de {} Mo)", obs.total_memory_mb.unwrap_or(0)),
+            Some(t) => println!(
+                "  tier    : {t} (déduit de {} Mo)",
+                obs.total_memory_mb.unwrap_or(0)
+            ),
             None => println!("  tier    : ⚠️  indéterminable — à poser à la main"),
         }
-        println!("  profil  : {} à {} nœud(s)", profil.as_str(), nodes.len() + 1);
+        println!(
+            "  profil  : {} à {} nœud(s)",
+            profil.as_str(),
+            nodes.len() + 1
+        );
         if advertise_addr.is_none() {
             println!();
             println!("  ⚠️  Sans --advertise-addr, Docker choisira une interface. Sur");
@@ -2444,7 +2532,10 @@ async fn node_add(
     let (apres, ch) = access::grant(&avant, &cle);
 
     if ch.is_noop() {
-        println!("✓ clé SSH déjà en place ({} autre(s) clé(s) conservée(s))", ch.kept);
+        println!(
+            "✓ clé SSH déjà en place ({} autre(s) clé(s) conservée(s))",
+            ch.kept
+        );
     } else {
         access::write_authorized_keys(&ssh_premier, "~", &apres, &avant).await?;
         println!(
@@ -2460,12 +2551,7 @@ async fn node_add(
     // maintenant, plutôt que de le découvrir au prochain redémarrage.
     let tmp = tempfile::tempdir()?;
     let chemin_cle = ecrire_cle_temporaire(tmp.path(), &kp.private)?;
-    let notre = build_runner(
-        Some(host),
-        user,
-        port,
-        chemin_cle.to_str(),
-    );
+    let notre = build_runner(Some(host), user, port, chemin_cle.to_str());
 
     match notre.run(&["true".to_string()]).await {
         Ok(o) if o.ok() => println!("✓ accès par la clé de Homelabus vérifié"),
@@ -2525,8 +2611,11 @@ async fn node_add(
     };
 
     let mut cmd = vec![
-        "docker".to_string(), "swarm".into(), "join".into(),
-        "--token".into(), tokens.for_role(role_enum).to_string(),
+        "docker".to_string(),
+        "swarm".into(),
+        "join".into(),
+        "--token".into(),
+        tokens.for_role(role_enum).to_string(),
         tokens.advertise_addr.clone(),
     ];
     if let Some(a) = advertise_addr {
@@ -2575,7 +2664,14 @@ async fn node_add(
     }
 
     state
-        .audit("cli", ACTEUR_ROLE, "node-add", host, "ok", Some(&role_final))
+        .audit(
+            "cli",
+            ACTEUR_ROLE,
+            "node-add",
+            host,
+            "ok",
+            Some(&role_final),
+        )
         .await?;
 
     println!();
@@ -2666,7 +2762,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     match &cli.command {
         Command::Catalog(CatalogCmd::List) => {
             let c = Catalog::load(&cli.catalog)?;
-            println!("{} application(s) dans {}\n", c.len(), cli.catalog.display());
+            println!(
+                "{} application(s) dans {}\n",
+                c.len(),
+                cli.catalog.display()
+            );
             for e in c.entries() {
                 let m = &e.manifest;
                 println!(
@@ -2727,7 +2827,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Command::Plan { app, domain, mail_domain } => {
+        Command::Plan {
+            app,
+            domain,
+            mail_domain,
+        } => {
             let c = Catalog::load(&cli.catalog)?;
             let entry = c.get(app)?;
 
@@ -2744,7 +2848,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Command::Install { app, domain, mail_domain, apply } => {
+        Command::Install {
+            app,
+            domain,
+            mail_domain,
+            apply,
+        } => {
             let c = Catalog::load(&cli.catalog)?;
             let entry = c.get(app)?;
 
@@ -2760,7 +2869,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let state = State::open(&cli.state).await?;
                 // §4.8 — le manifest est figé maintenant : une évolution ultérieure du
                 // catalogue ne modifiera pas cette installation.
-                state.upsert_app(app, &entry.manifest, domain.as_deref()).await?;
+                state
+                    .upsert_app(app, &entry.manifest, domain.as_deref())
+                    .await?;
 
                 let orch = SwarmOrchestrator::connect()?;
                 let vault = Vault::open_or_init(&cli.master_key)?;
@@ -2798,10 +2909,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 // Stalwart : même règle que les autres. Sans identifiants, le
                 // provisionnement des boîtes reste « non implémenté », jamais simulé.
-                let mail = match (&cli.stalwart_url, &cli.stalwart_admin, &cli.stalwart_password) {
+                let mail = match (
+                    &cli.stalwart_url,
+                    &cli.stalwart_admin,
+                    &cli.stalwart_password,
+                ) {
                     (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
                         u,
-                        hlb_mail::Auth::Basic { user: a.clone(), password: p.clone() },
+                        hlb_mail::Auth::Basic {
+                            user: a.clone(),
+                            password: p.clone(),
+                        },
                     )),
                     _ => None,
                 };
@@ -2838,7 +2956,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             _ => "failed",
                         };
                         state
-                            .audit("cli", ACTEUR_ROLE, "install", app, issue, Some(&e.to_string()))
+                            .audit(
+                                "cli",
+                                ACTEUR_ROLE,
+                                "install",
+                                app,
+                                issue,
+                                Some(&e.to_string()),
+                            )
                             .await?;
                         return Err(e.into());
                     }
@@ -2949,7 +3074,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::Ingress { apply, front_admin, back_admin } => {
+        Command::Ingress {
+            apply,
+            front_admin,
+            back_admin,
+        } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = State::open(&cli.state).await?;
@@ -3082,7 +3211,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     CaddyAdmin::new(back_url).load_caddyfile(&back).await?;
                     println!("✓ Caddy arrière rechargé");
                 } else {
-                    println!("ℹ️  --back-admin non fourni : le Caddy arrière n'a pas été rechargé.");
+                    println!(
+                        "ℹ️  --back-admin non fourni : le Caddy arrière n'a pas été rechargé."
+                    );
                 }
                 Ok(ExitCode::SUCCESS)
             })
@@ -3103,7 +3234,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 println!("{} écart(s) détecté(s) :\n", report.drifts.len());
                 for d in &report.drifts {
-                    let mark = if d.is_correctable() { "🔧" } else { "ℹ️ " };
+                    let mark = if d.is_correctable() {
+                        "🔧"
+                    } else {
+                        "ℹ️ "
+                    };
                     println!("  {mark} {d}");
                 }
 
@@ -3213,7 +3348,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 }
 
-                println!("{:<20} {:<10} {:<12} {:<16} ISSUE", "QUAND", "ACTEUR", "ACTION", "CIBLE");
+                println!(
+                    "{:<20} {:<10} {:<12} {:<16} ISSUE",
+                    "QUAND", "ACTEUR", "ACTION", "CIBLE"
+                );
                 for e in &t {
                     let marque = match e.outcome.as_str() {
                         "ok" => "✓",
@@ -3236,9 +3374,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
         Command::History { limit } => {
             let Some(chemin) = &cli.git_mirror else {
-                eprintln!(
-                    "aucun miroir Git configuré — utilise --git-mirror ou HLB_GIT_MIRROR"
-                );
+                eprintln!("aucun miroir Git configuré — utilise --git-mirror ou HLB_GIT_MIRROR");
                 return Ok(ExitCode::FAILURE);
             };
 
@@ -3249,11 +3385,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 return Ok(ExitCode::SUCCESS);
             }
 
-            println!("{} changement(s), du plus récent au plus ancien :\n", h.len());
+            println!(
+                "{} changement(s), du plus récent au plus ancien :\n",
+                h.len()
+            );
             for (id, msg) in &h {
                 println!("  {id}  {msg}");
             }
-            println!("\n  git -C {} show <id>   pour le diff complet", chemin.display());
+            println!(
+                "\n  git -C {} show <id>   pour le diff complet",
+                chemin.display()
+            );
             Ok(ExitCode::SUCCESS)
         }
 
@@ -3311,7 +3453,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
                     }
 
-                    TokenCmd::Create { name, role, user, mailbox, apply } => {
+                    TokenCmd::Create {
+                        name,
+                        role,
+                        user,
+                        mailbox,
+                        apply,
+                    } => {
                         let Some(r) = hlb_types::Role::parse(role) else {
                             eprintln!("Rôle « {role} » inconnu.");
                             eprintln!("  viewer   : tout voir, ne rien modifier");
@@ -3327,7 +3475,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         if let (Some(u), Some(b)) = (user, mailbox) {
                             let connues = state.mailboxes(u).await?;
                             if !connues.iter().any(|(l, ..)| l == b) {
-                                eprintln!("🔴 « {u} » n'a pas de boîte « {b} » — aucun jeton créé.");
+                                eprintln!(
+                                    "🔴 « {u} » n'a pas de boîte « {b} » — aucun jeton créé."
+                                );
                                 eprintln!("   hlb user mailbox add {u} {b}");
                                 return Ok(ExitCode::FAILURE);
                             }
@@ -3359,7 +3509,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                         }
                         state
-                            .audit("cli", ACTEUR_ROLE, "token-create", name, "ok", Some(r.as_str()))
+                            .audit(
+                                "cli",
+                                ACTEUR_ROLE,
+                                "token-create",
+                                name,
+                                "ok",
+                                Some(r.as_str()),
+                            )
                             .await?;
 
                         println!("✓ jeton « {name} » créé en rôle {}.", r.as_str());
@@ -3417,12 +3574,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         let v = snap::parse_list(fs, &String::from_utf8_lossy(&out.stdout));
                         if v.is_empty() {
-                            println!("Aucun instantané Homelabus sur {dataset} ({}).", fs.as_str());
+                            println!(
+                                "Aucun instantané Homelabus sur {dataset} ({}).",
+                                fs.as_str()
+                            );
                             println!("  hlb snapshot create {dataset} --apply");
                             return Ok(ExitCode::SUCCESS);
                         }
 
-                        println!("{} instantané(s) sur {dataset} ({}) :", v.len(), fs.as_str());
+                        println!(
+                            "{} instantané(s) sur {dataset} ({}) :",
+                            v.len(),
+                            fs.as_str()
+                        );
                         for s in &v {
                             println!("  {}", s.label);
                         }
@@ -3449,7 +3613,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("Créerait sur {dataset} ({}) :", fs.as_str());
                             println!("  {label}");
                             println!();
-                            println!("  Commande : {}", snap::create_command(fs, dataset, &label).join(" "));
+                            println!(
+                                "  Commande : {}",
+                                snap::create_command(fs, dataset, &label).join(" ")
+                            );
                             println!();
                             println!("  🔴 Un instantané n'est PAS une sauvegarde : il vit sur le");
                             println!("     même pool que les données. Il protège de l'erreur");
@@ -3463,8 +3630,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             Ok(_) => {
                                 let state = State::open(&cli.state).await?;
                                 state
-                                    .audit("cli", ACTEUR_ROLE, "snapshot-create", dataset, "ok",
-                                           Some(&label))
+                                    .audit(
+                                        "cli",
+                                        ACTEUR_ROLE,
+                                        "snapshot-create",
+                                        dataset,
+                                        "ok",
+                                        Some(&label),
+                                    )
                                     .await?;
                                 println!("✓ {label}");
                                 println!();
@@ -3524,7 +3697,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         if irreversibles.is_empty() {
                             println!("✓ {} migration(s), toutes réversibles.", migrations.len());
                         } else {
-                            println!("🔴 {} migration(s) SANS retour arrière :", irreversibles.len());
+                            println!(
+                                "🔴 {} migration(s) SANS retour arrière :",
+                                irreversibles.len()
+                            );
                             for m in irreversibles {
                                 println!("    {}", m.name);
                             }
@@ -3540,7 +3716,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    SelfCmd::Rollback { binary, to_migration, confirm, apply } => {
+                    SelfCmd::Rollback {
+                        binary,
+                        to_migration,
+                        confirm,
+                        apply,
+                    } => {
                         if *binary {
                             let chemins = su::SwapPaths::new(std::env::current_exe()?);
                             if !apply {
@@ -3549,7 +3730,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 println!("  ⚠️  Le SCHÉMA n'est pas touché. Si la version qu'on");
                                 println!("     quitte l'avait migré, l'ancien binaire lira un");
                                 println!("     schéma qu'il ne comprend pas :");
-                                println!("       hlb self rollback --to-migration <n> --apply --confirm");
+                                println!(
+                                    "       hlb self rollback --to-migration <n> --apply --confirm"
+                                );
                                 println!();
                                 println!("  Relance avec --apply.");
                                 return Ok(ExitCode::SUCCESS);
@@ -3558,12 +3741,20 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             match su::swap::rollback(&chemins) {
                                 Ok(()) => {
                                     state
-                                        .audit("cli", ACTEUR_ROLE, "self-rollback-binary",
-                                               "binaire", "ok", None)
+                                        .audit(
+                                            "cli",
+                                            ACTEUR_ROLE,
+                                            "self-rollback-binary",
+                                            "binaire",
+                                            "ok",
+                                            None,
+                                        )
                                         .await?;
                                     println!("✓ binaire précédent restauré.");
                                     println!();
-                                    println!("⚠️  Redémarre le controller pour qu'il prenne effet.");
+                                    println!(
+                                        "⚠️  Redémarre le controller pour qu'il prenne effet."
+                                    );
                                     return Ok(ExitCode::SUCCESS);
                                 }
                                 Err(e) => {
@@ -3632,7 +3823,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    SelfCmd::Update { version, from, key, confirm, apply } => {
+                    SelfCmd::Update {
+                        version,
+                        from,
+                        key,
+                        confirm,
+                        apply,
+                    } => {
                         let Some(cible) = su::Version::parse(version) else {
                             eprintln!("Version illisible : « {version} » (attendu : 0.2.0)");
                             return Ok(ExitCode::FAILURE);
@@ -3675,7 +3872,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         if plan.jump.needs_confirmation() && !confirm {
                             eprintln!();
-                            eprintln!("🔴 {} : validation explicite requise.", plan.jump.describe());
+                            eprintln!(
+                                "🔴 {} : validation explicite requise.",
+                                plan.jump.describe()
+                            );
                             eprintln!("   Relis les notes de version, puis --confirm.");
                             return Ok(ExitCode::FAILURE);
                         }
@@ -3728,20 +3928,26 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         println!();
                         println!("Téléchargement depuis {base_url}…");
-                        let (binaire, manifeste) =
-                            match telecharger_version(base_url, &cible).await {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    eprintln!("🔴 {e}");
-                                    return Ok(ExitCode::FAILURE);
-                                }
-                            };
+                        let (binaire, manifeste) = match telecharger_version(base_url, &cible).await
+                        {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("🔴 {e}");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        };
 
                         if let Err(r) = su::verify_release(&cle, &manifeste, cible, &binaire) {
                             eprintln!("{}", r.describe());
                             state
-                                .audit("cli", ACTEUR_ROLE, "self-update", version, "refused",
-                                       Some(&r.describe()))
+                                .audit(
+                                    "cli",
+                                    ACTEUR_ROLE,
+                                    "self-update",
+                                    version,
+                                    "refused",
+                                    Some(&r.describe()),
+                                )
                                 .await?;
                             return Ok(ExitCode::FAILURE);
                         }
@@ -3779,7 +3985,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 use hlb_backup::replication as repl;
 
                 match cmd {
-                    ReplCmd::Config { standby, primary_host, user } => {
+                    ReplCmd::Config {
+                        standby,
+                        primary_host,
+                        user,
+                    } => {
                         let slot = repl::slot_name(standby)?;
 
                         println!("═══ Sur la PRIMAIRE, dans postgresql.conf ═══");
@@ -3800,7 +4010,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         println!("  2. Dans postgresql.auto.conf, APRÈS le pg_basebackup :");
                         println!("{}", repl::APPLIQUER_APRES_BASEBACKUP);
                         println!();
-                        println!("{}", repl::standby_settings(primary_host, 5432, &slot, user));
+                        println!(
+                            "{}",
+                            repl::standby_settings(primary_host, 5432, &slot, user)
+                        );
                         Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
                     }
 
@@ -3849,14 +4062,15 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             // postgresql.auto.conf et emporte l'application_name.
                             for nom in repl::indistinguishable(&standbys) {
                                 println!();
-                                println!("⚠️ Plusieurs standbys s'annoncent « {nom} » : impossible");
+                                println!(
+                                    "⚠️ Plusieurs standbys s'annoncent « {nom} » : impossible"
+                                );
                                 println!("   de savoir lequel décroche. Pose un application_name");
                                 println!("   distinct sur chacun (hlb replication config).");
                             }
                         }
 
-                        let dangereux: Vec<_> =
-                            slots.iter().filter(|s| s.is_dangerous()).collect();
+                        let dangereux: Vec<_> = slots.iter().filter(|s| s.is_dangerous()).collect();
                         if !slots.is_empty() {
                             println!();
                             println!("Slots sans consommateur :");
@@ -4215,7 +4429,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     let cible = scrape::Cible::controller(controller.clone(), token.clone());
                     print!("{}", scrape::config_collecte(&[cible]));
                     println!();
-                    println!("# Rétention conseillée : -retentionPeriod={}", scrape::RETENTION);
+                    println!(
+                        "# Rétention conseillée : -retentionPeriod={}",
+                        scrape::RETENTION
+                    );
                     Ok(ExitCode::SUCCESS)
                 }
 
@@ -4240,74 +4457,83 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 MetricsCmd::Check { url } => {
                     let rt = tokio::runtime::Runtime::new()?;
                     rt.block_on(async {
-                    let mut alertes = 0;
-                    let mut aveugles = 0;
+                        let mut alertes = 0;
+                        let mut aveugles = 0;
 
-                    for r in rules::regles_par_defaut() {
-                        let point = format!(
-                            "{}/api/v1/query?query={}",
-                            url.trim_end_matches('/'),
-                            encoder_url(r.requete)
-                        );
+                        for r in rules::regles_par_defaut() {
+                            let point = format!(
+                                "{}/api/v1/query?query={}",
+                                url.trim_end_matches('/'),
+                                encoder_url(r.requete)
+                            );
 
-                        let evaluation = match reqwest::get(&point).await {
-                            Ok(rep) => match rep.text().await {
-                                Ok(corps) => match hlb_metrics::valeurs_promql(&corps) {
-                                    Ok(v) => r.juger(&v),
+                            let evaluation = match reqwest::get(&point).await {
+                                Ok(rep) => match rep.text().await {
+                                    Ok(corps) => match hlb_metrics::valeurs_promql(&corps) {
+                                        Ok(v) => r.juger(&v),
+                                        Err(e) => hlb_metrics::Evaluation::Inconnu {
+                                            raison: e.to_string(),
+                                        },
+                                    },
                                     Err(e) => hlb_metrics::Evaluation::Inconnu {
                                         raison: e.to_string(),
                                     },
                                 },
+                                // 🔴 VictoriaMetrics injoignable n'est PAS « rien à
+                                // signaler » : c'est la surveillance elle-même qui est
+                                // tombée, donc toutes les règles sont aveugles.
                                 Err(e) => hlb_metrics::Evaluation::Inconnu {
-                                    raison: e.to_string(),
+                                    raison: format!("VictoriaMetrics injoignable : {e}"),
                                 },
-                            },
-                            // 🔴 VictoriaMetrics injoignable n'est PAS « rien à
-                            // signaler » : c'est la surveillance elle-même qui est
-                            // tombée, donc toutes les règles sont aveugles.
-                            Err(e) => hlb_metrics::Evaluation::Inconnu {
-                                raison: format!("VictoriaMetrics injoignable : {e}"),
-                            },
-                        };
+                            };
 
-                        match &evaluation {
-                            hlb_metrics::Evaluation::Ok => println!("✓ {}", r.nom),
-                            hlb_metrics::Evaluation::Declenchee { valeur } => {
-                                println!("🔴 {} — {} (mesuré {valeur:.2})", r.nom, r.explication);
-                                alertes += 1;
-                            }
-                            hlb_metrics::Evaluation::Inconnu { raison } => {
-                                println!("❓ {} — AVEUGLE : {raison}", r.nom);
-                                aveugles += 1;
+                            match &evaluation {
+                                hlb_metrics::Evaluation::Ok => println!("✓ {}", r.nom),
+                                hlb_metrics::Evaluation::Declenchee { valeur } => {
+                                    println!(
+                                        "🔴 {} — {} (mesuré {valeur:.2})",
+                                        r.nom, r.explication
+                                    );
+                                    alertes += 1;
+                                }
+                                hlb_metrics::Evaluation::Inconnu { raison } => {
+                                    println!("❓ {} — AVEUGLE : {raison}", r.nom);
+                                    aveugles += 1;
+                                }
                             }
                         }
-                    }
 
-                    println!();
-                    if aveugles > 0 {
-                        // 🔴 « Je ne sais pas » ne doit jamais se lire comme « tout va
-                        // bien » : c'est exactement ce que ce module existe pour
-                        // empêcher. Un code de sortie 0 le ferait croire.
-                        println!("🔴 {aveugles} règle(s) AVEUGLE(S) : ce n'est pas « rien à");
-                        println!("   signaler », c'est « on ne sait pas ».");
-                    }
-                    if alertes > 0 {
-                        println!("🔴 {alertes} alerte(s) active(s).");
-                    }
-                    if alertes == 0 && aveugles == 0 {
-                        println!("Toutes les règles sont vertes, et toutes ont des données.");
-                    }
+                        println!();
+                        if aveugles > 0 {
+                            // 🔴 « Je ne sais pas » ne doit jamais se lire comme « tout va
+                            // bien » : c'est exactement ce que ce module existe pour
+                            // empêcher. Un code de sortie 0 le ferait croire.
+                            println!("🔴 {aveugles} règle(s) AVEUGLE(S) : ce n'est pas « rien à");
+                            println!("   signaler », c'est « on ne sait pas ».");
+                        }
+                        if alertes > 0 {
+                            println!("🔴 {alertes} alerte(s) active(s).");
+                        }
+                        if alertes == 0 && aveugles == 0 {
+                            println!("Toutes les règles sont vertes, et toutes ont des données.");
+                        }
 
-                    Ok::<_, Box<dyn std::error::Error>>(if alertes + aveugles > 0 {
-                        ExitCode::FAILURE
-                    } else {
-                        ExitCode::SUCCESS
-                    })
+                        Ok::<_, Box<dyn std::error::Error>>(if alertes + aveugles > 0 {
+                            ExitCode::FAILURE
+                        } else {
+                            ExitCode::SUCCESS
+                        })
                     })
                 }
 
-                MetricsCmd::Deadman { heartbeat_file, ntfy } => {
-                    println!("{}", deadman::script_veilleur(heartbeat_file, ntfy, "Homelabus"));
+                MetricsCmd::Deadman {
+                    heartbeat_file,
+                    ntfy,
+                } => {
+                    println!(
+                        "{}",
+                        deadman::script_veilleur(heartbeat_file, ntfy, "Homelabus")
+                    );
                     eprintln!("# ─────────────────────────────────────────────────────");
                     eprintln!("# 🔴 À poser sur le NAS, PAS sur le nœud du controller :");
                     eprintln!("#    un veilleur hébergé par ce qu'il surveille meurt");
@@ -4317,7 +4543,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     eprintln!("#    Homelabus : si le controller est mort, c'est le");
                     eprintln!("#    veilleur seul qui doit pouvoir parler.");
                     eprintln!("#");
-                    eprintln!("# Battements manqués tolérés : 3 (soit {} s de silence).", deadman::SILENCE_MAX_S);
+                    eprintln!(
+                        "# Battements manqués tolérés : 3 (soit {} s de silence).",
+                        deadman::SILENCE_MAX_S
+                    );
                     Ok(ExitCode::SUCCESS)
                 }
             }
@@ -4332,7 +4561,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let orch = SwarmOrchestrator::connect().ok();
 
                 match cmd {
-                    DrCmd::Exercise { base_dir, image, disposable, apply } => {
+                    DrCmd::Exercise {
+                        base_dir,
+                        image,
+                        disposable,
+                        apply,
+                    } => {
                         use hlb_backup::drill;
 
                         let bases = charger_bases(&state).await?;
@@ -4385,7 +4619,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             .await?;
                         state
                             .audit(
-                                "cli", ACTEUR_ROLE, "dr-exercise", &derniere.id,
+                                "cli",
+                                ACTEUR_ROLE,
+                                "dr-exercise",
+                                &derniere.id,
                                 if o.succeeded() { "ok" } else { "failed" },
                                 Some(&o.describe()),
                             )
@@ -4412,10 +4649,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             if bases.is_empty() {
                                 "🔴 AUCUNE — rien ne pourrait être restauré".to_string()
                             } else {
-                                format!("{} (la plus récente : {})",
+                                format!(
+                                    "{} (la plus récente : {})",
                                     bases.len(),
                                     hlb_backup::pitr::iso8601(
-                                        bases.iter().map(|b| b.finished_at).max().unwrap_or(0)))
+                                        bases.iter().map(|b| b.finished_at).max().unwrap_or(0)
+                                    )
+                                )
                             }
                         );
 
@@ -4466,9 +4706,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    DrCmd::Promote { node, base_dir, wal_dir, force_split_brain, apply } => {
+                    DrCmd::Promote {
+                        node,
+                        base_dir,
+                        wal_dir,
+                        force_split_brain,
+                        apply,
+                    } => {
                         let Some(orch) = orch else {
-                            eprintln!("🔴 Swarm injoignable : impossible de constater l'état réel.");
+                            eprintln!(
+                                "🔴 Swarm injoignable : impossible de constater l'état réel."
+                            );
                             eprintln!("   On ne bascule pas à l'aveugle.");
                             return Ok(ExitCode::FAILURE);
                         };
@@ -4546,9 +4794,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("  1. Restaurer {} depuis {base_dir}", plan.base_backup);
                             println!("  2. Poser les réglages ci-dessus");
                             println!("  3. Rejouer le WAL depuis {wal_dir} :");
-                            println!("       hlb backup pitr plan \"{}\"",
-                                     hlb_backup::pitr::iso8601(plan.recover_to));
-                            println!("  4. Déplacer le tier : hlb node tier {node} --set heavy --apply");
+                            println!(
+                                "       hlb backup pitr plan \"{}\"",
+                                hlb_backup::pitr::iso8601(plan.recover_to)
+                            );
+                            println!(
+                                "  4. Déplacer le tier : hlb node tier {node} --set heavy --apply"
+                            );
                             println!();
                             println!("  🔴 Cette commande ne restaure RIEN toute seule. Une");
                             println!("     bascule automatique sur détection de panne est le");
@@ -4562,11 +4814,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         // l'étiquette de placement. La restauration reste manuelle.
                         orch.label_node(&cible.id, "tier", "heavy").await?;
                         state
-                            .audit("cli", ACTEUR_ROLE, "dr-promote", node, "ok",
-                                   Some(&plan.describe()))
+                            .audit(
+                                "cli",
+                                ACTEUR_ROLE,
+                                "dr-promote",
+                                node,
+                                "ok",
+                                Some(&plan.describe()),
+                            )
                             .await?;
 
-                        println!("✓ tier=heavy posé sur {node} — Swarm peut y planifier PostgreSQL.");
+                        println!(
+                            "✓ tier=heavy posé sur {node} — Swarm peut y planifier PostgreSQL."
+                        );
                         println!();
                         println!("🔴 Les DONNÉES ne sont pas restaurées. Fais les étapes 1 à 3");
                         println!("   ci-dessus, sinon PostgreSQL démarrera sur une base VIDE.");
@@ -4588,8 +4848,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let charger_ca = || async {
                     match state.secret(SECRET_CA).await? {
                         Some(ct) => {
-                            let j: serde_json::Value =
-                                serde_json::from_str(&vault.decrypt(&ct)?)?;
+                            let j: serde_json::Value = serde_json::from_str(&vault.decrypt(&ct)?)?;
                             Ok::<_, Box<dyn std::error::Error>>(Some(pki::CertPair {
                                 cert_pem: j["cert"].as_str().unwrap_or_default().to_string(),
                                 key_pem: j["key"].as_str().unwrap_or_default().to_string(),
@@ -4656,7 +4915,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 "autorité de certification du cluster (mTLS)",
                             )
                             .await?;
-                        state.audit("cli", ACTEUR_ROLE, "pki-init", "cluster-ca", "ok", None).await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "pki-init", "cluster-ca", "ok", None)
+                            .await?;
 
                         println!("✓ Autorité créée, clé au coffre.");
                         println!();
@@ -4697,8 +4958,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             return Ok(ExitCode::FAILURE);
                         };
 
-                        let c = pki::issue(&ca, "controller", &["controller".into()], Purpose::Client)
-                            .await?;
+                        let c =
+                            pki::issue(&ca, "controller", &["controller".into()], Purpose::Client)
+                                .await?;
 
                         std::fs::create_dir_all(out)?;
                         // reqwest attend certificat ET clé dans le même PEM.
@@ -4726,11 +4988,26 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let vault = Vault::open_or_init(&cli.master_key)?;
 
                 let (host, user, port, identity) = match cmd {
-                    AccessCmd::Grant { host, user, port, identity, .. }
-                    | AccessCmd::Revoke { host, user, port, identity, .. }
-                    | AccessCmd::List { host, user, port, identity } => {
-                        (host, user.as_deref(), *port, identity.as_deref())
+                    AccessCmd::Grant {
+                        host,
+                        user,
+                        port,
+                        identity,
+                        ..
                     }
+                    | AccessCmd::Revoke {
+                        host,
+                        user,
+                        port,
+                        identity,
+                        ..
+                    }
+                    | AccessCmd::List {
+                        host,
+                        user,
+                        port,
+                        identity,
+                    } => (host, user.as_deref(), *port, identity.as_deref()),
                 };
 
                 let ssh = ssh_runner(host, user, port, identity);
@@ -4739,10 +5016,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 match cmd {
                     AccessCmd::List { .. } => {
                         let gerees = access::list_managed(&avant);
-                        let total = avant.lines().filter(|l| {
-                            let l = l.trim();
-                            !l.is_empty() && !l.starts_with('#')
-                        }).count();
+                        let total = avant
+                            .lines()
+                            .filter(|l| {
+                                let l = l.trim();
+                                !l.is_empty() && !l.starts_with('#')
+                            })
+                            .count();
 
                         println!("{host} — {total} clé(s) dans authorized_keys");
                         if gerees.is_empty() {
@@ -4752,8 +5032,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 println!("  gérée par Homelabus (cluster « {c} »)");
                             }
                         }
-                        println!("  {} clé(s) humaine(s), auxquelles on ne touche jamais",
-                                 total - gerees.len());
+                        println!(
+                            "  {} clé(s) humaine(s), auxquelles on ne touche jamais",
+                            total - gerees.len()
+                        );
                         Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
                     }
 
@@ -4775,7 +5057,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
 
                         access::write_authorized_keys(&ssh, "~", &apres, &avant).await?;
-                        state.audit("cli", ACTEUR_ROLE, "access-grant", host, "ok", None).await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "access-grant", host, "ok", None)
+                            .await?;
                         println!("✓ clé posée ({} conservée(s))", ch.kept);
                         Ok(ExitCode::SUCCESS)
                     }
@@ -4801,7 +5085,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
 
                         access::write_authorized_keys(&ssh, "~", &apres, &avant).await?;
-                        state.audit("cli", ACTEUR_ROLE, "access-revoke", host, "ok", None).await?;
+                        state
+                            .audit("cli", ACTEUR_ROLE, "access-revoke", host, "ok", None)
+                            .await?;
                         println!("✓ clé retirée ({} clé(s) humaine(s) intacte(s))", ch.kept);
                         Ok(ExitCode::SUCCESS)
                     }
@@ -4987,13 +5273,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         match (enrole.unwrap_or(false), au_coffre) {
                             (true, true) => {
                                 println!("✓ Le filtrage peut être appliqué.");
-                                println!("  Il ne l'est réellement qu'après un `hlb ingress --apply`.");
+                                println!(
+                                    "  Il ne l'est réellement qu'après un `hlb ingress --apply`."
+                                );
                             }
                             (true, false) => {
                                 // 🔴 Le pire des cas : CrowdSec croit avoir un videur,
                                 // et personne ne détient sa clé.
                                 println!("🔴 Videur enrôlé mais clé ABSENTE du coffre.");
-                                println!("   Elle n'est affichée qu'à la création : elle est perdue.");
+                                println!(
+                                    "   Elle n'est affichée qu'à la création : elle est perdue."
+                                );
                                 println!("   Supprime le videur puis réenrôle :");
                                 println!("     cscli bouncers delete {}", crowdsec::BOUNCER_NAME);
                                 println!("     hlb crowdsec enroll --apply");
@@ -5020,7 +5310,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         }
 
                         if !apply {
-                            println!("Enrôlerait le videur « {} » auprès de CrowdSec.", crowdsec::BOUNCER_NAME);
+                            println!(
+                                "Enrôlerait le videur « {} » auprès de CrowdSec.",
+                                crowdsec::BOUNCER_NAME
+                            );
                             println!();
                             println!("  Sa clé sera déposée au coffre. Elle n'est affichée");
                             println!("  qu'une fois : la perdre oblige à supprimer le videur");
@@ -5053,7 +5346,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             )
                             .await?;
                         state
-                            .audit("cli", ACTEUR_ROLE, "crowdsec-enroll", crowdsec::BOUNCER_NAME, "ok", None)
+                            .audit(
+                                "cli",
+                                ACTEUR_ROLE,
+                                "crowdsec-enroll",
+                                crowdsec::BOUNCER_NAME,
+                                "ok",
+                                None,
+                            )
                             .await?;
 
                         println!("✓ Videur enrôlé, clé au coffre.");
@@ -5066,7 +5366,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::SecretSet { name, purpose, rotate } => {
+        Command::SecretSet {
+            name,
+            purpose,
+            rotate,
+        } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = State::open(&cli.state).await?;
@@ -5122,7 +5426,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 if names.is_empty() {
                     println!("Aucun secret stocké.");
                 } else {
-                    println!("{} secret(s) — les valeurs ne sont jamais affichées :\n", names.len());
+                    println!(
+                        "{} secret(s) — les valeurs ne sont jamais affichées :\n",
+                        names.len()
+                    );
                     for (name, purpose) in &names {
                         println!("  {name:<28} {purpose}");
                     }
@@ -6031,9 +6338,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     let valeur = match set {
                         Some(v) => v.clone(),
                         None => {
-                            let mem = n.memory_mb.ok_or(
-                                "mémoire du nœud inconnue : précise --set heavy|light",
-                            )?;
+                            let mem = n
+                                .memory_mb
+                                .ok_or("mémoire du nœud inconnue : précise --set heavy|light")?;
                             hlb_orchestrator::cluster::tier_for_memory(mem).to_string()
                         }
                     };
@@ -6042,7 +6349,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         println!(
                             "Poserait tier={valeur} sur {} ({}).",
                             n.hostname,
-                            n.memory_mb.map(|m| format!("{m} Mo")).unwrap_or_else(|| "?".into())
+                            n.memory_mb
+                                .map(|m| format!("{m} Mo"))
+                                .unwrap_or_else(|| "?".into())
                         );
                         if n.tier.as_deref() == Some(valeur.as_str()) {
                             println!("  (déjà cette valeur — rien ne changerait)");
@@ -6056,29 +6365,55 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                     let state = State::open(&cli.state).await?;
                     state
-                        .audit("cli", ACTEUR_ROLE, "node-tier", &n.hostname, "ok", Some(&valeur))
+                        .audit(
+                            "cli",
+                            ACTEUR_ROLE,
+                            "node-tier",
+                            &n.hostname,
+                            "ok",
+                            Some(&valeur),
+                        )
                         .await?;
                     return Ok(ExitCode::SUCCESS);
                 }
 
                 if let NodeCmd::Add {
-                    host, user, port, identity, role, advertise_addr, apply,
+                    host,
+                    user,
+                    port,
+                    identity,
+                    role,
+                    advertise_addr,
+                    apply,
                 } = cmd
                 {
                     return node_add(
-                        &cli, host, user.as_deref(), *port, identity.as_deref(),
-                        role.as_deref(), advertise_addr.as_deref(), *apply,
+                        &cli,
+                        host,
+                        user.as_deref(),
+                        *port,
+                        identity.as_deref(),
+                        role.as_deref(),
+                        advertise_addr.as_deref(),
+                        *apply,
                     )
                     .await;
                 }
 
                 let (runner, apply) = match cmd {
-                    NodeCmd::Check { host, user, port, identity } => {
-                        (build_runner(host.as_deref(), user.as_deref(), *port, identity.as_deref()), false)
-                    }
-                    NodeCmd::Deps { host, user, apply } => {
-                        (build_runner(host.as_deref(), user.as_deref(), None, None), *apply)
-                    }
+                    NodeCmd::Check {
+                        host,
+                        user,
+                        port,
+                        identity,
+                    } => (
+                        build_runner(host.as_deref(), user.as_deref(), *port, identity.as_deref()),
+                        false,
+                    ),
+                    NodeCmd::Deps { host, user, apply } => (
+                        build_runner(host.as_deref(), user.as_deref(), None, None),
+                        *apply,
+                    ),
                     // Traités au-dessus.
                     NodeCmd::Tier { .. } | NodeCmd::Add { .. } => unreachable!(),
                 };

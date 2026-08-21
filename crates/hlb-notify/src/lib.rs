@@ -118,7 +118,10 @@ pub struct QuietHours {
 
 impl Default for QuietHours {
     fn default() -> Self {
-        Self { from_hour: 22, to_hour: 8 }
+        Self {
+            from_hour: 22,
+            to_hour: 8,
+        }
     }
 }
 
@@ -178,7 +181,10 @@ mod tests {
 
     #[test]
     fn a_window_within_the_day_also_works() {
-        let q = QuietHours { from_hour: 9, to_hour: 17 };
+        let q = QuietHours {
+            from_hour: 9,
+            to_hour: 17,
+        };
         assert!(q.contains(12));
         assert!(!q.contains(20));
         assert!(!q.contains(3));

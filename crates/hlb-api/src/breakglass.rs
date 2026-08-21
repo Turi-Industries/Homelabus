@@ -169,7 +169,10 @@ pub fn verdict(garde_fous: &[GardeFou]) -> String {
 
     let perimes = garde_fous
         .iter()
-        .filter(|g| g.atteste_il_y_a_s.is_some_and(|a| a > ATTESTATION_PERIMEE_S))
+        .filter(|g| {
+            g.atteste_il_y_a_s
+                .is_some_and(|a| a > ATTESTATION_PERIMEE_S)
+        })
         .count();
     if perimes > 0 {
         return format!(

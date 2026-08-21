@@ -131,10 +131,7 @@ pub fn resolve_with_guide(
         for a in &s.automate {
             if let hlb_types::Automation::Env { vars } = a {
                 for (k, v) in vars {
-                    table.insert(
-                        k.clone(),
-                        hlb_types::guide::render(v, &domain_vars(params)),
-                    );
+                    table.insert(k.clone(), hlb_types::guide::render(v, &domain_vars(params)));
                 }
             }
         }
@@ -151,9 +148,7 @@ pub fn resolve_with_guide(
         .requires
         .iter()
         .filter_map(|c| match c {
-            Capability::Storage { name, path, .. } => {
-                Some((format!("{app}-{name}"), path.clone()))
-            }
+            Capability::Storage { name, path, .. } => Some((format!("{app}-{name}"), path.clone())),
             _ => None,
         })
         .collect();
@@ -270,9 +265,7 @@ pub fn resolve_with_guide(
     if expose_apres_guide && !guide.steps.iter().any(|s| s.is_blocking()) {
         plan.push(Action::PendingGuideStep {
             id: format!("{app}-first-admin"),
-            title: format!(
-                "Vérifier le compte administrateur de {app} et fermer les inscriptions"
-            ),
+            title: format!("Vérifier le compte administrateur de {app} et fermer les inscriptions"),
             blocking: true,
             service: app.clone(),
             step: Box::new(hlb_types::GuideStep {
@@ -323,7 +316,11 @@ fn resolve_capability(
     // Le `match` est exhaustif : ajouter une variante à `Capability` fait échouer la
     // compilation ici. C'est exactement pourquoi le plan a retenu Rust (§1).
     match cap {
-        Capability::Database { engine, name, extensions } => {
+        Capability::Database {
+            engine,
+            name,
+            extensions,
+        } => {
             let db = name.clone().unwrap_or_else(|| app.to_string());
             let secret = format!("{app}-db-password");
 
@@ -334,9 +331,10 @@ fn resolve_capability(
             // partage UN rôle, donc UN mot de passe. Trois générations identiques
             // encombreraient le plan et l'état sans rien changer — la seconde serait
             // de toute façon ignorée, `store_secret_if_absent` ne réécrivant jamais.
-            let deja = plan.actions.iter().any(
-                |a| matches!(a, Action::GenerateSecret { name, .. } if name == &secret),
-            );
+            let deja = plan
+                .actions
+                .iter()
+                .any(|a| matches!(a, Action::GenerateSecret { name, .. } if name == &secret));
             if !deja {
                 plan.push(Action::GenerateSecret {
                     name: secret.clone(),
@@ -379,7 +377,10 @@ fn resolve_capability(
             });
         }
 
-        Capability::Sso { mode, redirect_paths } => {
+        Capability::Sso {
+            mode,
+            redirect_paths,
+        } => {
             // 🔴 Le `mode` décide, et il est examiné exhaustivement. La version
             // précédente l'ignorait (`..`), avec deux conséquences silencieuses :
             // une app en exclusion volontaire recevait quand même un client OIDC
@@ -470,7 +471,10 @@ fn resolve_capability(
         // 🔴 Motif EXHAUSTIF, sans `..`. Le `..` qui était ici avalait `quota_bytes`,
         // exactement comme il avait avalé `mode` sur `Capability::Sso` — un `..` a le
         // même effet qu'un bras `_ =>`, et le compilateur ne peut rien en dire.
-        Capability::MailAccount { aliases, quota_bytes } => {
+        Capability::MailAccount {
+            aliases,
+            quota_bytes,
+        } => {
             let domain = params
                 .mail_domain
                 .as_ref()
@@ -482,7 +486,13 @@ fn resolve_capability(
             });
         }
 
-        Capability::Storage { name, path, tier, backup, sqlite } => {
+        Capability::Storage {
+            name,
+            path,
+            tier,
+            backup,
+            sqlite,
+        } => {
             plan.push(Action::CreateVolume {
                 name: format!("{app}-{name}"),
                 path: path.clone(),
@@ -544,8 +554,16 @@ mod tests {
             .find(|a| matches!(a, Action::ProvisionMailAccount { .. }))
             .expect("une action de boîte");
         match a {
-            Action::ProvisionMailAccount { quota_bytes, aliases, .. } => {
-                assert_eq!(*quota_bytes, Some(5_000_000), "le quota a été avalé en route");
+            Action::ProvisionMailAccount {
+                quota_bytes,
+                aliases,
+                ..
+            } => {
+                assert_eq!(
+                    *quota_bytes,
+                    Some(5_000_000),
+                    "le quota a été avalé en route"
+                );
                 assert!(*aliases);
             }
             _ => unreachable!(),
@@ -584,10 +602,9 @@ mod tests {
             extensions: Vec::new(),
         }));
         // §3.1 — un rôle par app, jamais de mot de passe réutilisé.
-        assert!(p
-            .actions
-            .iter()
-            .any(|a| matches!(a, Action::GenerateSecret { name, .. } if name == "gitea-db-password")));
+        assert!(p.actions.iter().any(
+            |a| matches!(a, Action::GenerateSecret { name, .. } if name == "gitea-db-password")
+        ));
     }
 
     #[test]
@@ -607,7 +624,10 @@ mod tests {
             })
             .expect("client OIDC planifié");
 
-        assert_eq!(uris, vec!["https://git.example.fr/user/oauth2/pocketid/callback"]);
+        assert_eq!(
+            uris,
+            vec!["https://git.example.fr/user/oauth2/pocketid/callback"]
+        );
     }
 
     #[test]
@@ -641,7 +661,10 @@ mod tests {
         let m = manifest("  requires:\n    - kind: sso\n      mode: none\n");
         let p = resolve(&m, &InstallParams::with_domain("media.example.fr")).expect("plan");
 
-        assert!(uris_oidc(&p).is_none(), "aucun client OIDC ne doit être créé");
+        assert!(
+            uris_oidc(&p).is_none(),
+            "aucun client OIDC ne doit être créé"
+        );
         assert!(
             !p.actions.iter().any(|a| matches!(
                 a,
@@ -687,11 +710,16 @@ mod tests {
         // Quel que soit le mode, ou bien on ne crée rien, ou bien on crée un client
         // complet — jamais un client à moitié.
         for mode in ["none", "proxy-only", "proxy-header"] {
-            let m = manifest(&format!("  requires:\n    - kind: sso\n      mode: {mode}\n"));
+            let m = manifest(&format!(
+                "  requires:\n    - kind: sso\n      mode: {mode}\n"
+            ));
             let p = resolve(&m, &InstallParams::with_domain("app.example.fr")).expect("plan");
 
             if let Some(uris) = uris_oidc(&p) {
-                assert!(!uris.is_empty(), "mode {mode} : client sans URI de redirection");
+                assert!(
+                    !uris.is_empty(),
+                    "mode {mode} : client sans URI de redirection"
+                );
             }
         }
 
@@ -704,7 +732,10 @@ mod tests {
             .expect_err("un native sans redirectPaths doit être refusé");
         let msg = e.to_string();
         assert!(msg.contains("redirectPaths"), "{msg}");
-        assert!(msg.contains("proxy-only"), "l'erreur doit dire quoi faire : {msg}");
+        assert!(
+            msg.contains("proxy-only"),
+            "l'erreur doit dire quoi faire : {msg}"
+        );
     }
 
     #[test]
@@ -712,12 +743,21 @@ mod tests {
         let m = manifest("  requires:\n    - kind: database\n      engine: postgres\n");
         let p = resolve(&m, &InstallParams::default()).expect("plan");
 
-        let secret = p.actions.iter().position(|a| matches!(a, Action::GenerateSecret { .. }))
+        let secret = p
+            .actions
+            .iter()
+            .position(|a| matches!(a, Action::GenerateSecret { .. }))
             .expect("secret planifié");
-        let db = p.actions.iter().position(|a| matches!(a, Action::ProvisionDatabase { .. }))
+        let db = p
+            .actions
+            .iter()
+            .position(|a| matches!(a, Action::ProvisionDatabase { .. }))
             .expect("base planifiée");
 
-        assert!(secret < db, "sans mot de passe, le rôle ne peut pas être créé");
+        assert!(
+            secret < db,
+            "sans mot de passe, le rôle ne peut pas être créé"
+        );
     }
 
     #[test]
@@ -779,7 +819,11 @@ mod tests {
         let m = manifest(AFTER_GUIDE);
         let p = resolve_with_guide(&m, &hlb_types::Guide::default(), &InstallParams::default())
             .expect("plan");
-        assert_eq!(p.blocking_steps().len(), 1, "un garde-fou par défaut est attendu");
+        assert_eq!(
+            p.blocking_steps().len(),
+            1,
+            "un garde-fou par défaut est attendu"
+        );
     }
 
     #[test]
@@ -814,9 +858,10 @@ mod tests {
     fn private_is_the_default_exposure() {
         let m = manifest("  ingress:\n    - host: git.example.fr\n      port: 3000\n");
         let p = resolve(&m, &InstallParams::default()).expect("plan");
-        assert!(p.actions.iter().any(
-            |a| matches!(a, Action::ConfigureIngress { public: false, .. })
-        ));
+        assert!(p
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::ConfigureIngress { public: false, .. })));
     }
 
     #[test]
@@ -863,10 +908,19 @@ mod tests {
         let m: Manifest = serde_yaml_ng::from_str(y).unwrap();
         let p = resolve(&m, &InstallParams::default()).expect("plan");
 
-        let resolve_pos = p.actions.iter().position(|a| matches!(a, Action::ResolveDigest { .. }))
+        let resolve_pos = p
+            .actions
+            .iter()
+            .position(|a| matches!(a, Action::ResolveDigest { .. }))
             .expect("résolution de digest planifiée");
-        let deploy = p.actions.iter().position(|a| matches!(a, Action::DeployService { .. }))
+        let deploy = p
+            .actions
+            .iter()
+            .position(|a| matches!(a, Action::DeployService { .. }))
             .expect("déploiement");
-        assert!(resolve_pos < deploy, "le digest est résolu avant le déploiement");
+        assert!(
+            resolve_pos < deploy,
+            "le digest est résolu avant le déploiement"
+        );
     }
 }

@@ -99,10 +99,7 @@ impl Verification {
             format!(
                 "ÉCART — restauré {} fichiers / {} octets, l'instantané en annonçait \
                  {} / {}",
-                self.files_restored,
-                self.bytes_restored,
-                self.files_expected,
-                self.bytes_expected
+                self.files_restored, self.bytes_restored, self.files_expected, self.bytes_expected
             )
         }
     }
@@ -147,7 +144,8 @@ impl<R: Runner> Repository<R> {
     /// passerait inaperçu. `--read-data-subset` en relit un échantillon, ce qui
     /// attrape la corruption silencieuse sans relire tout le dépôt à chaque fois.
     pub async fn check_data(&self, subset: &str) -> Result<()> {
-        self.exec_public(&["check", "--read-data-subset", subset]).await?;
+        self.exec_public(&["check", "--read-data-subset", subset])
+            .await?;
         Ok(())
     }
 }
@@ -293,9 +291,15 @@ async fn compter_dans_volume(volume: &str) -> Result<(u64, u64)> {
                   | awk '{s+=$1} END {print NR, s+0}'";
 
     let out = docker(&[
-        "run", "--rm", "--entrypoint", "sh",
-        "-v", &format!("{volume}:/verif"),
-        IMAGE, "-c", script,
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        "-v",
+        &format!("{volume}:/verif"),
+        IMAGE,
+        "-c",
+        script,
     ])
     .await?;
 
@@ -423,8 +427,12 @@ mod tests {
 
     #[test]
     fn the_description_is_readable_in_both_cases() {
-        assert!(verification((3, 100), (3, 100)).describe().contains("conformes"));
-        assert!(verification((3, 100), (4, 100)).describe().contains("annonçait"));
+        assert!(verification((3, 100), (3, 100))
+            .describe()
+            .contains("conformes"));
+        assert!(verification((3, 100), (4, 100))
+            .describe()
+            .contains("annonçait"));
     }
 
     #[test]
@@ -434,7 +442,10 @@ mod tests {
         // « conforme » sur une sauvegarde inexploitable.
         let v = avec_blocs(verification((12, 4096), (12, 4096)), false);
 
-        assert!(!v.matches(), "la corruption doit faire échouer la vérification");
+        assert!(
+            !v.matches(),
+            "la corruption doit faire échouer la vérification"
+        );
         assert!(v.describe().contains("CORROMPU"), "{}", v.describe());
         assert!(v.describe().contains("3f2a"), "la cause doit être visible");
     }
@@ -477,7 +488,10 @@ mod tests {
         assert_eq!(parse_count("2 17\n").expect("analysable"), (2, 17));
         assert_eq!(parse_count("0 0\n").expect("analysable"), (0, 0));
         // Une ligne de bruit avant le résultat ne doit pas gêner.
-        assert_eq!(parse_count("attention: bla\n5 4096\n").expect("analysable"), (5, 4096));
+        assert_eq!(
+            parse_count("attention: bla\n5 4096\n").expect("analysable"),
+            (5, 4096)
+        );
     }
 
     #[test]
@@ -498,7 +512,4 @@ mod tests {
         let jetons: std::collections::BTreeSet<String> = (0..100).map(|_| jeton()).collect();
         assert_eq!(jetons.len(), 100, "collision entre jetons rapprochés");
     }
-
-
-
 }

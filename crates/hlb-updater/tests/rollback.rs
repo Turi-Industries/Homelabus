@@ -77,14 +77,20 @@ impl Orchestrator for Fake {
             stderr: String::new(),
         })
     }
-    async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+    async fn create_volume(
+        &self,
+        n: &str,
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         Ok(hlb_orchestrator::VolumeInfo {
             name: n.into(),
             mountpoint: format!("/volumes/{n}"),
             existed: false,
         })
     }
-    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+    async fn inspect_volume(
+        &self,
+        n: &str,
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         self.create_volume(n).await
     }
     async fn status(&self, _: &str) -> hlb_orchestrator::Result<ServiceStatus> {
@@ -92,7 +98,9 @@ impl Orchestrator for Fake {
         if s.len() > 1 {
             Ok(s.remove(0))
         } else {
-            s.first().cloned().ok_or(hlb_orchestrator::Error::NotFound("vide".into()))
+            s.first()
+                .cloned()
+                .ok_or(hlb_orchestrator::Error::NotFound("vide".into()))
         }
     }
     async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> {
@@ -153,7 +161,9 @@ async fn state_with_gitea() -> State {
 fn candidate() -> Candidate {
     Candidate {
         app: "gitea".into(),
-        kind: UpdateKind::NewVersion { to_tag: "1.25".into() },
+        kind: UpdateKind::NewVersion {
+            to_tag: "1.25".into(),
+        },
         from_tag: "1.24".into(),
         from_digest: Some("sha256:ancienne".into()),
         to_digest: "sha256:nouvelle".into(),
@@ -172,7 +182,10 @@ async fn success_is_detected_even_without_an_update_status() {
     let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
 
     assert!(outcome.is_success(), "{outcome:?}");
-    assert_eq!(s.app_manifest("gitea").await.unwrap().spec.image.tag, "1.25");
+    assert_eq!(
+        s.app_manifest("gitea").await.unwrap().spec.image.tag,
+        "1.25"
+    );
 }
 
 /// Après un rollback, le service est convergé — mais sur l'ancienne image. Se fier au
@@ -187,7 +200,10 @@ async fn a_converged_service_on_the_old_image_is_not_a_success() {
     let s = state_with_gitea().await;
 
     let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
-    assert!(matches!(outcome, UpdateOutcome::RolledBack { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, UpdateOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
 }
 
 #[tokio::test]
@@ -223,15 +239,30 @@ async fn a_rolled_back_update_leaves_the_state_untouched() {
     // « corriger » le cluster vers une image dont on sait qu'elle ne démarre pas —
     // en boucle.
     let o = Fake::returning(vec![
-        status("gitea/gitea:1.24@sha256:ancienne", Some(UpdateState::Updating), 1),
-        status("gitea/gitea:1.24@sha256:ancienne", Some(UpdateState::RollbackStarted), 1),
-        status("gitea/gitea:1.24@sha256:ancienne", Some(UpdateState::RollbackCompleted), 1),
+        status(
+            "gitea/gitea:1.24@sha256:ancienne",
+            Some(UpdateState::Updating),
+            1,
+        ),
+        status(
+            "gitea/gitea:1.24@sha256:ancienne",
+            Some(UpdateState::RollbackStarted),
+            1,
+        ),
+        status(
+            "gitea/gitea:1.24@sha256:ancienne",
+            Some(UpdateState::RollbackCompleted),
+            1,
+        ),
     ]);
     let s = state_with_gitea().await;
 
     let outcome = apply(&o, &s, &candidate(), 30).await.expect("mise à jour");
 
-    assert!(matches!(outcome, UpdateOutcome::RolledBack { .. }), "{outcome:?}");
+    assert!(
+        matches!(outcome, UpdateOutcome::RolledBack { .. }),
+        "{outcome:?}"
+    );
     assert!(!outcome.is_success());
 
     let m = s.app_manifest("gitea").await.unwrap();
@@ -248,8 +279,16 @@ async fn the_service_never_goes_down_during_a_rollback() {
     // C'est tout l'intérêt de start-first : les anciennes tâches restent debout
     // pendant que les nouvelles échouent à démarrer.
     let o = Fake::returning(vec![
-        status("gitea/gitea:1.24@sha256:ancienne", Some(UpdateState::RollbackStarted), 1),
-        status("gitea/gitea:1.24@sha256:ancienne", Some(UpdateState::RollbackCompleted), 1),
+        status(
+            "gitea/gitea:1.24@sha256:ancienne",
+            Some(UpdateState::RollbackStarted),
+            1,
+        ),
+        status(
+            "gitea/gitea:1.24@sha256:ancienne",
+            Some(UpdateState::RollbackCompleted),
+            1,
+        ),
     ]);
     let s = state_with_gitea().await;
 
@@ -273,7 +312,10 @@ async fn a_paused_update_needs_a_human() {
     assert_eq!(outcome, UpdateOutcome::Paused);
 
     // L'état reste sur l'ancienne version.
-    assert_eq!(s.app_manifest("gitea").await.unwrap().spec.image.tag, "1.24");
+    assert_eq!(
+        s.app_manifest("gitea").await.unwrap().spec.image.tag,
+        "1.24"
+    );
 }
 
 #[tokio::test]

@@ -152,9 +152,16 @@ mod tests {
         s.record_backup_to("gitea", "volume", "nas", Some("a"), None)
             .await
             .expect("sauvegarde");
-        s.audit("remy", hlb_types::Role::Admin, "install", "gitea", "ok", None)
-            .await
-            .expect("audit");
+        s.audit(
+            "remy",
+            hlb_types::Role::Admin,
+            "install",
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
 
         let f = evenements(&s, 50).await;
         assert!(f.len() >= 2, "{f:#?}");
@@ -172,15 +179,32 @@ mod tests {
         // Un refus est une garde qui a fonctionné ; un échec est une panne. Les peindre
         // pareil ferait chercher un problème là où il n'y en a pas.
         let s = State::in_memory().await.expect("état");
-        s.audit("viewer", hlb_types::Role::Viewer, "remove", "gitea", "refused", None)
-            .await
-            .expect("audit");
-        s.audit("remy", hlb_types::Role::Admin, "backup", "immich", "failed", None)
-            .await
-            .expect("audit");
+        s.audit(
+            "viewer",
+            hlb_types::Role::Viewer,
+            "remove",
+            "gitea",
+            "refused",
+            None,
+        )
+        .await
+        .expect("audit");
+        s.audit(
+            "remy",
+            hlb_types::Role::Admin,
+            "backup",
+            "immich",
+            "failed",
+            None,
+        )
+        .await
+        .expect("audit");
 
         let f = evenements(&s, 50).await;
-        let refus = f.iter().find(|e| e.quoi.contains("refused")).expect("refus");
+        let refus = f
+            .iter()
+            .find(|e| e.quoi.contains("refused"))
+            .expect("refus");
         let echec = f.iter().find(|e| e.quoi.contains("failed")).expect("échec");
         assert_eq!(refus.attention, Attention::Notice);
         assert_eq!(echec.attention, Attention::Critical);

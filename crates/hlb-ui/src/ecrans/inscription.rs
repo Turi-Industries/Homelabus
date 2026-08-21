@@ -191,10 +191,7 @@ fn fin(
                     ),
                 );
                 ui.add_space(mesures::ESPACE_SERRE);
-                ui.hyperlink_to(
-                    RichText::new(l).size(c::taille::CORPS).color(p.accent),
-                    l,
-                );
+                ui.hyperlink_to(RichText::new(l).size(c::taille::CORPS).color(p.accent), l);
                 ui.add_space(mesures::ESPACE);
             }
 

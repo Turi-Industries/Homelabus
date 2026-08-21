@@ -37,8 +37,7 @@ impl Drop for AgentGuard {
 
 /// Démarre l'agent compilé du dépôt et attend qu'il réponde.
 async fn start_agent(port: u16) -> AgentGuard {
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/hlb-agent");
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hlb-agent");
     assert!(
         bin.exists(),
         "binaire absent : lance `cargo build` d'abord ({})",
@@ -54,7 +53,10 @@ async fn start_agent(port: u16) -> AgentGuard {
 
     let mut garde = AgentGuard(Some(child));
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return garde;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -89,7 +91,6 @@ async fn the_controller_reads_a_real_agent_report() {
         "✓ rapport reçu : {} — {:.1} % occupé, agent {}",
         rapport.hostname, p, rapport.agent_version
     );
-
 }
 
 #[tokio::test]
@@ -125,9 +126,14 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
 
     let d = tempfile::tempdir().expect("répertoire");
     let ca = pki::generate_ca("CA de test").await.expect("CA");
-    let agent = pki::issue(&ca, "localhost", &["localhost".into(), "127.0.0.1".into()], Purpose::Server)
-        .await
-        .expect("certificat agent");
+    let agent = pki::issue(
+        &ca,
+        "localhost",
+        &["localhost".into(), "127.0.0.1".into()],
+        Purpose::Server,
+    )
+    .await
+    .expect("certificat agent");
     let controller = pki::issue(&ca, "controller", &["controller".into()], Purpose::Client)
         .await
         .expect("certificat controller");
@@ -141,17 +147,21 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
     let p_crt = ecrire("agent.crt", &agent.cert_pem);
     let p_key = ecrire("agent.key", &agent.key_pem);
 
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/hlb-agent");
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hlb-agent");
     let port = 8497u16;
 
     let child = std::process::Command::new(&bin)
         .args([
-            "--listen", &format!("127.0.0.1:{port}"),
-            "--watch", "/",
-            "--cert", &p_crt.to_string_lossy(),
-            "--key", &p_key.to_string_lossy(),
-            "--ca", &p_ca.to_string_lossy(),
+            "--listen",
+            &format!("127.0.0.1:{port}"),
+            "--watch",
+            "/",
+            "--cert",
+            &p_crt.to_string_lossy(),
+            "--key",
+            &p_key.to_string_lossy(),
+            "--ca",
+            &p_ca.to_string_lossy(),
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -160,7 +170,10 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
 
     let mut garde = AgentGuard(Some(child));
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -178,10 +191,16 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
     assert!(poller.is_secure(), "le poller doit être en https");
 
     let s = poller.poll("localhost").await;
-    let rapport = s
-        .report()
-        .unwrap_or_else(|| panic!("le controller légitime doit obtenir un rapport : {}", s.describe()));
-    assert!(!rapport.disks.is_empty(), "un rapport sans disque n'est pas normal");
+    let rapport = s.report().unwrap_or_else(|| {
+        panic!(
+            "le controller légitime doit obtenir un rapport : {}",
+            s.describe()
+        )
+    });
+    assert!(
+        !rapport.disks.is_empty(),
+        "un rapport sans disque n'est pas normal"
+    );
 
     // 2. 🔴 Un poller SANS certificat doit être refusé. C'est le conteneur compromis
     //    de l'overlay : il voit l'agent, il ne doit rien en tirer.

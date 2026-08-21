@@ -19,14 +19,14 @@
 
 pub mod access;
 pub mod deps;
-pub mod observe;
 pub mod distro;
+pub mod observe;
 pub mod preflight;
 pub mod runner;
 
 pub use access::{grant, revoke, ManagedKey};
 pub use deps::{plan as plan_dependencies, DependencyPlan, Presence};
-pub use observe::observe;
 pub use distro::{Distro, Family, PackageManager};
+pub use observe::observe;
 pub use preflight::{Level, Observation, Report};
 pub use runner::{LocalRunner, Runner, SshRunner, WriteFile};

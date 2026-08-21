@@ -39,7 +39,9 @@ pub fn sur(c: char) -> bool {
 
 /// Le texte, débarrassé de ce qui s'afficherait en carré vide.
 pub fn sans_tofu(s: &str) -> String {
-    s.chars().map(|c| if sur(c) { c } else { REMPLACEMENT }).collect()
+    s.chars()
+        .map(|c| if sur(c) { c } else { REMPLACEMENT })
+        .collect()
 }
 
 /// Les caractères qui ont été (ou seraient) remplacés, dédoublonnés et dans l'ordre.
@@ -64,7 +66,11 @@ pub fn explication(s: &str) -> Option<String> {
     if a.is_empty() {
         return None;
     }
-    let liste: Vec<String> = a.iter().take(5).map(|c| format!("U+{:04X}", *c as u32)).collect();
+    let liste: Vec<String> = a
+        .iter()
+        .take(5)
+        .map(|c| format!("U+{:04X}", *c as u32))
+        .collect();
     // ⚠️ Pas de « (s) » : c'est le tic que le reste de l'interface s'interdit, et une
     // infobulle n'y échappe pas.
     Some(format!(

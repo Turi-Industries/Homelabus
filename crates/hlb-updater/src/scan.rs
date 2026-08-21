@@ -32,7 +32,11 @@ pub enum Verdict {
     /// Contrôle effectué, rien à signaler.
     Clean,
     /// Contrôle effectué, problèmes trouvés.
-    Findings { critical: usize, high: usize, detail: String },
+    Findings {
+        critical: usize,
+        high: usize,
+        detail: String,
+    },
     /// 🔴 Contrôle **non effectué**. Ce n'est pas un succès.
     NotChecked { reason: String },
 }
@@ -55,7 +59,11 @@ impl Verdict {
     pub fn describe(&self) -> String {
         match self {
             Self::Clean => "✓ aucune vulnérabilité critique".into(),
-            Self::Findings { critical, high, detail } => {
+            Self::Findings {
+                critical,
+                high,
+                detail,
+            } => {
                 format!("🔴 {critical} critique(s), {high} élevée(s) — {detail}")
             }
             Self::NotChecked { reason } => {
@@ -78,11 +86,14 @@ pub async fn scan_image(image: &str) -> Verdict {
         .args([
             "image",
             "--quiet",
-            "--format", "json",
-            "--severity", "CRITICAL,HIGH",
+            "--format",
+            "json",
+            "--severity",
+            "CRITICAL,HIGH",
             "--ignore-unfixed",
             // Sans ça, un registre lent fait attendre indéfiniment le pipeline.
-            "--timeout", "5m",
+            "--timeout",
+            "5m",
             image,
         ])
         .output()
@@ -124,8 +135,18 @@ pub fn parse_trivy(json: &str) -> Verdict {
     let mut high = 0;
     let mut exemples = Vec::new();
 
-    for r in v.get("Results").and_then(|r| r.as_array()).into_iter().flatten() {
-        for vuln in r.get("Vulnerabilities").and_then(|x| x.as_array()).into_iter().flatten() {
+    for r in v
+        .get("Results")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+    {
+        for vuln in r
+            .get("Vulnerabilities")
+            .and_then(|x| x.as_array())
+            .into_iter()
+            .flatten()
+        {
             match vuln.get("Severity").and_then(|s| s.as_str()) {
                 Some("CRITICAL") => {
                     critical += 1;
@@ -179,8 +200,10 @@ pub async fn verify_signature(
     let out = tokio::process::Command::new("cosign")
         .args([
             "verify",
-            "--certificate-identity-regexp", identity,
-            "--certificate-oidc-issuer", issuer,
+            "--certificate-identity-regexp",
+            identity,
+            "--certificate-oidc-issuer",
+            issuer,
             image,
         ])
         .output()
@@ -263,7 +286,9 @@ mod tests {
         // 🔴 Le piège central. Traiter « trivy absent » comme « rien trouvé » ferait
         // passer toutes les mises à jour en donnant l'impression d'être vérifiées —
         // pire que de ne pas scanner du tout.
-        let v = Verdict::NotChecked { reason: "trivy indisponible".into() };
+        let v = Verdict::NotChecked {
+            reason: "trivy indisponible".into(),
+        };
 
         assert!(!v.was_checked());
         assert!(!v.blocks(), "mais ça ne doit pas bloquer non plus");
@@ -286,10 +311,18 @@ mod tests {
         // Les failles élevées sont signalées, pas bloquantes : bloquer dessus
         // arrêterait pratiquement toutes les mises à jour d'images Debian, et
         // l'utilisateur finirait par désactiver le contrôle.
-        let haute = Verdict::Findings { critical: 0, high: 12, detail: "x".into() };
+        let haute = Verdict::Findings {
+            critical: 0,
+            high: 12,
+            detail: "x".into(),
+        };
         assert!(!haute.blocks());
 
-        let crit = Verdict::Findings { critical: 1, high: 0, detail: "CVE-2026-1".into() };
+        let crit = Verdict::Findings {
+            critical: 1,
+            high: 0,
+            detail: "CVE-2026-1".into(),
+        };
         assert!(crit.blocks());
     }
 
@@ -301,7 +334,11 @@ mod tests {
             {"VulnerabilityID":"CVE-2026-3333","Severity":"HIGH"}]}]}"#;
 
         match parse_trivy(json) {
-            Verdict::Findings { critical, high, detail } => {
+            Verdict::Findings {
+                critical,
+                high,
+                detail,
+            } => {
                 assert_eq!(critical, 1);
                 assert_eq!(high, 2);
                 assert!(detail.contains("CVE-2026-1111"), "{detail}");
@@ -339,10 +376,15 @@ mod tests {
         let r = Report {
             image: "a/b:1".into(),
             vulnerabilities: Verdict::Clean,
-            signature: Verdict::NotChecked { reason: "image non signée".into() },
+            signature: Verdict::NotChecked {
+                reason: "image non signée".into(),
+            },
         };
         assert_eq!(r.unchecked(), 1);
-        assert!(!r.blocks(), "une image non signée ne bloque pas, elle se signale");
+        assert!(
+            !r.blocks(),
+            "une image non signée ne bloque pas, elle se signale"
+        );
     }
 
     #[test]

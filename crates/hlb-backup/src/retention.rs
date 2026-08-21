@@ -101,7 +101,14 @@ mod tests {
         let a = p.to_args();
         assert_eq!(
             a,
-            vec!["--keep-hourly", "24", "--keep-daily", "7", "--keep-monthly", "6"]
+            vec![
+                "--keep-hourly",
+                "24",
+                "--keep-daily",
+                "7",
+                "--keep-monthly",
+                "6"
+            ]
         );
         // Les valeurs nulles sont omises plutôt que passées à 0 : `--keep-weekly 0`
         // signifierait « n'en garde aucune », ce qui n'est pas la même chose.

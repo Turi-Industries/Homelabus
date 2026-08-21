@@ -74,12 +74,14 @@ impl Regle {
         let Some(pire) = (match self.comparaison {
             // On juge sur le cas le plus défavorable : une seule app sans sauvegarde
             // suffit à mériter l'alerte, la moyenne la noierait.
-            Comparaison::Depasse => valeurs.iter().cloned().fold(None, |a: Option<f64>, v| {
-                Some(a.map_or(v, |x| x.max(v)))
-            }),
-            Comparaison::TombeSous => valeurs.iter().cloned().fold(None, |a: Option<f64>, v| {
-                Some(a.map_or(v, |x| x.min(v)))
-            }),
+            Comparaison::Depasse => valeurs
+                .iter()
+                .cloned()
+                .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.max(v)))),
+            Comparaison::TombeSous => valeurs
+                .iter()
+                .cloned()
+                .fold(None, |a: Option<f64>, v| Some(a.map_or(v, |x| x.min(v)))),
         }) else {
             return Evaluation::Inconnu {
                 raison: "aucune donnée".into(),
@@ -111,7 +113,10 @@ impl Regle {
                 self.niveau,
                 self.nom,
                 self.nom,
-                &format!("{} (mesuré : {valeur:.2}, seuil : {})", self.explication, self.seuil),
+                &format!(
+                    "{} (mesuré : {valeur:.2}, seuil : {})",
+                    self.explication, self.seuil
+                ),
             )),
 
             Evaluation::Inconnu { raison } if self.absence_alarmante => Some(Notification::new(
@@ -323,10 +328,7 @@ mod tests {
         // alerterait en permanence sans que rien n'empire.
         let r = regle(Comparaison::Depasse, 0.85, false);
         assert_eq!(r.juger(&[0.85]), Evaluation::Ok);
-        assert!(matches!(
-            r.juger(&[0.8501]),
-            Evaluation::Declenchee { .. }
-        ));
+        assert!(matches!(r.juger(&[0.8501]), Evaluation::Declenchee { .. }));
     }
 
     #[test]

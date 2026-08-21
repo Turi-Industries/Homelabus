@@ -389,7 +389,11 @@ mod tests {
         std::fs::write(&cible, b"X").expect("initial");
 
         let e = rollback(&Paths::new(&cible)).unwrap_err();
-        assert!(e.describe().contains("rien à restaurer"), "{}", e.describe());
+        assert!(
+            e.describe().contains("rien à restaurer"),
+            "{}",
+            e.describe()
+        );
     }
 
     #[test]

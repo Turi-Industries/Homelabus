@@ -168,7 +168,9 @@ impl DumpRunner for PgContainerRunner {
 /// Échappement pour `sh -c`. Les noms de base viennent de manifests, pas d'une
 /// saisie libre, mais on ne construit jamais une ligne de commande sans échapper.
 fn shell_quote(s: &str) -> String {
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || "-_=./:".contains(c)) {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_=./:".contains(c))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))

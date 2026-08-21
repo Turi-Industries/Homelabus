@@ -102,7 +102,10 @@ pub fn afficher(
     ui.horizontal(|ui| {
         c::sous_titre(ui, "Comptes");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            c::legende(ui, &hlb_api::pluriel(comptes.len() as u64, "compte", "comptes"));
+            c::legende(
+                ui,
+                &hlb_api::pluriel(comptes.len() as u64, "compte", "comptes"),
+            );
         });
     });
     ui.add_space(mesures::ESPACE_SERRE);
@@ -163,10 +166,7 @@ fn formulaire_invitation(ui: &mut egui::Ui, p: crate::design::Palette) -> Option
                 ("7 jours", 7 * 86_400),
                 ("30 jours", 30 * 86_400),
             ] {
-                if ui
-                    .selectable_label(duree == secondes, libelle)
-                    .clicked()
-                {
+                if ui.selectable_label(duree == secondes, libelle).clicked() {
                     duree = secondes;
                 }
             }
@@ -257,7 +257,11 @@ fn carte_compte(
                 for b in &x.boites {
                     c::mono(
                         ui,
-                        &format!("{}{}", b.adresse, if b.par_defaut { " (défaut)" } else { "" }),
+                        &format!(
+                            "{}{}",
+                            b.adresse,
+                            if b.par_defaut { " (défaut)" } else { "" }
+                        ),
                     );
                 }
             });

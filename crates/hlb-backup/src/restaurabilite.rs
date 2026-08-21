@@ -58,9 +58,15 @@ pub struct Restaurabilite {
 /// L'état des exercices de restauration (§8.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EtatExercices {
-    AJour { jours: i64 },
-    Du { jours: i64 },
-    Perime { jours: i64 },
+    AJour {
+        jours: i64,
+    },
+    Du {
+        jours: i64,
+    },
+    Perime {
+        jours: i64,
+    },
     /// 🔴 Jamais exercé : on ne sait pas si une restauration marche.
     Jamais,
 }
@@ -270,10 +276,7 @@ mod tests {
     fn couverture(app: &str, dests: Vec<(&str, Etat)>) -> Couverture {
         Couverture {
             app: app.into(),
-            par_destination: dests
-                .into_iter()
-                .map(|(n, e)| (n.to_string(), e))
-                .collect(),
+            par_destination: dests.into_iter().map(|(n, e)| (n.to_string(), e)).collect(),
         }
     }
 
@@ -306,7 +309,12 @@ mod tests {
         assert!(r.verdict().contains("JAMAIS"), "{}", r.verdict());
         // Et le remède est de configurer, pas de vérifier.
         assert!(r.remedes()[0].contains("configurer"), "{:?}", r.remedes());
-        assert_eq!(r.remedes().len(), 1, "aucun conseil inutile : {:?}", r.remedes());
+        assert_eq!(
+            r.remedes().len(),
+            1,
+            "aucun conseil inutile : {:?}",
+            r.remedes()
+        );
     }
 
     #[test]
@@ -376,7 +384,10 @@ mod tests {
 
         assert!(r1.confiance() < r2.confiance());
         assert_eq!(r2.confiance(), Confiance::Verifiee);
-        assert!(r1.remedes().iter().any(|x| x.contains("seconde destination")));
+        assert!(r1
+            .remedes()
+            .iter()
+            .any(|x| x.contains("seconde destination")));
     }
 
     #[test]
@@ -413,7 +424,11 @@ mod tests {
             Some(7 * 86_400),
             Readiness::Ready { days: 1 },
         );
-        assert!(avec.verdict().contains("n'importe quel instant"), "{}", avec.verdict());
+        assert!(
+            avec.verdict().contains("n'importe quel instant"),
+            "{}",
+            avec.verdict()
+        );
     }
 
     #[test]

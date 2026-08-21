@@ -107,7 +107,10 @@ async fn q4_update_image() {
     o.wait_healthy(&n, 120).await.expect("convergence initiale");
 
     o.update_image(&n, "alpine:3.21").await.expect("update");
-    let st = o.wait_healthy(&n, 120).await.expect("convergence après update");
+    let st = o
+        .wait_healthy(&n, 120)
+        .await
+        .expect("convergence après update");
     assert!(st.image.contains("3.21"), "image effective : {}", st.image);
     println!("✓ mise à jour appliquée → {}", st.image);
 
@@ -128,7 +131,10 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
 
     o.deploy(&sleeper(&n)).await.expect("deploy");
     let avant = o.wait_healthy(&n, 120).await.expect("convergence initiale");
-    println!("  état initial : {} ({} tâche)", avant.image, avant.running_replicas);
+    println!(
+        "  état initial : {} ({} tâche)",
+        avant.image, avant.running_replicas
+    );
 
     // On pousse volontairement une image cassée.
     o.update_image(&n, BROKEN).await.expect("update accepté");
@@ -165,7 +171,10 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
         st.running_replicas, 1,
         "le service ne doit jamais tomber pendant un rollback"
     );
-    println!("✓ service toujours debout pendant le rollback ({})", st.image);
+    println!(
+        "✓ service toujours debout pendant le rollback ({})",
+        st.image
+    );
 
     cleanup(&o, &n).await;
 }
@@ -195,7 +204,10 @@ async fn q6_list_ne_voit_que_le_gere() {
 #[ignore = "nécessite un Docker Swarm actif"]
 async fn q7_service_inconnu() {
     let err = orch().status("hlb-spike-nexiste-pas").await.unwrap_err();
-    assert!(matches!(err, hlb_orchestrator::Error::NotFound(_)), "{err:?}");
+    assert!(
+        matches!(err, hlb_orchestrator::Error::NotFound(_)),
+        "{err:?}"
+    );
     println!("✓ erreur typée : {err}");
 }
 
@@ -204,7 +216,13 @@ async fn q7_service_inconnu() {
 /// Lit la spec effective d'un service, telle que Swarm la stocke.
 async fn effective_spec(name: &str) -> serde_json::Value {
     let out = std::process::Command::new("docker")
-        .args(["service", "inspect", name, "--format", "{{json .Spec.TaskTemplate.ContainerSpec}}"])
+        .args([
+            "service",
+            "inspect",
+            name,
+            "--format",
+            "{{json .Spec.TaskTemplate.ContainerSpec}}",
+        ])
         .output()
         .expect("docker inspect");
     serde_json::from_slice(&out.stdout).expect("json")
@@ -255,7 +273,9 @@ async fn a_relaxed_manifest_is_honoured_too() {
         ..Default::default()
     };
 
-    o.deploy(&sleeper(&n).hardening(relache)).await.expect("deploy");
+    o.deploy(&sleeper(&n).hardening(relache))
+        .await
+        .expect("deploy");
     o.wait_healthy(&n, 120).await.expect("convergence");
 
     let cs = effective_spec(&n).await;
@@ -285,12 +305,17 @@ async fn healthchecks_reach_swarm() {
         retries: 3,
         start_period_secs: 1,
     };
-    o.deploy(&sleeper(&n).healthcheck(hc)).await.expect("deploy");
+    o.deploy(&sleeper(&n).healthcheck(hc))
+        .await
+        .expect("deploy");
     o.wait_healthy(&n, 120).await.expect("convergence");
 
     let cs = effective_spec(&n).await;
     // ⚠️ Le champ s'écrit « Healthcheck », pas « HealthCheck ».
-    assert_eq!(cs["Healthcheck"]["Test"], serde_json::json!(["CMD-SHELL", "true"]));
+    assert_eq!(
+        cs["Healthcheck"]["Test"],
+        serde_json::json!(["CMD-SHELL", "true"])
+    );
     // Swarm stocke les durées en nanosecondes.
     assert_eq!(cs["Healthcheck"]["Interval"], 5_000_000_000i64);
     assert_eq!(cs["Healthcheck"]["Retries"], 3);

@@ -148,7 +148,10 @@ pub const APPLIQUER_APRES_BASEBACKUP: &str =
 /// moment : on voit qu'un nœud décroche sans pouvoir dire lequel. Un seul standby
 /// anonyme reste identifiable, donc ne mérite pas d'alerte.
 pub fn indistinguishable(standbys: &[StandbyStatus]) -> Vec<String> {
-    let mut noms: Vec<&str> = standbys.iter().map(|s| s.application_name.as_str()).collect();
+    let mut noms: Vec<&str> = standbys
+        .iter()
+        .map(|s| s.application_name.as_str())
+        .collect();
     noms.sort_unstable();
 
     let mut ambigus: Vec<String> = Vec::new();
@@ -193,9 +196,7 @@ pub const RETARD_MAX_OCTETS: i64 = 64 * 1024 * 1024;
 impl StandbyStatus {
     pub fn health(&self) -> Health {
         match self.state.as_str() {
-            "streaming" if self.lag_bytes.is_some_and(|l| l > RETARD_MAX_OCTETS) => {
-                Health::Lagging
-            }
+            "streaming" if self.lag_bytes.is_some_and(|l| l > RETARD_MAX_OCTETS) => Health::Lagging,
             "streaming" => Health::Streaming,
             "catchup" | "startup" => Health::CatchingUp,
             _ => Health::Lagging,
@@ -422,7 +423,11 @@ mod tests {
         let v = parse_slots("hlb_small01|f|500000000|f\n");
         assert_eq!(v.len(), 1);
         assert!(v[0].is_dangerous());
-        assert!(v[0].describe().contains("disque de la PRIMAIRE"), "{}", v[0].describe());
+        assert!(
+            v[0].describe().contains("disque de la PRIMAIRE"),
+            "{}",
+            v[0].describe()
+        );
         // Le message doit donner la commande, pas seulement le constat.
         assert!(v[0].describe().contains("pg_drop_replication_slot"));
     }
@@ -434,7 +439,10 @@ mod tests {
         let v = parse_slots("hlb_small01|f|0|t\n");
         assert!(!v[0].is_dangerous());
         assert!(v[0].describe().contains("INVALIDÉ"));
-        assert!(v[0].describe().contains("reconstruit"), "il faut dire quoi faire");
+        assert!(
+            v[0].describe().contains("reconstruit"),
+            "il faut dire quoi faire"
+        );
     }
 
     #[test]
@@ -469,7 +477,10 @@ mod tests {
             lag_bytes: Some(lag),
         };
 
-        assert_eq!(indistinguishable(&[anonyme(0), anonyme(0)]), [NOM_PAR_DEFAUT]);
+        assert_eq!(
+            indistinguishable(&[anonyme(0), anonyme(0)]),
+            [NOM_PAR_DEFAUT]
+        );
 
         // Un seul standby anonyme reste identifiable : pas d'alerte inutile.
         assert!(indistinguishable(&[anonyme(0)]).is_empty());
@@ -500,9 +511,15 @@ mod tests {
         assert!(!v[0].is_dangerous(), "pas encore dangereux");
 
         let d = v[0].describe();
-        assert!(!d.contains("actif"), "un slot sans consommateur n'est pas actif : {d}");
+        assert!(
+            !d.contains("actif"),
+            "un slot sans consommateur n'est pas actif : {d}"
+        );
         assert!(d.contains("sans consommateur"), "{d}");
-        assert!(d.contains("grossira"), "il doit dire ce qui va se passer : {d}");
+        assert!(
+            d.contains("grossira"),
+            "il doit dire ce qui va se passer : {d}"
+        );
     }
 
     #[test]

@@ -89,7 +89,10 @@ impl Verifier {
         match &step.verify {
             Verify::Attest => Outcome::NotVerifiable,
 
-            Verify::Dns { record, expect_contains } => {
+            Verify::Dns {
+                record,
+                expect_contains,
+            } => {
                 let name = hlb_types::guide::render(record, vars);
                 self.check_dns(&name, expect_contains.as_deref()).await
             }
@@ -323,8 +326,14 @@ mod tests {
 
     #[test]
     fn outcomes_read_clearly() {
-        assert!(Outcome::Verified { detail: "x → y".into() }.describe().starts_with('✓'));
-        assert!(Outcome::Failed { detail: "z".into() }.describe().starts_with('✗'));
+        assert!(Outcome::Verified {
+            detail: "x → y".into()
+        }
+        .describe()
+        .starts_with('✓'));
+        assert!(Outcome::Failed { detail: "z".into() }
+            .describe()
+            .starts_with('✗'));
         assert!(Outcome::NotVerifiable.describe().contains("attestation"));
     }
 }

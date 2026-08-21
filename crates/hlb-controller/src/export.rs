@@ -39,7 +39,9 @@ pub fn ligne(champs: &[&str]) -> String {
 
 /// Le journal d'audit, en CSV.
 pub fn audit(entrees: &[hlb_state::AuditRecord]) -> String {
-    let mut s = ligne(&["quand", "acteur", "role", "action", "cible", "issue", "detail"]);
+    let mut s = ligne(&[
+        "quand", "acteur", "role", "action", "cible", "issue", "detail",
+    ]);
     for e in entrees {
         s.push_str(&ligne(&[
             &e.at,

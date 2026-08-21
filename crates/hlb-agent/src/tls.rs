@@ -79,14 +79,13 @@ fn root_store(ca_pem: &str) -> Result<RootCertStore> {
 pub fn server_config(agent: &CertPair, ca_pem: &str) -> Result<Arc<ServerConfig>> {
     install_crypto_provider();
 
-    let verifier = tokio_rustls::rustls::server::WebPkiClientVerifier::builder(
-        Arc::new(root_store(ca_pem)?),
-    )
-    // 🔴 `build()` et NON `allow_unauthenticated()` : ce dernier laisse passer les
-    // clients sans certificat, ce qui annule tout l'intérêt du mTLS tout en donnant
-    // l'apparence d'une configuration sécurisée.
-    .build()
-    .map_err(|e| Error::Pki(format!("vérificateur client : {e}")))?;
+    let verifier =
+        tokio_rustls::rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store(ca_pem)?))
+            // 🔴 `build()` et NON `allow_unauthenticated()` : ce dernier laisse passer les
+            // clients sans certificat, ce qui annule tout l'intérêt du mTLS tout en donnant
+            // l'apparence d'une configuration sécurisée.
+            .build()
+            .map_err(|e| Error::Pki(format!("vérificateur client : {e}")))?;
 
     let cfg = ServerConfig::builder()
         .with_client_cert_verifier(verifier)

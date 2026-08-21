@@ -14,16 +14,18 @@ use hlb_agent::tls;
 use tokio_rustls::rustls::pki_types::ServerName;
 
 /// Démarre un serveur mTLS minimal et renvoie son adresse.
-async fn serveur(
-    config: Arc<tokio_rustls::rustls::ServerConfig>,
-) -> std::net::SocketAddr {
-    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+async fn serveur(config: Arc<tokio_rustls::rustls::ServerConfig>) -> std::net::SocketAddr {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = l.local_addr().expect("adresse");
     let acceptor = tokio_rustls::TlsAcceptor::from(config);
 
     tokio::spawn(async move {
         loop {
-            let Ok((flux, _)) = l.accept().await else { continue };
+            let Ok((flux, _)) = l.accept().await else {
+                continue;
+            };
             let a = acceptor.clone();
             tokio::spawn(async move {
                 // Le résultat importe peu côté serveur : c'est le client qui doit
@@ -80,7 +82,11 @@ async fn parc() -> Parc {
     let controller = pki::issue(&ca, "controller", &["controller".into()], Purpose::Client)
         .await
         .expect("controller");
-    Parc { ca, agent, controller }
+    Parc {
+        ca,
+        agent,
+        controller,
+    }
 }
 
 #[tokio::test]
@@ -148,12 +154,12 @@ async fn the_controller_refuses_an_impostor_agent() {
         .expect("faux agent");
 
     // Le faux agent accepte tout le monde : c'est le CONTROLLER qui doit refuser.
-    let addr = serveur(
-        tls::server_config(&faux_agent, &autre_ca.cert_pem).expect("serveur"),
-    )
-    .await;
+    let addr = serveur(tls::server_config(&faux_agent, &autre_ca.cert_pem).expect("serveur")).await;
 
     let client = tls::client_config(&p.controller, &p.ca.cert_pem).expect("client");
     let r = se_connecte(addr, client, "localhost").await;
-    assert!(r.is_err(), "le controller doit REFUSER un agent qu'il ne reconnaît pas");
+    assert!(
+        r.is_err(),
+        "le controller doit REFUSER un agent qu'il ne reconnaît pas"
+    );
 }

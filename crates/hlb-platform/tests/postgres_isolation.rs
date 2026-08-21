@@ -181,9 +181,15 @@ async fn injection_attempt_is_refused_before_reaching_sql() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, hlb_platform::Error::InvalidIdentifier(_)), "{err}");
+    assert!(
+        matches!(err, hlb_platform::Error::InvalidIdentifier(_)),
+        "{err}"
+    );
 
     // Et la base d'administration est toujours là.
-    assert!(p.database_exists("postgres").await.expect("postgres existe"));
+    assert!(p
+        .database_exists("postgres")
+        .await
+        .expect("postgres existe"));
     println!("✓ tentative d'injection refusée à la validation : {err}");
 }

@@ -207,7 +207,10 @@ impl Stalwart {
     }
 
     async fn call(&self, method: &str, args: serde_json::Value) -> Result<serde_json::Value> {
-        let req = self.http.post(self.endpoint()).json(&JmapRequest::one(method, args));
+        let req = self
+            .http
+            .post(self.endpoint())
+            .json(&JmapRequest::one(method, args));
 
         let req = match &self.auth {
             Auth::Basic { user, password } => req.basic_auth(user, Some(password)),
@@ -365,9 +368,7 @@ impl Stalwart {
         v.get("blobId")
             .and_then(|b| b.as_str())
             .map(str::to_string)
-            .ok_or_else(|| {
-                Error::Unexpected(format!("aucun blobId dans la réponse : {v}"))
-            })
+            .ok_or_else(|| Error::Unexpected(format!("aucun blobId dans la réponse : {v}")))
     }
 
     /// Récupère le contenu d'un blob.
@@ -542,7 +543,12 @@ impl Stalwart {
     /// réécrit — et deux modifications simultanées feraient perdre la première. Sur un
     /// homelab piloté par une seule commande à la fois, c'est acceptable ; le noter
     /// évite de le redécouvrir le jour où le controller le fera en parallèle.
-    async fn set_aliases(&self, account_id: &str, domain_id: &str, aliases: &[String]) -> Result<()> {
+    async fn set_aliases(
+        &self,
+        account_id: &str,
+        domain_id: &str,
+        aliases: &[String],
+    ) -> Result<()> {
         let liste: Vec<serde_json::Value> = aliases
             .iter()
             .filter_map(|a| {
@@ -622,8 +628,7 @@ impl Stalwart {
         if !actuels.iter().any(|a| a == alias_local) {
             return Ok(false);
         }
-        let restants: Vec<String> =
-            actuels.into_iter().filter(|a| a != alias_local).collect();
+        let restants: Vec<String> = actuels.into_iter().filter(|a| a != alias_local).collect();
         self.set_aliases(&account_id, &domain_id, &restants).await?;
 
         tracing::info!(compte = %address, alias = alias_local, "alias retiré");

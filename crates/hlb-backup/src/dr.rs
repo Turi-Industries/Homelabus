@@ -113,7 +113,11 @@ pub enum Blocked {
     /// Aucune sauvegarde de base : il n'y a rien à restaurer.
     NoBaseBackup,
     /// Le nœud d'accueil n'a pas assez de mémoire, même en dégradé.
-    NotEnoughMemory { node: String, mb: u64, needed_mb: u64 },
+    NotEnoughMemory {
+        node: String,
+        mb: u64,
+        needed_mb: u64,
+    },
     /// Le nœud d'accueil n'est pas joignable.
     TargetUnreachable { node: String },
 }
@@ -129,7 +133,11 @@ impl Blocked {
             Self::NoBaseBackup => "🔴 aucune sauvegarde de base : il n'y a rien à \
                  restaurer. Les journaux WAL seuls ne reconstruisent pas une base."
                 .to_string(),
-            Self::NotEnoughMemory { node, mb, needed_mb } => format!(
+            Self::NotEnoughMemory {
+                node,
+                mb,
+                needed_mb,
+            } => format!(
                 "🔴 {node} n'a que {mb} Mo, il en faut au moins {needed_mb} même en \
                  profil réduit. Un PostgreSQL qui démarre puis se fait tuer par l'OOM \
                  est pire qu'un refus net : le service paraît reparti."
@@ -260,9 +268,8 @@ pub fn plan_promotion(
 
 /// Les réglages à écrire, prêts à poser.
 pub fn render_settings(p: Profile) -> Result<String> {
-    let mut s = String::from(
-        "# Généré par Homelabus (§2bis.5) — profil de ressources PostgreSQL.\n",
-    );
+    let mut s =
+        String::from("# Généré par Homelabus (§2bis.5) — profil de ressources PostgreSQL.\n");
     if p == Profile::Minimal {
         s.push_str(
             "# 🔴 MODE DÉGRADÉ. Ces valeurs tiennent dans un nœud « light » qui fait\n\
@@ -288,13 +295,23 @@ mod tests {
 
     fn bases() -> Vec<BaseBackup> {
         vec![
-            BaseBackup { id: "base-1".into(), finished_at: J0 },
-            BaseBackup { id: "base-2".into(), finished_at: J0 + 3600 },
+            BaseBackup {
+                id: "base-1".into(),
+                finished_at: J0,
+            },
+            BaseBackup {
+                id: "base-2".into(),
+                finished_at: J0 + 3600,
+            },
         ]
     }
 
     fn petit() -> Candidate {
-        Candidate { node: "small-01".into(), memory_mb: 4096, reachable: true }
+        Candidate {
+            node: "small-01".into(),
+            memory_mb: 4096,
+            reachable: true,
+        }
     }
 
     fn apps() -> Vec<(String, bool)> {
@@ -310,10 +327,15 @@ mod tests {
         // 🔴 LE garde-fou. Deux PostgreSQL qui écrivent, ce sont deux jeux de données
         // qui divergent — et réconcilier après coup demande de choisir quelles
         // transactions perdre.
-        let e = plan_promotion(&petit(), Some("big-01"), true, &bases(), None, &apps())
-            .unwrap_err();
+        let e =
+            plan_promotion(&petit(), Some("big-01"), true, &bases(), None, &apps()).unwrap_err();
 
-        assert_eq!(e, Blocked::PrimaryStillAlive { node: "big-01".into() });
+        assert_eq!(
+            e,
+            Blocked::PrimaryStillAlive {
+                node: "big-01".into()
+            }
+        );
         assert!(e.describe().contains("DEUX PostgreSQL"), "{}", e.describe());
         // Le message doit dire QUOI FAIRE, pas seulement constater.
         assert!(e.describe().contains("drain"), "{}", e.describe());
@@ -324,7 +346,10 @@ mod tests {
         // Même sans sauvegarde de base et avec un nœud injoignable, c'est le
         // split-brain qui doit être signalé : découvrir que l'ancien primaire est
         // vivant APRÈS avoir restauré serait trop tard.
-        let injoignable = Candidate { reachable: false, ..petit() };
+        let injoignable = Candidate {
+            reachable: false,
+            ..petit()
+        };
         let e = plan_promotion(&injoignable, Some("big-01"), true, &[], None, &[]).unwrap_err();
         assert!(matches!(e, Blocked::PrimaryStillAlive { .. }), "{e:?}");
     }
@@ -333,7 +358,10 @@ mod tests {
     fn a_node_too_small_is_refused_rather_than_killed_later() {
         // 🔴 Un PostgreSQL qui démarre puis se fait tuer par l'OOM est pire qu'un
         // refus : le service paraît reparti.
-        let minuscule = Candidate { memory_mb: 1024, ..petit() };
+        let minuscule = Candidate {
+            memory_mb: 1024,
+            ..petit()
+        };
         let e = plan_promotion(&minuscule, None, false, &bases(), None, &apps()).unwrap_err();
 
         assert!(matches!(e, Blocked::NotEnoughMemory { .. }), "{e:?}");
@@ -355,7 +383,11 @@ mod tests {
 
     #[test]
     fn a_big_node_keeps_the_normal_profile() {
-        let gros = Candidate { node: "big-02".into(), memory_mb: 32768, reachable: true };
+        let gros = Candidate {
+            node: "big-02".into(),
+            memory_mb: 32768,
+            reachable: true,
+        };
         let p = plan_promotion(&gros, None, false, &bases(), None, &apps()).expect("plan");
         assert_eq!(p.profile, Profile::Normal);
         // Rien n'est mis en pause : le nœud tient la charge.
@@ -384,18 +416,24 @@ mod tests {
         assert_eq!(p.recover_to, J0 + 7200);
 
         // Une couverture ANTÉRIEURE à la base est ignorée : elle ne sert à rien.
-        let p = plan_promotion(&petit(), None, false, &bases(), Some(J0 - 100), &apps())
-            .expect("plan");
+        let p =
+            plan_promotion(&petit(), None, false, &bases(), Some(J0 - 100), &apps()).expect("plan");
         assert_eq!(p.recover_to, J0 + 3600);
     }
 
     #[test]
     fn the_reduced_profile_fits_a_small_node() {
         let s = Profile::Minimal.settings();
-        let sb = s.iter().find(|(k, _)| *k == "shared_buffers").expect("shared_buffers");
+        let sb = s
+            .iter()
+            .find(|(k, _)| *k == "shared_buffers")
+            .expect("shared_buffers");
         assert_eq!(sb.1, "512MB");
 
-        let mc = s.iter().find(|(k, _)| *k == "max_connections").expect("max_connections");
+        let mc = s
+            .iter()
+            .find(|(k, _)| *k == "max_connections")
+            .expect("max_connections");
         assert_eq!(mc.1, "50");
     }
 

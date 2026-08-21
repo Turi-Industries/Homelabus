@@ -64,7 +64,11 @@ pub fn afficher(
     ui.add_space(mesures::ESPACE);
 
     for g in &v {
-        let teinte = if g.blocking { p.attention } else { p.texte_faible };
+        let teinte = if g.blocking {
+            p.attention
+        } else {
+            p.texte_faible
+        };
         c::carte(ui, |ui| {
             ui.horizontal(|ui| {
                 c::badge(ui, &g.app, teinte);
@@ -114,7 +118,6 @@ pub fn afficher(
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

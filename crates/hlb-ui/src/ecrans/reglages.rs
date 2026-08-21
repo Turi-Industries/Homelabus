@@ -17,10 +17,7 @@ pub enum Demande {
     Theme(Option<String>),
 }
 
-pub fn afficher(
-    ui: &mut egui::Ui,
-    preferences: Option<&hlb_api::Preferences>,
-) -> Option<Demande> {
+pub fn afficher(ui: &mut egui::Ui, preferences: Option<&hlb_api::Preferences>) -> Option<Demande> {
     let p = c::palette(ui);
     let mut demande = None;
 
@@ -162,7 +159,8 @@ pub fn afficher(
 fn pastille_de(ui: &mut egui::Ui, teinte: egui::Color32) {
     let taille = 12.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(taille, taille), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), taille * 0.4, teinte);
+    ui.painter()
+        .circle_filled(rect.center(), taille * 0.4, teinte);
 }
 
 #[cfg(test)]

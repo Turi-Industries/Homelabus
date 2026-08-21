@@ -99,7 +99,10 @@ pub async fn assistant(
     if boites.is_empty() {
         return refus(
             axum::http::StatusCode::NOT_FOUND,
-            format!("« {} » n'a aucune boîte : rien ne recevrait les aliases.", d.compte),
+            format!(
+                "« {} » n'a aucune boîte : rien ne recevrait les aliases.",
+                d.compte
+            ),
         );
     }
 
@@ -203,7 +206,9 @@ mod tests {
         //
         // Constaté en appelant réellement `/api/v1/aliases` avec le jeton produit.
         let s = hlb_state::State::in_memory().await.expect("état");
-        s.upsert_user("remy", "standard", None).await.expect("compte");
+        s.upsert_user("remy", "standard", None)
+            .await
+            .expect("compte");
         s.add_mailbox("remy", "remy", "turi.fr", true)
             .await
             .expect("boîte");

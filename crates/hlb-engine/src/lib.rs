@@ -13,12 +13,12 @@ pub mod reconcile;
 
 pub use reconcile::{Drift, Reconciler, Report};
 
-use hlb_orchestrator::{Orchestrator, ServiceSpec};
-use hlb_platform::{MariadbProvisioner, PostgresProvisioner};
 use hlb_identity::PocketId;
 use hlb_ingress::CaddyAdmin;
 use hlb_mail::Stalwart;
 use hlb_objstore::Garage;
+use hlb_orchestrator::{Orchestrator, ServiceSpec};
+use hlb_platform::{MariadbProvisioner, PostgresProvisioner};
 use hlb_registry::{ImageRef, RegistryClient};
 use hlb_resolver::{Action, Plan};
 use hlb_secrets::Vault;
@@ -53,12 +53,14 @@ pub enum Error {
     #[error(transparent)]
     ObjStore(#[from] hlb_objstore::Error),
 
-    #[error("🔴 l'extension « {extension} » n'a pas pu être activée sur « {database} ». \
+    #[error(
+        "🔴 l'extension « {extension} » n'a pas pu être activée sur « {database} ». \
              Une extension ne s'installe PAS depuis SQL : elle doit être présente dans \
              l'image du serveur PostgreSQL. Vérifie l'image du service `postgres` au \
              catalogue — pour les extensions vectorielles, \
              ghcr.io/immich-app/postgres:17-vectorchord0.4.3-pgvector0.8.0 les porte. \
-             Cause : {cause}")]
+             Cause : {cause}"
+    )]
     MissingExtension {
         extension: String,
         database: String,
@@ -68,8 +70,10 @@ pub enum Error {
     #[error("le secret « {0} » est introuvable — le plan a-t-il été exécuté dans l'ordre ?")]
     MissingSecret(String),
 
-    #[error("{blocking} action(s) manuelle(s) bloquante(s) en attente — \
-             traite-les puis relance (hlb todo)")]
+    #[error(
+        "{blocking} action(s) manuelle(s) bloquante(s) en attente — \
+             traite-les puis relance (hlb todo)"
+    )]
     BlockedByGuide { blocking: usize },
 }
 
@@ -213,7 +217,13 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
 
         // Les guides sont enregistrés même en aperçu : ils décrivent du travail réel.
         for a in &plan.actions {
-            if let Action::PendingGuideStep { id, title, blocking, .. } = a {
+            if let Action::PendingGuideStep {
+                id,
+                title,
+                blocking,
+                ..
+            } = a
+            {
                 self.state.add_guide(app, id, title, *blocking).await?;
             }
         }
@@ -268,7 +278,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         }
 
         if self.apply {
-            let status = if out.unimplemented > 0 { "partial" } else { "running" };
+            let status = if out.unimplemented > 0 {
+                "partial"
+            } else {
+                "running"
+            };
             self.state.set_app_status(app, status).await?;
         }
 
@@ -284,7 +298,12 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
         let mut cfg = hlb_ingress::Config::default();
 
         // Même règle que dans le CLI : le portail n'apparaît que s'il sert.
-        if self.all_routes().await?.iter().any(|r| r.needs_forward_auth) {
+        if self
+            .all_routes()
+            .await?
+            .iter()
+            .any(|r| r.needs_forward_auth)
+        {
             cfg.forward_auth = Some(hlb_ingress::caddyfile::ForwardAuth::default());
         }
 
@@ -292,7 +311,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             return Ok(cfg);
         };
 
-        match self.state.secret(hlb_ingress::crowdsec::SECRET_NAME).await? {
+        match self
+            .state
+            .secret(hlb_ingress::crowdsec::SECRET_NAME)
+            .await?
+        {
             Some(ct) => {
                 let cle = vault.decrypt(&ct)?;
                 if hlb_ingress::crowdsec::looks_like_key(&cle) {
@@ -330,7 +353,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
             let domain = self.state.app_domain(&name).await?;
             // §4.6bis — la route ne s'ouvre qu'une fois les actions bloquantes traitées.
             let cleared = self.state.unverified_blocking(&name).await? == 0;
-            routes.extend(hlb_ingress::routes_from_manifest(&m, domain.as_deref(), cleared));
+            routes.extend(hlb_ingress::routes_from_manifest(
+                &m,
+                domain.as_deref(),
+                cleared,
+            ));
         }
         Ok(routes)
     }
@@ -441,8 +468,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                     }
 
                     hlb_types::Capability::ObjectStorage { bucket, .. } => {
-                        let compartiment =
-                            bucket.clone().unwrap_or_else(|| app.to_string());
+                        let compartiment = bucket.clone().unwrap_or_else(|| app.to_string());
                         s3.insert("{{ s3.bucket }}".to_string(), compartiment);
                         s3.insert("{{ s3.endpoint }}".to_string(), S3_ENDPOINT.into());
                         s3.insert("{{ s3.region }}".to_string(), S3_REGION.into());
@@ -517,7 +543,14 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService {
-                name, image, replicas, constraints, env, mounts, hardening, healthcheck,
+                name,
+                image,
+                replicas,
+                constraints,
+                env,
+                mounts,
+                hardening,
+                healthcheck,
             } => {
                 // ⚠️ Le plan a été construit AVANT l'exécution, donc son champ `image`
                 // porte encore le tag. Le digest résolu à l'étape précédente vit dans
@@ -560,21 +593,26 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                     return Ok(Step::NotImplemented);
                 };
 
-                let password = hlb_secrets::generate_password(
-                    hlb_secrets::DEFAULT_PASSWORD_LEN,
-                );
+                let password = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
                 let ct = vault.encrypt(&password)?;
 
                 // `if_absent` : un mot de passe déjà injecté dans un service ne doit
                 // jamais changer sous ses pieds à la relance d'un plan.
-                let created = self.state.store_secret_if_absent(name, &ct, purpose).await?;
+                let created = self
+                    .state
+                    .store_secret_if_absent(name, &ct, purpose)
+                    .await?;
                 if created {
                     tracing::info!(secret = name, "secret généré");
                 }
                 Ok(Step::Done)
             }
 
-            Action::ProvisionBucket { bucket, key_name, secret_name } => {
+            Action::ProvisionBucket {
+                bucket,
+                key_name,
+                secret_name,
+            } => {
                 let (Some(garage), Some(vault)) = (self.objstore, self.vault) else {
                     // 🔴 Jamais `Done` : prétendre avoir créé un compartiment ferait
                     // démarrer l'app sur un stockage qui n'existe pas, et elle
@@ -614,7 +652,13 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::ProvisionDatabase { engine, database, role, password_secret, extensions } => {
+            Action::ProvisionDatabase {
+                engine,
+                database,
+                role,
+                password_secret,
+                extensions,
+            } => {
                 let Some(vault) = self.vault else {
                     return Ok(Step::NotImplemented);
                 };
@@ -672,7 +716,9 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::PendingGuideStep { id, service, step, .. } => {
+            Action::PendingGuideStep {
+                id, service, step, ..
+            } => {
                 // §4.6bis — on tente d'abord de s'en occuper tout seul. Beaucoup
                 // d'étapes « dans l'application » se scriptent ; les traiter comme
                 // manuelles par défaut est l'erreur habituelle.
@@ -706,7 +752,12 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::CreateVolume { name, backup, sqlite, .. } => {
+            Action::CreateVolume {
+                name,
+                backup,
+                sqlite,
+                ..
+            } => {
                 let info = self.orchestrator.create_volume(name).await?;
 
                 // On mémorise le point de montage RÉEL : c'est ce que la sauvegarde
@@ -721,7 +772,10 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::CreateOidcClient { app: client, redirect_uris } => {
+            Action::CreateOidcClient {
+                app: client,
+                redirect_uris,
+            } => {
                 let (Some(pid), Some(vault)) = (self.identity, self.vault) else {
                     return Ok(Step::NotImplemented);
                 };
@@ -781,7 +835,11 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 Ok(Step::Done)
             }
 
-            Action::ProvisionMailAccount { address, aliases, quota_bytes } => {
+            Action::ProvisionMailAccount {
+                address,
+                aliases,
+                quota_bytes,
+            } => {
                 let (Some(mail), Some(vault)) = (self.mail, self.vault) else {
                     return Ok(Step::NotImplemented);
                 };
@@ -811,9 +869,7 @@ impl<'a, O: Orchestrator> Executor<'a, O> {
                 let password = match self.state.secret(&secret_name).await? {
                     Some(ct) => vault.decrypt(&ct)?,
                     None => {
-                        let p = hlb_secrets::generate_password(
-                            hlb_secrets::DEFAULT_PASSWORD_LEN,
-                        );
+                        let p = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
                         self.state
                             .store_secret_if_absent(
                                 &secret_name,
@@ -876,10 +932,10 @@ mod tests {
     use std::sync::Mutex;
 
     /// Orchestrateur factice : enregistre les appels, peut échouer à la demande.
-        /// Ce qu'un déploiement a réellement transmis : nom du service et variables.
+    /// Ce qu'un déploiement a réellement transmis : nom du service et variables.
     type Deploiement = (String, Vec<(String, String)>);
 
-#[derive(Default)]
+    #[derive(Default)]
     struct Fake {
         deployed: Mutex<Vec<String>>,
         waited: Mutex<Vec<String>>,
@@ -919,7 +975,10 @@ mod tests {
             Ok(())
         }
         async fn scale(&self, name: &str, replicas: u64) -> hlb_orchestrator::Result<()> {
-            self.scaled.lock().expect("mutex").push((name.into(), replicas));
+            self.scaled
+                .lock()
+                .expect("mutex")
+                .push((name.into(), replicas));
             Ok(())
         }
         async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
@@ -955,15 +1014,21 @@ mod tests {
                 stderr: String::new(),
             })
         }
-        async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+        async fn create_volume(
+            &self,
+            n: &str,
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
             Ok(hlb_orchestrator::VolumeInfo {
-            name: n.into(),
-            mountpoint: format!("/volumes/{n}"),
-            existed: false,
+                name: n.into(),
+                mountpoint: format!("/volumes/{n}"),
+                existed: false,
             })
         }
-        async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
-        self.create_volume(n).await
+        async fn inspect_volume(
+            &self,
+            n: &str,
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+            self.create_volume(n).await
         }
         async fn status(&self, name: &str) -> hlb_orchestrator::Result<ServiceStatus> {
             Ok(ServiceStatus {
@@ -1043,13 +1108,14 @@ spec:
     }
 
     fn plan() -> Plan {
-        hlb_resolver::resolve(&manifest(), &hlb_resolver::InstallParams::default())
-            .expect("plan")
+        hlb_resolver::resolve(&manifest(), &hlb_resolver::InstallParams::default()).expect("plan")
     }
 
     async fn state() -> State {
         let s = State::in_memory().await.expect("base");
-        s.upsert_app("demo", &manifest(), None).await.expect("upsert");
+        s.upsert_app("demo", &manifest(), None)
+            .await
+            .expect("upsert");
         s
     }
 
@@ -1058,9 +1124,15 @@ spec:
         let o = Fake::default();
         let s = state().await;
 
-        let out = Executor::new(&o, &s).run("demo", &plan()).await.expect("run");
+        let out = Executor::new(&o, &s)
+            .run("demo", &plan())
+            .await
+            .expect("run");
 
-        assert!(o.deployed.lock().unwrap().is_empty(), "aucun déploiement en aperçu");
+        assert!(
+            o.deployed.lock().unwrap().is_empty(),
+            "aucun déploiement en aperçu"
+        );
         assert!(out.is_success());
         // Rien n'est marqué fait : l'aperçu ne consomme pas le plan.
         assert!(s.completed_seqs("demo").await.unwrap().is_empty());
@@ -1089,7 +1161,11 @@ spec:
         let s = state().await;
         let p = plan();
 
-        Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+        Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
         let second = Executor::new(&o, &s)
             .apply(true)
             .run("demo", &p)
@@ -1120,7 +1196,10 @@ spec:
             .expect("run");
 
         assert!(!out.is_success());
-        assert!(o.waited.lock().unwrap().is_empty(), "on s'arrête au premier échec");
+        assert!(
+            o.waited.lock().unwrap().is_empty(),
+            "on s'arrête au premier échec"
+        );
 
         let recorded = s.plan_actions("demo").await.unwrap();
         let failed = recorded
@@ -1141,12 +1220,23 @@ spec:
         let p = plan();
 
         // Premier passage : échoue au déploiement.
-        let failing = Fake { fail_deploy: true, ..Default::default() };
-        Executor::new(&failing, &s).apply(true).run("demo", &p).await.unwrap();
+        let failing = Fake {
+            fail_deploy: true,
+            ..Default::default()
+        };
+        Executor::new(&failing, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
 
         // Second passage, orchestrateur réparé.
         let ok = Fake::default();
-        let out = Executor::new(&ok, &s).apply(true).run("demo", &p).await.unwrap();
+        let out = Executor::new(&ok, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
 
         assert!(out.is_success());
         assert_eq!(*ok.deployed.lock().unwrap(), vec!["demo"]);
@@ -1161,7 +1251,11 @@ spec:
         s.upsert_app("demo", &m, None).await.unwrap();
 
         let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
-        let out = Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+        let out = Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
 
         assert!(out.unimplemented >= 2, "base + secret non implémentés");
         assert_eq!(s.installed_apps().await.unwrap()[0].1, "partial");
@@ -1308,7 +1402,11 @@ spec:
                 _ => None,
             })
             .collect();
-        assert_eq!(bases, vec!["ccnet_db", "seafile_db", "seahub_db"], "trois bases");
+        assert_eq!(
+            bases,
+            vec!["ccnet_db", "seafile_db", "seahub_db"],
+            "trois bases"
+        );
 
         // ⚠️ Un seul rôle veut dire un seul mot de passe : trois générations
         // identiques encombreraient le plan et l'état sans rien changer.
@@ -1346,10 +1444,17 @@ spec:
 
         let p = hlb_resolver::resolve(&m, &Default::default()).unwrap();
         // Pas de `.with_vault(...)` : aucun secret n'est lisible.
-        Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+        Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
 
         let deploiements = o.deployed_env.lock().unwrap().clone();
-        let (_, env) = deploiements.iter().find(|(n, _)| n == "demo").expect("déployée");
+        let (_, env) = deploiements
+            .iter()
+            .find(|(n, _)| n == "demo")
+            .expect("déployée");
         let table: std::collections::BTreeMap<&str, &str> =
             env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
@@ -1409,7 +1514,11 @@ spec:
         s.upsert_app("demo", &m, None).await.unwrap();
 
         let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
-        Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap();
+        Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap();
 
         let rec = s.plan_actions("demo").await.unwrap();
         let secret = rec.iter().find(|a| a.kind == "GenerateSecret").unwrap();
@@ -1435,7 +1544,11 @@ spec:
             .await
             .unwrap();
 
-        let ct = s.secret("demo-db-password").await.unwrap().expect("secret stocké");
+        let ct = s
+            .secret("demo-db-password")
+            .await
+            .unwrap()
+            .expect("secret stocké");
         let clear = vault.decrypt(&ct).expect("déchiffrable");
         assert_eq!(clear.len(), hlb_secrets::DEFAULT_PASSWORD_LEN);
         assert!(clear.chars().all(|c| c.is_ascii_alphanumeric()));
@@ -1462,11 +1575,16 @@ spec:
         let first = s.secret("demo-db-password").await.unwrap().unwrap();
 
         // On force un rejeu en effaçant la progression.
-        s.set_action_status("demo", 0, ActionStatus::Pending, None).await.unwrap();
+        s.set_action_status("demo", 0, ActionStatus::Pending, None)
+            .await
+            .unwrap();
         exec().run("demo", &p).await.unwrap();
         let second = s.secret("demo-db-password").await.unwrap().unwrap();
 
-        assert_eq!(first, second, "le mot de passe ne doit pas changer sous les pieds du service");
+        assert_eq!(
+            first, second,
+            "le mot de passe ne doit pas changer sous les pieds du service"
+        );
     }
 
     #[tokio::test]
@@ -1478,17 +1596,31 @@ spec:
         s.upsert_app("demo", &m, None).await.unwrap();
 
         let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
-        let err = Executor::new(&o, &s).apply(true).run("demo", &p).await.unwrap_err();
+        let err = Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .unwrap_err();
 
-        assert!(matches!(err, Error::BlockedByGuide { blocking: 1 }), "{err}");
-        assert!(o.deployed.lock().unwrap().is_empty(), "rien déployé avant le guide");
+        assert!(
+            matches!(err, Error::BlockedByGuide { blocking: 1 }),
+            "{err}"
+        );
+        assert!(
+            o.deployed.lock().unwrap().is_empty(),
+            "rien déployé avant le guide"
+        );
 
         // Le guide est quand même enregistré : c'est du travail réel à faire.
         assert_eq!(s.pending_guides().await.unwrap().len(), 1);
 
         // Une fois traité, l'installation repart.
         s.verify_guide("demo", "demo-first-admin").await.unwrap();
-        let out = Executor::new(&o, &s).apply(true).run("demo", &p).await.expect("run");
+        let out = Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .expect("run");
         assert!(out.is_success());
         assert_eq!(*o.deployed.lock().unwrap(), vec!["demo"]);
     }

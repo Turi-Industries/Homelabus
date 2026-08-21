@@ -11,21 +11,20 @@
 
 pub mod capability;
 pub mod guide;
+pub mod manifest;
 pub mod rbac;
 pub mod token;
-pub mod manifest;
 
-pub use token::{generate as generate_token, StoredToken};
-pub use rbac::Role;
 pub use guide::{Automation, Guide, GuideStep, Phase, Severity, Verify};
+pub use rbac::Role;
+pub use token::{generate as generate_token, StoredToken};
 pub mod binding;
 
 pub use binding::{redact, substitute, Token};
 pub use capability::{CacheEngine, Capability, DbEngine, SsoMode, StorageTier};
 pub use manifest::{
     ApiVersion, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image, Ingress, Kind,
-    Manifest, Metadata, Runtime,
-    SecuritySpec, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
+    Manifest, Metadata, Runtime, SecuritySpec, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -47,11 +46,10 @@ pub fn validate(m: &Manifest) -> Result<()> {
     // §5.4 — une app en `proxy-header` fait confiance à un en-tête HTTP. Si elle est
     // joignable sans passer par le proxy, `curl -H "Remote-User: admin"` suffit à
     // usurper n'importe quel compte.
-    let header_auth = m
-        .spec
-        .requires
-        .iter()
-        .any(|c| matches!(c, Capability::Sso { mode, .. } if mode.requires_network_isolation()));
+    let header_auth =
+        m.spec.requires.iter().any(
+            |c| matches!(c, Capability::Sso { mode, .. } if mode.requires_network_isolation()),
+        );
 
     if header_auth && !m.spec.security.published_ports.is_empty() {
         return Err(Error::Validation(format!(
@@ -69,7 +67,11 @@ pub fn validate(m: &Manifest) -> Result<()> {
     // Le manifest est refusé ici plutôt que de laisser planifier un client inutile :
     // c'est une faute de rédaction, elle se dit avec son numéro de ligne.
     for c in &m.spec.requires {
-        if let Capability::Sso { mode: SsoMode::Native, redirect_paths } = c {
+        if let Capability::Sso {
+            mode: SsoMode::Native,
+            redirect_paths,
+        } = c
+        {
             if redirect_paths.is_empty() {
                 return Err(Error::Validation(format!(
                     "{} déclare « sso: native » sans redirectPaths : le client OIDC \
@@ -137,7 +139,10 @@ pub fn validate(m: &Manifest) -> Result<()> {
     // §10.2 — une base sur NFS finit par se corrompre : le verrouillage de fichiers
     // n'y est pas fiable.
     for c in &m.spec.requires {
-        if let Capability::Storage { tier, sqlite, name, .. } = c {
+        if let Capability::Storage {
+            tier, sqlite, name, ..
+        } = c
+        {
             if *sqlite && *tier == StorageTier::Nfs {
                 return Err(Error::Validation(format!(
                     "volume « {name} » : une base SQLite ne doit jamais être sur NFS"
@@ -217,7 +222,10 @@ spec:
             "{BASE}  requires:\n    - kind: storage\n      name: data\n      \
              path: /data\n      tier: nfs\n      sqlite: true\n"
         );
-        assert!(validate(&manifest(&y)).unwrap_err().to_string().contains("NFS"));
+        assert!(validate(&manifest(&y))
+            .unwrap_err()
+            .to_string()
+            .contains("NFS"));
     }
 
     #[test]
@@ -225,12 +233,13 @@ spec:
         // 🔴 Sans ce refus, la variable partirait vers Swarm avec « {{ db.password }} »
         // pour valeur. L'app dirait « mot de passe incorrect », et l'on chercherait
         // pendant longtemps du côté du mot de passe.
-        let y = format!(
-            "{BASE}  env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n"
-        );
+        let y = format!("{BASE}  env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n");
         let e = validate(&manifest(&y)).unwrap_err().to_string();
         assert!(e.contains("db.password"), "{e}");
-        assert!(e.contains("database"), "l'erreur doit nommer la capacité manquante : {e}");
+        assert!(
+            e.contains("database"),
+            "l'erreur doit nommer la capacité manquante : {e}"
+        );
     }
 
     #[test]
@@ -253,7 +262,10 @@ spec:
     #[test]
     fn rejects_latest_channel() {
         let y = format!("{BASE}  update: {{ channel: latest }}\n");
-        assert!(validate(&manifest(&y)).unwrap_err().to_string().contains("latest"));
+        assert!(validate(&manifest(&y))
+            .unwrap_err()
+            .to_string()
+            .contains("latest"));
     }
 
     #[test]

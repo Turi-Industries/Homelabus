@@ -52,10 +52,15 @@ pub async fn apply<O: Orchestrator>(
         UpdateKind::NewVersion { to_tag } => to_tag.clone(),
         UpdateKind::DigestOnly => m.spec.image.tag.clone(),
     };
-    let reference = format!("{}:{}@{}", m.spec.image.repo, target_tag, candidate.to_digest);
+    let reference = format!(
+        "{}:{}@{}",
+        m.spec.image.repo, target_tag, candidate.to_digest
+    );
 
     tracing::info!(app, %reference, "bascule");
-    orch.update_image(app, &reference).await.map_err(Error::from)?;
+    orch.update_image(app, &reference)
+        .await
+        .map_err(Error::from)?;
 
     let outcome = watch(orch, app, &candidate.to_digest, timeout_secs).await?;
 
@@ -74,7 +79,10 @@ pub async fn apply<O: Orchestrator>(
             // Écrire le nouveau digest ici ferait croire à une mise à jour réussie,
             // et la réconciliation tenterait ensuite de « corriger » vers une image
             // dont on sait qu'elle ne démarre pas.
-            tracing::warn!(app, "mise à jour annulée, l'état reste sur l'ancienne version");
+            tracing::warn!(
+                app,
+                "mise à jour annulée, l'état reste sur l'ancienne version"
+            );
         }
         UpdateOutcome::Inconclusive => {
             tracing::warn!(app, "issue indéterminée dans le délai imparti");

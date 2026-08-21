@@ -171,7 +171,10 @@ pub fn scan_archive(dir: &std::path::Path) -> std::io::Result<Vec<Segment>> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        out.push(Segment { name: nom, archived_at: at });
+        out.push(Segment {
+            name: nom,
+            archived_at: at,
+        });
     }
 
     // Par nom : l'ordre lexicographique des segments WAL EST leur ordre chronologique,
@@ -204,8 +207,9 @@ pub enum Unreachable {
 impl Unreachable {
     pub fn describe(&self) -> String {
         match self {
-            Self::NoBaseBackup => "aucune sauvegarde de base : le WAL seul ne restaure rien"
-                .to_string(),
+            Self::NoBaseBackup => {
+                "aucune sauvegarde de base : le WAL seul ne restaure rien".to_string()
+            }
             Self::BeforeOldestBase { oldest } => format!(
                 "antérieur à la plus ancienne sauvegarde de base ({})",
                 iso8601(*oldest)
@@ -255,11 +259,7 @@ pub fn base_for(
         .filter(|b| b.finished_at <= target)
         .max_by_key(|b| b.finished_at)
         .ok_or_else(|| Unreachable::BeforeOldestBase {
-            oldest: bases
-                .iter()
-                .map(|b| b.finished_at)
-                .min()
-                .unwrap_or(target),
+            oldest: bases.iter().map(|b| b.finished_at).min().unwrap_or(target),
         })
 }
 
@@ -455,9 +455,18 @@ mod tests {
 
     fn bases() -> Vec<BaseBackup> {
         vec![
-            BaseBackup { id: "base-1".into(), finished_at: J0 },
-            BaseBackup { id: "base-2".into(), finished_at: J0 + 24 * HEURE },
-            BaseBackup { id: "base-3".into(), finished_at: J0 + 48 * HEURE },
+            BaseBackup {
+                id: "base-1".into(),
+                finished_at: J0,
+            },
+            BaseBackup {
+                id: "base-2".into(),
+                finished_at: J0 + 24 * HEURE,
+            },
+            BaseBackup {
+                id: "base-3".into(),
+                finished_at: J0 + 48 * HEURE,
+            },
         ]
     }
 
@@ -579,7 +588,10 @@ mod tests {
         // 🔴 Sans `+00`, PostgreSQL interprète la date dans le fuseau du serveur :
         // on restaure à un instant décalé de plusieurs heures, sans avertissement.
         let c = render_recovery(&WalArchive::new("/a"), J0);
-        assert!(c.contains("recovery_target_time = '2026-08-16 12:00:00+00'"), "{c}");
+        assert!(
+            c.contains("recovery_target_time = '2026-08-16 12:00:00+00'"),
+            "{c}"
+        );
     }
 
     #[test]
@@ -628,7 +640,12 @@ mod tests {
         }
 
         let s = scan_archive(d.path()).expect("inventaire");
-        assert_eq!(s.len(), 2, "{:?}", s.iter().map(|x| &x.name).collect::<Vec<_>>());
+        assert_eq!(
+            s.len(),
+            2,
+            "{:?}",
+            s.iter().map(|x| &x.name).collect::<Vec<_>>()
+        );
         assert!(s.iter().all(|x| is_segment(&x.name)));
     }
 
@@ -651,9 +668,19 @@ mod tests {
     fn a_segment_carries_its_timeline() {
         // Après une reprise, PostgreSQL passe en ligne 2 : deux segments de lignes
         // différentes couvrent la même position sans être interchangeables.
-        let s = Segment { name: seg(2, 0, 7), archived_at: 0 };
+        let s = Segment {
+            name: seg(2, 0, 7),
+            archived_at: 0,
+        };
         assert_eq!(s.timeline(), Some(2));
-        assert_eq!(Segment { name: "court".into(), archived_at: 0 }.timeline(), None);
+        assert_eq!(
+            Segment {
+                name: "court".into(),
+                archived_at: 0
+            }
+            .timeline(),
+            None
+        );
     }
 
     #[test]
@@ -677,8 +704,14 @@ mod tests {
     #[test]
     fn coverage_is_the_latest_archived_segment() {
         let s = vec![
-            Segment { name: seg(1, 0, 1), archived_at: J0 },
-            Segment { name: seg(1, 0, 2), archived_at: J0 + HEURE },
+            Segment {
+                name: seg(1, 0, 1),
+                archived_at: J0,
+            },
+            Segment {
+                name: seg(1, 0, 2),
+                archived_at: J0 + HEURE,
+            },
         ];
         assert_eq!(wal_coverage(&s), Some(J0 + HEURE));
     }
@@ -695,11 +728,19 @@ mod tests {
 
         let w = recoverable_window(&bases(), couverture).expect("fenêtre");
         assert_eq!(w.latest, J0 + 70 * HEURE);
-        assert!(w.contains(J0 + 65 * HEURE), "après la dernière base, mais couvert");
+        assert!(
+            w.contains(J0 + 65 * HEURE),
+            "après la dernière base, mais couvert"
+        );
 
         // Et la cible correspondante devient atteignable.
-        let p = plan_recovery(&bases(), couverture, J0 + 65 * HEURE, &WalArchive::new("/a"))
-            .expect("plan");
+        let p = plan_recovery(
+            &bases(),
+            couverture,
+            J0 + 65 * HEURE,
+            &WalArchive::new("/a"),
+        )
+        .expect("plan");
         assert_eq!(p.base.id, "base-3");
     }
 
@@ -719,12 +760,20 @@ mod tests {
         // 🔴 Sans l'aller-retour de validation, le 31 février déborderait sur le
         // 3 mars et l'on restaurerait à une date que personne n'a demandée.
         assert_eq!(parse_utc("2026-02-31 00:00:00"), None);
-        assert_eq!(parse_utc("2025-02-29 00:00:00"), None, "2025 n'est pas bissextile");
+        assert_eq!(
+            parse_utc("2025-02-29 00:00:00"),
+            None,
+            "2025 n'est pas bissextile"
+        );
         assert!(parse_utc("2024-02-29 00:00:00").is_some(), "2024 l'est");
         assert_eq!(parse_utc("2026-13-01 00:00:00"), None);
         assert_eq!(parse_utc("2026-08-16 25:00:00"), None);
         assert_eq!(parse_utc("n'importe quoi"), None);
-        assert_eq!(parse_utc("2026-08-16"), None, "sans heure, la cible est ambiguë");
+        assert_eq!(
+            parse_utc("2026-08-16"),
+            None,
+            "sans heure, la cible est ambiguë"
+        );
     }
 
     #[test]
@@ -934,9 +983,10 @@ pub mod basebackup {
         cmd.arg(&target.image);
         cmd.args(args(&nom));
 
-        let out = cmd.output().await.map_err(|e| {
-            Error::ResticMissing(format!("docker introuvable : {e}"))
-        })?;
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| Error::ResticMissing(format!("docker introuvable : {e}")))?;
 
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -996,8 +1046,9 @@ mod tests_basebackup {
 
     #[test]
     fn the_label_reaches_the_command() {
-        assert!(args("base-20260816T120000Z")
-            .contains(&"--label=base-20260816T120000Z".to_string()));
+        assert!(
+            args("base-20260816T120000Z").contains(&"--label=base-20260816T120000Z".to_string())
+        );
     }
 
     #[test]
@@ -1053,7 +1104,11 @@ mod tests_basebackup {
     #[test]
     fn a_trailing_slash_does_not_double_up() {
         let t = Target::new("/archive/base/", "postgres");
-        let chemin = format!("{}/{}", t.destination.trim_end_matches('/'), directory_name(J0));
+        let chemin = format!(
+            "{}/{}",
+            t.destination.trim_end_matches('/'),
+            directory_name(J0)
+        );
         assert!(!chemin.contains("//"), "{chemin}");
     }
 }
@@ -1097,7 +1152,6 @@ pub fn parse_maria_url(url: &str) -> Option<Credentials> {
 }
 
 fn parse_url_apres_schema(reste: &str, port_defaut: u16) -> Option<Credentials> {
-
     // On coupe sur le DERNIER `@` : un mot de passe peut en contenir un.
     let (identifiants, hote) = reste.rsplit_once('@')?;
     let (user, password) = identifiants.split_once(':').unwrap_or((identifiants, ""));
@@ -1147,8 +1201,7 @@ mod tests_url {
 
     #[test]
     fn a_standard_url_is_parsed() {
-        let c = parse_pg_url("postgres://admin:secret@db.local:5433/postgres")
-            .expect("analysable");
+        let c = parse_pg_url("postgres://admin:secret@db.local:5433/postgres").expect("analysable");
         assert_eq!(c.user, "admin");
         assert_eq!(c.password, "secret");
         assert_eq!(c.host, "db.local");
@@ -1194,8 +1247,14 @@ mod tests_url {
     fn nonsense_is_refused() {
         assert!(parse_pg_url("").is_none());
         assert!(parse_pg_url("mysql://a:b@h/db").is_none(), "mauvais schéma");
-        assert!(parse_pg_url("postgres://db.local/base").is_none(), "sans identifiants");
-        assert!(parse_pg_url("postgres://:mdp@h/db").is_none(), "sans utilisateur");
+        assert!(
+            parse_pg_url("postgres://db.local/base").is_none(),
+            "sans identifiants"
+        );
+        assert!(
+            parse_pg_url("postgres://:mdp@h/db").is_none(),
+            "sans utilisateur"
+        );
     }
 
     #[test]
@@ -1209,7 +1268,9 @@ mod tests_url {
         assert_eq!(m.user, "admin");
 
         assert_eq!(
-            parse_maria_url("mariadb://a:b@h:3307/db").expect("schéma mariadb").port,
+            parse_maria_url("mariadb://a:b@h:3307/db")
+                .expect("schéma mariadb")
+                .port,
             3307
         );
 

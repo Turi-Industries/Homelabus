@@ -178,7 +178,10 @@ pub async fn retour(
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(erreur = %e, "échec de connexion OIDC");
-            return (StatusCode::BAD_GATEWAY, format!("connexion impossible : {e}\n"))
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("connexion impossible : {e}\n"),
+            )
                 .into_response();
         }
     };
@@ -229,10 +232,7 @@ pub async fn retour(
 
     // Le lien `sub` ↔ compte est consigné à la première connexion : un renommage chez
     // PocketID ne cassera plus rien ensuite.
-    let _ = s
-        .state
-        .upsert_user_pocket_id(&compte, &identite.sub)
-        .await;
+    let _ = s.state.upsert_user_pocket_id(&compte, &identite.sub).await;
 
     let mut brut = [0u8; 32];
     hlb_secrets::fill_random(&mut brut);
@@ -412,7 +412,8 @@ mod tests {
             userinfo_endpoint: "https://id.turi.fr/userinfo".into(),
             end_session_endpoint: None,
         };
-        let oidc = |_: ()| Oidc::avec_endpoints(ep.clone(), "hlb", "s", "https://hlb.turi.fr/auth/retour");
+        let oidc =
+            |_: ()| Oidc::avec_endpoints(ep.clone(), "hlb", "s", "https://hlb.turi.fr/auth/retour");
         assert!(Connexion::new(oidc(()), "https://hlb.turi.fr").securise);
         assert!(!Connexion::new(oidc(()), "http://127.0.0.1:8420").securise);
     }

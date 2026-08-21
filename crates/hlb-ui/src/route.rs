@@ -317,7 +317,10 @@ impl Route {
     /// Le tableau de bord d'abord : c'est l'écran qui répond à « est-ce que quelque
     /// chose ne va pas ? », et il doit être atteignable sans réfléchir.
     pub fn navigation_admin() -> Vec<Route> {
-        Self::plan_admin().into_iter().filter(Route::implemente).collect()
+        Self::plan_admin()
+            .into_iter()
+            .filter(Route::implemente)
+            .collect()
     }
 
     /// Tout ce que le §11bis prévoit, implémenté ou non.
@@ -345,7 +348,10 @@ impl Route {
 
     /// Les entrées du portail.
     pub fn navigation_portail() -> Vec<Route> {
-        Self::plan_portail().into_iter().filter(Route::implemente).collect()
+        Self::plan_portail()
+            .into_iter()
+            .filter(Route::implemente)
+            .collect()
     }
 
     pub fn plan_portail() -> Vec<Route> {
@@ -365,8 +371,14 @@ mod tests {
         let toutes = [
             Route::TableauDeBord,
             Route::Apps,
-            Route::App { nom: "gitea".into(), onglet: OngletApp::Sauvegardes },
-            Route::App { nom: "gitea".into(), onglet: OngletApp::Apercu },
+            Route::App {
+                nom: "gitea".into(),
+                onglet: OngletApp::Sauvegardes,
+            },
+            Route::App {
+                nom: "gitea".into(),
+                onglet: OngletApp::Apercu,
+            },
             Route::Noeuds,
             Route::Topologie,
             Route::Derive,
@@ -390,7 +402,11 @@ mod tests {
         ];
         for r in toutes {
             let s = r.to_string();
-            assert_eq!(Route::from_str(&s).expect(&s), r, "aller-retour cassé pour {s}");
+            assert_eq!(
+                Route::from_str(&s).expect(&s),
+                r,
+                "aller-retour cassé pour {s}"
+            );
         }
     }
 
@@ -401,7 +417,10 @@ mod tests {
         let r = Route::from_str("/apps/gitea/un-onglet-supprime").expect("route");
         assert_eq!(
             r,
-            Route::App { nom: "gitea".into(), onglet: OngletApp::Apercu }
+            Route::App {
+                nom: "gitea".into(),
+                onglet: OngletApp::Apercu
+            }
         );
     }
 
@@ -409,7 +428,10 @@ mod tests {
     fn an_app_without_a_tab_opens_its_overview() {
         assert_eq!(
             Route::from_str("/apps/gitea").expect("route"),
-            Route::App { nom: "gitea".into(), onglet: OngletApp::Apercu }
+            Route::App {
+                nom: "gitea".into(),
+                onglet: OngletApp::Apercu
+            }
         );
     }
 
@@ -500,8 +522,15 @@ mod tests {
     fn navigation_only_offers_screens_that_exist() {
         // 🔴 Une entrée qui mènerait à « à venir » promet, on clique, on n'a rien, et on
         // doute de tout le reste.
-        for r in Route::navigation_admin().into_iter().chain(Route::navigation_portail()) {
-            assert!(r.implemente(), "« {} » est proposé sans exister", r.libelle());
+        for r in Route::navigation_admin()
+            .into_iter()
+            .chain(Route::navigation_portail())
+        {
+            assert!(
+                r.implemente(),
+                "« {} » est proposé sans exister",
+                r.libelle()
+            );
         }
         assert!(!Route::navigation_admin().is_empty());
     }
@@ -542,7 +571,10 @@ mod tests {
         for r in Route::plan_admin().into_iter().chain(Route::plan_portail()) {
             let c = r.libelle_court();
             assert!(!c.is_empty(), "{r:?}");
-            assert!(c.chars().count() <= 10, "« {c} » est trop long pour une barre basse");
+            assert!(
+                c.chars().count() <= 10,
+                "« {c} » est trop long pour une barre basse"
+            );
         }
     }
 

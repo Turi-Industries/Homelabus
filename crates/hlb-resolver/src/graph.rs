@@ -186,15 +186,22 @@ mod tests {
         let g = DependencyGraph::from_manifests(&[with_db("gitea"), plain("postgres")]);
         let order = g.shutdown_order().expect("ordre calculable");
         let pos = |n: &str| order.iter().position(|x| x == n).expect("présent");
-        assert!(pos("gitea") < pos("postgres"), "les apps s'arrêtent en premier");
+        assert!(
+            pos("gitea") < pos("postgres"),
+            "les apps s'arrêtent en premier"
+        );
     }
 
     #[test]
     fn order_is_reproducible() {
         let ms = || vec![with_db("gitea"), with_db("vikunja"), plain("postgres")];
-        let a = DependencyGraph::from_manifests(&ms()).deployment_order().unwrap();
+        let a = DependencyGraph::from_manifests(&ms())
+            .deployment_order()
+            .unwrap();
         for _ in 0..20 {
-            let b = DependencyGraph::from_manifests(&ms()).deployment_order().unwrap();
+            let b = DependencyGraph::from_manifests(&ms())
+                .deployment_order()
+                .unwrap();
             assert_eq!(a, b, "un plan doit être reproductible (§12bis)");
         }
     }

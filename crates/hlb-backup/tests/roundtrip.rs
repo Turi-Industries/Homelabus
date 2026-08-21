@@ -29,8 +29,14 @@ fn repo_in(volume: &str) -> Repository<ContainerRunner> {
 fn in_volume(volume: &str, script: &str) -> String {
     let out = std::process::Command::new("docker")
         .args([
-            "run", "--rm", "-v", &format!("{volume}:{WORKDIR}"),
-            "alpine:3", "sh", "-c", script,
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume}:{WORKDIR}"),
+            "alpine:3",
+            "sh",
+            "-c",
+            script,
         ])
         .output()
         .expect("docker joignable (DOCKER_HOST ?)");
@@ -114,10 +120,7 @@ async fn data_survives_destruction_and_comes_back_identical() {
 
     // 5. Comparaison, fichier par fichier.
     let apres = fingerprint(&vol, &format!("{WORKDIR}/donnees"));
-    assert_eq!(
-        avant, apres,
-        "le contenu restauré diffère de l'original"
-    );
+    assert_eq!(avant, apres, "le contenu restauré diffère de l'original");
     println!("✓ {} fichiers restaurés à l'identique", apres.len());
 
     drop_volume(&vol);
@@ -129,23 +132,42 @@ async fn snapshots_are_listed_and_tagged() {
     let vol = make_volume("hlb-test-snapshots");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/a && echo un > {WORKDIR}/a/f.txt"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/a && echo un > {WORKDIR}/a/f.txt"),
+    );
     repo.init().await.expect("init");
 
-    repo.backup(&format!("{WORKDIR}/a"), &["app:gitea"]).await.expect("1");
+    repo.backup(&format!("{WORKDIR}/a"), &["app:gitea"])
+        .await
+        .expect("1");
     in_volume(&vol, &format!("echo deux > {WORKDIR}/a/f.txt"));
-    repo.backup(&format!("{WORKDIR}/a"), &["app:gitea"]).await.expect("2");
+    repo.backup(&format!("{WORKDIR}/a"), &["app:gitea"])
+        .await
+        .expect("2");
 
     let tous = repo.snapshots(None).await.expect("liste");
     assert_eq!(tous.len(), 2, "{tous:?}");
 
-    let filtres = repo.snapshots(Some("app:gitea")).await.expect("liste filtrée");
+    let filtres = repo
+        .snapshots(Some("app:gitea"))
+        .await
+        .expect("liste filtrée");
     assert_eq!(filtres.len(), 2);
 
-    let autres = repo.snapshots(Some("app:inexistante")).await.expect("liste filtrée");
-    assert!(autres.is_empty(), "le filtre par étiquette doit être effectif");
+    let autres = repo
+        .snapshots(Some("app:inexistante"))
+        .await
+        .expect("liste filtrée");
+    assert!(
+        autres.is_empty(),
+        "le filtre par étiquette doit être effectif"
+    );
 
-    println!("✓ {} instantanés, filtrage par étiquette opérationnel", tous.len());
+    println!(
+        "✓ {} instantanés, filtrage par étiquette opérationnel",
+        tous.len()
+    );
     drop_volume(&vol);
 }
 
@@ -156,12 +178,23 @@ async fn point_in_time_restore_picks_the_right_version() {
     let vol = make_volume("hlb-test-pitr");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && echo 'version bonne' > {WORKDIR}/d/f.txt"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && echo 'version bonne' > {WORKDIR}/d/f.txt"),
+    );
     repo.init().await.expect("init");
-    let bon = repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("1");
+    let bon = repo
+        .backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("1");
 
-    in_volume(&vol, &format!("echo 'version corrompue' > {WORKDIR}/d/f.txt"));
-    repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("2");
+    in_volume(
+        &vol,
+        &format!("echo 'version corrompue' > {WORKDIR}/d/f.txt"),
+    );
+    repo.backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("2");
 
     // On restaure explicitement le premier instantané.
     in_volume(&vol, &format!("rm -rf {WORKDIR}/d"));
@@ -183,9 +216,14 @@ async fn integrity_check_passes_on_a_healthy_repository() {
     let vol = make_volume("hlb-test-check");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && echo x > {WORKDIR}/d/f"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && echo x > {WORKDIR}/d/f"),
+    );
     repo.init().await.expect("init");
-    repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+    repo.backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("sauvegarde");
 
     repo.check().await.expect("le dépôt doit être sain");
     println!("✓ intégrité vérifiée");
@@ -199,12 +237,17 @@ async fn retention_removes_old_snapshots_but_keeps_the_recent_one() {
     let vol = make_volume("hlb-test-retention");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && echo a > {WORKDIR}/d/f"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && echo a > {WORKDIR}/d/f"),
+    );
     repo.init().await.expect("init");
 
     for i in 0..3 {
         in_volume(&vol, &format!("echo {i} > {WORKDIR}/d/f"));
-        repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+        repo.backup(&format!("{WORKDIR}/d"), &["app:test"])
+            .await
+            .expect("sauvegarde");
     }
     assert_eq!(repo.snapshots(None).await.expect("liste").len(), 3);
 
@@ -242,9 +285,14 @@ async fn a_wrong_password_cannot_read_the_repository() {
     let vol = make_volume("hlb-test-crypto");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && echo secret > {WORKDIR}/d/f"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && echo secret > {WORKDIR}/d/f"),
+    );
     repo.init().await.expect("init");
-    repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+    repo.backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("sauvegarde");
 
     let intrus = Repository::new(
         ContainerRunner::new("restic/restic:latest").mount(&vol, WORKDIR),
@@ -294,7 +342,10 @@ async fn verification_confirms_a_healthy_backup() {
         ),
     );
     repo.init().await.expect("init");
-    let id = repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+    let id = repo
+        .backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("sauvegarde");
 
     let v = hlb_backup::verify_by_restore(&repo, &id, &format!("{WORKDIR}/verif"), |_| async {
         Ok(count_files(&vol, &format!("{WORKDIR}/verif")))
@@ -321,10 +372,15 @@ async fn verification_detects_an_incomplete_restore() {
 
     in_volume(
         &vol,
-        &format!("mkdir -p {WORKDIR}/d && echo un > {WORKDIR}/d/a.txt && echo deux > {WORKDIR}/d/b.txt"),
+        &format!(
+            "mkdir -p {WORKDIR}/d && echo un > {WORKDIR}/d/a.txt && echo deux > {WORKDIR}/d/b.txt"
+        ),
     );
     repo.init().await.expect("init");
-    let id = repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+    let id = repo
+        .backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("sauvegarde");
 
     let cible = format!("{WORKDIR}/verif");
     let v = hlb_backup::verify_by_restore(&repo, &id, &cible, |t| {
@@ -353,11 +409,18 @@ async fn reading_the_data_catches_more_than_metadata() {
     let vol = make_volume("hlb-test-readdata");
     let repo = repo_in(&vol);
 
-    in_volume(&vol, &format!("mkdir -p {WORKDIR}/d && head -c 65536 /dev/urandom > {WORKDIR}/d/gros.bin"));
+    in_volume(
+        &vol,
+        &format!("mkdir -p {WORKDIR}/d && head -c 65536 /dev/urandom > {WORKDIR}/d/gros.bin"),
+    );
     repo.init().await.expect("init");
-    repo.backup(&format!("{WORKDIR}/d"), &["app:test"]).await.expect("sauvegarde");
+    repo.backup(&format!("{WORKDIR}/d"), &["app:test"])
+        .await
+        .expect("sauvegarde");
 
-    repo.check_data("100%").await.expect("les blocs doivent être lisibles");
+    repo.check_data("100%")
+        .await
+        .expect("les blocs doivent être lisibles");
     println!("✓ intégrité des données vérifiée par relecture");
 
     drop_volume(&vol);
@@ -393,7 +456,10 @@ async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
     let repo = Repository::new(runner, "/depot", "mot-de-passe-de-test");
 
     repo.init().await.expect("init");
-    let snap = repo.backup("/donnees", &["app:demo"]).await.expect("sauvegarde");
+    let snap = repo
+        .backup("/donnees", &["app:demo"])
+        .await
+        .expect("sauvegarde");
 
     let v = hlb_backup::verify_snapshot(&depot, "mot-de-passe-de-test", &snap).await;
 
@@ -404,7 +470,8 @@ async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
     assert_eq!(v.files_expected, 2, "l'instantané annonce 2 fichiers");
     assert_eq!(v.bytes_expected, 17, "7 + 10 octets");
     assert_eq!(
-        v.files_restored, 2,
+        v.files_restored,
+        2,
         "🔴 zéro ici = l'espace jetable n'est pas partagé avec Docker : {}",
         v.describe()
     );
@@ -413,7 +480,10 @@ async fn a_healthy_snapshot_verifies_by_actually_restoring_it() {
 
     // La relecture d'un échantillon de blocs doit avoir eu lieu : sans elle, une
     // corruption à taille identique passerait pour « conforme ».
-    let d = v.data_checked.as_ref().expect("relecture de blocs effectuée");
+    let d = v
+        .data_checked
+        .as_ref()
+        .expect("relecture de blocs effectuée");
     assert!(d.ok, "blocs illisibles : {:?}", d.detail);
     assert_eq!(d.subset, "5%");
 }
@@ -490,9 +560,16 @@ async fn a_sqlite_database_survives_the_whole_pipeline() {
     let restaure = travail.path().join("restaure.db");
     let out = std::process::Command::new("docker")
         .args([
-            "run", "--rm", "-e", "RESTIC_PASSWORD=mot-de-passe-de-test",
-            "-v", &format!("{depot}:/depot"),
-            "--entrypoint", "sh", "restic/restic:latest", "-c",
+            "run",
+            "--rm",
+            "-e",
+            "RESTIC_PASSWORD=mot-de-passe-de-test",
+            "-v",
+            &format!("{depot}:/depot"),
+            "--entrypoint",
+            "sh",
+            "restic/restic:latest",
+            "-c",
             &format!("restic -r /depot dump {id} /staging/app.db.snapshot"),
         ])
         .output()

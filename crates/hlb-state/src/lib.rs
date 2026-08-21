@@ -198,7 +198,6 @@ fn empreinte_entree(prev: Option<&str>, champs: [&str; 6], detail: Option<&str>)
     hlb_types::token::sha256_hex(buf.as_bytes())
 }
 
-
 /// Statut d'une action dans un plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionStatus {
@@ -478,10 +477,11 @@ impl State {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        let precedent: Option<String> = sqlx::query("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
-            .fetch_optional(&mut *tx)
-            .await?
-            .and_then(|r| r.try_get::<Option<String>, _>("hash").ok().flatten());
+        let precedent: Option<String> =
+            sqlx::query("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await?
+                .and_then(|r| r.try_get::<Option<String>, _>("hash").ok().flatten());
 
         // `datetime('now')` est calculé ici plutôt que laissé au DEFAULT : l'empreinte
         // doit porter sur la valeur réellement enregistrée, or on ne peut pas hacher ce
@@ -910,14 +910,12 @@ impl State {
             .await?;
 
         for d in destinations {
-            sqlx::query(
-                "INSERT INTO backup_routes (app, class, destination) VALUES (?1, ?2, ?3)",
-            )
-            .bind(app)
-            .bind(class)
-            .bind(d)
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("INSERT INTO backup_routes (app, class, destination) VALUES (?1, ?2, ?3)")
+                .bind(app)
+                .bind(class)
+                .bind(d)
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
@@ -940,7 +938,12 @@ impl State {
 
     // ─────────────────── Comptes humains (§5bis.3) ───────────────────
 
-    pub async fn upsert_user(&self, name: &str, profil: &str, pocket_id: Option<&str>) -> Result<()> {
+    pub async fn upsert_user(
+        &self,
+        name: &str,
+        profil: &str,
+        pocket_id: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO users (name, profil, pocket_id) VALUES (?1, ?2, ?3)
              ON CONFLICT(name) DO UPDATE SET
@@ -965,7 +968,13 @@ impl State {
             .fetch_all(&self.pool)
             .await?;
         rows.iter()
-            .map(|r| Ok((r.try_get("name")?, r.try_get("profil")?, r.try_get("pocket_id")?)))
+            .map(|r| {
+                Ok((
+                    r.try_get("name")?,
+                    r.try_get("profil")?,
+                    r.try_get("pocket_id")?,
+                ))
+            })
             .collect()
     }
 
@@ -1047,7 +1056,16 @@ impl State {
     pub async fn aliases(
         &self,
         user: &str,
-    ) -> Result<Vec<(String, String, Option<i64>, bool, Option<String>, Option<String>)>> {
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            Option<i64>,
+            bool,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
         let rows = sqlx::query(
             "SELECT mailbox, local, expires_at, active, hint, note
              FROM user_aliases WHERE user = ?1 ORDER BY mailbox, local",
@@ -1087,7 +1105,13 @@ impl State {
         .await?;
 
         rows.iter()
-            .map(|r| Ok((r.try_get("user")?, r.try_get("mailbox")?, r.try_get("local")?)))
+            .map(|r| {
+                Ok((
+                    r.try_get("user")?,
+                    r.try_get("mailbox")?,
+                    r.try_get("local")?,
+                ))
+            })
             .collect()
     }
 
@@ -1190,7 +1214,13 @@ impl State {
         .await?;
 
         rows.iter()
-            .map(|r| Ok((r.try_get("local")?, r.try_get("folder")?, r.try_get("hint")?)))
+            .map(|r| {
+                Ok((
+                    r.try_get("local")?,
+                    r.try_get("folder")?,
+                    r.try_get("hint")?,
+                ))
+            })
             .collect()
     }
 
@@ -1299,10 +1329,11 @@ impl State {
     pub async fn find_token(&self, presented: &str) -> Result<Option<hlb_types::StoredToken>> {
         let empreinte = hlb_types::token::fingerprint_of(presented);
 
-        let row = sqlx::query("SELECT name, fingerprint, role FROM api_tokens WHERE fingerprint = ?1")
-            .bind(&empreinte)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT name, fingerprint, role FROM api_tokens WHERE fingerprint = ?1")
+                .bind(&empreinte)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let Some(r) = row else { return Ok(None) };
         let role: String = r.try_get("role")?;
@@ -1327,14 +1358,18 @@ impl State {
 
     /// Les jetons : noms, rôles, dernier usage. **Jamais les valeurs.**
     pub async fn list_tokens(&self) -> Result<Vec<(String, String, Option<String>)>> {
-        let rows = sqlx::query(
-            "SELECT name, role, last_used FROM api_tokens ORDER BY name",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT name, role, last_used FROM api_tokens ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.iter()
-            .map(|r| Ok((r.try_get("name")?, r.try_get("role")?, r.try_get("last_used")?)))
+            .map(|r| {
+                Ok((
+                    r.try_get("name")?,
+                    r.try_get("role")?,
+                    r.try_get("last_used")?,
+                ))
+            })
             .collect()
     }
 
@@ -1371,8 +1406,13 @@ impl State {
     /// N'existe que pour le retour arrière d'une version : un binaire N ne sait pas
     /// lire un schéma N+1, et sans ce chemin il n'y aurait aucune sortie.
     pub async fn undo_migrations(&self, cible: i64) -> Result<()> {
-        tracing::warn!(cible, "🔴 retour arrière du schéma — opération destructrice");
-        sqlx::migrate!("./migrations").undo(&self.pool, cible).await?;
+        tracing::warn!(
+            cible,
+            "🔴 retour arrière du schéma — opération destructrice"
+        );
+        sqlx::migrate!("./migrations")
+            .undo(&self.pool, cible)
+            .await?;
         Ok(())
     }
 
@@ -1519,14 +1559,12 @@ impl State {
             .execute(&mut *tx)
             .await?;
         for (host, app, public) in routes {
-            sqlx::query(
-                "INSERT INTO ingress_publie (host, app, public) VALUES (?1, ?2, ?3)",
-            )
-            .bind(host)
-            .bind(app)
-            .bind(if *public { 1 } else { 0 })
-            .execute(&mut *tx)
-            .await?;
+            sqlx::query("INSERT INTO ingress_publie (host, app, public) VALUES (?1, ?2, ?3)")
+                .bind(host)
+                .bind(app)
+                .bind(if *public { 1 } else { 0 })
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(())
@@ -1564,13 +1602,11 @@ impl State {
     }
 
     pub async fn set_app_status(&self, name: &str, status: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE apps SET status = ?2, updated_at = datetime('now') WHERE name = ?1",
-        )
-        .bind(name)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE apps SET status = ?2, updated_at = datetime('now') WHERE name = ?1")
+            .bind(name)
+            .bind(status)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1769,7 +1805,9 @@ impl State {
     }
 
     /// Les plans enregistrés : `(nom, méthode, chemin, corps, résumé, par, âge)`.
-    pub async fn plans_nommes(&self) -> Result<Vec<(String, String, String, String, String, String, i64)>> {
+    pub async fn plans_nommes(
+        &self,
+    ) -> Result<Vec<(String, String, String, String, String, String, i64)>> {
         let rows = sqlx::query(
             "SELECT nom, methode, chemin, corps, resume, cree_par,
                     CAST(strftime('%s','now') AS INTEGER)
@@ -1878,13 +1916,7 @@ impl State {
             .collect()
     }
 
-    pub async fn add_guide(
-        &self,
-        app: &str,
-        id: &str,
-        title: &str,
-        blocking: bool,
-    ) -> Result<()> {
+    pub async fn add_guide(&self, app: &str, id: &str, title: &str, blocking: bool) -> Result<()> {
         sqlx::query(
             "INSERT INTO pending_guides (id, app, title, blocking)
              VALUES (?1, ?2, ?3, ?4)
@@ -1991,11 +2023,7 @@ impl State {
     pub async fn compte(&self, nom: &str) -> Result<hlb_users::Compte> {
         use hlb_users::{Alias, Boite, Compte, Duree};
 
-        let inscrit = self
-            .users()
-            .await?
-            .into_iter()
-            .find(|(n, _, _)| n == nom);
+        let inscrit = self.users().await?.into_iter().find(|(n, _, _)| n == nom);
 
         let (profil, pocket_id) = match inscrit {
             Some((_, p, id)) => (p, id),
@@ -2120,14 +2148,13 @@ impl State {
 
     /// Ferme une session désignée par sa référence courte (« déconnecter cet appareil »).
     pub async fn close_session_by_reference(&self, user: &str, reference: &str) -> Result<bool> {
-        let r = sqlx::query(
-            "DELETE FROM sessions WHERE user = ?1 AND substr(fingerprint, 1, ?3) = ?2",
-        )
-        .bind(user)
-        .bind(reference)
-        .bind(reference.len() as i64)
-        .execute(&self.pool)
-        .await?;
+        let r =
+            sqlx::query("DELETE FROM sessions WHERE user = ?1 AND substr(fingerprint, 1, ?3) = ?2")
+                .bind(user)
+                .bind(reference)
+                .bind(reference.len() as i64)
+                .execute(&self.pool)
+                .await?;
         Ok(r.rows_affected() > 0)
     }
 
@@ -2553,9 +2580,7 @@ impl State {
 
     /// Enregistre la marque. Ne touche pas au logo, qui a sa propre opération.
     pub async fn set_marque(&self, m: &hlb_api::Marque) -> Result<()> {
-        let accent = m
-            .accent
-            .map(|[r, v, b]| format!("{r:02X}{v:02X}{b:02X}"));
+        let accent = m.accent.map(|[r, v, b]| format!("{r:02X}{v:02X}{b:02X}"));
         sqlx::query(
             "INSERT INTO apparence (id, nom, produit, accent, pied, theme_defaut)
              VALUES (1, ?1, ?2, ?3, ?4, ?5)
@@ -2711,12 +2736,11 @@ impl State {
     /// 🔴 Sert à refuser la rétrogradation du dernier admin : un système sans personne
     /// pour accorder des droits ne se répare qu'en éditant la base à la main.
     pub async fn has_other_admin(&self, sauf: &str) -> Result<bool> {
-        let row = sqlx::query(
-            "SELECT COUNT(*) AS n FROM user_roles WHERE role = 'admin' AND user <> ?1",
-        )
-        .bind(sauf)
-        .fetch_one(&self.pool)
-        .await?;
+        let row =
+            sqlx::query("SELECT COUNT(*) AS n FROM user_roles WHERE role = 'admin' AND user <> ?1")
+                .bind(sauf)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(row.try_get::<i64, _>("n")? > 0)
     }
 }
@@ -2858,7 +2882,10 @@ mod tests {
             .await
             .expect("échec");
         assert_eq!(s.consecutive_failures_on("demo", "nas").await.unwrap(), 0);
-        assert_eq!(s.consecutive_failures_on("demo", "offsite").await.unwrap(), 1);
+        assert_eq!(
+            s.consecutive_failures_on("demo", "offsite").await.unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -2868,7 +2895,9 @@ mod tests {
         // qui reste — un jeton par boîte, et changer de destination revient à changer
         // de jeton dans les réglages du gestionnaire de mots de passe.
         let s = State::in_memory().await.expect("état");
-        s.upsert_user("remy", "standard", None).await.expect("compte");
+        s.upsert_user("remy", "standard", None)
+            .await
+            .expect("compte");
 
         let (_, jeton) = hlb_types::generate_token(
             "bw-photo",
@@ -2876,8 +2905,12 @@ mod tests {
             [7u8; hlb_types::token::TOKEN_BYTES],
         );
         s.store_token(&jeton).await.expect("jeton");
-        s.set_token_user("bw-photo", Some("remy")).await.expect("rattachement");
-        s.set_token_mailbox("bw-photo", Some("photo")).await.expect("boîte");
+        s.set_token_user("bw-photo", Some("remy"))
+            .await
+            .expect("rattachement");
+        s.set_token_mailbox("bw-photo", Some("photo"))
+            .await
+            .expect("boîte");
 
         assert_eq!(
             s.token_target("bw-photo").await.expect("cible"),
@@ -2898,21 +2931,28 @@ mod tests {
         );
         s.store_token(&jeton).await.expect("jeton");
 
-        assert_eq!(s.token_target("service").await.expect("cible"), (None, None));
+        assert_eq!(
+            s.token_target("service").await.expect("cible"),
+            (None, None)
+        );
     }
 
     #[tokio::test]
     async fn a_token_without_a_mailbox_falls_back_to_the_default_one() {
         // Le cas courant : un seul jeton, la boîte par défaut, rien à configurer.
         let s = State::in_memory().await.expect("état");
-        s.upsert_user("remy", "standard", None).await.expect("compte");
+        s.upsert_user("remy", "standard", None)
+            .await
+            .expect("compte");
         let (_, jeton) = hlb_types::generate_token(
             "bw",
             hlb_types::Role::Operator,
             [9u8; hlb_types::token::TOKEN_BYTES],
         );
         s.store_token(&jeton).await.expect("jeton");
-        s.set_token_user("bw", Some("remy")).await.expect("rattachement");
+        s.set_token_user("bw", Some("remy"))
+            .await
+            .expect("rattachement");
 
         let (u, b) = s.token_target("bw").await.expect("cible");
         assert_eq!(u.as_deref(), Some("remy"));
@@ -2952,11 +2992,21 @@ mod tests {
         // fichier principal et son WAL seraient capturés à des instants différents,
         // et la base restaurée serait corrompue sans que rien ne l'ait signalé.
         let s = st().await;
-        s.upsert_app("pocket-id", &manifest("pocket-id"), None).await.expect("upsert");
-        s.add_volume("pocket-id", "pid-data", "/mnt/pid", true, true).await.expect("volume");
-        s.add_volume("pocket-id", "pid-cache", "/mnt/cache", false, true).await.expect("volume");
-        s.upsert_app("gitea", &manifest("gitea"), None).await.expect("upsert");
-        s.add_volume("gitea", "g-data", "/mnt/g", true, false).await.expect("volume");
+        s.upsert_app("pocket-id", &manifest("pocket-id"), None)
+            .await
+            .expect("upsert");
+        s.add_volume("pocket-id", "pid-data", "/mnt/pid", true, true)
+            .await
+            .expect("volume");
+        s.add_volume("pocket-id", "pid-cache", "/mnt/cache", false, true)
+            .await
+            .expect("volume");
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("upsert");
+        s.add_volume("gitea", "g-data", "/mnt/g", true, false)
+            .await
+            .expect("volume");
 
         let v = s.sqlite_volumes().await.expect("lecture");
         assert_eq!(v.len(), 1, "{v:?}");
@@ -2991,8 +3041,12 @@ mod tests {
     #[tokio::test]
     async fn an_app_without_a_database_is_not_listed() {
         let s = st().await;
-        s.upsert_app("statique", &manifest("statique"), None).await.expect("upsert");
-        s.set_app_status("statique", "running").await.expect("statut");
+        s.upsert_app("statique", &manifest("statique"), None)
+            .await
+            .expect("upsert");
+        s.set_app_status("statique", "running")
+            .await
+            .expect("statut");
         assert!(s.app_databases().await.expect("lecture").is_empty());
     }
 
@@ -3076,7 +3130,10 @@ mod tests {
         s.record_drill("postgres", true, Some(14), 30, "")
             .await
             .expect("réussite");
-        assert_eq!(s.days_since_successful_drill().await.expect("lecture"), Some(0));
+        assert_eq!(
+            s.days_since_successful_drill().await.expect("lecture"),
+            Some(0)
+        );
     }
 
     #[tokio::test]
@@ -3086,7 +3143,10 @@ mod tests {
         // cassé au pire moment — pendant un rollback, après un échec de mise à jour.
         let s = st().await;
         let avant = s.schema_version().await.expect("version").expect("migrée");
-        assert!(avant >= 6, "toutes les migrations doivent être appliquées : {avant}");
+        assert!(
+            avant >= 6,
+            "toutes les migrations doivent être appliquées : {avant}"
+        );
 
         // On revient avant la migration du journal d'audit.
         s.undo_migrations(4).await.expect("retour arrière");
@@ -3180,7 +3240,9 @@ mod tests {
     #[tokio::test]
     async fn completed_actions_survive_a_replan() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
 
         let plan = vec![
             ("Deploy".to_string(), "déployer gitea".to_string()),
@@ -3201,7 +3263,9 @@ mod tests {
     #[tokio::test]
     async fn shorter_plan_drops_stale_actions() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
 
         let long = vec![
             ("A".to_string(), "a".to_string()),
@@ -3218,7 +3282,9 @@ mod tests {
     #[tokio::test]
     async fn failure_is_recorded_with_its_message() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
         s.record_plan("gitea", &[("Deploy".into(), "déployer".into())])
             .await
             .unwrap();
@@ -3238,23 +3304,39 @@ mod tests {
     async fn a_secret_is_never_silently_regenerated() {
         // Un mot de passe déjà injecté dans un service ne doit pas changer sous ses pieds.
         let s = st().await;
-        assert!(s.store_secret_if_absent("db-pw", b"chiffre-1", "base").await.unwrap());
-        assert!(!s.store_secret_if_absent("db-pw", b"chiffre-2", "base").await.unwrap());
-        assert_eq!(s.secret("db-pw").await.unwrap().as_deref(), Some(&b"chiffre-1"[..]));
+        assert!(s
+            .store_secret_if_absent("db-pw", b"chiffre-1", "base")
+            .await
+            .unwrap());
+        assert!(!s
+            .store_secret_if_absent("db-pw", b"chiffre-2", "base")
+            .await
+            .unwrap());
+        assert_eq!(
+            s.secret("db-pw").await.unwrap().as_deref(),
+            Some(&b"chiffre-1"[..])
+        );
     }
 
     #[tokio::test]
     async fn rotation_replaces_the_value() {
         let s = st().await;
-        s.store_secret_if_absent("db-pw", b"ancien", "base").await.unwrap();
+        s.store_secret_if_absent("db-pw", b"ancien", "base")
+            .await
+            .unwrap();
         s.rotate_secret("db-pw", b"nouveau").await.unwrap();
-        assert_eq!(s.secret("db-pw").await.unwrap().as_deref(), Some(&b"nouveau"[..]));
+        assert_eq!(
+            s.secret("db-pw").await.unwrap().as_deref(),
+            Some(&b"nouveau"[..])
+        );
     }
 
     #[tokio::test]
     async fn inventory_never_exposes_values() {
         let s = st().await;
-        s.store_secret_if_absent("db-pw", b"tres-secret", "base gitea").await.unwrap();
+        s.store_secret_if_absent("db-pw", b"tres-secret", "base gitea")
+            .await
+            .unwrap();
         let inv = s.secret_names().await.unwrap();
         assert_eq!(inv, vec![("db-pw".to_string(), "base gitea".to_string())]);
     }
@@ -3267,9 +3349,15 @@ mod tests {
     #[tokio::test]
     async fn blocking_guides_come_first() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        s.add_guide("gitea", "tip", "une astuce", false).await.unwrap();
-        s.add_guide("gitea", "admin", "créer l'admin", true).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
+        s.add_guide("gitea", "tip", "une astuce", false)
+            .await
+            .unwrap();
+        s.add_guide("gitea", "admin", "créer l'admin", true)
+            .await
+            .unwrap();
 
         let g = s.pending_guides().await.unwrap();
         assert_eq!(g.len(), 2);
@@ -3293,7 +3381,9 @@ mod tests {
         // ⚠️ Un volume absent de la liste se lit « il n'existe pas ». Ce qu'on veut
         // voir sur un écran de détail, c'est qu'il existe ET qu'il n'est pas protégé.
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.expect("app");
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("app");
         s.add_volume("gitea", "gitea-data", "/data", true, false)
             .await
             .expect("volume");
@@ -3313,12 +3403,26 @@ mod tests {
         // Sur l'écran d'une app, le journal global est illisible : on veut ce qui la
         // concerne, elle.
         let s = st().await;
-        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
-            .await
-            .expect("audit");
-        s.audit("cli", hlb_types::Role::Admin, "install", "vikunja", "ok", None)
-            .await
-            .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "install",
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "install",
+            "vikunja",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
 
         let j = s.audit_pour("gitea", 10).await.expect("journal");
         assert_eq!(j.len(), 1);
@@ -3358,7 +3462,11 @@ mod tests {
                 .expect("sauvegarde");
         }
         let h = s.backup_history("gitea", 10).await.expect("historique");
-        assert_eq!(h[0].snapshot_id.as_deref(), Some("s4"), "la plus récente d'abord");
+        assert_eq!(
+            h[0].snapshot_id.as_deref(),
+            Some("s4"),
+            "la plus récente d'abord"
+        );
         for f in h.windows(2) {
             assert!(f[0].id > f[1].id);
         }
@@ -3374,7 +3482,13 @@ mod tests {
                 .await
                 .expect("sauvegarde");
         }
-        assert_eq!(s.backup_history("gitea", 5).await.expect("historique").len(), 5);
+        assert_eq!(
+            s.backup_history("gitea", 5)
+                .await
+                .expect("historique")
+                .len(),
+            5
+        );
     }
 
     #[tokio::test]
@@ -3405,8 +3519,7 @@ mod tests {
 
         let h = s.backup_history_all(10).await.expect("historique");
         assert_eq!(h.len(), 2);
-        let apps: std::collections::BTreeSet<&str> =
-            h.iter().map(|r| r.app.as_str()).collect();
+        let apps: std::collections::BTreeSet<&str> = h.iter().map(|r| r.app.as_str()).collect();
         assert_eq!(apps.len(), 2);
     }
 
@@ -3428,10 +3541,17 @@ mod tests {
             .await
             .expect("annonce");
 
-        s.suivre_annonce(id, "Cause : disque plein.", "remy").await.expect("suivi");
-        s.suivre_annonce(id, "Résolu.", "remy").await.expect("suivi");
+        s.suivre_annonce(id, "Cause : disque plein.", "remy")
+            .await
+            .expect("suivi");
+        s.suivre_annonce(id, "Résolu.", "remy")
+            .await
+            .expect("suivi");
 
-        let v = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
+        let v = s
+            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .await
+            .expect("liste");
         assert_eq!(v.len(), 1);
         // Le message d'origine est INTACT…
         assert_eq!(v[0].corps, "On cherche.");
@@ -3469,18 +3589,32 @@ mod tests {
         .await
         .expect("annonce");
 
-        let portail = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
-        assert_eq!(portail.len(), 1, "l'annonce d'exploitation a fuité au portail");
+        let portail = s
+            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .await
+            .expect("liste");
+        assert_eq!(
+            portail.len(),
+            1,
+            "l'annonce d'exploitation a fuité au portail"
+        );
         assert_eq!(portail[0].titre, "Nouveau webmail");
 
-        let admin = s.annonces(hlb_types::Role::Admin, 1_000, false).await.expect("liste");
+        let admin = s
+            .annonces(hlb_types::Role::Admin, 1_000, false)
+            .await
+            .expect("liste");
         assert_eq!(admin.len(), 2, "l'admin doit voir les deux");
     }
 
     #[tokio::test]
     async fn pinned_announcements_come_first() {
         let s = st().await;
-        for (titre, epingle) in [("ancienne", false), ("importante", true), ("récente", false)] {
+        for (titre, epingle) in [
+            ("ancienne", false),
+            ("importante", true),
+            ("récente", false),
+        ] {
             s.publier_annonce(
                 titre,
                 "x",
@@ -3493,7 +3627,10 @@ mod tests {
             .await
             .expect("annonce");
         }
-        let v = s.annonces(hlb_types::Role::Utilisateur, 1_000, false).await.expect("liste");
+        let v = s
+            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .await
+            .expect("liste");
         assert_eq!(v[0].titre, "importante");
     }
 
@@ -3513,10 +3650,16 @@ mod tests {
         .await
         .expect("annonce");
 
-        let portail = s.annonces(hlb_types::Role::Admin, 1_000, false).await.expect("liste");
+        let portail = s
+            .annonces(hlb_types::Role::Admin, 1_000, false)
+            .await
+            .expect("liste");
         assert!(portail.is_empty(), "une annonce expirée reste au portail");
 
-        let archive = s.annonces(hlb_types::Role::Admin, 1_000, true).await.expect("liste");
+        let archive = s
+            .annonces(hlb_types::Role::Admin, 1_000, true)
+            .await
+            .expect("liste");
         assert_eq!(archive.len(), 1, "l'historique a été perdu");
     }
 
@@ -3525,10 +3668,19 @@ mod tests {
         // 🔴 La base part dans les sauvegardes, donc hors site. Y stocker des jetons
         // utilisables ferait de chaque copie un trousseau de clés.
         let s = st().await;
-        s.creer_invitation("lien-secret-52-caracteres", "remy", "standard",
-            hlb_types::Role::Utilisateur, None, 1_000, 604_800, 1, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien-secret-52-caracteres",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            604_800,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
 
         let brut: String = sqlx::query("SELECT group_concat(fingerprint) AS tout FROM invitations")
             .fetch_one(&s.pool)
@@ -3545,35 +3697,75 @@ mod tests {
         // 🔴 La réutiliser créerait un second compte avec les mêmes droits, au nom de
         // quelqu'un qui n'a rien demandé.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 1, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
 
-        let premier = s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+        let premier = s
+            .consommer_invitation("lien", "alice", 1_100)
+            .await
+            .expect("conso");
         assert!(premier.is_some(), "la première fois doit marcher");
 
-        let second = s.consommer_invitation("lien", "mallory", 1_200).await.expect("conso");
+        let second = s
+            .consommer_invitation("lien", "mallory", 1_200)
+            .await
+            .expect("conso");
         assert!(second.is_none(), "un lien à usage unique a resservi");
     }
 
     #[tokio::test]
     async fn an_expired_invitation_is_refused() {
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 60, 1, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            60,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
 
-        assert!(s.consommer_invitation("lien", "a", 1_050).await.expect("conso").is_some());
+        assert!(s
+            .consommer_invitation("lien", "a", 1_050)
+            .await
+            .expect("conso")
+            .is_some());
 
         // Une autre, déjà expirée.
-        s.creer_invitation("lien2", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 60, 1, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien2",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            60,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
         assert!(
-            s.consommer_invitation("lien2", "b", 2_000).await.expect("conso").is_none(),
+            s.consommer_invitation("lien2", "b", 2_000)
+                .await
+                .expect("conso")
+                .is_none(),
             "une invitation périmée a été acceptée"
         );
     }
@@ -3583,10 +3775,19 @@ mod tests {
         // 🔴 Le rôle est fixé à l'INVITATION. Le laisser choisir permettrait de
         // s'inscrire administrateur.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "invite", hlb_types::Role::Viewer,
-            None, 1_000, 3_600, 1, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "invite",
+            hlb_types::Role::Viewer,
+            None,
+            1_000,
+            3_600,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
 
         let (profil, role, _) = s
             .consommer_invitation("lien", "alice", 1_100)
@@ -3601,20 +3802,37 @@ mod tests {
     async fn an_unknown_invitation_is_indistinguishable_from_an_expired_one() {
         // Les séparer dirait à qui essaie des jetons si l'un d'eux a existé.
         let s = st().await;
-        assert!(s.consommer_invitation("jamais-cree", "a", 1_000).await.expect("conso").is_none());
+        assert!(s
+            .consommer_invitation("jamais-cree", "a", 1_000)
+            .await
+            .expect("conso")
+            .is_none());
     }
 
     #[tokio::test]
     async fn listing_invitations_never_exposes_a_usable_value() {
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 1, Some("pour camille"))
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            1,
+            Some("pour camille"),
+        )
+        .await
+        .expect("invitation");
 
         let v = s.invitations(1_100).await.expect("liste");
         assert_eq!(v.len(), 1);
-        assert_eq!(v[0].reference.len(), 8, "une référence courte, pas le jeton");
+        assert_eq!(
+            v[0].reference.len(),
+            8,
+            "une référence courte, pas le jeton"
+        );
         assert!(v[0].utilisable());
         assert_eq!(v[0].expire_dans_s, 3_500);
         assert_eq!(v[0].note.as_deref(), Some("pour camille"));
@@ -3624,20 +3842,35 @@ mod tests {
     async fn a_multi_use_invitation_serves_exactly_its_quota() {
         // Inviter cinq personnes avec un lien : ni quatre, ni six.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 3, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            3,
+            None,
+        )
+        .await
+        .expect("invitation");
 
         for (n, qui) in ["a", "b", "c"].iter().enumerate() {
             assert!(
-                s.consommer_invitation("lien", qui, 1_100).await.expect("conso").is_some(),
+                s.consommer_invitation("lien", qui, 1_100)
+                    .await
+                    .expect("conso")
+                    .is_some(),
                 "l'usage {} devait passer",
                 n + 1
             );
         }
         assert!(
-            s.consommer_invitation("lien", "d", 1_100).await.expect("conso").is_none(),
+            s.consommer_invitation("lien", "d", 1_100)
+                .await
+                .expect("conso")
+                .is_none(),
             "le quatrième usage a été accepté sur un lien à trois"
         );
     }
@@ -3647,17 +3880,31 @@ mod tests {
         // 🔴 Un lien largement ouvert qui traîne est une porte d'entrée : le nombre
         // restant doit se voir AVANT qu'il soit épuisé.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 5, None)
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            5,
+            None,
+        )
+        .await
+        .expect("invitation");
+        s.consommer_invitation("lien", "a", 1_100)
             .await
-            .expect("invitation");
-        s.consommer_invitation("lien", "a", 1_100).await.expect("conso");
+            .expect("conso");
 
         let v = s.invitations(1_200).await.expect("liste");
         assert_eq!(v[0].usages, 1);
         assert_eq!(v[0].usages_max, 5);
         assert_eq!(v[0].restants(), 4);
-        assert!(v[0].largement_ouverte(), "un lien à quatre entrées restantes");
+        assert!(
+            v[0].largement_ouverte(),
+            "un lien à quatre entrées restantes"
+        );
         assert_eq!(v[0].etat(), "partiellement utilisée");
     }
 
@@ -3666,12 +3913,25 @@ mod tests {
         // ⚠️ Une invitation à zéro usage serait inutilisable dès sa création, ce qui
         // ressemble à une panne — on chercherait le problème ailleurs.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 0, None)
-            .await
-            .expect("invitation");
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            0,
+            None,
+        )
+        .await
+        .expect("invitation");
 
-        assert!(s.consommer_invitation("lien", "a", 1_100).await.expect("conso").is_some());
+        assert!(s
+            .consommer_invitation("lien", "a", 1_100)
+            .await
+            .expect("conso")
+            .is_some());
     }
 
     #[tokio::test]
@@ -3680,20 +3940,42 @@ mod tests {
         // supprimer perdrait la trace de qui l'a créé et de qui est déjà entré —
         // exactement au moment où on en a besoin.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 10, None)
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            10,
+            None,
+        )
+        .await
+        .expect("invitation");
+        s.consommer_invitation("lien", "alice", 1_100)
             .await
-            .expect("invitation");
-        s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+            .expect("conso");
 
-        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+        let reference: String = hlb_types::token::fingerprint_of("lien")
+            .chars()
+            .take(8)
+            .collect();
         assert!(s.revoquer_invitation(&reference).await.expect("révocation"));
 
         // Fermée…
-        assert!(s.consommer_invitation("lien", "mallory", 1_200).await.expect("conso").is_none());
+        assert!(s
+            .consommer_invitation("lien", "mallory", 1_200)
+            .await
+            .expect("conso")
+            .is_none());
         // …mais l'historique est là.
         let v = s.invitations(1_200).await.expect("liste");
-        assert_eq!(v.len(), 1, "l'invitation a été effacée au lieu d'être fermée");
+        assert_eq!(
+            v.len(),
+            1,
+            "l'invitation a été effacée au lieu d'être fermée"
+        );
         assert_eq!(v[0].cree_par, "remy");
         assert_eq!(v[0].etat(), "épuisée");
     }
@@ -3703,13 +3985,27 @@ mod tests {
         // Elle est déjà fermée : la « révoquer » n'aurait aucun effet, et rendre
         // « fait » laisserait croire à une action qui n'a rien changé.
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 1, None)
-            .await
-            .expect("invitation");
-        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
+        let reference: String = hlb_types::token::fingerprint_of("lien")
+            .chars()
+            .take(8)
+            .collect();
 
-        s.consommer_invitation("lien", "alice", 1_100).await.expect("conso");
+        s.consommer_invitation("lien", "alice", 1_100)
+            .await
+            .expect("conso");
         assert!(
             !s.revoquer_invitation(&reference).await.expect("révocation"),
             "une invitation utilisée ne doit pas s'effacer"
@@ -3719,14 +4015,30 @@ mod tests {
     #[tokio::test]
     async fn a_pending_invitation_can_be_revoked() {
         let s = st().await;
-        s.creer_invitation("lien", "remy", "standard", hlb_types::Role::Utilisateur,
-            None, 1_000, 3_600, 1, None)
-            .await
-            .expect("invitation");
-        let reference: String = hlb_types::token::fingerprint_of("lien").chars().take(8).collect();
+        s.creer_invitation(
+            "lien",
+            "remy",
+            "standard",
+            hlb_types::Role::Utilisateur,
+            None,
+            1_000,
+            3_600,
+            1,
+            None,
+        )
+        .await
+        .expect("invitation");
+        let reference: String = hlb_types::token::fingerprint_of("lien")
+            .chars()
+            .take(8)
+            .collect();
 
         assert!(s.revoquer_invitation(&reference).await.expect("révocation"));
-        assert!(s.consommer_invitation("lien", "a", 1_100).await.expect("conso").is_none());
+        assert!(s
+            .consommer_invitation("lien", "a", 1_100)
+            .await
+            .expect("conso")
+            .is_none());
     }
 
     #[tokio::test]
@@ -3789,7 +4101,9 @@ mod tests {
         avec_compte(&s, "remy").await;
         assert_eq!(s.theme_de("remy").await.expect("thème"), None);
 
-        s.set_theme_de("remy", Some("Turi clair")).await.expect("écriture");
+        s.set_theme_de("remy", Some("Turi clair"))
+            .await
+            .expect("écriture");
         assert_eq!(
             s.theme_de("remy").await.expect("thème").as_deref(),
             Some("Turi clair")
@@ -3812,9 +4126,16 @@ mod tests {
         // dans les sauvegardes, donc hors site — ne doit pas être un trousseau de clés.
         let s = st().await;
         avec_compte(&s, "remy").await;
-        s.open_session("cookie-secret-52-caracteres", "remy", Some("sub-1"), 1000, 3600, None)
-            .await
-            .expect("session");
+        s.open_session(
+            "cookie-secret-52-caracteres",
+            "remy",
+            Some("sub-1"),
+            1000,
+            3600,
+            None,
+        )
+        .await
+        .expect("session");
 
         let brut: String = sqlx::query("SELECT group_concat(fingerprint) AS tout FROM sessions")
             .fetch_one(&s.pool)
@@ -3835,7 +4156,9 @@ mod tests {
         // qui oublierait la comparaison authentifierait une session morte.
         let s = st().await;
         avec_compte(&s, "remy").await;
-        s.open_session("c", "remy", None, 1000, 60, None).await.expect("session");
+        s.open_session("c", "remy", None, 1000, 60, None)
+            .await
+            .expect("session");
 
         assert!(s.find_session("c", 1030).await.expect("avant").is_some());
         assert!(
@@ -3854,9 +4177,14 @@ mod tests {
         s.set_user_role("remy", hlb_types::Role::Admin, Some("cli"))
             .await
             .expect("rôle");
-        s.open_session("c", "remy", None, 1000, 3600, None).await.expect("session");
+        s.open_session("c", "remy", None, 1000, 3600, None)
+            .await
+            .expect("session");
 
-        assert_eq!(s.user_role("remy").await.expect("rôle"), hlb_types::Role::Admin);
+        assert_eq!(
+            s.user_role("remy").await.expect("rôle"),
+            hlb_types::Role::Admin
+        );
 
         s.set_user_role("remy", hlb_types::Role::Viewer, Some("cli"))
             .await
@@ -3865,7 +4193,10 @@ mod tests {
         // La session vit toujours…
         assert!(s.find_session("c", 1010).await.expect("session").is_some());
         // …mais elle ne donne plus les mêmes droits.
-        assert_eq!(s.user_role("remy").await.expect("rôle"), hlb_types::Role::Viewer);
+        assert_eq!(
+            s.user_role("remy").await.expect("rôle"),
+            hlb_types::Role::Viewer
+        );
     }
 
     #[tokio::test]
@@ -3874,7 +4205,9 @@ mod tests {
         // son cookie.
         let s = st().await;
         avec_compte(&s, "remy").await;
-        s.open_session("c", "remy", None, 1000, 3600, None).await.expect("session");
+        s.open_session("c", "remy", None, 1000, 3600, None)
+            .await
+            .expect("session");
 
         sqlx::query("DELETE FROM users WHERE name = 'remy'")
             .execute(&s.pool)
@@ -3898,7 +4231,10 @@ mod tests {
             s.user_by_pocket_id("sub-stable").await.expect("recherche"),
             Some("remy".into())
         );
-        assert_eq!(s.user_by_pocket_id("autre-sub").await.expect("recherche"), None);
+        assert_eq!(
+            s.user_by_pocket_id("autre-sub").await.expect("recherche"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -3906,10 +4242,16 @@ mod tests {
         // La connexion ne regarde ni le profil ni les boîtes : les écraser au passage
         // ferait perdre un quota à la première connexion.
         let s = st().await;
-        s.upsert_user("remy", "illimite", None).await.expect("compte");
-        s.add_mailbox("remy", "remy", "turi.fr", true).await.expect("boîte");
+        s.upsert_user("remy", "illimite", None)
+            .await
+            .expect("compte");
+        s.add_mailbox("remy", "remy", "turi.fr", true)
+            .await
+            .expect("boîte");
 
-        s.upsert_user_pocket_id("remy", "sub-1").await.expect("lien");
+        s.upsert_user_pocket_id("remy", "sub-1")
+            .await
+            .expect("lien");
 
         let c = s.compte("remy").await.expect("compte");
         assert_eq!(c.profil, "illimite");
@@ -3977,21 +4319,36 @@ mod tests {
             .close_session_by_reference("remy", &vues[0].reference)
             .await
             .expect("fermeture"));
-        assert!(s.find_session("portable", 1010).await.expect("session").is_none());
+        assert!(s
+            .find_session("portable", 1010)
+            .await
+            .expect("session")
+            .is_none());
     }
 
     #[tokio::test]
     async fn the_audit_chain_holds_across_entries() {
         let s = st().await;
         for n in 0..5 {
-            s.audit("cli", hlb_types::Role::Admin, "install", &format!("app{n}"), "ok", None)
-                .await
-                .expect("audit");
+            s.audit(
+                "cli",
+                hlb_types::Role::Admin,
+                "install",
+                &format!("app{n}"),
+                "ok",
+                None,
+            )
+            .await
+            .expect("audit");
         }
         let v = s.verify_audit_chain().await.expect("vérification");
         assert!(v.est_intacte(), "{}", v.describe());
         match v {
-            AuditIntegrity::Intacte { verifiees, non_chainees, .. } => {
+            AuditIntegrity::Intacte {
+                verifiees,
+                non_chainees,
+                ..
+            } => {
                 assert_eq!(verifiees, 5);
                 assert_eq!(non_chainees, 0);
             }
@@ -4005,12 +4362,26 @@ mod tests {
         // le fichier SQLite est ouvrable. Une réécriture reste possible, mais elle se
         // voit — ce qui est la seule garantie atteignable sans tiers de confiance.
         let s = st().await;
-        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
-            .await
-            .expect("audit");
-        s.audit("cli", hlb_types::Role::Admin, "purge", "vikunja", "ok", None)
-            .await
-            .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "install",
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "purge",
+            "vikunja",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
 
         sqlx::query("UPDATE audit_log SET target = 'innocent' WHERE action = 'purge'")
             .execute(&s.pool)
@@ -4028,9 +4399,16 @@ mod tests {
         // passage plutôt que la modifier.
         let s = st().await;
         for n in 0..3 {
-            s.audit("cli", hlb_types::Role::Admin, "install", &format!("app{n}"), "ok", None)
-                .await
-                .expect("audit");
+            s.audit(
+                "cli",
+                hlb_types::Role::Admin,
+                "install",
+                &format!("app{n}"),
+                "ok",
+                None,
+            )
+            .await
+            .expect("audit");
         }
         sqlx::query("DELETE FROM audit_log WHERE target = 'app1'")
             .execute(&s.pool)
@@ -4055,16 +4433,30 @@ mod tests {
         .await
         .expect("entrée pré-chaînage");
 
-        s.audit("cli", hlb_types::Role::Admin, "install", "vikunja", "ok", None)
-            .await
-            .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "install",
+            "vikunja",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
 
         let v = s.verify_audit_chain().await.expect("vérification");
         assert!(v.est_intacte());
         match v {
-            AuditIntegrity::Intacte { verifiees, non_chainees, depuis_l_entree } => {
+            AuditIntegrity::Intacte {
+                verifiees,
+                non_chainees,
+                depuis_l_entree,
+            } => {
                 assert_eq!(verifiees, 1);
-                assert_eq!(non_chainees, 1, "l'entrée antérieure est comptée, pas cachée");
+                assert_eq!(
+                    non_chainees, 1,
+                    "l'entrée antérieure est comptée, pas cachée"
+                );
                 assert!(depuis_l_entree.is_some());
             }
             AuditIntegrity::Rompue { .. } => panic!("pas de rupture attendue"),
@@ -4076,8 +4468,16 @@ mod tests {
         // 🔴 Sans préfixe de longueur, une cible « gitea|ok » et une cible « gitea »
         // suivie de l'issue « ok » donneraient la même empreinte : on pourrait
         // requalifier un échec en réussite sans casser la chaîne.
-        let a = empreinte_entree(None, ["t", "cli", "admin", "purge", "gitea|ok", "failed"], None);
-        let b = empreinte_entree(None, ["t", "cli", "admin", "purge", "gitea", "|okfailed"], None);
+        let a = empreinte_entree(
+            None,
+            ["t", "cli", "admin", "purge", "gitea|ok", "failed"],
+            None,
+        );
+        let b = empreinte_entree(
+            None,
+            ["t", "cli", "admin", "purge", "gitea", "|okfailed"],
+            None,
+        );
         assert_ne!(a, b);
     }
 
@@ -4108,23 +4508,47 @@ mod tests {
         let s = st().await;
         avec_compte(&s, "remy").await;
         avec_compte(&s, "alice").await;
-        s.set_user_role("remy", hlb_types::Role::Admin, None).await.expect("rôle");
+        s.set_user_role("remy", hlb_types::Role::Admin, None)
+            .await
+            .expect("rôle");
 
-        assert!(!s.has_other_admin("remy").await.expect("compte"), "il est le seul");
+        assert!(
+            !s.has_other_admin("remy").await.expect("compte"),
+            "il est le seul"
+        );
 
-        s.set_user_role("alice", hlb_types::Role::Admin, None).await.expect("rôle");
-        assert!(s.has_other_admin("remy").await.expect("compte"), "alice prend le relais");
+        s.set_user_role("alice", hlb_types::Role::Admin, None)
+            .await
+            .expect("rôle");
+        assert!(
+            s.has_other_admin("remy").await.expect("compte"),
+            "alice prend le relais"
+        );
     }
 
     #[tokio::test]
     async fn audited_actions_are_retrievable_in_order() {
         let s = st().await;
-        s.audit("cli", hlb_types::Role::Admin, "install", "gitea", "ok", None)
-            .await
-            .unwrap();
-        s.audit("remy", hlb_types::Role::Operator, "purge", "vikunja", "refused", Some("rôle insuffisant"))
-            .await
-            .unwrap();
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "install",
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .unwrap();
+        s.audit(
+            "remy",
+            hlb_types::Role::Operator,
+            "purge",
+            "vikunja",
+            "refused",
+            Some("rôle insuffisant"),
+        )
+        .await
+        .unwrap();
 
         let t = s.audit_trail(10).await.unwrap();
         assert_eq!(t.len(), 2);
@@ -4138,9 +4562,16 @@ mod tests {
         // 🔴 Une tentative refusée est au moins aussi intéressante qu'une réussie :
         // c'est le signal d'un accès mal configuré, ou d'une intrusion.
         let s = st().await;
-        s.audit("inconnu", hlb_types::Role::Viewer, "purge", "gitea", "refused", None)
-            .await
-            .unwrap();
+        s.audit(
+            "inconnu",
+            hlb_types::Role::Viewer,
+            "purge",
+            "gitea",
+            "refused",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(s.audit_trail(10).await.unwrap()[0].outcome, "refused");
     }
 
@@ -4148,37 +4579,60 @@ mod tests {
     async fn a_failure_does_not_push_back_the_schedule() {
         // 🔴 Sinon une sauvegarde cassée se ferait de plus en plus rare.
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
 
         assert_eq!(s.seconds_since_last_success("gitea").await.unwrap(), None);
 
-        s.record_backup("gitea", "volume", None, Some("disque plein")).await.unwrap();
+        s.record_backup("gitea", "volume", None, Some("disque plein"))
+            .await
+            .unwrap();
         assert_eq!(
             s.seconds_since_last_success("gitea").await.unwrap(),
             None,
             "un échec ne compte pas comme une réussite"
         );
 
-        s.record_backup("gitea", "volume", Some("abc"), None).await.unwrap();
-        assert!(s.seconds_since_last_success("gitea").await.unwrap().is_some());
+        s.record_backup("gitea", "volume", Some("abc"), None)
+            .await
+            .unwrap();
+        assert!(s
+            .seconds_since_last_success("gitea")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
     async fn the_latest_successful_snapshot_is_retrievable() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
 
-        s.record_backup("gitea", "volume", Some("ancien"), None).await.unwrap();
-        s.record_backup("gitea", "volume", None, Some("échec")).await.unwrap();
-        s.record_backup("gitea", "volume", Some("recent"), None).await.unwrap();
+        s.record_backup("gitea", "volume", Some("ancien"), None)
+            .await
+            .unwrap();
+        s.record_backup("gitea", "volume", None, Some("échec"))
+            .await
+            .unwrap();
+        s.record_backup("gitea", "volume", Some("recent"), None)
+            .await
+            .unwrap();
 
-        assert_eq!(s.latest_snapshot("gitea").await.unwrap().as_deref(), Some("recent"));
+        assert_eq!(
+            s.latest_snapshot("gitea").await.unwrap().as_deref(),
+            Some("recent")
+        );
     }
 
     #[tokio::test]
     async fn verifications_track_only_successes() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
 
         s.record_verification("gitea", "abc", false, Some("contenu différent"))
             .await
@@ -4189,20 +4643,36 @@ mod tests {
             "une vérification en échec ne prouve rien"
         );
 
-        s.record_verification("gitea", "abc", true, None).await.unwrap();
-        assert!(s.seconds_since_last_verification("gitea").await.unwrap().is_some());
+        s.record_verification("gitea", "abc", true, None)
+            .await
+            .unwrap();
+        assert!(s
+            .seconds_since_last_verification("gitea")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
     async fn volumes_are_recorded_with_their_real_path() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-
-        s.add_volume("gitea", "gitea-data", "/var/lib/docker/volumes/gitea-data/_data", true, false)
+        s.upsert_app("gitea", &manifest("gitea"), None)
             .await
             .unwrap();
+
+        s.add_volume(
+            "gitea",
+            "gitea-data",
+            "/var/lib/docker/volumes/gitea-data/_data",
+            true,
+            false,
+        )
+        .await
+        .unwrap();
         // Un cache : pas de sauvegarde.
-        s.add_volume("gitea", "gitea-cache", "/ailleurs", false, false).await.unwrap();
+        s.add_volume("gitea", "gitea-cache", "/ailleurs", false, false)
+            .await
+            .unwrap();
 
         let v = s.volumes_to_backup("gitea").await.unwrap();
         assert_eq!(v.len(), 1, "seul le volume à sauvegarder doit remonter");
@@ -4213,9 +4683,15 @@ mod tests {
     #[tokio::test]
     async fn recording_a_volume_twice_updates_it() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        s.add_volume("gitea", "d", "/ancien", true, false).await.unwrap();
-        s.add_volume("gitea", "d", "/nouveau", true, false).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
+        s.add_volume("gitea", "d", "/ancien", true, false)
+            .await
+            .unwrap();
+        s.add_volume("gitea", "d", "/nouveau", true, false)
+            .await
+            .unwrap();
 
         let v = s.volumes_to_backup("gitea").await.unwrap();
         assert_eq!(v.len(), 1);
@@ -4225,8 +4701,17 @@ mod tests {
     #[tokio::test]
     async fn the_resolved_digest_is_frozen_in_the_manifest() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        assert!(s.app_manifest("gitea").await.unwrap().spec.image.digest.is_none());
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
+        assert!(s
+            .app_manifest("gitea")
+            .await
+            .unwrap()
+            .spec
+            .image
+            .digest
+            .is_none());
 
         s.set_app_digest("gitea", "sha256:abc").await.unwrap();
 
@@ -4239,8 +4724,12 @@ mod tests {
     #[tokio::test]
     async fn verifying_a_guide_unblocks_it() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        s.add_guide("gitea", "admin", "créer l'admin", true).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
+        s.add_guide("gitea", "admin", "créer l'admin", true)
+            .await
+            .unwrap();
 
         assert_eq!(s.unverified_blocking("gitea").await.unwrap(), 1);
         assert!(s.verify_guide("gitea", "admin").await.unwrap());
@@ -4254,8 +4743,12 @@ mod tests {
     #[tokio::test]
     async fn deleting_an_app_cascades() {
         let s = st().await;
-        s.upsert_app("gitea", &manifest("gitea"), None).await.unwrap();
-        s.record_plan("gitea", &[("A".into(), "a".into())]).await.unwrap();
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .unwrap();
+        s.record_plan("gitea", &[("A".into(), "a".into())])
+            .await
+            .unwrap();
         s.add_guide("gitea", "x", "y", true).await.unwrap();
 
         sqlx::query("DELETE FROM apps WHERE name = 'gitea'")

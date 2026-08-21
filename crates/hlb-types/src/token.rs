@@ -174,7 +174,10 @@ pub fn constant_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// Encodage base32 (RFC 4648, sans remplissage).
@@ -316,7 +319,11 @@ mod tests {
         for n in 0..40usize {
             let brut: Vec<u8> = (0..n).map(|i| (i * 37 % 251) as u8).collect();
             let code = base64url(&brut);
-            assert_eq!(base64url_decode(&code).as_deref(), Some(brut.as_slice()), "{n} octets");
+            assert_eq!(
+                base64url_decode(&code).as_deref(),
+                Some(brut.as_slice()),
+                "{n} octets"
+            );
         }
     }
 
@@ -411,7 +418,9 @@ mod tests {
         // ⚠️ Base32 : pas de « / » ni de « + » comme en base64, qui cassent les
         // copier-coller dans une URL ou un fichier d'unité systemd.
         let (v, _) = generate("x", Role::Admin, alea(9));
-        assert!(v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(v
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
         assert!(!v.contains('/') && !v.contains('+') && !v.contains('='));
         // 32 octets → au moins 51 caractères base32.
         assert!(v.len() >= 51, "{} caractères", v.len());

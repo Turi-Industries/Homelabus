@@ -157,7 +157,10 @@ mod tests {
     #[test]
     fn rejects_malformed_input() {
         for bad in ["", "sun", "sun 03:00", "sun 25:00-26:00", "xyz 03:00-05:00"] {
-            assert!(MaintenanceWindow::parse(bad).is_err(), "« {bad} » devrait échouer");
+            assert!(
+                MaintenanceWindow::parse(bad).is_err(),
+                "« {bad} » devrait échouer"
+            );
         }
     }
 

@@ -69,7 +69,10 @@ impl MeshConfig {
 
     /// Le réseau du mesh en notation CIDR.
     pub fn cidr(&self) -> String {
-        format!("{}.{}.{}.0/24", self.network[0], self.network[1], self.network[2])
+        format!(
+            "{}.{}.{}.0/24",
+            self.network[0], self.network[1], self.network[2]
+        )
     }
 
     /// Ajoute un nœud, en lui attribuant la première adresse libre.
@@ -195,8 +198,14 @@ mod tests {
     fn addresses_start_at_two() {
         // .0 et .255 sont réservés par le protocole, .1 par convention.
         let m = mesh_avec(&["n1", "n2"]);
-        assert_eq!(m.get("n1").expect("n1").mesh_ip, Ipv4Addr::new(10, 42, 0, 2));
-        assert_eq!(m.get("n2").expect("n2").mesh_ip, Ipv4Addr::new(10, 42, 0, 3));
+        assert_eq!(
+            m.get("n1").expect("n1").mesh_ip,
+            Ipv4Addr::new(10, 42, 0, 2)
+        );
+        assert_eq!(
+            m.get("n2").expect("n2").mesh_ip,
+            Ipv4Addr::new(10, 42, 0, 3)
+        );
     }
 
     #[test]
@@ -240,7 +249,10 @@ mod tests {
         assert_eq!(c.matches("[Peer]").count(), 2, "{c}");
         assert!(c.contains("cle-n2"));
         assert!(c.contains("cle-n3"));
-        assert!(!c.contains("cle-n1"), "un nœud ne doit pas être son propre pair");
+        assert!(
+            !c.contains("cle-n1"),
+            "un nœud ne doit pas être son propre pair"
+        );
     }
 
     #[test]
@@ -257,11 +269,15 @@ mod tests {
     #[test]
     fn a_natted_node_does_not_listen_but_keeps_alive() {
         let mut m = MeshConfig::default();
-        m.add_node("public", "cle-pub", Some("public.example.fr".into())).expect("ajout");
+        m.add_node("public", "cle-pub", Some("public.example.fr".into()))
+            .expect("ajout");
         m.add_node("derriere-nat", "cle-nat", None).expect("ajout");
 
         let c = m.render_for("derriere-nat", "x").expect("config");
-        assert!(!c.contains("ListenPort"), "un nœud NATé n'a pas à écouter :\n{c}");
+        assert!(
+            !c.contains("ListenPort"),
+            "un nœud NATé n'a pas à écouter :\n{c}"
+        );
         // Mais il doit maintenir la correspondance NAT ouverte, sinon il devient
         // injoignable après quelques minutes de silence.
         assert!(c.contains("PersistentKeepalive = 25"));
@@ -271,7 +287,10 @@ mod tests {
     #[test]
     fn a_public_node_listens() {
         let m = mesh_avec(&["n1"]);
-        assert!(m.render_for("n1", "x").expect("config").contains("ListenPort = 51820"));
+        assert!(m
+            .render_for("n1", "x")
+            .expect("config")
+            .contains("ListenPort = 51820"));
     }
 
     #[test]
@@ -334,12 +353,11 @@ mod tests_persistance {
 
         let avant: Vec<_> = m.peers().map(|p| (p.name.clone(), p.mesh_ip)).collect();
 
-        let recharge = MeshConfig::from_peers(
-            [10, 42, 0],
-            51820,
-            m.peers().cloned().collect(),
-        );
-        let apres: Vec<_> = recharge.peers().map(|p| (p.name.clone(), p.mesh_ip)).collect();
+        let recharge = MeshConfig::from_peers([10, 42, 0], 51820, m.peers().cloned().collect());
+        let apres: Vec<_> = recharge
+            .peers()
+            .map(|p| (p.name.clone(), p.mesh_ip))
+            .collect();
 
         assert_eq!(avant, apres);
         // `zeta`, ajouté en premier, garde .2 bien qu'il trie après `alpha`.

@@ -42,11 +42,7 @@ pub fn peindre(ui: &mut egui::Ui, donnee: &str, taille: f32) -> Option<f32> {
     for y in 0..cote {
         for x in 0..cote {
             if modules[y * cote + x] == qrcode::Color::Dark {
-                let coin = rect.min
-                    + Vec2::new(
-                        (x + MARGE) as f32 * px,
-                        (y + MARGE) as f32 * px,
-                    );
+                let coin = rect.min + Vec2::new((x + MARGE) as f32 * px, (y + MARGE) as f32 * px);
                 p.rect_filled(
                     Rect::from_min_size(coin, Vec2::splat(px)),
                     0.0,

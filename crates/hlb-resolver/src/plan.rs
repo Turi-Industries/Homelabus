@@ -126,14 +126,23 @@ impl Action {
     /// Une action qui modifie quelque chose hors du cluster, ou qui est coûteuse à
     /// annuler. Sert à colorer le plan et à décider ce qui demande confirmation.
     pub fn is_mutating(&self) -> bool {
-        !matches!(self, Self::WaitHealthy { .. } | Self::PendingGuideStep { .. })
+        !matches!(
+            self,
+            Self::WaitHealthy { .. } | Self::PendingGuideStep { .. }
+        )
     }
 }
 
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProvisionDatabase { engine, database, role, password_secret, extensions } => {
+            Self::ProvisionDatabase {
+                engine,
+                database,
+                role,
+                password_secret,
+                extensions,
+            } => {
                 write!(
                     f,
                     "créer la base {database} sur {} avec le rôle {role} \
@@ -145,7 +154,11 @@ impl fmt::Display for Action {
                 }
                 Ok(())
             }
-            Self::ProvisionBucket { bucket, key_name, secret_name } => write!(
+            Self::ProvisionBucket {
+                bucket,
+                key_name,
+                secret_name,
+            } => write!(
                 f,
                 "créer le compartiment {bucket} avec la clé isolée {key_name} \
                  (secret {secret_name})"
@@ -158,14 +171,28 @@ impl fmt::Display for Action {
                 "créer le client OIDC « {app} » dans PocketID → {}",
                 redirect_uris.join(", ")
             ),
-            Self::CreateVolume { name, path, tier, backup, sqlite } => write!(
+            Self::CreateVolume {
+                name,
+                path,
+                tier,
+                backup,
+                sqlite,
+            } => write!(
                 f,
                 "créer le volume {name} sur {path} (tier {tier:?}, sauvegarde {}{})",
                 if *backup { "activée" } else { "désactivée" },
                 if *sqlite { ", instantané SQLite" } else { "" }
             ),
-            Self::ProvisionMailAccount { address, aliases, quota_bytes } => {
-                write!(f, "créer la boîte {address}{}", if *aliases { " avec aliases" } else { "" })?;
+            Self::ProvisionMailAccount {
+                address,
+                aliases,
+                quota_bytes,
+            } => {
+                write!(
+                    f,
+                    "créer la boîte {address}{}",
+                    if *aliases { " avec aliases" } else { "" }
+                )?;
                 if let Some(q) = quota_bytes {
                     // Affiché dans l'aperçu : un quota qu'on ne sait pas poser doit se
                     // voir AVANT l'installation, pas se découvrir à l'usage.
@@ -174,7 +201,14 @@ impl fmt::Display for Action {
                 Ok(())
             }
             Self::DeployService {
-                name, image, replicas, constraints, env, mounts, hardening, healthcheck,
+                name,
+                image,
+                replicas,
+                constraints,
+                env,
+                mounts,
+                hardening,
+                healthcheck,
             } => {
                 write!(f, "déployer {name} ×{replicas} depuis {image}")?;
                 if !constraints.is_empty() {
@@ -183,13 +217,21 @@ impl fmt::Display for Action {
                 // Le durcissement figure dans le plan : il doit être visible avant
                 // application, pas découvert après coup.
                 let mut d = Vec::new();
-                if hardening.read_only_rootfs { d.push("rootfs ro".to_string()); }
-                if hardening.no_new_privileges { d.push("no-new-privileges".to_string()); }
+                if hardening.read_only_rootfs {
+                    d.push("rootfs ro".to_string());
+                }
+                if hardening.no_new_privileges {
+                    d.push("no-new-privileges".to_string());
+                }
                 if !hardening.cap_drop.is_empty() {
                     d.push(format!("cap_drop {}", hardening.cap_drop.join("+")));
                 }
-                if healthcheck.is_some() { d.push("sonde".to_string()); }
-                if !env.is_empty() { d.push(format!("{} variables", env.len())); }
+                if healthcheck.is_some() {
+                    d.push("sonde".to_string());
+                }
+                if !env.is_empty() {
+                    d.push(format!("{} variables", env.len()));
+                }
                 for (vol, path) in mounts {
                     d.push(format!("{vol}→{path}"));
                 }
@@ -204,17 +246,37 @@ impl fmt::Display for Action {
             Self::WaitHealthy { name, timeout_secs } => {
                 write!(f, "attendre que {name} soit sain (max {timeout_secs} s)")
             }
-            Self::ConfigureIngress { host, service, port, chain, public } => write!(
+            Self::ConfigureIngress {
+                host,
+                service,
+                port,
+                chain,
+                public,
+            } => write!(
                 f,
                 "router {host} → {service}:{port} via {} ({})",
-                if chain.is_empty() { "direct".to_string() } else { chain.join(" → ") },
+                if chain.is_empty() {
+                    "direct".to_string()
+                } else {
+                    chain.join(" → ")
+                },
                 if *public { "public" } else { "VPN uniquement" }
             ),
-            Self::PendingGuideStep { id, title, blocking, step, .. } => write!(
+            Self::PendingGuideStep {
+                id,
+                title,
+                blocking,
+                step,
+                ..
+            } => write!(
                 f,
                 "{} {} « {title} » [{id}]",
                 if *blocking { "🔴" } else { "🟠" },
-                if step.is_automatable() { "action" } else { "action manuelle" }
+                if step.is_automatable() {
+                    "action"
+                } else {
+                    "action manuelle"
+                }
             ),
         }
     }

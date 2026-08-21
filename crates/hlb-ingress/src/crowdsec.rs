@@ -45,13 +45,17 @@ pub struct Cscli {
 
 impl Default for Cscli {
     fn default() -> Self {
-        Self { service: "crowdsec".into() }
+        Self {
+            service: "crowdsec".into(),
+        }
     }
 }
 
 impl Cscli {
     pub fn new(service: impl Into<String>) -> Self {
-        Self { service: service.into() }
+        Self {
+            service: service.into(),
+        }
     }
 
     /// Retrouve le conteneur CrowdSec sur cette machine.
@@ -76,7 +80,13 @@ impl Cscli {
 
         // Hors Swarm (docker run, compose), l'étiquette n'existe pas.
         let par_nom = self
-            .docker(&["ps", "--filter", &format!("name={}", self.service), "--format", "{{.ID}}"])
+            .docker(&[
+                "ps",
+                "--filter",
+                &format!("name={}", self.service),
+                "--format",
+                "{{.ID}}",
+            ])
             .await?;
 
         par_nom
@@ -84,10 +94,12 @@ impl Cscli {
             .next()
             .filter(|l| !l.is_empty())
             .map(|s| s.to_string())
-            .ok_or_else(|| Error::CrowdSec(format!(
-                "aucun conteneur CrowdSec en fonctionnement (service « {} »)",
-                self.service
-            )))
+            .ok_or_else(|| {
+                Error::CrowdSec(format!(
+                    "aucun conteneur CrowdSec en fonctionnement (service « {} »)",
+                    self.service
+                ))
+            })
     }
 
     /// Enrôle le videur et renvoie sa clé.
@@ -97,10 +109,25 @@ impl Cscli {
     pub async fn enroll(&self) -> Result<String> {
         let c = self.container().await?;
         let out = self
-            .docker(&["exec", &c, "cscli", "bouncers", "add", BOUNCER_NAME, "-o", "raw"])
+            .docker(&[
+                "exec",
+                &c,
+                "cscli",
+                "bouncers",
+                "add",
+                BOUNCER_NAME,
+                "-o",
+                "raw",
+            ])
             .await?;
 
-        let cle = out.trim().lines().next_back().unwrap_or("").trim().to_string();
+        let cle = out
+            .trim()
+            .lines()
+            .next_back()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if cle.is_empty() {
             return Err(Error::CrowdSec(
                 "cscli n'a renvoyé aucune clé — le videur existe peut-être déjà ; \
@@ -117,7 +144,9 @@ impl Cscli {
         let out = self
             .docker(&["exec", &c, "cscli", "bouncers", "list", "-o", "raw"])
             .await?;
-        Ok(out.lines().any(|l| l.split(',').next() == Some(BOUNCER_NAME)))
+        Ok(out
+            .lines()
+            .any(|l| l.split(',').next() == Some(BOUNCER_NAME)))
     }
 
     async fn docker(&self, args: &[&str]) -> Result<String> {
@@ -143,7 +172,9 @@ impl Cscli {
 /// sans la moindre erreur visible. Mieux vaut refuser de générer la configuration.
 pub fn looks_like_key(k: &str) -> bool {
     let k = k.trim();
-    k.len() >= 16 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    k.len() >= 16
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]

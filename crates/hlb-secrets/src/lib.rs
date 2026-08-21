@@ -31,8 +31,10 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("clé maîtresse absente : {0}\n  → `hlb secrets init` la crée, \
-             mais toute donnée déjà chiffrée serait alors irrécupérable")]
+    #[error(
+        "clé maîtresse absente : {0}\n  → `hlb secrets init` la crée, \
+             mais toute donnée déjà chiffrée serait alors irrécupérable"
+    )]
     MissingKey(PathBuf),
 
     #[error("clé maîtresse illisible : {0}")]
@@ -100,7 +102,10 @@ impl Vault {
         write_private(path, identity.to_string().expose_secret())?;
 
         let recipient = identity.to_public();
-        Ok(Self { identity, recipient })
+        Ok(Self {
+            identity,
+            recipient,
+        })
     }
 
     /// Charge une clé maîtresse existante.
@@ -127,7 +132,10 @@ impl Vault {
             .map_err(|e: &str| Error::MalformedKey(e.to_string()))?;
 
         let recipient = identity.to_public();
-        Ok(Self { identity, recipient })
+        Ok(Self {
+            identity,
+            recipient,
+        })
     }
 
     /// Ouvre la clé si elle existe, la crée sinon.
@@ -151,9 +159,7 @@ impl Vault {
         writer
             .write_all(plaintext.as_bytes())
             .map_err(|e| Error::Encrypt(e.to_string()))?;
-        writer
-            .finish()
-            .map_err(|e| Error::Encrypt(e.to_string()))?;
+        writer.finish().map_err(|e| Error::Encrypt(e.to_string()))?;
 
         Ok(out)
     }
@@ -263,7 +269,10 @@ mod tests {
         let d = tmp();
         let path = d.path().join("master.key");
 
-        let ct = Vault::init(&path).expect("init").encrypt("valeur").expect("chiffrement");
+        let ct = Vault::init(&path)
+            .expect("init")
+            .encrypt("valeur")
+            .expect("chiffrement");
         let reopened = Vault::open(&path).expect("réouverture");
 
         assert_eq!(reopened.decrypt(&ct).expect("déchiffrement"), "valeur");
@@ -304,7 +313,9 @@ mod tests {
         let path = d.path().join("master.key");
 
         let first = Vault::open_or_init(&path).expect("création").public_key();
-        let second = Vault::open_or_init(&path).expect("réouverture").public_key();
+        let second = Vault::open_or_init(&path)
+            .expect("réouverture")
+            .public_key();
 
         assert_eq!(first, second, "la clé ne doit pas être régénérée");
     }
@@ -317,7 +328,10 @@ mod tests {
         let path = d.path().join("master.key");
         Vault::init(&path).expect("init");
 
-        let mode = std::fs::metadata(&path).expect("metadata").permissions().mode();
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o077, 0, "aucun accès pour le groupe ni les autres");
     }
 

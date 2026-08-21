@@ -251,11 +251,7 @@ impl AliasPurgeLoop {
                 .mailboxes(&user)
                 .await
                 .ok()
-                .and_then(|v| {
-                    v.into_iter()
-                        .find(|(l, ..)| l == &boite)
-                        .map(|(_, d, _)| d)
-                })
+                .and_then(|v| v.into_iter().find(|(l, ..)| l == &boite).map(|(_, d, _)| d))
                 .unwrap_or_else(|| self.domaine_defaut.clone());
 
             // L'état n'est marqué qu'APRÈS le retrait effectif.
@@ -482,11 +478,7 @@ impl AlerteLoop {
         // On réutilise le relais : sa liste blanche s'applique aussi à nos propres
         // règles, ce qui garantit qu'aucune règle livrée n'interroge autre chose que
         // les métriques attendues.
-        match self
-            .metriques
-            .instant(requete)
-            .await
-        {
+        match self.metriques.instant(requete).await {
             Ok(v) => Ok(v),
             Err(e) => Err(e),
         }
@@ -513,8 +505,11 @@ fn niveau_de(l: hlb_notify::Level) -> hlb_api::NiveauAlerte {
     }
 }
 
-pub async fn every<F, Fut>(interval: Duration, mut shutdown: tokio::sync::watch::Receiver<bool>, mut f: F)
-where
+pub async fn every<F, Fut>(
+    interval: Duration,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut f: F,
+) where
     F: FnMut() -> Fut + Send,
     Fut: std::future::Future<Output = ()> + Send,
 {
@@ -572,11 +567,16 @@ mod tests {
         let r = b.tick(1_000).await;
 
         assert!(r.evaluees > 0, "aucune règle évaluée");
-        assert!(r.inconnues > 0, "une base injoignable doit produire des inconnues");
+        assert!(
+            r.inconnues > 0,
+            "une base injoignable doit produire des inconnues"
+        );
 
         let actives = b.actives.read().await;
         assert!(
-            actives.iter().any(|a| a.niveau == hlb_api::NiveauAlerte::Inconnu),
+            actives
+                .iter()
+                .any(|a| a.niveau == hlb_api::NiveauAlerte::Inconnu),
             "aucune alerte « non évaluable » : la surveillance serait aveugle en silence"
         );
     }
@@ -640,7 +640,9 @@ mod tests {
             actives.iter().all(|a| a.silencee_jusqu_a == Some(9_999)),
             "la sourdine a été perdue au tour suivant"
         );
-        assert!(actives.iter().all(|a| a.silencee_par.as_deref() == Some("remy")));
+        assert!(actives
+            .iter()
+            .all(|a| a.silencee_par.as_deref() == Some("remy")));
     }
 
     #[tokio::test]
@@ -671,8 +673,14 @@ mod tests {
     fn every_notify_level_maps_to_an_alert_level() {
         // Un `match` exhaustif : ajouter un niveau à `hlb_notify` doit faire échouer la
         // compilation ici plutôt que de retomber silencieusement sur « info ».
-        assert_eq!(niveau_de(hlb_notify::Level::Debug), hlb_api::NiveauAlerte::Info);
-        assert_eq!(niveau_de(hlb_notify::Level::Info), hlb_api::NiveauAlerte::Info);
+        assert_eq!(
+            niveau_de(hlb_notify::Level::Debug),
+            hlb_api::NiveauAlerte::Info
+        );
+        assert_eq!(
+            niveau_de(hlb_notify::Level::Info),
+            hlb_api::NiveauAlerte::Info
+        );
         assert_eq!(
             niveau_de(hlb_notify::Level::Important),
             hlb_api::NiveauAlerte::Important
@@ -714,7 +722,9 @@ mod tests {
     async fn state_with(apps: &[(&str, &str)]) -> Arc<State> {
         let s = State::in_memory().await.expect("base");
         for (name, status) in apps {
-            s.upsert_app(name, &manifest(name), None).await.expect("upsert");
+            s.upsert_app(name, &manifest(name), None)
+                .await
+                .expect("upsert");
             s.set_app_status(name, status).await.expect("statut");
         }
         Arc::new(s)
@@ -738,7 +748,9 @@ mod tests {
     #[tokio::test]
     async fn a_recently_backed_up_app_is_not_due() {
         let s = state_with(&[("gitea", "running")]).await;
-        s.record_backup("gitea", "volume", Some("abc"), None).await.expect("sauvegarde");
+        s.record_backup("gitea", "volume", Some("abc"), None)
+            .await
+            .expect("sauvegarde");
 
         let l = BackupLoop::new(s, hlb_backup::Schedule::default());
         assert!(l.due_apps().await.expect("dues").is_empty());
@@ -775,14 +787,22 @@ mod tests {
 
         h.beat().await.expect("battement");
         let contenu = tokio::fs::read_to_string(&p).await.expect("lecture");
-        assert!(contenu.trim().parse::<u64>().is_ok(), "horodatage : {contenu:?}");
+        assert!(
+            contenu.trim().parse::<u64>().is_ok(),
+            "horodatage : {contenu:?}"
+        );
 
         // Aucun fichier temporaire ne doit subsister.
         assert!(!p.with_extension("tmp").exists());
 
         // Un second battement écrase proprement.
         h.beat().await.expect("second battement");
-        assert!(tokio::fs::read_to_string(&p).await.expect("lecture").trim().parse::<u64>().is_ok());
+        assert!(tokio::fs::read_to_string(&p)
+            .await
+            .expect("lecture")
+            .trim()
+            .parse::<u64>()
+            .is_ok());
     }
 
     #[tokio::test]
@@ -791,8 +811,12 @@ mod tests {
         // des deux mondes : l'adresse recevrait encore, ET plus rien ne le
         // signalerait. Le silence entretiendrait la croyance que la porte est fermée.
         let s = Arc::new(State::in_memory().await.expect("état"));
-        s.upsert_user("remy", "standard", None).await.expect("compte");
-        s.add_mailbox("remy", "remy", "example.fr", true).await.expect("boîte");
+        s.upsert_user("remy", "standard", None)
+            .await
+            .expect("compte");
+        s.add_mailbox("remy", "remy", "example.fr", true)
+            .await
+            .expect("boîte");
         s.add_alias("remy", "remy", "vieux", Some(1), None, None)
             .await
             .expect("alias expiré");
@@ -815,8 +839,12 @@ mod tests {
         // Aucun alias expiré : rien à faire, et le compte rendu doit le dire sans
         // fabriquer une alerte.
         let s = Arc::new(State::in_memory().await.expect("état"));
-        s.upsert_user("remy", "standard", None).await.expect("compte");
-        s.add_mailbox("remy", "remy", "example.fr", true).await.expect("boîte");
+        s.upsert_user("remy", "standard", None)
+            .await
+            .expect("compte");
+        s.add_mailbox("remy", "remy", "example.fr", true)
+            .await
+            .expect("boîte");
         // Permanent : jamais dû.
         s.add_alias("remy", "remy", "contact", None, None, None)
             .await
@@ -825,7 +853,11 @@ mod tests {
         let r = AliasPurgeLoop::new(s, None, "example.fr").tick().await;
         assert_eq!(r.dus, 0);
         assert!(r.is_clean());
-        assert!(r.errors.is_empty(), "aucune alerte pour un permanent : {:?}", r.errors);
+        assert!(
+            r.errors.is_empty(),
+            "aucune alerte pour un permanent : {:?}",
+            r.errors
+        );
     }
 
     #[test]
@@ -833,16 +865,26 @@ mod tests {
         // 🔴 Une purge SANS erreur qui n'a rien retiré laisse autant de portes
         // ouvertes qu'une purge qui a échoué bruyamment. C'est le premier chiffre
         // qu'on regarde.
-        let muette = PurgeReport { dus: 5, retires: 0, errors: vec![] };
+        let muette = PurgeReport {
+            dus: 5,
+            retires: 0,
+            errors: vec![],
+        };
         assert_eq!(muette.encore_ouvertes(), 5);
-        assert!(!muette.is_clean(), "aucune erreur, et pourtant cinq portes ouvertes");
+        assert!(
+            !muette.is_clean(),
+            "aucune erreur, et pourtant cinq portes ouvertes"
+        );
 
         let bruyante = PurgeReport {
             dus: 5,
             retires: 5,
             errors: vec!["avertissement".into()],
         };
-        assert!(bruyante.is_clean(), "tout est refermé : le bruit ne change rien");
+        assert!(
+            bruyante.is_clean(),
+            "tout est refermé : le bruit ne change rien"
+        );
     }
 
     #[tokio::test]
@@ -861,15 +903,24 @@ mod tests {
             orchestrateur_joignable: false,
             reconciliation_recente: true,
         };
-        assert!(!h.beat_si_sain(&malade).await.expect("décision"), "ne doit pas battre");
-        assert!(!p.exists(), "aucun fichier ne doit être écrit : le silence EST le signal");
+        assert!(
+            !h.beat_si_sain(&malade).await.expect("décision"),
+            "ne doit pas battre"
+        );
+        assert!(
+            !p.exists(),
+            "aucun fichier ne doit être écrit : le silence EST le signal"
+        );
 
         let saine = hlb_metrics::Sante {
             etat_lisible: true,
             orchestrateur_joignable: true,
             reconciliation_recente: true,
         };
-        assert!(h.beat_si_sain(&saine).await.expect("décision"), "doit battre");
+        assert!(
+            h.beat_si_sain(&saine).await.expect("décision"),
+            "doit battre"
+        );
         assert!(p.exists(), "un système sain écrit bien son battement");
     }
 
@@ -895,7 +946,10 @@ mod tests {
         assert!(!h.beat_si_sain(&malade).await.expect("décision"));
 
         let apres = tokio::fs::read_to_string(&p).await.expect("lecture");
-        assert_eq!(avant, apres, "l'horodatage doit VIEILLIR, pas se rafraîchir");
+        assert_eq!(
+            avant, apres,
+            "l'horodatage doit VIEILLIR, pas se rafraîchir"
+        );
     }
 
     #[tokio::test]

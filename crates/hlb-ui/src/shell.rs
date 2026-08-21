@@ -267,7 +267,11 @@ fn entete(
                 // portait n'existe pas.
                 c::monogramme(ui, &marque.nom, p.accent, 22.0);
                 ui.add_space(mesures::ESPACE_SERRE);
-                ui.label(RichText::new(&marque.produit).size(c::taille::SOUS_TITRE).strong());
+                ui.label(
+                    RichText::new(&marque.produit)
+                        .size(c::taille::SOUS_TITRE)
+                        .strong(),
+                );
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -386,7 +390,12 @@ fn barre_laterale(
 
 /// Une entrée de navigation : pleine largeur, avec un liseré d'accent quand elle est
 /// active.
-fn entree_nav(ui: &mut egui::Ui, libelle: &str, actif: bool, p: crate::design::Palette) -> egui::Response {
+fn entree_nav(
+    ui: &mut egui::Ui,
+    libelle: &str,
+    actif: bool,
+    p: crate::design::Palette,
+) -> egui::Response {
     let hauteur = 30.0;
     let (rect, reponse) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), hauteur),
@@ -443,8 +452,7 @@ fn barre_basse(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for r in entrees(droits) {
-                            let actif =
-                                std::mem::discriminant(&r) == std::mem::discriminant(route);
+                            let actif = std::mem::discriminant(&r) == std::mem::discriminant(route);
                             let texte = RichText::new(r.libelle_court())
                                 .size(c::taille::CORPS)
                                 .color(if actif { p.accent } else { p.texte_faible });
@@ -523,7 +531,11 @@ mod tests {
         let d = hlb_api::Droits::pour(hlb_types::Role::Admin);
         let v = entrees(d);
         for r in Route::navigation_admin() {
-            assert!(v.contains(&r), "« {} » manque à l'administrateur", r.libelle());
+            assert!(
+                v.contains(&r),
+                "« {} » manque à l'administrateur",
+                r.libelle()
+            );
         }
     }
 
@@ -546,7 +558,11 @@ mod tests {
         // Supposer des droits par défaut afficherait brièvement une console complète à
         // quelqu'un qui n'y a pas droit — et les clics partiraient avant la correction.
         let v = entrees(hlb_api::Droits::default());
-        assert!(v.is_empty(), "{:?}", v.iter().map(|r| r.libelle()).collect::<Vec<_>>());
+        assert!(
+            v.is_empty(),
+            "{:?}",
+            v.iter().map(|r| r.libelle()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

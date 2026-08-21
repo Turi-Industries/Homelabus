@@ -71,9 +71,7 @@ impl RegistryClient {
 
     /// Liste les tags publiés. Sert à choisir la prochaine version (§7).
     pub async fn list_tags(&self, image: &ImageRef) -> Result<Vec<String>> {
-        let resp = self
-            .get_authorized(&image.tags_url(), image, false)
-            .await?;
+        let resp = self.get_authorized(&image.tags_url(), image, false).await?;
 
         if !resp.status().is_success() {
             return Err(Error::Registry {
@@ -226,7 +224,10 @@ mod tests {
         // ghcr.io n'inclut pas toujours la portée : on retombe sur celle de l'image.
         let c = r#"Bearer realm="https://ghcr.io/token",service="ghcr.io""#;
         assert!(extract_param(c, "scope").is_none());
-        assert_eq!(extract_param(c, "realm").as_deref(), Some("https://ghcr.io/token"));
+        assert_eq!(
+            extract_param(c, "realm").as_deref(),
+            Some("https://ghcr.io/token")
+        );
     }
 
     #[test]

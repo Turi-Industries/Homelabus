@@ -7,10 +7,10 @@
 //! `Color32::from_rgb(…)` oublié dans un écran, et l'interface a l'air cassée dans le
 //! thème clair, sans que personne ne sache pourquoi.
 
-pub mod qr;
 pub mod composants;
 pub mod glyphes;
 pub mod palette;
+pub mod qr;
 pub mod theme;
 
 pub use palette::Palette;

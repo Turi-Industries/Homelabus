@@ -148,7 +148,13 @@ impl Shared {
 /// un instantané où les apps dateraient de maintenant et le journal d'une heure serait
 /// incohérent sans que ça se voie. Les écrans de détail, eux, utilisent [`Ressource`],
 /// qui porte sa propre fraîcheur.
-const ROUTES: &[&str] = &["/healthz", "/api/apps", "/api/todo", "/api/audit", "/api/secrets"];
+const ROUTES: &[&str] = &[
+    "/healthz",
+    "/api/apps",
+    "/api/todo",
+    "/api/audit",
+    "/api/secrets",
+];
 
 /// Les réponses d'un tour, remplies au fil des retours réseau.
 ///
@@ -208,10 +214,7 @@ impl Acces {
             method: methode.to_string(),
             url: format!("{}{chemin}", self.base_url),
             body: corps.as_bytes().to_vec(),
-            headers: ehttp::Headers::new(&[
-                ("Content-Type", "application/json"),
-                (ENTETE_UI, "1"),
-            ]),
+            headers: ehttp::Headers::new(&[("Content-Type", "application/json"), (ENTETE_UI, "1")]),
         };
         self.autoriser(&mut r);
         r
@@ -594,7 +597,11 @@ impl ActionEnCours {
                 .map_err(|e| format!("réponse illisible ({e})"))
         }) {
             Ok(res) => {
-                let cible = if applique { &self.resultat } else { &self.apercu };
+                let cible = if applique {
+                    &self.resultat
+                } else {
+                    &self.apercu
+                };
                 if let Ok(mut c) = cible.lock() {
                     *c = Some(res);
                 }
@@ -1101,7 +1108,10 @@ mod tests {
 
         *a.boite.lock().expect("boîte") = Some((false, Ok(resultat(false))));
         a.recolter();
-        assert!(a.lire_apercu().is_some(), "l'aperçu doit être rangé comme tel");
+        assert!(
+            a.lire_apercu().is_some(),
+            "l'aperçu doit être rangé comme tel"
+        );
         assert!(a.lire_resultat().is_none());
 
         *a.boite.lock().expect("boîte") = Some((true, Ok(resultat(true))));
@@ -1134,7 +1144,10 @@ mod tests {
 
         assert!(a.lire_resultat().is_none());
         assert!(a.lire_erreur().is_some());
-        assert!(!a.occupee(), "le verrou doit être relâché même en cas d'erreur");
+        assert!(
+            !a.occupee(),
+            "le verrou doit être relâché même en cas d'erreur"
+        );
     }
 
     #[test]
@@ -1159,9 +1172,7 @@ mod tests {
         let sans = "/api/apps/x/backup";
         let avec = "/api/apps/x/backup?force=1";
 
-        let joint = |c: &str| {
-            format!("{c}{}apply=true", if c.contains('?') { "&" } else { "?" })
-        };
+        let joint = |c: &str| format!("{c}{}apply=true", if c.contains('?') { "&" } else { "?" });
         assert_eq!(joint(sans), "/api/apps/x/backup?apply=true");
         assert_eq!(joint(avec), "/api/apps/x/backup?force=1&apply=true");
     }
@@ -1252,7 +1263,11 @@ mod tests {
         *r.boite.lock().expect("boîte") = Some((1, Ok("[1,2,3]".to_string())));
         r.recolter(30.0);
 
-        assert_eq!(r.lire(30.0).0, None, "une réponse périmée ne doit pas être adoptée");
+        assert_eq!(
+            r.lire(30.0).0,
+            None,
+            "une réponse périmée ne doit pas être adoptée"
+        );
     }
 
     #[test]
@@ -1325,10 +1340,17 @@ mod tests {
         let a = Acces::new("http://x:1/", Some("jeton".into()));
         let r = a.requete("/api/apps");
         assert_eq!(r.headers.get("Authorization"), Some("Bearer jeton"));
-        assert_eq!(r.url, "http://x:1/api/apps", "la barre finale ne doit pas doubler");
+        assert_eq!(
+            r.url, "http://x:1/api/apps",
+            "la barre finale ne doit pas doubler"
+        );
 
         let sans = Acces::new("http://x:1", None);
-        assert!(sans.requete("/api/apps").headers.get("Authorization").is_none());
+        assert!(sans
+            .requete("/api/apps")
+            .headers
+            .get("Authorization")
+            .is_none());
     }
 
     #[test]
@@ -1394,7 +1416,10 @@ mod tests {
 
         let (d, f) = s.read(20.0);
         assert!(d.health.is_some(), "le dernier état connu reste disponible");
-        assert!(!f.is_trustworthy(), "mais il n'est plus présenté comme fiable");
+        assert!(
+            !f.is_trustworthy(),
+            "mais il n'est plus présenté comme fiable"
+        );
     }
 
     #[test]
@@ -1419,7 +1444,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        for motif in [format!("Instant::{}()", "now"), format!("thread::{}", "sleep")] {
+        for motif in [
+            format!("Instant::{}()", "now"),
+            format!("thread::{}", "sleep"),
+        ] {
             assert!(
                 !code.contains(&motif),
                 "« {motif} » est revenu dans le code : il paniquera ou gèlera l'onglet"
@@ -1462,7 +1490,10 @@ mod tests {
             "[]".to_string(),
         ];
         let e = assembler(&corps).unwrap_err();
-        assert!(e.contains("/api/audit"), "l'erreur doit nommer la route : {e}");
+        assert!(
+            e.contains("/api/audit"),
+            "l'erreur doit nommer la route : {e}"
+        );
     }
 
     #[test]

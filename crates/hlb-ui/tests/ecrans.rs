@@ -59,7 +59,10 @@ fn every_reachable_screen_renders_without_data() {
         .filter(Route::implemente)
         .collect();
 
-    assert!(ecrans.len() > 10, "la liste des écrans a fondu : {ecrans:?}");
+    assert!(
+        ecrans.len() > 10,
+        "la liste des écrans a fondu : {ecrans:?}"
+    );
 
     for route in ecrans {
         rendre(&route, 1200.0);

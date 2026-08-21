@@ -209,13 +209,25 @@ impl Veille {
 pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "#!/bin/sh");
-    let _ = writeln!(s, "# Veilleur Homelabus (§8bis) — à lancer par cron sur le NAS.");
+    let _ = writeln!(
+        s,
+        "# Veilleur Homelabus (§8bis) — à lancer par cron sur le NAS."
+    );
     let _ = writeln!(s, "#");
     let _ = writeln!(s, "# 🔴 Ce script NE DOIT PAS tourner sur la machine qu'il");
-    let _ = writeln!(s, "#    surveille : il mourrait avec elle, et ne détecterait rien.");
+    let _ = writeln!(
+        s,
+        "#    surveille : il mourrait avec elle, et ne détecterait rien."
+    );
     let _ = writeln!(s, "#");
-    let _ = writeln!(s, "# 🔴 Il pousse vers ntfy DIRECTEMENT. Passer par Homelabus pour");
-    let _ = writeln!(s, "#    signaler que Homelabus est mort ne peut pas fonctionner.");
+    let _ = writeln!(
+        s,
+        "# 🔴 Il pousse vers ntfy DIRECTEMENT. Passer par Homelabus pour"
+    );
+    let _ = writeln!(
+        s,
+        "#    signaler que Homelabus est mort ne peut pas fonctionner."
+    );
     let _ = writeln!(s, "#");
     let _ = writeln!(s, "# Pose-le en cron toutes les 5 minutes :");
     let _ = writeln!(s, "#   */5 * * * * /chemin/veilleur.sh");
@@ -225,12 +237,27 @@ pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> 
     let _ = writeln!(s, "SILENCE_MAX={SILENCE_MAX_S}");
     let _ = writeln!(s);
     let _ = writeln!(s, "if [ ! -f \"$BATTEMENT\" ]; then");
-    let _ = writeln!(s, "  # Jamais armé : distinct d'un silence récent. Le dispositif");
-    let _ = writeln!(s, "  # n'a jamais fonctionné, donc n'a jamais rien protégé.");
-    let _ = writeln!(s, "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} jamais armé' \\");
-    let _ = writeln!(s, "    -d 'Aucun battement reçu, jamais. Le deadman ne protège rien.' \\");
+    let _ = writeln!(
+        s,
+        "  # Jamais armé : distinct d'un silence récent. Le dispositif"
+    );
+    let _ = writeln!(
+        s,
+        "  # n'a jamais fonctionné, donc n'a jamais rien protégé."
+    );
+    let _ = writeln!(
+        s,
+        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} jamais armé' \\"
+    );
+    let _ = writeln!(
+        s,
+        "    -d 'Aucun battement reçu, jamais. Le deadman ne protège rien.' \\"
+    );
     let _ = writeln!(s, "    '{ntfy_url}' >/dev/null 2>&1 \\");
-    let _ = writeln!(s, "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2");
+    let _ = writeln!(
+        s,
+        "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2"
+    );
     let _ = writeln!(s, "  exit 1");
     let _ = writeln!(s, "fi");
     let _ = writeln!(s);
@@ -239,11 +266,23 @@ pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> 
     let _ = writeln!(s, "AGE=$((MAINTENANT - DERNIER))");
     let _ = writeln!(s);
     let _ = writeln!(s, "if [ \"$AGE\" -gt \"$SILENCE_MAX\" ]; then");
-    let _ = writeln!(s, "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} silencieux' \\");
-    let _ = writeln!(s, "    -d \"Aucun signe de vie depuis $((AGE / 60)) minutes. \\");
-    let _ = writeln!(s, "Tant que dure ce silence, AUCUNE autre alerte ne peut partir.\" \\");
+    let _ = writeln!(
+        s,
+        "  curl -fsS -H 'Priority: urgent' -H 'Title: {sujet} silencieux' \\"
+    );
+    let _ = writeln!(
+        s,
+        "    -d \"Aucun signe de vie depuis $((AGE / 60)) minutes. \\"
+    );
+    let _ = writeln!(
+        s,
+        "Tant que dure ce silence, AUCUNE autre alerte ne peut partir.\" \\"
+    );
     let _ = writeln!(s, "    '{ntfy_url}' >/dev/null 2>&1 \\");
-    let _ = writeln!(s, "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2");
+    let _ = writeln!(
+        s,
+        "    || echo 'VEILLEUR: ntfy injoignable, alerte PERDUE' >&2"
+    );
     let _ = writeln!(s, "  exit 1");
     let _ = writeln!(s, "fi");
     let _ = writeln!(s);
@@ -353,7 +392,11 @@ mod tests {
     fn the_watcher_never_routes_through_the_watched_system() {
         // 🔴 Demander au système surveillé de signaler sa propre mort ne peut pas
         // marcher. Le veilleur doit pousser vers ntfy directement.
-        let s = script_veilleur("/var/lib/hlb/battement", "https://ntfy.sh/mon-sujet", "Homelabus");
+        let s = script_veilleur(
+            "/var/lib/hlb/battement",
+            "https://ntfy.sh/mon-sujet",
+            "Homelabus",
+        );
 
         assert!(s.contains("https://ntfy.sh/mon-sujet"), "{s}");
         assert!(
@@ -369,7 +412,10 @@ mod tests {
         // rien : c'est lui qui parle à l'humain.
         let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         assert!(s.contains("jamais armé"), "{s}");
-        assert!(s.contains("if [ ! -f"), "il doit tester l'absence du fichier : {s}");
+        assert!(
+            s.contains("if [ ! -f"),
+            "il doit tester l'absence du fichier : {s}"
+        );
     }
 
     #[test]

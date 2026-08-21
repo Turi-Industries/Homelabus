@@ -16,8 +16,8 @@
 //! jour est **refusée**. Une migration de schéma n'est pas réversible par un rollback
 //! d'image — prétendre avoir sauvegardé serait le pire mensonge possible.
 
-pub mod scan;
 pub mod apply;
+pub mod scan;
 pub mod window;
 
 pub use apply::{apply, UpdateOutcome};
@@ -45,8 +45,10 @@ pub enum Error {
     #[error(transparent)]
     Orchestrator(#[from] hlb_orchestrator::Error),
 
-    #[error("« {app} » exige une sauvegarde avant mise à jour, mais aucun \
-             fournisseur de sauvegarde n'est configuré — mise à jour refusée")]
+    #[error(
+        "« {app} » exige une sauvegarde avant mise à jour, mais aucun \
+             fournisseur de sauvegarde n'est configuré — mise à jour refusée"
+    )]
     BackupRequired { app: String },
 }
 
@@ -188,7 +190,9 @@ mod tests {
     fn candidate(needs_backup: bool) -> Candidate {
         Candidate {
             app: "gitea".into(),
-            kind: UpdateKind::NewVersion { to_tag: "1.25".into() },
+            kind: UpdateKind::NewVersion {
+                to_tag: "1.25".into(),
+            },
             from_tag: "1.24".into(),
             from_digest: Some("sha256:old".into()),
             to_digest: "sha256:new".into(),

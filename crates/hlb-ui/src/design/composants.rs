@@ -68,7 +68,12 @@ pub fn titre(ui: &mut Ui, s: &str) {
 
 pub fn sous_titre(ui: &mut Ui, s: &str) {
     let p = palette(ui);
-    ui.label(RichText::new(s).size(taille::SOUS_TITRE).strong().color(p.texte));
+    ui.label(
+        RichText::new(s)
+            .size(taille::SOUS_TITRE)
+            .strong()
+            .color(p.texte),
+    );
 }
 
 /// Une légende : du texte secondaire, qui se replie proprement.
@@ -156,7 +161,12 @@ pub fn etat(ui: &mut Ui, a: Attention) {
     let c = palette(ui).attention_de(a);
     ui.horizontal(|ui| {
         pastille(ui, a);
-        ui.label(RichText::new(mot(a)).size(taille::LEGENDE).color(c).strong());
+        ui.label(
+            RichText::new(mot(a))
+                .size(taille::LEGENDE)
+                .color(c)
+                .strong(),
+        );
     });
 }
 
@@ -219,7 +229,10 @@ pub fn carte_attention<R>(
     };
     egui::Frame::new()
         .fill(p.surface)
-        .stroke(Stroke::new(if a == Attention::Ok { 1.0_f32 } else { 1.5_f32 }, bord))
+        .stroke(Stroke::new(
+            if a == Attention::Ok { 1.0_f32 } else { 1.5_f32 },
+            bord,
+        ))
         .corner_radius(mesures::RAYON as u8)
         .inner_margin(egui::Margin::same(mesures::MARGE as i8))
         .show(ui, |ui| {
@@ -262,7 +275,11 @@ pub fn etat_vide(ui: &mut Ui, message: &str, commande: Option<&str>) {
     let p = palette(ui);
     ui.add_space(mesures::ESPACE_LARGE);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new(message).size(taille::CORPS).color(p.texte_faible));
+        ui.label(
+            RichText::new(message)
+                .size(taille::CORPS)
+                .color(p.texte_faible),
+        );
         if let Some(c) = commande {
             ui.add_space(mesures::ESPACE_SERRE);
             ui.label(
@@ -281,7 +298,13 @@ pub fn etat_vide(ui: &mut Ui, message: &str, commande: Option<&str>) {
 // ---------------------------------------------------------------------------
 
 /// Une tuile de statistique : un grand chiffre, son libellé, un complément.
-pub fn tuile_stat(ui: &mut Ui, libelle: &str, valeur: &str, sous_texte: Option<&str>, teinte: Color32) {
+pub fn tuile_stat(
+    ui: &mut Ui,
+    libelle: &str,
+    valeur: &str,
+    sous_texte: Option<&str>,
+    teinte: Color32,
+) {
     let p = palette(ui);
     ui.vertical(|ui| {
         ui.label(
@@ -289,7 +312,12 @@ pub fn tuile_stat(ui: &mut Ui, libelle: &str, valeur: &str, sous_texte: Option<&
                 .size(taille::LEGENDE)
                 .color(p.texte_faible),
         );
-        ui.label(RichText::new(valeur).size(taille::TITRE).strong().color(teinte));
+        ui.label(
+            RichText::new(valeur)
+                .size(taille::TITRE)
+                .strong()
+                .color(teinte),
+        );
         if let Some(s) = sous_texte {
             ui.label(RichText::new(s).size(taille::LEGENDE).color(p.texte_faible));
         }
@@ -337,7 +365,11 @@ pub fn sparkline(ui: &mut Ui, points: &[f64], teinte: Color32, taille_px: Vec2) 
     let max = points.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     // Une série constante n'a pas d'amplitude : la centrer vaut mieux que diviser par
     // zéro, ou que l'écraser en bas du cadre comme si elle valait le minimum.
-    let etendue = if (max - min).abs() < f64::EPSILON { 1.0 } else { max - min };
+    let etendue = if (max - min).abs() < f64::EPSILON {
+        1.0
+    } else {
+        max - min
+    };
 
     let pas = rect.width() / (points.len() - 1) as f32;
     let sommets: Vec<egui::Pos2> = points
@@ -383,7 +415,11 @@ pub fn monogramme(ui: &mut Ui, nom: &str, teinte: Color32, cote: f32) {
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(cote), Sense::hover());
     let pe = ui.painter();
-    pe.rect_filled(rect, mesures::RAYON_PETIT, melanger(p.surface_haute, teinte, 0.30));
+    pe.rect_filled(
+        rect,
+        mesures::RAYON_PETIT,
+        melanger(p.surface_haute, teinte, 0.30),
+    );
 
     pe.text(
         rect.center(),
@@ -614,7 +650,10 @@ mod tests {
             );
         }
         assert!(src.contains("circle_filled"), "le rond doit être peint");
-        assert!(src.contains("convex_polygon"), "le triangle doit être peint");
+        assert!(
+            src.contains("convex_polygon"),
+            "le triangle doit être peint"
+        );
         assert!(src.contains("rect_filled"), "le carré doit être peint");
     }
 
@@ -624,7 +663,11 @@ mod tests {
         // son contenu, et une liste de cartes devient un escalier. Le défaut est
         // invisible dans le code et saute aux yeux dès qu'on regarde l'interface.
         let src = include_str!("composants.rs");
-        let conteneurs = ["pub fn carte<R>", "pub fn carte_attention<R>", "pub fn bandeau"];
+        let conteneurs = [
+            "pub fn carte<R>",
+            "pub fn carte_attention<R>",
+            "pub fn bandeau",
+        ];
         for c in conteneurs {
             let debut = src.find(c).unwrap_or_else(|| panic!("{c} introuvable"));
             // Le corps de la fonction, jusqu'à la suivante.

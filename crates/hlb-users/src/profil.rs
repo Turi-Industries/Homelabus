@@ -212,7 +212,10 @@ mod tests {
         let p = Profil::invite();
         assert_eq!(p.max_boites, 1);
 
-        let usage = Usage { boites: 1, ..Default::default() };
+        let usage = Usage {
+            boites: 1,
+            ..Default::default()
+        };
         assert!(
             p.autorise(&usage, Demande::Boite).is_err(),
             "l'invité a déjà sa boîte par défaut : la seconde est refusée"
@@ -224,7 +227,10 @@ mod tests {
         // 🔴 « Quota dépassé » enverrait chercher du côté du disque ou du serveur de
         // messagerie, c'est-à-dire nulle part.
         let p = Profil::invite();
-        let usage = Usage { boites: 1, ..Default::default() };
+        let usage = Usage {
+            boites: 1,
+            ..Default::default()
+        };
         let e = p.autorise(&usage, Demande::Boite).unwrap_err().raison;
 
         assert!(e.contains("1/1"), "la limite chiffrée : {e}");
@@ -247,10 +253,11 @@ mod tests {
             .autorise(&usage, Demande::AliasTemporaire { duree_s: 86_400 })
             .is_ok());
 
-        let plein = Usage { aliases_temporaires: 50, ..usage };
-        assert!(plein
-            .aliases_temporaires
-            .eq(&p.max_aliases_temporaires));
+        let plein = Usage {
+            aliases_temporaires: 50,
+            ..usage
+        };
+        assert!(plein.aliases_temporaires.eq(&p.max_aliases_temporaires));
         assert!(p
             .autorise(&plein, Demande::AliasTemporaire { duree_s: 86_400 })
             .is_err());
@@ -265,8 +272,14 @@ mod tests {
         // Refuser sans proposer l'alternative disponible pousse à demander un
         // changement de profil pour un besoin qui n'en réclamait pas.
         let p = Profil::invite();
-        let usage = Usage { aliases_permanents: 0, ..Default::default() };
-        let e = p.autorise(&usage, Demande::AliasPermanent).unwrap_err().raison;
+        let usage = Usage {
+            aliases_permanents: 0,
+            ..Default::default()
+        };
+        let e = p
+            .autorise(&usage, Demande::AliasPermanent)
+            .unwrap_err()
+            .raison;
         assert!(e.contains("TEMPORAIRE"), "{e}");
     }
 
@@ -278,11 +291,21 @@ mod tests {
         let usage = Usage::default();
 
         assert!(p
-            .autorise(&usage, Demande::AliasTemporaire { duree_s: 30 * 86_400 })
+            .autorise(
+                &usage,
+                Demande::AliasTemporaire {
+                    duree_s: 30 * 86_400
+                }
+            )
             .is_ok());
 
         let e = p
-            .autorise(&usage, Demande::AliasTemporaire { duree_s: 3650 * 86_400 })
+            .autorise(
+                &usage,
+                Demande::AliasTemporaire {
+                    duree_s: 3650 * 86_400,
+                },
+            )
             .unwrap_err()
             .raison;
         assert!(e.contains("30 j"), "la limite doit être dite : {e}");
@@ -310,7 +333,10 @@ mod tests {
             .is_err());
         assert!(p
             .autorise(
-                &Usage { boites: 9999, ..Default::default() },
+                &Usage {
+                    boites: 9999,
+                    ..Default::default()
+                },
                 Demande::Boite
             )
             .is_ok());
@@ -318,9 +344,18 @@ mod tests {
 
     #[test]
     fn profiles_are_read_from_several_spellings() {
-        assert_eq!(Profil::par_nom("standard").map(|p| p.nom), Some("standard".into()));
-        assert_eq!(Profil::par_nom("INVITÉ").map(|p| p.nom), Some("invite".into()));
-        assert_eq!(Profil::par_nom("unlimited").map(|p| p.nom), Some("illimite".into()));
+        assert_eq!(
+            Profil::par_nom("standard").map(|p| p.nom),
+            Some("standard".into())
+        );
+        assert_eq!(
+            Profil::par_nom("INVITÉ").map(|p| p.nom),
+            Some("invite".into())
+        );
+        assert_eq!(
+            Profil::par_nom("unlimited").map(|p| p.nom),
+            Some("illimite".into())
+        );
         assert!(Profil::par_nom("nimportequoi").is_none());
     }
 }

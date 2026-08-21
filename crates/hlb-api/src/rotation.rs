@@ -210,11 +210,9 @@ impl SecretARouler {
             (true, None) => "Tourner ce secret impose de redéployer ce qui l'utilise : \
                              sans redéploiement, l'ancienne valeur reste en place."
                 .to_string(),
-            (false, _) => {
-                "Ce secret est relu à chaque usage : un rechargement de configuration \
+            (false, _) => "Ce secret est relu à chaque usage : un rechargement de configuration \
                  suffit."
-                    .to_string()
-            }
+                .to_string(),
         }
     }
 }
@@ -263,7 +261,10 @@ mod tests {
         // d'avoir vu la nouvelle fonctionner laisse l'app sans aucun accès, et sans
         // moyen de revenir en arrière.
         let p = Nature::CleObjet.procedure();
-        let creation = p.iter().position(|e| e.contains("NOUVELLE")).expect("création");
+        let creation = p
+            .iter()
+            .position(|e| e.contains("NOUVELLE"))
+            .expect("création");
         let suppression = p
             .iter()
             .position(|e| e.contains("supprimer l'ancienne"))
@@ -304,10 +305,22 @@ mod tests {
         // Ces noms viennent de `hlb-resolver` et `hlb-backup`.
         for (nom, usage, attendu) in [
             ("gitea-db-password", "secret généré", Nature::MotDePasseBase),
-            ("gitea-oidc-secret", "client secret OIDC", Nature::ClientOidc),
+            (
+                "gitea-oidc-secret",
+                "client secret OIDC",
+                Nature::ClientOidc,
+            ),
             ("immich-s3-secret", "clé secrète S3", Nature::CleObjet),
-            ("remy-smtp-password", "mot de passe IMAP/SMTP", Nature::MotDePasseMail),
-            ("seafile-cache-password", "secret généré", Nature::MotDePasseCache),
+            (
+                "remy-smtp-password",
+                "mot de passe IMAP/SMTP",
+                Nature::MotDePasseMail,
+            ),
+            (
+                "seafile-cache-password",
+                "secret généré",
+                Nature::MotDePasseCache,
+            ),
             (
                 "backup-dest-offsite",
                 "identifiants S3 du hors-site",
@@ -329,8 +342,14 @@ mod tests {
         // « signature invalide » qui n'oriente vers rien. Révoquer l'ancienne clé avant
         // d'avoir vu une sauvegarde passer laisse le hors-site muet sans le savoir.
         let p = Nature::IdentifiantsDestination.procedure();
-        let verif = p.iter().position(|e| e.contains("VÉRIFIER")).expect("vérification");
-        let revoc = p.iter().position(|e| e.contains("révoquer")).expect("révocation");
+        let verif = p
+            .iter()
+            .position(|e| e.contains("VÉRIFIER"))
+            .expect("vérification");
+        let revoc = p
+            .iter()
+            .position(|e| e.contains("révoquer"))
+            .expect("révocation");
         assert!(verif < revoc, "{p:?}");
         // Et rien à redéployer : aucune app ne porte ces identifiants.
         assert!(!Nature::IdentifiantsDestination.exige_redeploiement());
@@ -356,7 +375,11 @@ mod tests {
             jamais_tourne: true,
             app: Some("gitea".into()),
         };
-        assert!(s.consequence().contains("redéployer gitea"), "{}", s.consequence());
+        assert!(
+            s.consequence().contains("redéployer gitea"),
+            "{}",
+            s.consequence()
+        );
         assert_eq!(s.attention(), crate::Attention::Notice);
     }
 
@@ -372,7 +395,11 @@ mod tests {
             jamais_tourne: true,
             app: None,
         };
-        assert!(s.consequence().contains("rechargement"), "{}", s.consequence());
+        assert!(
+            s.consequence().contains("rechargement"),
+            "{}",
+            s.consequence()
+        );
         assert_eq!(s.attention(), crate::Attention::Ok);
     }
 }

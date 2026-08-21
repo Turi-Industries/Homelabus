@@ -106,7 +106,9 @@ pub fn charge() -> Option<Charge> {
 
 /// Le nombre de cœurs vus par le noyau.
 pub fn coeurs() -> Option<u32> {
-    std::thread::available_parallelism().ok().map(|n| n.get() as u32)
+    std::thread::available_parallelism()
+        .ok()
+        .map(|n| n.get() as u32)
 }
 
 /// Lit la ligne `cpu` agrégée de `/proc/stat`.
@@ -176,7 +178,11 @@ pub fn parser_interfaces(proc_net_dev: &str) -> Vec<Interface> {
 /// Lit l'uptime en secondes.
 pub fn uptime_s() -> Option<u64> {
     let s = std::fs::read_to_string("/proc/uptime").ok()?;
-    s.split_whitespace().next()?.parse::<f64>().ok().map(|v| v as u64)
+    s.split_whitespace()
+        .next()?
+        .parse::<f64>()
+        .ok()
+        .map(|v| v as u64)
 }
 
 /// Le noyau et la distribution.
@@ -234,8 +240,14 @@ mod tests {
     fn cpu_usage_needs_two_readings() {
         // 🔴 La toute première lecture n'a rien à comparer. Rendre 0 % ferait passer un
         // nœud dont on ne sait rien pour un nœud au repos.
-        let a = RelevéCpu { total: 1000, inactif: 800 };
-        let b = RelevéCpu { total: 1100, inactif: 850 };
+        let a = RelevéCpu {
+            total: 1000,
+            inactif: 800,
+        };
+        let b = RelevéCpu {
+            total: 1100,
+            inactif: 850,
+        };
         // 100 ticks écoulés, 50 inactifs → 50 % occupé.
         assert_eq!(b.occupation(&a), Some(0.5));
     }
@@ -244,15 +256,24 @@ mod tests {
     fn a_reboot_does_not_produce_an_absurd_figure() {
         // Après un redémarrage, les compteurs repartent de zéro : la soustraction
         // déborderait, et un `wrapping_sub` donnerait un taux aberrant.
-        let avant = RelevéCpu { total: 1_000_000, inactif: 900_000 };
-        let apres = RelevéCpu { total: 500, inactif: 400 };
+        let avant = RelevéCpu {
+            total: 1_000_000,
+            inactif: 900_000,
+        };
+        let apres = RelevéCpu {
+            total: 500,
+            inactif: 400,
+        };
         assert_eq!(apres.occupation(&avant), None);
     }
 
     #[test]
     fn two_identical_readings_yield_nothing_rather_than_idle() {
         // Aucun temps écoulé : on ne sait rien. « 0 % » dirait « au repos ».
-        let a = RelevéCpu { total: 1000, inactif: 800 };
+        let a = RelevéCpu {
+            total: 1000,
+            inactif: 800,
+        };
         assert_eq!(a.occupation(&a), None);
     }
 
@@ -305,7 +326,11 @@ mod tests {
         // 🔴 Une charge de 4 est dramatique sur un cœur et confortable sur seize. Un
         // homelab est fait de machines hétérogènes : la valeur brute côte à côte ne
         // veut rien dire.
-        let c = Charge { une_min: 4.0, cinq_min: 3.0, quinze_min: 2.0 };
+        let c = Charge {
+            une_min: 4.0,
+            cinq_min: 3.0,
+            quinze_min: 2.0,
+        };
         assert_eq!(c.par_coeur(1), Some(4.0));
         assert_eq!(c.par_coeur(16), Some(0.25));
         assert_eq!(c.par_coeur(0), None, "aucune division par zéro");
@@ -314,7 +339,10 @@ mod tests {
     #[test]
     fn the_distribution_name_is_read_without_its_quotes() {
         let os = "NAME=\"Debian GNU/Linux\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nID=debian\n";
-        assert_eq!(pretty_name(os).as_deref(), Some("Debian GNU/Linux 12 (bookworm)"));
+        assert_eq!(
+            pretty_name(os).as_deref(),
+            Some("Debian GNU/Linux 12 (bookworm)")
+        );
         assert_eq!(pretty_name("ID=debian\n"), None);
         assert_eq!(pretty_name("PRETTY_NAME=\"\"\n"), None, "vide vaut absent");
     }

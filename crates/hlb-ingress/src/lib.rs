@@ -77,10 +77,7 @@ pub fn routes_from_manifest(
         .iter()
         .map(|ing| {
             let host = match domain {
-                Some(d) => ing
-                    .host
-                    .replace("{{ domain }}", d)
-                    .replace("{{domain}}", d),
+                Some(d) => ing.host.replace("{{ domain }}", d).replace("{{domain}}", d),
                 None => ing.host.clone(),
             };
 

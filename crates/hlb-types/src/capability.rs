@@ -129,7 +129,11 @@ impl Capability {
     /// sur `Sso`, et `quota_bytes` sur `MailAccount`.
     pub fn describe(&self) -> String {
         match self {
-            Self::Database { engine, name, extensions } => {
+            Self::Database {
+                engine,
+                name,
+                extensions,
+            } => {
                 let base = format!(
                     "base {} « {} » isolée (rôle dédié)",
                     engine.service_name(),
@@ -149,16 +153,21 @@ impl Capability {
                 engine.service_name(),
                 if *dedicated { " dédié" } else { " partagé" }
             ),
-            Self::Sso { mode, redirect_paths } => match mode {
+            Self::Sso {
+                mode,
+                redirect_paths,
+            } => match mode {
                 SsoMode::None => "SSO explicitement exclu — aucun client OIDC".to_string(),
-                SsoMode::Native => format!(
-                    "client OIDC natif ({} URI de rappel)",
-                    redirect_paths.len()
-                ),
+                SsoMode::Native => {
+                    format!("client OIDC natif ({} URI de rappel)", redirect_paths.len())
+                }
                 autre => format!("SSO par portail ({autre:?})"),
             },
             Self::Smtp => "relais SMTP".to_string(),
-            Self::MailAccount { quota_bytes, aliases } => {
+            Self::MailAccount {
+                quota_bytes,
+                aliases,
+            } => {
                 let mut d = "boîte mail".to_string();
                 if *aliases {
                     d.push_str(" avec aliases");
@@ -171,7 +180,13 @@ impl Capability {
                 }
                 d
             }
-            Self::Storage { name, path, tier, backup, sqlite } => {
+            Self::Storage {
+                name,
+                path,
+                tier,
+                backup,
+                sqlite,
+            } => {
                 let mut d = format!("volume « {name} » sur {path} (tier {tier:?})");
                 d.push_str(if *backup {
                     ", sauvegardé"
@@ -361,7 +376,11 @@ mod tests {
             backup: false,
             sqlite: false,
         };
-        assert!(sans.describe().contains("NON sauvegardé"), "{}", sans.describe());
+        assert!(
+            sans.describe().contains("NON sauvegardé"),
+            "{}",
+            sans.describe()
+        );
     }
 
     #[test]
@@ -408,7 +427,10 @@ mod tests {
         let c: Capability = serde_yaml_ng::from_str(y).unwrap();
         match c {
             Capability::Storage {
-                tier, backup, sqlite, ..
+                tier,
+                backup,
+                sqlite,
+                ..
             } => {
                 assert_eq!(tier, StorageTier::Local);
                 assert!(backup, "la sauvegarde doit être activée par défaut");

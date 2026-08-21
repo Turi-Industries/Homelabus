@@ -211,7 +211,10 @@ pub async fn creer_invitation(
     // ⚠️ Bornée des DEUX côtés. Une heure au minimum : en dessous, le lien expire
     // avant d'avoir été lu. Trente jours au maximum : un lien qui traîne un trimestre
     // est une porte d'entrée qu'on a oubliée.
-    let duree = d.duree_s.unwrap_or(DUREE_INVITATION_S).clamp(3_600, 30 * 86_400);
+    let duree = d
+        .duree_s
+        .unwrap_or(DUREE_INVITATION_S)
+        .clamp(3_600, 30 * 86_400);
 
     // 🔴 Le nombre d'usages, borné lui aussi. Au-delà de cinquante, ce n'est plus une
     // invitation, c'est une inscription ouverte — et ça se décide autrement que par un
@@ -335,7 +338,15 @@ pub async fn revoquer_invitation(
         confirmation_requise: None,
     };
 
-    rendre(&s, auth.identite(), "invitation-revoke", &reference, r, None).await
+    rendre(
+        &s,
+        auth.identite(),
+        "invitation-revoke",
+        &reference,
+        r,
+        None,
+    )
+    .await
 }
 
 /// Change le rôle d'une personne.
@@ -493,8 +504,7 @@ pub async fn inscrire(
         blocages.push(e.to_string());
     }
 
-    if s
-        .state
+    if s.state
         .users()
         .await
         .unwrap_or_default()
@@ -569,7 +579,10 @@ pub async fn inscrire(
         }
     }
     etapes.push(e);
-    let _ = s.state.set_user_role(&d.nom, role, Some("invitation")).await;
+    let _ = s
+        .state
+        .set_user_role(&d.nom, role, Some("invitation"))
+        .await;
 
     // 3. L'identité PocketID.
     //
@@ -593,9 +606,7 @@ pub async fn inscrire(
                     // d'accès. On ne transmet donc pas un secret initial mais un jeton
                     // à usage unique, affiché une fois et jamais enregistré.
                     match pid.one_time_token(&u.id, "12h").await {
-                        Ok(jeton) => {
-                            lien_enrolement = Some(format!("{}/lc/{jeton}", pid.issuer()))
-                        }
+                        Ok(jeton) => lien_enrolement = Some(format!("{}/lc/{jeton}", pid.issuer())),
                         Err(err) => {
                             // Le compte existe mais personne ne peut s'y connecter :
                             // ce n'est pas un échec de création, c'est un lien à
@@ -633,8 +644,7 @@ pub async fn inscrire(
             // Le mot de passe IMAP/SMTP est généré et n'est PAS rendu : la personne se
             // sert du webmail, qui passe par le SSO. Un mot de passe affiché serait un
             // secret de plus à transmettre, pour un usage que presque personne n'a.
-            let motdepasse =
-                hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
+            let motdepasse = hlb_secrets::generate_password(hlb_secrets::DEFAULT_PASSWORD_LEN);
             match mail.ensure_account(&adresse, &motdepasse, &[]).await {
                 Ok(_) => {
                     e.etat = EtatEtape::Faite;
@@ -692,7 +702,13 @@ async fn refus_inscription(s: &AppState, nom: &str, blocages: Vec<String>) -> Re
             Some(&r.blocages.join(" · ")),
         )
         .await;
-    (StatusCode::UNPROCESSABLE_ENTITY, Json(Inscrit { resultat: r, lien_enrolement: None }))
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(Inscrit {
+            resultat: r,
+            lien_enrolement: None,
+        }),
+    )
         .into_response()
 }
 

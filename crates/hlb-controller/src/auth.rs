@@ -52,10 +52,7 @@ pub const ENTETE_UI: &str = "x-hlb-ui";
 pub enum Acteur {
     /// Une machine. `user` est le compte au nom duquel le jeton peut agir (§5bis.3) —
     /// `None` pour un jeton de service, qui n'agit au nom de personne.
-    Jeton {
-        nom: String,
-        user: Option<String>,
-    },
+    Jeton { nom: String, user: Option<String> },
     /// Une personne, connectée dans un navigateur.
     Personne { user: String },
     /// Mode `--insecure-no-auth`. Nommé, pour que le journal d'audit ne prétende pas
@@ -427,7 +424,10 @@ mod tests {
         // 🔴 Sans comparaison exacte, un `xhlb_session` posé par un sous-domaine tiers
         // serait accepté à la place du nôtre.
         assert_eq!(cookie("hlb_session=abc", COOKIE), Some("abc".into()));
-        assert_eq!(cookie("autre=1; hlb_session=abc; x=2", COOKIE), Some("abc".into()));
+        assert_eq!(
+            cookie("autre=1; hlb_session=abc; x=2", COOKIE),
+            Some("abc".into())
+        );
         assert_eq!(cookie(" hlb_session = abc ", COOKIE), Some("abc".into()));
         assert_eq!(cookie("xhlb_session=abc", COOKIE), None);
         assert_eq!(cookie("hlb_session_bis=abc", COOKIE), None);
@@ -450,7 +450,9 @@ mod tests {
     fn a_refusal_carries_the_remedy() {
         let i = Identite {
             role: Role::Viewer,
-            acteur: Acteur::Personne { user: "remy".into() },
+            acteur: Acteur::Personne {
+                user: "remy".into(),
+            },
         };
         assert!(i.peut(Action::Lire));
         let m = i.refus(Action::Operer).expect("un viewer n'opère pas");
@@ -462,7 +464,9 @@ mod tests {
     fn a_plain_user_is_not_a_viewer() {
         let i = Identite {
             role: Role::Utilisateur,
-            acteur: Acteur::Personne { user: "invite".into() },
+            acteur: Acteur::Personne {
+                user: "invite".into(),
+            },
         };
         assert!(i.peut(Action::LireSoi));
         assert!(i.peut(Action::AgirSurSoi));

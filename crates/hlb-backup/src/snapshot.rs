@@ -69,7 +69,10 @@ pub fn snapshot_label(motif: &str, at: i64) -> Result<String> {
             "motif « {motif} » : 1 à 40 caractères"
         )));
     }
-    if !motif.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !motif
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err(Error::Unexpected(format!(
             "motif « {motif} » : seuls les caractères alphanumériques, « - » et « _ » \
              sont admis. ZFS refuse « : » et « @ » dans un nom d'instantané, et échoue \
@@ -78,7 +81,9 @@ pub fn snapshot_label(motif: &str, at: i64) -> Result<String> {
     }
 
     let (y, m, d, hh, mm, ss) = crate::pitr::civil_public(at);
-    Ok(format!("hlb-{motif}-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z"))
+    Ok(format!(
+        "hlb-{motif}-{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z"
+    ))
 }
 
 /// Détecte le système de fichiers d'un chemin.
@@ -178,7 +183,11 @@ fn expliquer(fs: Filesystem, stderr: &str) -> String {
              Le chemin n'est pas un {} — un instantané ne peut porter que sur un\n\
              dataset ({}) ou un sous-volume (btrfs), pas sur un répertoire ordinaire.",
             fs.as_str(),
-            if fs == Filesystem::Zfs { "ZFS" } else { "btrfs" }
+            if fs == Filesystem::Zfs {
+                "ZFS"
+            } else {
+                "btrfs"
+            }
         );
     }
     if b.contains("already exists") {

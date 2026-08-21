@@ -135,13 +135,12 @@ impl MariadbProvisioner {
     }
 
     pub async fn database_exists(&self, name: &str) -> Result<bool> {
-        let r: Option<MySqlRow> = sqlx::query(
-            "SELECT 1 AS x FROM information_schema.schemata WHERE schema_name = ?",
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| Error::Sql(e.to_string()))?;
+        let r: Option<MySqlRow> =
+            sqlx::query("SELECT 1 AS x FROM information_schema.schemata WHERE schema_name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Error::Sql(e.to_string()))?;
         Ok(r.is_some())
     }
 
@@ -254,7 +253,10 @@ mod tests {
 
         let e = validate_identifier("mon_app").unwrap_err().to_string();
         assert!(e.contains("JOKER"), "{e}");
-        assert!(e.contains("monXapp"), "l'erreur doit montrer la conséquence : {e}");
+        assert!(
+            e.contains("monXapp"),
+            "l'erreur doit montrer la conséquence : {e}"
+        );
     }
 
     #[test]
@@ -292,7 +294,10 @@ mod tests {
 
     #[test]
     fn passwords_never_leak_into_error_messages() {
-        let m = redact("Access denied for 'x' using password 'tr3sSecret'", "tr3sSecret");
+        let m = redact(
+            "Access denied for 'x' using password 'tr3sSecret'",
+            "tr3sSecret",
+        );
         assert!(!m.contains("tr3sSecret"), "{m}");
         assert!(m.contains("«mot de passe»"));
     }

@@ -23,7 +23,9 @@ impl<R: Runner> ResticBackupProvider<R> {
     pub fn new(
         make: impl Fn(&str) -> Option<(Repository<R>, Vec<String>)> + Send + Sync + 'static,
     ) -> Self {
-        Self { make: Box::new(make) }
+        Self {
+            make: Box::new(make),
+        }
     }
 
     /// Le dépôt et les chemins d'une app, pour les opérations qui ne sont pas des
@@ -92,10 +94,7 @@ pub async fn provider_for_state(
             paths.push(format!("/donnees/{name}"));
         }
 
-        Some((
-            Repository::new(runner, "/depot", password.clone()),
-            paths,
-        ))
+        Some((Repository::new(runner, "/depot", password.clone()), paths))
     })
 }
 
@@ -110,11 +109,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::restic::Runner for Fake {
-        async fn run(
-            &self,
-            _: &[String],
-            _: &[(String, String)],
-        ) -> crate::Result<Output> {
+        async fn run(&self, _: &[String], _: &[(String, String)]) -> crate::Result<Output> {
             Ok(self.0.lock().expect("mutex")[0].clone())
         }
     }
@@ -161,4 +156,3 @@ mod tests {
     #[allow(dead_code)]
     fn is_object_safe(_: &dyn BackupProvider) {}
 }
-

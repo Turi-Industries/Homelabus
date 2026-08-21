@@ -31,8 +31,8 @@
 //! paraît correcte, et l'authentification échoue quand même. D'où les `chmod`
 //! systématiques dans le script d'installation.
 
-use crate::runner::{Runner, WriteFile};
 use crate::runner::{Error, Result};
+use crate::runner::{Runner, WriteFile};
 
 /// Marqueur apposé en commentaire sur les clés que nous gérons.
 ///
@@ -140,7 +140,14 @@ pub fn grant(existing: &str, key: &ManagedKey) -> (String, Change) {
         sortie.push(ligne);
     }
 
-    (finaliser(sortie), Change { added, removed, kept })
+    (
+        finaliser(sortie),
+        Change {
+            added,
+            removed,
+            kept,
+        },
+    )
 }
 
 /// Retire la clé, en préservant tout le reste.
@@ -160,7 +167,14 @@ pub fn revoke(existing: &str, key: &ManagedKey) -> (String, Change) {
         }
     }
 
-    (finaliser(sortie), Change { added: 0, removed, kept })
+    (
+        finaliser(sortie),
+        Change {
+            added: 0,
+            removed,
+            kept,
+        },
+    )
 }
 
 /// Les clés gérées présentes dans un fichier, tous clusters confondus.
@@ -226,7 +240,12 @@ pub async fn read_authorized_keys<R: Runner>(runner: &R, home: &str) -> Result<S
 /// 🔴 Refuse d'écrire un fichier vide quand l'ancien ne l'était pas. C'est le
 /// garde-fou de dernier recours : quel que soit le bug en amont, on ne peut pas
 /// enfermer tout le monde dehors.
-pub async fn write_authorized_keys<R>(runner: &R, home: &str, contenu: &str, avant: &str) -> Result<()>
+pub async fn write_authorized_keys<R>(
+    runner: &R,
+    home: &str,
+    contenu: &str,
+    avant: &str,
+) -> Result<()>
 where
     R: Runner + WriteFile,
 {
@@ -254,12 +273,14 @@ where
 mod tests {
     use super::*;
 
-    const HUMAINE: &str =
-        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ remy@portable";
+    const HUMAINE: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ remy@portable";
     const AUTRE: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI collegue@bureau";
 
     fn cle() -> ManagedKey {
-        ManagedKey::new("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHLB homelabus@hlb", "maison")
+        ManagedKey::new(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHLB homelabus@hlb",
+            "maison",
+        )
     }
 
     #[test]
@@ -268,7 +289,10 @@ mod tests {
         // clé qui en portait déjà un le masquerait.
         let l = cle().line();
         assert!(l.ends_with("homelabus-managed:maison"), "{l}");
-        assert!(!l.contains("homelabus@hlb"), "l'ancien commentaire doit sauter : {l}");
+        assert!(
+            !l.contains("homelabus@hlb"),
+            "l'ancien commentaire doit sauter : {l}"
+        );
     }
 
     #[test]
@@ -418,7 +442,10 @@ mod tests {
         // un fichier tronqué qui n'ouvrirait plus rien.
         let s = script_installation("/root", "x");
         assert!(s.contains(".hlb-tmp"), "{s}");
-        assert!(s.contains("mv /root/.ssh/authorized_keys.hlb-tmp /root/.ssh/authorized_keys"), "{s}");
+        assert!(
+            s.contains("mv /root/.ssh/authorized_keys.hlb-tmp /root/.ssh/authorized_keys"),
+            "{s}"
+        );
         // `set -e` : un chmod qui échoue ne doit pas laisser continuer le mv.
         assert!(s.starts_with("set -e"), "{s}");
     }
@@ -466,9 +493,7 @@ pub async fn generate_keypair(comment: &str) -> Result<KeyPair> {
             "-t", "ed25519",
             // Sans phrase de passe : la clé est protégée par le coffre, et une
             // phrase interactive bloquerait tout automatisme.
-            "-N", "",
-            "-C", comment,
-            "-f",
+            "-N", "", "-C", comment, "-f",
         ])
         .arg(&chemin)
         .output()
@@ -516,21 +541,28 @@ mod tests_keygen {
         };
 
         assert!(kp.public.starts_with("ssh-ed25519 "), "{}", kp.public);
-        assert!(kp.private.contains("OPENSSH PRIVATE KEY"), "format inattendu");
+        assert!(
+            kp.private.contains("OPENSSH PRIVATE KEY"),
+            "format inattendu"
+        );
         // 🔴 La clé privée ne doit JAMAIS se retrouver dans la publique.
         assert!(!kp.public.contains("PRIVATE"));
-        assert_eq!(kp.public.lines().count(), 1, "la publique tient sur une ligne");
+        assert_eq!(
+            kp.public.lines().count(),
+            1,
+            "la publique tient sur une ligne"
+        );
     }
 
     #[tokio::test]
     async fn two_generations_differ() {
-        let (Ok(a), Ok(b)) = (
-            generate_keypair("x@1").await,
-            generate_keypair("x@2").await,
-        ) else {
+        let (Ok(a), Ok(b)) = (generate_keypair("x@1").await, generate_keypair("x@2").await) else {
             return;
         };
-        assert_ne!(a.public, b.public, "deux clés identiques seraient une catastrophe");
+        assert_ne!(
+            a.public, b.public,
+            "deux clés identiques seraient une catastrophe"
+        );
     }
 
     #[tokio::test]

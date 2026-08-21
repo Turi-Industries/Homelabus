@@ -3,10 +3,10 @@
 //! Les tests d'intégration doivent pouvoir exercer le client — et surtout la détection
 //! de péremption — sans lancer de fenêtre graphique.
 
-pub mod kiosque;
 pub mod client;
 pub mod design;
 pub mod ecrans;
+pub mod kiosque;
 pub mod route;
 pub mod shell;
 
@@ -89,9 +89,9 @@ fn invitation_web() -> Option<String> {
 #[cfg(target_arch = "wasm32")]
 pub fn ecrire_fragment(route: &str) {
     if let Some(w) = web_sys::window() {
-        let _ = w
-            .history()
-            .map(|h| h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&format!("#{route}"))));
+        let _ = w.history().map(|h| {
+            h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&format!("#{route}")))
+        });
     }
 }
 
@@ -245,8 +245,14 @@ mod tests_pwa {
         // Le monogramme est peint en SVG : aucune police n'intervient (donc aucun tofu
         // possible), et aucun décodeur d'image n'est embarqué dans le wasm.
         let i = include_str!("../web/icone.svg");
-        assert!(i.contains("<path"), "l'icône doit être un tracé, pas du texte");
-        assert!(!i.contains("<text"), "un <text> dépendrait d'une police du système");
+        assert!(
+            i.contains("<path"),
+            "l'icône doit être un tracé, pas du texte"
+        );
+        assert!(
+            !i.contains("<text"),
+            "un <text> dépendrait d'une police du système"
+        );
     }
 
     #[test]
@@ -256,7 +262,10 @@ mod tests_pwa {
         // inexistant — le navigateur refuse par exemple en HTTP simple.
         let h = include_str!("../web/index.html");
         assert!(h.contains("serviceWorker"), "{h}");
-        assert!(h.contains(".catch("), "l'échec d'enregistrement doit être avalé");
+        assert!(
+            h.contains(".catch("),
+            "l'échec d'enregistrement doit être avalé"
+        );
         assert!(h.contains("rel=\"manifest\""));
     }
 }

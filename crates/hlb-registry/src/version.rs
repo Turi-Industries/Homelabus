@@ -102,9 +102,7 @@ impl Version {
             UpdateChannel::Pin => false,
             // Interdit par la validation des manifests ; refusé ici par sécurité.
             UpdateChannel::Latest => false,
-            UpdateChannel::Patch => {
-                candidate.major == self.major && candidate.minor == self.minor
-            }
+            UpdateChannel::Patch => candidate.major == self.major && candidate.minor == self.minor,
             UpdateChannel::Minor => candidate.major == self.major,
         }
     }
@@ -194,7 +192,10 @@ mod tests {
         assert!(!v("17-alpine").allows(&v("18"), Minor));
         assert!(!v("17-alpine").allows(&v("18-bookworm"), Minor));
         assert!(!v("17").allows(&v("18-alpine"), Minor));
-        assert!(!v("17-alpine").allows(&v("18-alpine"), Minor), "une majeure reste interdite");
+        assert!(
+            !v("17-alpine").allows(&v("18-alpine"), Minor),
+            "une majeure reste interdite"
+        );
     }
 
     #[test]
@@ -235,8 +236,14 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        assert_eq!(best_upgrade("1.24.2", &tags, Patch).as_deref(), Some("1.24.5"));
-        assert_eq!(best_upgrade("1.24.2", &tags, Minor).as_deref(), Some("1.25.0"));
+        assert_eq!(
+            best_upgrade("1.24.2", &tags, Patch).as_deref(),
+            Some("1.24.5")
+        );
+        assert_eq!(
+            best_upgrade("1.24.2", &tags, Minor).as_deref(),
+            Some("1.25.0")
+        );
         assert_eq!(best_upgrade("1.24.2", &tags, Pin), None);
     }
 

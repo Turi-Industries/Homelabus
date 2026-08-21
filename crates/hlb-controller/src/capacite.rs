@@ -127,7 +127,10 @@ mod tests {
         // 🔴 Le cœur du calcul : un service ne se répartit pas entre deux machines.
         // Additionner donnerait « 800 Mo disponibles » et laisserait installer une app
         // qu'aucun des deux nœuds ne peut porter.
-        let b = budget(&parc(&[("light", Some(400)), ("light", Some(400))]), "light");
+        let b = budget(
+            &parc(&[("light", Some(400)), ("light", Some(400))]),
+            "light",
+        );
 
         assert_eq!(b.disponible_mb, 800);
         assert_eq!(b.meilleur_noeud_mb, 400, "c'est le plus large qui décide");
@@ -167,7 +170,10 @@ mod tests {
     #[test]
     fn a_comfortable_tier_says_nothing_at_all() {
         // 🔴 Un avertissement affiché en permanence cesse d'être lu.
-        let b = budget(&parc(&[("heavy", Some(12_000)), ("heavy", Some(9_000))]), "heavy");
+        let b = budget(
+            &parc(&[("heavy", Some(12_000)), ("heavy", Some(9_000))]),
+            "heavy",
+        );
         assert_eq!(b.avertissement(), None);
     }
 }

@@ -184,9 +184,9 @@ impl<R: Runner> Repository<R> {
                     None
                 }
             })
-            .ok_or_else(|| Error::Unexpected(
-                "restic n'a pas renvoyé d'identifiant d'instantané".into(),
-            ))?;
+            .ok_or_else(|| {
+                Error::Unexpected("restic n'a pas renvoyé d'identifiant d'instantané".into())
+            })?;
 
         tracing::info!(id = %&id[..8.min(id.len())], path, "instantané créé");
         Ok(id)
@@ -199,14 +199,14 @@ impl<R: Runner> Repository<R> {
             args.push(t);
         }
         let out = self.exec(&args).await?;
-        serde_json::from_str(&out.stdout).map_err(|e| Error::Unexpected(format!(
-            "liste d'instantanés illisible : {e}"
-        )))
+        serde_json::from_str(&out.stdout)
+            .map_err(|e| Error::Unexpected(format!("liste d'instantanés illisible : {e}")))
     }
 
     /// Restaure un instantané vers `target`.
     pub async fn restore(&self, snapshot: &str, target: &str) -> Result<()> {
-        self.exec(&["restore", snapshot, "--target", target]).await?;
+        self.exec(&["restore", snapshot, "--target", target])
+            .await?;
         tracing::info!(snapshot, target, "restauration effectuée");
         Ok(())
     }
@@ -275,7 +275,11 @@ mod tests {
             self.calls.lock().expect("mutex").push(args.to_vec());
             self.envs.lock().expect("mutex").push(env.to_vec());
             let mut o = self.outputs.lock().expect("mutex");
-            Ok(if o.len() > 1 { o.remove(0) } else { o[0].clone() })
+            Ok(if o.len() > 1 {
+                o.remove(0)
+            } else {
+                o[0].clone()
+            })
         }
     }
 
@@ -310,7 +314,10 @@ mod tests {
             stdout: String::new(),
             stderr: "Fatal: create repository at /tmp/depot failed: already initialized".into(),
         }]));
-        assert!(r.init().await.is_ok(), "un dépôt déjà créé n'est pas une erreur");
+        assert!(
+            r.init().await.is_ok(),
+            "un dépôt déjà créé n'est pas une erreur"
+        );
     }
 
     #[tokio::test]
@@ -336,7 +343,9 @@ mod tests {
     #[tokio::test]
     async fn backups_carry_a_stable_host() {
         // 🔴 Sans `--host` fixe, `forget` groupe par hôte et ne supprime jamais rien.
-        let r = repo(Fake::ok(r#"{"message_type":"summary","snapshot_id":"aaa"}"#));
+        let r = repo(Fake::ok(
+            r#"{"message_type":"summary","snapshot_id":"aaa"}"#,
+        ));
         r.backup("/data", &[]).await.expect("sauvegarde");
 
         let calls = r.runner.calls.lock().expect("mutex");
@@ -352,7 +361,9 @@ mod tests {
         let r = repo(Fake::ok(
             r#"{"message_type":"summary","snapshot_id":"aaa"}"#,
         ));
-        r.backup("/data", &["app:gitea", "kind:volume"]).await.expect("sauvegarde");
+        r.backup("/data", &["app:gitea", "kind:volume"])
+            .await
+            .expect("sauvegarde");
 
         let calls = r.runner.calls.lock().expect("mutex");
         let joined = calls[0].join(" ");
@@ -381,7 +392,9 @@ mod tests {
     #[tokio::test]
     async fn forget_passes_the_policy_and_prunes() {
         let r = repo(Fake::ok(""));
-        r.forget(&RetentionPolicy::default(), true).await.expect("forget");
+        r.forget(&RetentionPolicy::default(), true)
+            .await
+            .expect("forget");
 
         let calls = r.runner.calls.lock().expect("mutex");
         let joined = calls[0].join(" ");

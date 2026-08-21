@@ -18,11 +18,7 @@
 use hlb_state::State;
 
 /// Le runbook, en Markdown : lisible tel quel, et imprimable depuis n'importe quoi.
-pub async fn engendrer(
-    state: &State,
-    noeuds: &[hlb_api::NoeudSummary],
-    maintenant: i64,
-) -> String {
+pub async fn engendrer(state: &State, noeuds: &[hlb_api::NoeudSummary], maintenant: i64) -> String {
     let mut s = String::new();
 
     s.push_str("# Runbook Homelabus\n\n");
@@ -74,8 +70,10 @@ pub async fn engendrer(
     // --- Les nœuds ------------------------------------------------------------
     s.push_str("## Nœuds\n\n");
     if noeuds.is_empty() {
-        s.push_str("*Aucun nœud connu : Docker est injoignable, ou aucun agent ne \
-                    répond.*\n\n");
+        s.push_str(
+            "*Aucun nœud connu : Docker est injoignable, ou aucun agent ne \
+                    répond.*\n\n",
+        );
     } else {
         s.push_str("| Nom | Adresse | Joignable |\n|---|---|---|\n");
         for n in noeuds {
@@ -95,9 +93,7 @@ pub async fn engendrer(
     s.push_str("## Destinations de sauvegarde\n\n");
     let dests = state.destinations().await.unwrap_or_default();
     if dests.is_empty() {
-        s.push_str(
-            "🔴 **AUCUNE destination déclarée.** Il n'y a rien à restaurer.\n\n",
-        );
+        s.push_str("🔴 **AUCUNE destination déclarée.** Il n'y a rien à restaurer.\n\n");
     } else {
         s.push_str("| Nom | Emplacement | Classes |\n|---|---|---|\n");
         for (nom, location, classes, _secret) in &dests {
@@ -251,7 +247,10 @@ mod tests {
         s.upsert_app("gitea", &m, None).await.expect("app");
 
         let r = engendrer(&s, &[], 1_787_097_600).await;
-        assert!(r.contains("postgres"), "la raison doit nommer le manquant : {r}");
+        assert!(
+            r.contains("postgres"),
+            "la raison doit nommer le manquant : {r}"
+        );
         assert!(r.contains("AVANT les applications"));
     }
 
@@ -277,6 +276,9 @@ mod tests_horodatage {
         assert_eq!(horodatage_lisible(0), "1970-01-01 00:00");
         assert_eq!(horodatage_lisible(946_684_800), "2000-01-01 00:00");
         assert_eq!(horodatage_lisible(1_787_097_600), "2026-08-19 00:00");
-        assert_eq!(horodatage_lisible(1_787_097_600 + 11_520), "2026-08-19 03:12");
+        assert_eq!(
+            horodatage_lisible(1_787_097_600 + 11_520),
+            "2026-08-19 03:12"
+        );
     }
 }

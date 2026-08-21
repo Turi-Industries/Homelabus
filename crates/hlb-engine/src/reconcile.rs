@@ -113,20 +113,32 @@ impl std::fmt::Display for Drift {
             Self::ServiceMissing { app, image } => {
                 write!(f, "{app} : service absent, devrait tourner depuis {image}")
             }
-            Self::ReplicasDiverged { app, desired, actual } => write!(
+            Self::ReplicasDiverged {
+                app,
+                desired,
+                actual,
+            } => write!(
                 f,
                 "{app} : {} {} en consigne, le manifest en demande {desired}",
                 actual,
                 if *actual > 1 { "réplicas" } else { "réplica" }
             ),
-            Self::ImageDiverged { app, expected, actual } => {
+            Self::ImageDiverged {
+                app,
+                expected,
+                actual,
+            } => {
                 write!(f, "{app} : tourne sous {actual}, attendu {expected}")
             }
             Self::OrphanService { name } => write!(
                 f,
                 "{name} : service géré sans app correspondante — vérifie avant de supprimer"
             ),
-            Self::Converging { app, running, desired } => {
+            Self::Converging {
+                app,
+                running,
+                desired,
+            } => {
                 write!(f, "{app} : convergence en cours ({running}/{desired})")
             }
         }
@@ -166,7 +178,10 @@ pub struct Reconciler<'a, O: Orchestrator> {
 
 impl<'a, O: Orchestrator> Reconciler<'a, O> {
     pub fn new(orchestrator: &'a O, state: &'a State) -> Self {
-        Self { orchestrator, state }
+        Self {
+            orchestrator,
+            state,
+        }
     }
 
     /// Détecte les écarts. **Strictement en lecture seule.**

@@ -32,7 +32,11 @@ use clap::Parser;
 #[command(name = "hlb-ui", version, about = "Tableau de bord Homelabus")]
 struct Cli {
     /// URL de l'API du controller.
-    #[arg(long, default_value = "http://localhost:8420", env = "HLB_CONTROLLER_URL")]
+    #[arg(
+        long,
+        default_value = "http://localhost:8420",
+        env = "HLB_CONTROLLER_URL"
+    )]
     url: String,
 
     /// Jeton, si le controller en exige un.

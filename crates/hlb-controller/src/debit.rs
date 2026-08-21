@@ -97,7 +97,9 @@ pub enum Verdict {
     Passe,
     /// 🔴 Trop de requêtes. `retry_after_s` dit dans combien de temps réessayer —
     /// un `429` sans cette indication laisse le client marteler de plus belle.
-    Refuse { retry_after_s: i64 },
+    Refuse {
+        retry_after_s: i64,
+    },
 }
 
 impl Verdict {
@@ -129,12 +131,10 @@ impl Limiteur {
             m.retain(|_, c| maintenant - c.debut < FENETRE_S);
         }
 
-        let e = m
-            .entry((client.to_string(), classe))
-            .or_insert(Compteur {
-                debut: maintenant,
-                nombre: 0,
-            });
+        let e = m.entry((client.to_string(), classe)).or_insert(Compteur {
+            debut: maintenant,
+            nombre: 0,
+        });
 
         if maintenant - e.debut >= FENETRE_S {
             *e = Compteur {
@@ -197,7 +197,9 @@ mod tests {
         let v = l.verifier("1.2.3.4", Classe::Ecriture, 100);
         assert!(!v.passe());
         match v {
-            Verdict::Refuse { retry_after_s } => assert!(retry_after_s > 0, "il faut dire quand réessayer"),
+            Verdict::Refuse { retry_after_s } => {
+                assert!(retry_after_s > 0, "il faut dire quand réessayer")
+            }
             Verdict::Passe => unreachable!(),
         }
     }
@@ -209,7 +211,9 @@ mod tests {
             l.verifier("1.2.3.4", Classe::Ecriture, 100);
         }
         assert!(!l.verifier("1.2.3.4", Classe::Ecriture, 100).passe());
-        assert!(l.verifier("1.2.3.4", Classe::Ecriture, 100 + FENETRE_S).passe());
+        assert!(l
+            .verifier("1.2.3.4", Classe::Ecriture, 100 + FENETRE_S)
+            .passe());
     }
 
     #[test]
@@ -239,11 +243,20 @@ mod tests {
 
     #[test]
     fn login_routes_have_their_own_class() {
-        assert_eq!(Classe::de(&Method::GET, "/auth/connexion"), Classe::Connexion);
+        assert_eq!(
+            Classe::de(&Method::GET, "/auth/connexion"),
+            Classe::Connexion
+        );
         assert_eq!(Classe::de(&Method::GET, "/auth/retour"), Classe::Connexion);
-        assert_eq!(Classe::de(&Method::POST, "/auth/deconnexion"), Classe::Connexion);
+        assert_eq!(
+            Classe::de(&Method::POST, "/auth/deconnexion"),
+            Classe::Connexion
+        );
         assert_eq!(Classe::de(&Method::GET, "/api/apps"), Classe::Lecture);
-        assert_eq!(Classe::de(&Method::POST, "/api/v1/aliases"), Classe::Ecriture);
+        assert_eq!(
+            Classe::de(&Method::POST, "/api/v1/aliases"),
+            Classe::Ecriture
+        );
         assert_eq!(Classe::de(&Method::DELETE, "/api/apps/x"), Classe::Ecriture);
     }
 
@@ -263,7 +276,10 @@ mod tests {
     #[test]
     fn the_original_client_is_the_first_of_the_chain() {
         let mut h = HeaderMap::new();
-        h.insert("x-forwarded-for", HeaderValue::from_static("9.9.9.9, 10.0.0.1, 10.0.0.2"));
+        h.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("9.9.9.9, 10.0.0.1, 10.0.0.2"),
+        );
         assert_eq!(client(&h, None, true), "9.9.9.9");
     }
 

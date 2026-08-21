@@ -30,7 +30,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Une personne qui a un compte, et rien d'autre : sa boîte, ses aliases, le
@@ -241,7 +243,10 @@ mod tests {
     fn a_viewer_can_only_read() {
         let r = Role::Viewer;
         assert!(r.allows(Action::Lire));
-        assert!(r.allows(Action::LireSoi), "voir le cluster implique se voir soi");
+        assert!(
+            r.allows(Action::LireSoi),
+            "voir le cluster implique se voir soi"
+        );
         assert!(!r.allows(Action::Operer));
         assert!(!r.allows(Action::Publier));
         assert!(!r.allows(Action::Detruire));
@@ -253,7 +258,10 @@ mod tests {
         let r = Role::Operator;
         assert!(r.allows(Action::Lire));
         assert!(r.allows(Action::Operer));
-        assert!(r.allows(Action::Publier), "annoncer une maintenance est du travail courant");
+        assert!(
+            r.allows(Action::Publier),
+            "annoncer une maintenance est du travail courant"
+        );
         assert!(!r.allows(Action::Detruire), "un opérateur ne détruit pas");
         assert!(!r.allows(Action::GererComptes), "ni n'accorde de droits");
     }
@@ -310,7 +318,10 @@ mod tests {
             .expect("un viewer ne peut pas détruire");
         assert!(m.contains("admin"), "le rôle requis doit être nommé : {m}");
         assert!(m.contains("viewer"), "le rôle détenu doit être nommé : {m}");
-        assert!(m.contains("administrateur"), "le remède doit être nommé : {m}");
+        assert!(
+            m.contains("administrateur"),
+            "le remède doit être nommé : {m}"
+        );
     }
 
     #[test]
@@ -335,7 +346,11 @@ mod tests {
             Action::Detruire,
         ] {
             assert!(!a.describe().is_empty());
-            assert!(!a.describe().contains('_'), "{} n'est pas une phrase", a.describe());
+            assert!(
+                !a.describe().contains('_'),
+                "{} n'est pas une phrase",
+                a.describe()
+            );
         }
     }
 

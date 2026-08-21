@@ -170,7 +170,10 @@ fn constant_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn from_hex(s: &str) -> Option<Vec<u8>> {
@@ -327,6 +330,9 @@ mod tests {
         let mut m = manifeste_signe(&sk, v, b"x");
         m.signature.truncate(20);
 
-        assert_eq!(verify(&vk, &m, v, b"x").unwrap_err(), Rejected::BadSignature);
+        assert_eq!(
+            verify(&vk, &m, v, b"x").unwrap_err(),
+            Rejected::BadSignature
+        );
     }
 }

@@ -100,18 +100,27 @@ pub async fn generate_ca(common_name: &str) -> Result<CertPair> {
     let crt = dir.path().join("ca.crt");
 
     openssl(&[
-        "req", "-x509", "-newkey", "ed25519",
+        "req",
+        "-x509",
+        "-newkey",
+        "ed25519",
         // Sans phrase de passe : la clé est protégée par le coffre, et une invite
         // interactive bloquerait tout automatisme.
         "-nodes",
-        "-keyout", &key.to_string_lossy(),
-        "-out", &crt.to_string_lossy(),
-        "-days", &CA_DAYS.to_string(),
-        "-subj", &format!("/CN={common_name}"),
+        "-keyout",
+        &key.to_string_lossy(),
+        "-out",
+        &crt.to_string_lossy(),
+        "-days",
+        &CA_DAYS.to_string(),
+        "-subj",
+        &format!("/CN={common_name}"),
         // `critical` : un client qui ne comprend pas cette extension doit REFUSER,
         // pas l'ignorer. Sans ça, un certificat de feuille pourrait en signer d'autres.
-        "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
-        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE,pathlen:0",
+        "-addext",
+        "keyUsage=critical,keyCertSign,cRLSign",
     ])
     .await?;
 
@@ -141,22 +150,36 @@ pub async fn issue(
     ecrire(&ext, &extensions(names, purpose)).await?;
 
     openssl(&[
-        "req", "-new", "-newkey", "ed25519", "-nodes",
-        "-keyout", &key.to_string_lossy(),
-        "-out", &csr.to_string_lossy(),
-        "-subj", &format!("/CN={common_name}"),
+        "req",
+        "-new",
+        "-newkey",
+        "ed25519",
+        "-nodes",
+        "-keyout",
+        &key.to_string_lossy(),
+        "-out",
+        &csr.to_string_lossy(),
+        "-subj",
+        &format!("/CN={common_name}"),
     ])
     .await?;
 
     openssl(&[
-        "x509", "-req",
-        "-in", &csr.to_string_lossy(),
-        "-CA", &ca_crt.to_string_lossy(),
-        "-CAkey", &ca_key.to_string_lossy(),
+        "x509",
+        "-req",
+        "-in",
+        &csr.to_string_lossy(),
+        "-CA",
+        &ca_crt.to_string_lossy(),
+        "-CAkey",
+        &ca_key.to_string_lossy(),
         "-CAcreateserial",
-        "-out", &crt.to_string_lossy(),
-        "-days", &LEAF_DAYS.to_string(),
-        "-extfile", &ext.to_string_lossy(),
+        "-out",
+        &crt.to_string_lossy(),
+        "-days",
+        &LEAF_DAYS.to_string(),
+        "-extfile",
+        &ext.to_string_lossy(),
     ])
     .await?;
 
@@ -340,6 +363,9 @@ mod tests {
         // `const` : la contrainte est vérifiée à la COMPILATION, donc changer une
         // constante sans y penser ne compile même pas.
         const _: () = assert!(LEAF_DAYS * 10 < CA_DAYS);
-        const _: () = assert!(LEAF_DAYS >= 30, "trop court : le renouvellement deviendrait un fardeau");
+        const _: () = assert!(
+            LEAF_DAYS >= 30,
+            "trop court : le renouvellement deviendrait un fardeau"
+        );
     }
 }

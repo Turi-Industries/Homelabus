@@ -162,12 +162,7 @@ pub async fn preferences(
     Json(hlb_api::Preferences {
         theme,
         disponibles: THEMES.iter().map(|t| t.to_string()).collect(),
-        defaut: s
-            .state
-            .marque()
-            .await
-            .ok()
-            .and_then(|m| m.theme_defaut),
+        defaut: s.state.marque().await.ok().and_then(|m| m.theme_defaut),
     })
 }
 
@@ -410,7 +405,10 @@ pub async fn publier(
         applique,
         resume: format!("publier « {titre} »"),
         etapes: vec![etape],
-        commande_cli: format!("hlb annonce publier \"{titre}\" --niveau {} --apply", niveau.as_str()),
+        commande_cli: format!(
+            "hlb annonce publier \"{titre}\" --niveau {} --apply",
+            niveau.as_str()
+        ),
         blocages,
         avertissements,
         confirmation_requise: None,
@@ -451,7 +449,11 @@ pub async fn suivre(
     };
 
     if applique {
-        match s.state.suivre_annonce(id, &texte, auth.acteur().nom()).await {
+        match s
+            .state
+            .suivre_annonce(id, &texte, auth.acteur().nom())
+            .await
+        {
             Ok(()) => etape.etat = EtatEtape::Faite,
             Err(e) => {
                 etape.etat = EtatEtape::Echouee;

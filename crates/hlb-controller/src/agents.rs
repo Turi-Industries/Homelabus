@@ -111,7 +111,11 @@ impl AgentPoller {
             .build()
             .map_err(|e| format!("client mTLS : {e}"))?;
 
-        Ok(Self { http, port, scheme: "https" })
+        Ok(Self {
+            http,
+            port,
+            scheme: "https",
+        })
     }
 
     pub fn is_secure(&self) -> bool {
@@ -158,7 +162,10 @@ impl AgentPoller {
             (a.clone(), s)
         });
 
-        futures::future::join_all(futures).await.into_iter().collect()
+        futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .collect()
     }
 }
 
@@ -245,7 +252,9 @@ mod tests {
     fn an_unreachable_node_never_allows_a_deployment() {
         // 🔴 On ne sait pas s'il a de la place. Supposer que oui, c'est risquer de
         // saturer un disque à l'aveugle.
-        let s = AgentStatus::Unreachable { detail: "délai dépassé".into() };
+        let s = AgentStatus::Unreachable {
+            detail: "délai dépassé".into(),
+        };
         assert!(!s.allows_deploy(&Thresholds::default()));
         assert!(s.report().is_none());
         assert!(s.describe().contains("injoignable"));
@@ -267,9 +276,18 @@ mod tests {
     #[test]
     fn health_counts_reporting_and_silent_nodes_apart() {
         let mut m = BTreeMap::new();
-        m.insert("10.0.0.1".into(), AgentStatus::Reporting(Box::new(rapport("n1", 10, 90))));
-        m.insert("10.0.0.2".into(), AgentStatus::Unreachable { detail: "x".into() });
-        m.insert("10.0.0.3".into(), AgentStatus::Reporting(Box::new(rapport("n3", 96, 4))));
+        m.insert(
+            "10.0.0.1".into(),
+            AgentStatus::Reporting(Box::new(rapport("n1", 10, 90))),
+        );
+        m.insert(
+            "10.0.0.2".into(),
+            AgentStatus::Unreachable { detail: "x".into() },
+        );
+        m.insert(
+            "10.0.0.3".into(),
+            AgentStatus::Reporting(Box::new(rapport("n3", 96, 4))),
+        );
 
         let h = ClusterHealth::from_statuses(&m, &Thresholds::default());
         assert_eq!(h.reporting, 2);
@@ -283,7 +301,10 @@ mod tests {
         // On ne sait pas s'il l'est : l'affirmer serait faux, et brouillerait le
         // diagnostic — « 3 nœuds saturés » alors qu'ils sont peut-être juste éteints.
         let mut m = BTreeMap::new();
-        m.insert("10.0.0.1".into(), AgentStatus::Unreachable { detail: "x".into() });
+        m.insert(
+            "10.0.0.1".into(),
+            AgentStatus::Unreachable { detail: "x".into() },
+        );
 
         let h = ClusterHealth::from_statuses(&m, &Thresholds::default());
         assert!(h.saturated.is_empty());
@@ -293,7 +314,10 @@ mod tests {
     #[test]
     fn a_fully_healthy_cluster_needs_nothing() {
         let mut m = BTreeMap::new();
-        m.insert("10.0.0.1".into(), AgentStatus::Reporting(Box::new(rapport("n1", 10, 90))));
+        m.insert(
+            "10.0.0.1".into(),
+            AgentStatus::Reporting(Box::new(rapport("n1", 10, 90))),
+        );
 
         let h = ClusterHealth::from_statuses(&m, &Thresholds::default());
         assert!(!h.needs_attention());
@@ -316,9 +340,7 @@ mod tests {
     #[tokio::test]
     async fn polling_several_nodes_returns_one_entry_each() {
         let p = AgentPoller::new(PORT_FERME, Duration::from_millis(300));
-        let r = p
-            .poll_all(&["127.0.0.1".into(), "127.0.0.2".into()])
-            .await;
+        let r = p.poll_all(&["127.0.0.1".into(), "127.0.0.2".into()]).await;
         assert_eq!(r.len(), 2);
     }
 }

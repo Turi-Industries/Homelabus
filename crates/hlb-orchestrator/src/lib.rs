@@ -25,8 +25,10 @@ pub enum Error {
     #[error("service « {0} » introuvable")]
     NotFound(String),
 
-    #[error("le service « {service} » n'est pas devenu sain avant {timeout_secs} s \
-             ({running}/{desired} tâches en cours)")]
+    #[error(
+        "le service « {service} » n'est pas devenu sain avant {timeout_secs} s \
+             ({running}/{desired} tâches en cours)"
+    )]
     HealthTimeout {
         service: String,
         timeout_secs: u64,

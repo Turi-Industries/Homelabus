@@ -68,7 +68,11 @@ pub enum Probleme {
 impl Probleme {
     pub fn describe(&self) -> String {
         match self {
-            Self::Contraste { quoi, mesure, exige } => format!(
+            Self::Contraste {
+                quoi,
+                mesure,
+                exige,
+            } => format!(
                 "{quoi} : contraste {mesure:.2}:1, il en faut {exige:.1}:1 — \
                  illisible pour beaucoup de monde, et pas seulement au soleil"
             ),
@@ -95,16 +99,45 @@ impl Palette {
 
         for (quoi, avant, arriere, exige) in [
             ("texte sur le fond", self.texte, self.fond, CONTRASTE_TEXTE),
-            ("texte sur une surface", self.texte, self.surface, CONTRASTE_TEXTE),
-            ("texte secondaire", self.texte_faible, self.surface, CONTRASTE_FAIBLE),
-            ("texte sur l'accent", self.sur_accent, self.accent, CONTRASTE_FAIBLE),
+            (
+                "texte sur une surface",
+                self.texte,
+                self.surface,
+                CONTRASTE_TEXTE,
+            ),
+            (
+                "texte secondaire",
+                self.texte_faible,
+                self.surface,
+                CONTRASTE_FAIBLE,
+            ),
+            (
+                "texte sur l'accent",
+                self.sur_accent,
+                self.accent,
+                CONTRASTE_FAIBLE,
+            ),
             ("état ok", self.ok, self.surface, CONTRASTE_FAIBLE),
-            ("état attention", self.attention, self.surface, CONTRASTE_FAIBLE),
-            ("état critique", self.critique, self.surface, CONTRASTE_FAIBLE),
+            (
+                "état attention",
+                self.attention,
+                self.surface,
+                CONTRASTE_FAIBLE,
+            ),
+            (
+                "état critique",
+                self.critique,
+                self.surface,
+                CONTRASTE_FAIBLE,
+            ),
         ] {
             let m = contraste(avant, arriere);
             if m < exige {
-                p.push(Probleme::Contraste { quoi, mesure: m, exige });
+                p.push(Probleme::Contraste {
+                    quoi,
+                    mesure: m,
+                    exige,
+                });
             }
         }
 
@@ -115,7 +148,11 @@ impl Palette {
         ] {
             let d = distance_deuteranope(a, b);
             if d < DISTANCE_ETATS {
-                p.push(Probleme::EtatsConfondus { a: na, b: nb, distance: d });
+                p.push(Probleme::EtatsConfondus {
+                    a: na,
+                    b: nb,
+                    distance: d,
+                });
             }
         }
 
@@ -246,7 +283,8 @@ mod tests {
         };
         let pbs = p.valider();
         assert!(
-            pbs.iter().any(|x| matches!(x, Probleme::EtatsConfondus { .. })),
+            pbs.iter()
+                .any(|x| matches!(x, Probleme::EtatsConfondus { .. })),
             "une palette où les états fusionnent doit être refusée : {pbs:?}"
         );
     }
@@ -269,17 +307,27 @@ mod tests {
             info: Color32::from_rgb(0x4F, 0x8F, 0xD6),
         };
         let pbs = p.valider();
-        assert!(pbs.iter().any(|x| matches!(x, Probleme::Contraste { .. })), "{pbs:?}");
+        assert!(
+            pbs.iter().any(|x| matches!(x, Probleme::Contraste { .. })),
+            "{pbs:?}"
+        );
     }
 
     #[test]
     fn a_problem_says_what_is_wrong_and_for_whom() {
         // Un message de validation qui dit « contraste insuffisant » n'aide personne à
         // choisir une autre couleur.
-        let p = Probleme::EtatsConfondus { a: "ok", b: "critique", distance: 12.0 };
+        let p = Probleme::EtatsConfondus {
+            a: "ok",
+            b: "critique",
+            distance: 12.0,
+        };
         let m = p.describe();
         assert!(m.contains("ok") && m.contains("critique"), "{m}");
-        assert!(m.contains("8 %"), "le message doit dire qui est concerné : {m}");
+        assert!(
+            m.contains("8 %"),
+            "le message doit dire qui est concerné : {m}"
+        );
     }
 
     #[test]

@@ -66,8 +66,14 @@ pub enum Refus {
     FonctionInterdite(String),
     /// Une plage trop longue ferait balayer des mois de points à VictoriaMetrics, qui
     /// tourne sur le même matériel que les apps.
-    PlageTropLongue { demande_s: i64, max_s: i64 },
-    TropDePoints { demande: i64, max: i64 },
+    PlageTropLongue {
+        demande_s: i64,
+        max_s: i64,
+    },
+    TropDePoints {
+        demande: i64,
+        max: i64,
+    },
 }
 
 impl Refus {
@@ -129,7 +135,11 @@ pub fn verifier(q: &str, depuis_s: i64, pas_s: i64) -> Result<(), Refus> {
             max_s: PLAGE_MAX_S,
         });
     }
-    let points = if pas_s > 0 { depuis_s / pas_s } else { i64::MAX };
+    let points = if pas_s > 0 {
+        depuis_s / pas_s
+    } else {
+        i64::MAX
+    };
     if points > POINTS_MAX {
         return Err(Refus::TropDePoints {
             demande: points,
@@ -166,7 +176,14 @@ fn verifier_expression(q: &str) -> Result<(), Refus> {
 }
 
 /// Les mots-clés PromQL qui ne sont ni métrique ni fonction.
-const MOTS_CLES: &[&str] = &["on", "ignoring", "group_left", "group_right", "offset", "bool"];
+const MOTS_CLES: &[&str] = &[
+    "on",
+    "ignoring",
+    "group_left",
+    "group_right",
+    "offset",
+    "bool",
+];
 
 /// Extrait les identifiants d'une requête, hors chaînes entre guillemets.
 ///
@@ -310,7 +327,7 @@ impl Metriques {
                         "VictoriaMetrics injoignable ({e}). Est-il installé ? \
                          « hlb install victoriametrics --apply »"
                     ),
-                }
+                };
             }
         };
 
@@ -376,7 +393,10 @@ mod tests {
         // d'apps — la cartographie complète de l'installation, à qui a un jeton
         // `viewer`.
         let r = verifier(r#"{__name__=~".+"}"#, 3600, 60).expect_err("doit refuser");
-        assert!(matches!(r, Refus::MetriqueInterdite(_) | Refus::AucuneMetrique), "{r:?}");
+        assert!(
+            matches!(r, Refus::MetriqueInterdite(_) | Refus::AucuneMetrique),
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -398,7 +418,11 @@ mod tests {
         // si — et le message nomme ce qui est possible plutôt que de laisser chercher.
         let r = verifier("secret_tokens_total", 3600, 60).expect_err("doit refuser");
         assert!(r.describe().contains("hlb_"), "{}", r.describe());
-        assert!(r.describe().contains("secret_tokens_total"), "{}", r.describe());
+        assert!(
+            r.describe().contains("secret_tokens_total"),
+            "{}",
+            r.describe()
+        );
     }
 
     #[test]
@@ -406,13 +430,22 @@ mod tests {
         // ⚠️ `node="small-01"` : ni « node » ni « small-01 » ne sont des métriques.
         // Les traiter comme tels refuserait des requêtes parfaitement légitimes, et on
         // finirait par désactiver le filtre.
-        assert!(verifier(r#"hlb_disk_used_ratio{node="postgres_secret",path="/"}"#, 3600, 60).is_ok());
+        assert!(verifier(
+            r#"hlb_disk_used_ratio{node="postgres_secret",path="/"}"#,
+            3600,
+            60
+        )
+        .is_ok());
     }
 
     #[test]
     fn an_unknown_function_is_refused() {
-        let r = verifier("label_replace(hlb_app_up, \"a\", \"b\", \"c\", \"d\")", 3600, 60)
-            .expect_err("doit refuser");
+        let r = verifier(
+            "label_replace(hlb_app_up, \"a\", \"b\", \"c\", \"d\")",
+            3600,
+            60,
+        )
+        .expect_err("doit refuser");
         assert!(r.describe().contains("label_replace"), "{}", r.describe());
     }
 

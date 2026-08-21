@@ -257,9 +257,9 @@ impl PocketId {
             )
             .await?;
 
-        resp.json().await.map_err(|e| Error::Unexpected(format!(
-            "réponse de création d'utilisateur illisible : {e}"
-        )))
+        resp.json().await.map_err(|e| {
+            Error::Unexpected(format!("réponse de création d'utilisateur illisible : {e}"))
+        })
     }
 
     /// Le compte portant ce nom, s'il existe.
@@ -270,7 +270,8 @@ impl PocketId {
     pub async fn find_user(&self, username: &str) -> Result<Option<User>> {
         let resp = self
             .send(
-                self.http.get(self.url(&format!("/api/users?search={username}"))),
+                self.http
+                    .get(self.url(&format!("/api/users?search={username}"))),
                 "recherche d'utilisateur",
             )
             .await?;
@@ -349,7 +350,8 @@ impl PocketId {
 
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.send(
-            self.http.delete(self.url(&format!("/api/oidc/clients/{id}"))),
+            self.http
+                .delete(self.url(&format!("/api/oidc/clients/{id}"))),
             "suppression du client",
         )
         .await?;
@@ -445,6 +447,9 @@ mod tests {
             client_id: "abc".into(),
             client_secret: None,
         };
-        assert!(c.client_secret.is_none(), "client existant : pas de nouveau secret");
+        assert!(
+            c.client_secret.is_none(),
+            "client existant : pas de nouveau secret"
+        );
     }
 }

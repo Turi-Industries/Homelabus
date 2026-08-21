@@ -55,9 +55,11 @@ pub enum Error {
         reason: String,
     },
 
-    #[error("🔴 la clé « {0} » existe chez Garage mais son secret est inconnu. \
+    #[error(
+        "🔴 la clé « {0} » existe chez Garage mais son secret est inconnu. \
              Garage ne redonne JAMAIS une clé secrète après sa création : \
-             supprime cette clé et relance pour en obtenir une neuve")]
+             supprime cette clé et relance pour en obtenir une neuve"
+    )]
     LostSecret(String),
 }
 
@@ -147,7 +149,8 @@ impl Garage {
 
     /// Garage répond-il ?
     pub async fn health(&self) -> Result<()> {
-        self.appel("health", reqwest::Method::GET, "/health", None).await?;
+        self.appel("health", reqwest::Method::GET, "/health", None)
+            .await?;
         Ok(())
     }
 
@@ -203,11 +206,7 @@ impl Garage {
     /// une clé présente chez Garage dont on a perdu le secret est inutilisable, et
     /// repartir sans lui donnerait à l'app une clé vide — l'échec apparaîtrait comme
     /// une signature S3 invalide, ce qui n'oriente vers rien.
-    pub async fn ensure_key(
-        &self,
-        nom: &str,
-        secret_connu: Option<&str>,
-    ) -> Result<AccessKey> {
+    pub async fn ensure_key(&self, nom: &str, secret_connu: Option<&str>) -> Result<AccessKey> {
         if let Some(s) = secret_connu {
             if let Some(id) = self.key_id(nom).await? {
                 return Ok(AccessKey {
@@ -308,7 +307,10 @@ mod tests {
         // ⚠️ 3903 (administration) et 3900 (S3) sont deux écoutes distinctes. Pointer
         // le client vers le port S3 donnerait des 403 que rien ne rattache au port.
         let g = Garage::new("http://garage:3903/", "jeton");
-        assert_eq!(g.base, "http://garage:3903", "la barre finale doit être retirée");
+        assert_eq!(
+            g.base, "http://garage:3903",
+            "la barre finale doit être retirée"
+        );
     }
 
     #[test]
@@ -345,7 +347,9 @@ mod tests {
             {"id":"bbb","globalAliases":["immich","photos"]}
         ]"#;
         let l: Vec<BucketListe> = serde_json::from_str(json).expect("liste valide");
-        let trouve = l.iter().find(|b| b.global_aliases.iter().any(|a| a == "immich"));
+        let trouve = l
+            .iter()
+            .find(|b| b.global_aliases.iter().any(|a| a == "immich"));
         assert_eq!(trouve.map(|b| b.id.as_str()), Some("bbb"));
     }
 

@@ -110,7 +110,11 @@ pub fn bloc(regles: &[Regle]) -> String {
         // arriver avec l'alias en copie, ou avec un affichage « Nom <alias@dom> ».
         // Comparer l'adresse entière raterait ces cas, et la règle ne se
         // déclencherait jamais — sans erreur nulle part.
-        let _ = writeln!(s, "if address :localpart :is \"to\" \"{}\" {{", echapper(&r.alias));
+        let _ = writeln!(
+            s,
+            "if address :localpart :is \"to\" \"{}\" {{",
+            echapper(&r.alias)
+        );
         let _ = writeln!(s, "    fileinto :create \"{}\";", echapper(&r.dossier));
         if r.stop {
             // Sans `stop`, un message correspondant à deux règles serait classé deux
@@ -196,7 +200,10 @@ mod tests {
         assert_eq!(deux.matches(FIN).count(), 1, "{deux}");
         assert!(deux.contains("# perso"), "le hors-bloc survit : {deux}");
         assert!(deux.contains("\"b\""), "{deux}");
-        assert!(!deux.contains("\"a\""), "l'ancien bloc est REMPLACÉ : {deux}");
+        assert!(
+            !deux.contains("\"a\""),
+            "l'ancien bloc est REMPLACÉ : {deux}"
+        );
     }
 
     #[test]
@@ -259,7 +266,10 @@ mod tests {
         // règle ne se déclencherait jamais — sans erreur nulle part.
         let b = bloc(&[Regle::new("fnac-a1b2", "Alias/fnac")]);
         assert!(b.contains(":localpart"), "{b}");
-        assert!(!b.contains("@"), "l'adresse complète n'a rien à faire ici : {b}");
+        assert!(
+            !b.contains("@"),
+            "l'adresse complète n'a rien à faire ici : {b}"
+        );
     }
 
     #[test]

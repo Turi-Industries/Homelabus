@@ -48,7 +48,9 @@ pub struct AppMetrics {
 /// Un nom d'app ne devrait jamais contenir de guillemet, mais une métrique mal formée
 /// fait rejeter **tout** le lot par le collecteur — pas seulement la ligne fautive.
 fn label(v: &str) -> String {
-    v.replace('\\', r"\\").replace('"', "\\\"").replace('\n', r"\n")
+    v.replace('\\', r"\\")
+        .replace('"', "\\\"")
+        .replace('\n', r"\n")
 }
 
 fn entete(out: &mut String, nom: &str, aide: &str, genre: &str) {
@@ -121,7 +123,11 @@ fn render_base(apps: &[AppMetrics], nodes: &BTreeMap<String, AgentStatus>) -> St
         // sauvegarde. Un 0 signifierait « sauvegardée à l'instant » — soit
         // exactement le contraire, et l'alerte ne partirait jamais.
         if let Some(s) = a.last_backup_secs {
-            let _ = writeln!(o, "hlb_backup_age_seconds{{app=\"{}\"}} {s}", label(&a.name));
+            let _ = writeln!(
+                o,
+                "hlb_backup_age_seconds{{app=\"{}\"}} {s}",
+                label(&a.name)
+            );
         }
     }
 
@@ -254,7 +260,11 @@ fn render_base(apps: &[AppMetrics], nodes: &BTreeMap<String, AgentStatus>) -> St
     );
     for (addr, s) in nodes {
         if let Some(v) = s.report().and_then(|r| r.memoire_utilisee()) {
-            let _ = writeln!(o, "hlb_memory_used_ratio{{node=\"{}\"}} {v:.4}", label(addr));
+            let _ = writeln!(
+                o,
+                "hlb_memory_used_ratio{{node=\"{}\"}} {v:.4}",
+                label(addr)
+            );
         }
     }
 
@@ -314,7 +324,11 @@ fn render_base(apps: &[AppMetrics], nodes: &BTreeMap<String, AgentStatus>) -> St
         "gauge",
     );
     for (addr, s) in nodes {
-        if let Some(v) = s.report().and_then(|r| r.systeme.as_ref()).and_then(|y| y.uptime_s) {
+        if let Some(v) = s
+            .report()
+            .and_then(|r| r.systeme.as_ref())
+            .and_then(|y| y.uptime_s)
+        {
             let _ = writeln!(o, "hlb_node_uptime_seconds{{node=\"{}\"}} {v}", label(addr));
         }
     }
@@ -415,7 +429,10 @@ mod tests {
         );
         let o = render(&[], &noeuds);
         assert!(o.contains("# TYPE hlb_net_bytes_total counter"), "{o}");
-        assert!(o.contains("sens=\"rx\"}} 100".replace("}}", "}").as_str()) || o.contains("sens=\"rx\"} 100"));
+        assert!(
+            o.contains("sens=\"rx\"}} 100".replace("}}", "}").as_str())
+                || o.contains("sens=\"rx\"} 100")
+        );
         assert!(o.contains("sens=\"tx\"} 200"));
     }
 
@@ -434,7 +451,10 @@ mod tests {
             })),
         );
         let o = render(&[], &noeuds);
-        assert!(o.contains("hlb_swap_used_ratio{node=\"n:1\"} 0.6000"), "{o}");
+        assert!(
+            o.contains("hlb_swap_used_ratio{node=\"n:1\"} 0.6000"),
+            "{o}"
+        );
     }
 
     #[test]
@@ -508,7 +528,10 @@ mod tests {
     #[test]
     fn a_backed_up_app_emits_its_age() {
         let m = render(&[app("gitea")], &BTreeMap::new());
-        assert!(m.contains("hlb_backup_age_seconds{app=\"gitea\"} 3600"), "{m}");
+        assert!(
+            m.contains("hlb_backup_age_seconds{app=\"gitea\"} 3600"),
+            "{m}"
+        );
         assert!(
             m.contains("hlb_backup_verification_age_seconds{app=\"gitea\"} 86400"),
             "{m}"
@@ -520,14 +543,19 @@ mod tests {
         let mut a = app("gitea");
         a.status = "failed".into();
         let m = render(&[a], &BTreeMap::new());
-        assert!(m.contains("hlb_app_up{app=\"gitea\",status=\"failed\"} 0"), "{m}");
+        assert!(
+            m.contains("hlb_app_up{app=\"gitea\",status=\"failed\"} 0"),
+            "{m}"
+        );
     }
 
     #[test]
     fn an_unreachable_node_is_reported_without_disks() {
         // Un nœud muet ne doit pas produire de métrique disque : la dernière valeur
         // connue serait interprétée comme actuelle.
-        let n = AgentStatus::Unreachable { detail: "délai dépassé".into() };
+        let n = AgentStatus::Unreachable {
+            detail: "délai dépassé".into(),
+        };
         let m = render(&[], &nodes(vec![("node2", n)]));
         assert!(m.contains("hlb_node_reachable{node=\"node2\"} 0"), "{m}");
         assert!(!m.contains("hlb_disk_used_ratio{node=\"node2\""), "{m}");
@@ -538,19 +566,28 @@ mod tests {
         // 12057 utilisés, 6964 libres → 63,4 % de l'utilisable. Sur `total_mb`
         // (qui inclut la réserve root de 5 %), le chiffre serait plus bas.
         let m = render(&[], &nodes(vec![("node1", sain("node1", 12_057, 6_964))]));
-        assert!(m.contains("hlb_disk_used_ratio{node=\"node1\",path=\"/\"} 0.63"), "{m}");
+        assert!(
+            m.contains("hlb_disk_used_ratio{node=\"node1\",path=\"/\"} 0.63"),
+            "{m}"
+        );
     }
 
     #[test]
     fn the_pressure_tier_is_exported() {
         // 96 utilisés / 4 libres = 96 % → Critical (§9bis).
         let m = render(&[], &nodes(vec![("node1", sain("node1", 96, 4))]));
-        assert!(m.contains("hlb_disk_pressure{node=\"node1\",path=\"/\"} 4"), "{m}");
+        assert!(
+            m.contains("hlb_disk_pressure{node=\"node1\",path=\"/\"} 4"),
+            "{m}"
+        );
     }
 
     #[test]
     fn every_metric_declares_its_help_and_type() {
-        let m = render(&[app("gitea")], &nodes(vec![("node1", sain("node1", 10, 90))]));
+        let m = render(
+            &[app("gitea")],
+            &nodes(vec![("node1", sain("node1", 10, 90))]),
+        );
         let noms: Vec<&str> = m
             .lines()
             .filter(|l| !l.starts_with('#'))
@@ -559,8 +596,14 @@ mod tests {
             .collect();
 
         for n in noms {
-            assert!(m.contains(&format!("# TYPE {n} ")), "{n} sans # TYPE :\n{m}");
-            assert!(m.contains(&format!("# HELP {n} ")), "{n} sans # HELP :\n{m}");
+            assert!(
+                m.contains(&format!("# TYPE {n} ")),
+                "{n} sans # TYPE :\n{m}"
+            );
+            assert!(
+                m.contains(&format!("# HELP {n} ")),
+                "{n} sans # HELP :\n{m}"
+            );
         }
     }
 

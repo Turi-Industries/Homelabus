@@ -207,8 +207,7 @@ pub async fn installer_app(
         }
     };
 
-    if s
-        .state
+    if s.state
         .installed_apps()
         .await
         .unwrap_or_default()
@@ -555,7 +554,9 @@ pub async fn redimensionner(
     };
 
     if actuel.is_none() {
-        blocages.push(format!("« {app} » n'est pas déployée, ou Docker est injoignable"));
+        blocages.push(format!(
+            "« {app} » n'est pas déployée, ou Docker est injoignable"
+        ));
     }
 
     let applique = q.apply && blocages.is_empty();
@@ -733,9 +734,7 @@ pub async fn noeud_disponibilite(
 
     let vise = d.disponibilite.clone().unwrap_or_default();
     if !matches!(vise.as_str(), "active" | "pause" | "drain") {
-        blocages.push(
-            "disponibilité attendue : « active », « pause » ou « drain »".to_string(),
-        );
+        blocages.push("disponibilité attendue : « active », « pause » ou « drain »".to_string());
     }
 
     // 🔴 Drainer le DERNIER nœud sain viderait le cluster : toutes les apps
@@ -967,14 +966,23 @@ mod tests {
     fn a_path_template_never_matches_a_longer_path() {
         // ⚠️ Une comparaison par préfixe laisserait passer « …/install/vraiment », qui
         // n'existe pas — et le plan échouerait à l'exécution.
-        assert!(chemins_compatibles("/api/apps/{name}/install", "/api/apps/gitea/install"));
+        assert!(chemins_compatibles(
+            "/api/apps/{name}/install",
+            "/api/apps/gitea/install"
+        ));
         assert!(!chemins_compatibles(
             "/api/apps/{name}/install",
             "/api/apps/gitea/install/vraiment"
         ));
-        assert!(!chemins_compatibles("/api/apps/{name}/install", "/api/apps/gitea"));
+        assert!(!chemins_compatibles(
+            "/api/apps/{name}/install",
+            "/api/apps/gitea"
+        ));
         // Et un paramètre accepte n'importe quel segment, mais UN seul.
-        assert!(!chemins_compatibles("/api/secours/{id}", "/api/secours/a/b"));
+        assert!(!chemins_compatibles(
+            "/api/secours/{id}",
+            "/api/secours/a/b"
+        ));
     }
 
     use super::*;
@@ -1062,8 +1070,14 @@ pub async fn enregistrer_plan(
         )
         .await
     {
-        return erreur_action(&s, auth.identite(), "plan-enregistrer", &d.nom, &e.to_string())
-            .await;
+        return erreur_action(
+            &s,
+            auth.identite(),
+            "plan-enregistrer",
+            &d.nom,
+            &e.to_string(),
+        )
+        .await;
     }
 
     let r = ResultatAction {
@@ -1107,16 +1121,16 @@ pub async fn lister_plans(
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|(nom, methode, chemin, _corps, resume, cree_par, age_s)| {
-                hlb_api::PlanNomme {
+            .map(
+                |(nom, methode, chemin, _corps, resume, cree_par, age_s)| hlb_api::PlanNomme {
                     nom,
                     resume,
                     methode,
                     chemin,
                     cree_par,
                     age_s,
-                }
-            })
+                },
+            )
             .collect(),
     )
 }

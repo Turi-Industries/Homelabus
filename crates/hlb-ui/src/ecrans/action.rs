@@ -173,7 +173,9 @@ fn apercu(
                 );
                 let valide = !nom_plan.trim().is_empty();
                 let entree = champ.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (ui.add_enabled(valide, egui::Button::new("Enregistrer")).clicked()
+                if (ui
+                    .add_enabled(valide, egui::Button::new("Enregistrer"))
+                    .clicked()
                     || (entree && valide))
                     && valide
                 {
@@ -339,7 +341,11 @@ mod tests {
         let mut uniques = mots.clone();
         uniques.sort_unstable();
         uniques.dedup();
-        assert_eq!(uniques.len(), 4, "deux états portent le même mot : {mots:?}");
+        assert_eq!(
+            uniques.len(),
+            4,
+            "deux états portent le même mot : {mots:?}"
+        );
     }
 
     #[test]

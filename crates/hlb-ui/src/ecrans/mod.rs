@@ -8,24 +8,24 @@
 pub mod a_faire;
 pub mod action;
 pub mod alertes;
-pub mod app_detail;
 pub mod annonces;
+pub mod app_detail;
 pub mod apps;
 pub mod comptes;
+pub mod derive;
+pub mod frise;
 pub mod inscription;
 pub mod journal;
 pub mod noeuds;
+pub mod plans;
 pub mod portail;
 pub mod reglages;
 pub mod sauvegardes;
 pub mod secrets;
-pub mod statut;
-pub mod derive;
-pub mod frise;
-pub mod plans;
 pub mod securite;
-pub mod topologie;
+pub mod statut;
 pub mod tableau_bord;
+pub mod topologie;
 
 use crate::client::{Ressources, Snapshot};
 use crate::design::composants as c;
@@ -392,9 +392,14 @@ fn dispatcher(ui: &mut egui::Ui, route: &Route, ctx: &Contexte) -> Option<Route>
                     }
                 };
                 ctx.ressources.action.fermer();
-                ctx.ressources
-                    .action
-                    .lancer(ctx.acces, methode, &chemin, &corps, false, move || reveil());
+                ctx.ressources.action.lancer(
+                    ctx.acces,
+                    methode,
+                    &chemin,
+                    &corps,
+                    false,
+                    move || reveil(),
+                );
             }
         }
         Route::Portail => {
@@ -430,9 +435,14 @@ fn dispatcher(ui: &mut egui::Ui, route: &Route, ctx: &Contexte) -> Option<Route>
                 // Un aperçu d'abord, comme partout : c'est le panneau qui propose
                 // ensuite d'appliquer, une fois le plan lu.
                 ctx.ressources.action.fermer();
-                ctx.ressources
-                    .action
-                    .lancer(ctx.acces, methode, &chemin, &corps, false, move || reveil());
+                ctx.ressources.action.lancer(
+                    ctx.acces,
+                    methode,
+                    &chemin,
+                    &corps,
+                    false,
+                    move || reveil(),
+                );
             }
         }
         Route::Topologie => {
@@ -490,16 +500,13 @@ fn dispatcher(ui: &mut egui::Ui, route: &Route, ctx: &Contexte) -> Option<Route>
         }
         Route::App { nom, onglet } => {
             let reveil = ctx.reveil.clone();
-            let (d, f) = ctx.ressources.detail_app(
-                nom,
-                ctx.acces,
-                ctx.maintenant,
-                move || reveil(),
-            );
+            let (d, f) = ctx
+                .ressources
+                .detail_app(nom, ctx.acces, ctx.maintenant, move || reveil());
             let reveil2 = ctx.reveil.clone();
-            let versions =
-                ctx.ressources
-                    .versions_app(nom, ctx.acces, ctx.maintenant, move || reveil2());
+            let versions = ctx
+                .ressources
+                .versions_app(nom, ctx.acces, ctx.maintenant, move || reveil2());
             match app_detail::afficher(
                 ui,
                 nom,
@@ -587,19 +594,43 @@ mod tests {
         // sources finiraient par diverger, et l'on appliquerait une action différente
         // de celle qu'on vient de lire à l'écran.
         let cas: &[(&str, &str, &str)] = &[
-            ("hlb install gitea --domain g.fr --apply", "POST", "/api/apps/gitea/install"),
-            ("hlb backup run --app immich --apply", "POST", "/api/apps/immich/backup"),
+            (
+                "hlb install gitea --domain g.fr --apply",
+                "POST",
+                "/api/apps/gitea/install",
+            ),
+            (
+                "hlb backup run --app immich --apply",
+                "POST",
+                "/api/apps/immich/backup",
+            ),
             ("hlb scale gitea 3 --apply", "POST", "/api/apps/gitea/scale"),
             ("hlb remove vikunja --apply", "DELETE", "/api/apps/vikunja"),
-            ("hlb guide verify gitea premier-admin", "POST", "/api/todo/gitea/premier-admin"),
+            (
+                "hlb guide verify gitea premier-admin",
+                "POST",
+                "/api/todo/gitea/premier-admin",
+            ),
             (
                 "hlb backup dest add nas --location /mnt --classes critique --apply",
                 "PUT",
                 "/api/backup/destinations/nas",
             ),
-            ("hlb user invite --profil standard --role viewer --apply", "POST", "/api/invitations"),
-            ("hlb user invite revoke a1b2c3d4 --apply", "DELETE", "/api/invitations/a1b2c3d4"),
-            ("hlb user role camille operator --apply", "POST", "/api/comptes/camille/role/operator"),
+            (
+                "hlb user invite --profil standard --role viewer --apply",
+                "POST",
+                "/api/invitations",
+            ),
+            (
+                "hlb user invite revoke a1b2c3d4 --apply",
+                "DELETE",
+                "/api/invitations/a1b2c3d4",
+            ),
+            (
+                "hlb user role camille operator --apply",
+                "POST",
+                "/api/comptes/camille/role/operator",
+            ),
         ];
 
         for (cli, methode, chemin) in cas {

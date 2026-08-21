@@ -28,8 +28,17 @@ fn docker(args: &[&str]) -> std::process::Output {
 /// Exécute du SQL via `psql` dans le conteneur, et renvoie la sortie.
 fn psql(db: &str, sql: &str) -> String {
     let out = docker(&[
-        "exec", "-e", &format!("PGPASSWORD={PASSWORD}"), CONTAINER,
-        "psql", "-U", "postgres", "-d", db, "-tAc", sql,
+        "exec",
+        "-e",
+        &format!("PGPASSWORD={PASSWORD}"),
+        CONTAINER,
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        db,
+        "-tAc",
+        sql,
     ]);
     assert!(
         out.status.success(),
@@ -44,8 +53,14 @@ fn start_postgres() {
     let _ = docker(&["network", "create", NETWORK]);
 
     let out = docker(&[
-        "run", "-d", "--name", CONTAINER, "--network", NETWORK,
-        "-e", &format!("POSTGRES_PASSWORD={PASSWORD}"),
+        "run",
+        "-d",
+        "--name",
+        CONTAINER,
+        "--network",
+        NETWORK,
+        "-e",
+        &format!("POSTGRES_PASSWORD={PASSWORD}"),
         PG_IMAGE,
     ]);
     assert!(
@@ -109,14 +124,25 @@ async fn a_database_survives_destruction_and_comes_back_identical() {
 
     let avant_auteurs = psql("appli", "SELECT count(*) FROM auteurs");
     let avant_billets = psql("appli", "SELECT count(*) FROM billets");
-    let avant_somme = psql("appli", "SELECT md5(string_agg(titre, ',' ORDER BY id)) FROM billets");
+    let avant_somme = psql(
+        "appli",
+        "SELECT md5(string_agg(titre, ',' ORDER BY id)) FROM billets",
+    );
     println!("✓ base peuplée : {avant_auteurs} auteurs, {avant_billets} billets");
 
     // 2. Dump.
     let dump = dumper().dump(&target("appli")).await.expect("dump");
-    assert!(dump.len() > 1000, "dump suspicieusement petit : {} o", dump.len());
+    assert!(
+        dump.len() > 1000,
+        "dump suspicieusement petit : {} o",
+        dump.len()
+    );
     // Le format custom commence par la signature « PGDMP ».
-    assert_eq!(&dump[..5], b"PGDMP", "ce n'est pas un dump au format custom");
+    assert_eq!(
+        &dump[..5],
+        b"PGDMP",
+        "ce n'est pas un dump au format custom"
+    );
     println!("✓ dump de {} octets", dump.len());
 
     // 3. 🔴 Destruction.
@@ -139,7 +165,10 @@ async fn a_database_survives_destruction_and_comes_back_identical() {
     assert_eq!(psql("appli", "SELECT count(*) FROM auteurs"), avant_auteurs);
     assert_eq!(psql("appli", "SELECT count(*) FROM billets"), avant_billets);
     assert_eq!(
-        psql("appli", "SELECT md5(string_agg(titre, ',' ORDER BY id)) FROM billets"),
+        psql(
+            "appli",
+            "SELECT md5(string_agg(titre, ',' ORDER BY id)) FROM billets"
+        ),
         avant_somme,
         "le contenu restauré diffère"
     );
@@ -181,8 +210,16 @@ async fn a_dump_taken_during_concurrent_writes_stays_consistent() {
         for _ in 0..40 {
             let _ = std::process::Command::new("docker")
                 .args([
-                    "exec", "-e", &format!("PGPASSWORD={PASSWORD}"), CONTAINER,
-                    "psql", "-U", "postgres", "-d", "charge", "-tAc",
+                    "exec",
+                    "-e",
+                    &format!("PGPASSWORD={PASSWORD}"),
+                    CONTAINER,
+                    "psql",
+                    "-U",
+                    "postgres",
+                    "-d",
+                    "charge",
+                    "-tAc",
                     "BEGIN; UPDATE compteur SET valeur = valeur + 1; COMMIT;",
                 ])
                 .output();
@@ -216,7 +253,10 @@ async fn a_dump_taken_during_concurrent_writes_stays_consistent() {
         "instantané incohérent : somme = {somme}, on a capturé une transaction \
          partiellement appliquée"
     );
-    println!("✓ invariant respecté (somme = {somme}, soit {} incréments complets)", somme / 100);
+    println!(
+        "✓ invariant respecté (somme = {somme}, soit {} incréments complets)",
+        somme / 100
+    );
 
     stop_postgres();
 }
@@ -227,15 +267,24 @@ async fn restoring_over_a_populated_database_needs_clean() {
     start_postgres();
 
     psql("postgres", "CREATE DATABASE src");
-    psql("src", "CREATE TABLE t (id int PRIMARY KEY); INSERT INTO t VALUES (1), (2);");
+    psql(
+        "src",
+        "CREATE TABLE t (id int PRIMARY KEY); INSERT INTO t VALUES (1), (2);",
+    );
     let dump = dumper().dump(&target("src")).await.expect("dump");
 
     // La cible existe déjà avec la même table : sans --clean, pg_restore échoue.
     psql("postgres", "CREATE DATABASE cible");
-    psql("cible", "CREATE TABLE t (id int PRIMARY KEY); INSERT INTO t VALUES (99);");
+    psql(
+        "cible",
+        "CREATE TABLE t (id int PRIMARY KEY); INSERT INTO t VALUES (99);",
+    );
 
     assert!(
-        dumper().restore(&target("cible"), &dump, false).await.is_err(),
+        dumper()
+            .restore(&target("cible"), &dump, false)
+            .await
+            .is_err(),
         "sans --clean, restaurer par-dessus doit échouer"
     );
 
@@ -309,9 +358,16 @@ async fn a_scheduled_dump_reaches_the_repository_and_comes_back() {
 
     // 3. Le relire et vérifier qu'il contient bien le dump, octet pour octet.
     let out = docker(&[
-        "run", "--rm", "-e", "RESTIC_PASSWORD=mot-de-passe-de-test",
-        "-v", &format!("{depot}:/depot"),
-        "--entrypoint", "sh", "restic/restic:latest", "-c",
+        "run",
+        "--rm",
+        "-e",
+        "RESTIC_PASSWORD=mot-de-passe-de-test",
+        "-v",
+        &format!("{depot}:/depot"),
+        "--entrypoint",
+        "sh",
+        "restic/restic:latest",
+        "-c",
         &format!("restic -r /depot dump {id} /staging/{} | wc -c", d.filename),
     ]);
     assert!(
@@ -355,7 +411,10 @@ async fn a_drill_restores_a_usable_database_without_touching_the_archive() {
     // La réplication depuis un autre conteneur : sans cette ligne, pg_basebackup est
     // refusé avec un message qui parle de mot de passe (cf. pitr::basebackup).
     docker(&[
-        "exec", CONTAINER, "sh", "-c",
+        "exec",
+        CONTAINER,
+        "sh",
+        "-c",
         "grep -q 'host replication all all' /var/lib/postgresql/data/pg_hba.conf || \
          echo 'host replication all all scram-sha-256' >> /var/lib/postgresql/data/pg_hba.conf",
     ]);
@@ -377,8 +436,8 @@ async fn a_drill_restores_a_usable_database_without_touching_the_archive() {
     // verrait rien. C'est le troisième endroit du projet où ce piège se présente
     // (cf. verify.rs et pgdump.rs). On passe donc par `target/`, sous /Users, qui
     // est monté.
-    let racine = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/hlb-test-drill");
+    let racine =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/hlb-test-drill");
     let _ = std::fs::remove_dir_all(&racine);
     std::fs::create_dir_all(&racine).expect("répertoire de test");
 
@@ -417,10 +476,19 @@ async fn a_drill_restores_a_usable_database_without_touching_the_archive() {
 
     // 3. 🔴 L'archive est intacte : le montage en lecture seule a tenu.
     let apres = std::fs::metadata(&archive).expect("archive").len();
-    assert_eq!(avant, apres, "l'exercice a MODIFIÉ la sauvegarde qu'il vérifiait");
+    assert_eq!(
+        avant, apres,
+        "l'exercice a MODIFIÉ la sauvegarde qu'il vérifiait"
+    );
 
     // 4. Rien ne traîne.
-    let restants = docker(&["ps", "-a", "--filter", &format!("name={}", t.container), "-q"]);
+    let restants = docker(&[
+        "ps",
+        "-a",
+        "--filter",
+        &format!("name={}", t.container),
+        "-q",
+    ]);
     assert!(
         String::from_utf8_lossy(&restants.stdout).trim().is_empty(),
         "le conteneur d'exercice n'a pas été détruit"

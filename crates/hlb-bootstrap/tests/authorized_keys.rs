@@ -13,7 +13,10 @@ use hlb_bootstrap::LocalRunner;
 const HUMAINE: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ remy@portable";
 
 fn cle() -> ManagedKey {
-    ManagedKey::new("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHLB homelabus@hlb", "hlb")
+    ManagedKey::new(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHLB homelabus@hlb",
+        "hlb",
+    )
 }
 
 /// Un faux `$HOME` avec un `authorized_keys` préexistant.
@@ -35,7 +38,9 @@ async fn a_real_grant_preserves_the_human_key() {
     let home = d.path().to_string_lossy().to_string();
     let r = LocalRunner;
 
-    let avant = access::read_authorized_keys(&r, &home).await.expect("lecture");
+    let avant = access::read_authorized_keys(&r, &home)
+        .await
+        .expect("lecture");
     assert!(avant.contains(HUMAINE));
 
     let (apres, ch) = access::grant(&avant, &cle());
@@ -44,7 +49,10 @@ async fn a_real_grant_preserves_the_human_key() {
         .expect("écriture");
 
     let final_ = lire(&d);
-    assert!(final_.contains(HUMAINE), "🔴 clé humaine perdue :\n{final_}");
+    assert!(
+        final_.contains(HUMAINE),
+        "🔴 clé humaine perdue :\n{final_}"
+    );
     assert!(final_.contains("homelabus-managed:hlb"), "{final_}");
     assert_eq!(ch.kept, 1);
 }
@@ -62,8 +70,11 @@ async fn permissions_are_what_sshd_demands() {
         let r = LocalRunner;
 
         // On dégrade volontairement les droits avant l'écriture.
-        std::fs::set_permissions(d.path().join(".ssh"), std::fs::Permissions::from_mode(0o777))
-            .expect("chmod");
+        std::fs::set_permissions(
+            d.path().join(".ssh"),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .expect("chmod");
 
         let (apres, _) = access::grant("", &cle());
         access::write_authorized_keys(&r, &home, &apres, "")
@@ -73,8 +84,16 @@ async fn permissions_are_what_sshd_demands() {
         let m_dir = std::fs::metadata(d.path().join(".ssh")).expect("stat");
         let m_f = std::fs::metadata(d.path().join(".ssh/authorized_keys")).expect("stat");
 
-        assert_eq!(m_dir.permissions().mode() & 0o777, 0o700, "~/.ssh doit être 700");
-        assert_eq!(m_f.permissions().mode() & 0o777, 0o600, "le fichier doit être 600");
+        assert_eq!(
+            m_dir.permissions().mode() & 0o777,
+            0o700,
+            "~/.ssh doit être 700"
+        );
+        assert_eq!(
+            m_f.permissions().mode() & 0o777,
+            0o600,
+            "le fichier doit être 600"
+        );
     }
 }
 
@@ -101,17 +120,28 @@ async fn a_grant_then_revoke_round_trip_leaves_no_trace() {
     let home = d.path().to_string_lossy().to_string();
     let r = LocalRunner;
 
-    let avant = access::read_authorized_keys(&r, &home).await.expect("lecture");
+    let avant = access::read_authorized_keys(&r, &home)
+        .await
+        .expect("lecture");
     let (avec, _) = access::grant(&avant, &cle());
-    access::write_authorized_keys(&r, &home, &avec, &avant).await.expect("pose");
+    access::write_authorized_keys(&r, &home, &avec, &avant)
+        .await
+        .expect("pose");
 
-    let relu = access::read_authorized_keys(&r, &home).await.expect("relecture");
+    let relu = access::read_authorized_keys(&r, &home)
+        .await
+        .expect("relecture");
     let (sans, ch) = access::revoke(&relu, &cle());
-    access::write_authorized_keys(&r, &home, &sans, &relu).await.expect("retrait");
+    access::write_authorized_keys(&r, &home, &sans, &relu)
+        .await
+        .expect("retrait");
 
     let final_ = lire(&d);
     assert_eq!(ch.removed, 1);
-    assert!(final_.contains(HUMAINE), "la clé humaine survit au cycle complet");
+    assert!(
+        final_.contains(HUMAINE),
+        "la clé humaine survit au cycle complet"
+    );
     assert!(!final_.contains("homelabus-managed"), "{final_}");
 }
 
@@ -137,9 +167,13 @@ async fn exotic_content_survives_the_heredoc() {
     let home = d.path().to_string_lossy().to_string();
     let r = LocalRunner;
 
-    let avant = access::read_authorized_keys(&r, &home).await.expect("lecture");
+    let avant = access::read_authorized_keys(&r, &home)
+        .await
+        .expect("lecture");
     let (apres, _) = access::grant(&avant, &cle());
-    access::write_authorized_keys(&r, &home, &apres, &avant).await.expect("écriture");
+    access::write_authorized_keys(&r, &home, &apres, &avant)
+        .await
+        .expect("écriture");
 
     assert!(lire(&d).contains(piege), "contenu altéré :\n{}", lire(&d));
 }

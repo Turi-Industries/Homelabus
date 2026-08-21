@@ -190,10 +190,7 @@ impl<R: DumpRunner> MariaDumper<R> {
         // que toute cette vérification existe pour empêcher.
         verifier_complet(&target.database, dump)?;
 
-        let args = vec![
-            "mariadb".to_string(),
-            format!("--user={}", target.user),
-        ];
+        let args = vec!["mariadb".to_string(), format!("--user={}", target.user)];
 
         let mut env = target.env();
         env.push(("HLB_STDIN_B64".into(), crate::pgdump::base64_encode(dump)));
@@ -415,7 +412,10 @@ mod tests {
             coherence_pour(&["myisam".into()]),
             Coherence::VerrouillageRequis
         );
-        assert_eq!(coherence_pour(&["Aria".into()]), Coherence::VerrouillageRequis);
+        assert_eq!(
+            coherence_pour(&["Aria".into()]),
+            Coherence::VerrouillageRequis
+        );
     }
 
     #[test]
@@ -435,7 +435,10 @@ mod tests {
         let e = verifier_complet("app", tronque.as_bytes()).expect_err("doit être refusé");
         let m = e.to_string();
         assert!(m.contains("TRONQUÉ"), "{m}");
-        assert!(m.contains("disque plein"), "la cause doit être suggérée : {m}");
+        assert!(
+            m.contains("disque plein"),
+            "la cause doit être suggérée : {m}"
+        );
 
         verifier_complet("app", DUMP_COMPLET.as_bytes()).expect("dump complet accepté");
     }
@@ -469,7 +472,10 @@ mod tests {
             .expect("dump");
 
         let args = d.runner.arguments();
-        assert!(!args.contains("s3cr3t"), "mot de passe en argument : {args}");
+        assert!(
+            !args.contains("s3cr3t"),
+            "mot de passe en argument : {args}"
+        );
         assert!(!args.contains("--password"), "{args}");
     }
 

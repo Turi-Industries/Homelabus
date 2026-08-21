@@ -99,9 +99,11 @@ mod duree_lisible {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
         let s = String::deserialize(d)?;
-        parse(&s).ok_or_else(|| serde::de::Error::custom(format!(
-            "durée « {s} » invalide — attendu par ex. 30m, 4h, 7d"
-        )))
+        parse(&s).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "durée « {s} » invalide — attendu par ex. 30m, 4h, 7d"
+            ))
+        })
     }
 
     pub fn parse(s: &str) -> Option<Duration> {
@@ -149,7 +151,10 @@ mod tests {
         // trois jours de trou silencieux, mais une sauvegarde dès le retour.
         let s = Schedule::every(Duration::from_secs(4 * H));
         assert!(s.is_due(Some(Duration::from_secs(72 * H))));
-        assert_eq!(s.time_until_due(Some(Duration::from_secs(72 * H))), Duration::ZERO);
+        assert_eq!(
+            s.time_until_due(Some(Duration::from_secs(72 * H))),
+            Duration::ZERO
+        );
     }
 
     #[test]
@@ -194,6 +199,9 @@ mod tests {
         let s = Schedule::every(Duration::from_secs(4 * H));
         let y = serde_yaml_ng::to_string(&s).expect("sérialisable");
         assert!(y.contains("4h"), "{y}");
-        assert_eq!(serde_yaml_ng::from_str::<Schedule>(&y).expect("analysable"), s);
+        assert_eq!(
+            serde_yaml_ng::from_str::<Schedule>(&y).expect("analysable"),
+            s
+        );
     }
 }

@@ -180,7 +180,11 @@ pub struct SwarmSpec {
 
 impl Default for SwarmSpec {
     fn default() -> Self {
-        Self { replicas: 1, healthcheck: None, tier: None }
+        Self {
+            replicas: 1,
+            healthcheck: None,
+            tier: None,
+        }
     }
 }
 
@@ -401,18 +405,27 @@ spec:
         assert_eq!(m.spec.requires.len(), 2);
         assert!(matches!(
             m.spec.requires[0],
-            Capability::Database { engine: DbEngine::Postgres, .. }
+            Capability::Database {
+                engine: DbEngine::Postgres,
+                ..
+            }
         ));
         assert!(matches!(
             m.spec.requires[1],
-            Capability::Sso { mode: SsoMode::Native, .. }
+            Capability::Sso {
+                mode: SsoMode::Native,
+                ..
+            }
         ));
     }
 
     #[test]
     fn a_pinned_reference_keeps_the_tag_for_readability() {
         let m: Manifest = serde_yaml_ng::from_str(VIKUNJA).unwrap();
-        assert_eq!(m.spec.image.reference(), "vikunja/vikunja:0.24.6@sha256:abc");
+        assert_eq!(
+            m.spec.image.reference(),
+            "vikunja/vikunja:0.24.6@sha256:abc"
+        );
         assert!(m.spec.image.is_pinned());
     }
 

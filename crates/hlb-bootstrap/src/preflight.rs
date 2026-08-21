@@ -31,7 +31,12 @@ pub struct Check {
 
 impl Check {
     fn ok(name: &'static str, detail: impl Into<String>) -> Self {
-        Self { name, level: Level::Ok, detail: detail.into(), remedy: None }
+        Self {
+            name,
+            level: Level::Ok,
+            detail: detail.into(),
+            remedy: None,
+        }
     }
     fn warn(name: &'static str, detail: impl Into<String>, remedy: impl Into<String>) -> Self {
         Self {
@@ -97,11 +102,17 @@ impl Report {
     }
 
     pub fn blocking(&self) -> Vec<&Check> {
-        self.checks.iter().filter(|c| c.level == Level::Blocking).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.level == Level::Blocking)
+            .collect()
     }
 
     pub fn warnings(&self) -> Vec<&Check> {
-        self.checks.iter().filter(|c| c.level == Level::Warning).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.level == Level::Warning)
+            .collect()
     }
 }
 
@@ -195,7 +206,11 @@ pub fn run(obs: &Observation) -> Report {
             format!("libère de l'espace : au moins {MIN_DISK_MB} Mo"),
         )),
         Some(d) => checks.push(Check::ok("disque", format!("{d} Mo libres"))),
-        None => checks.push(Check::warn("disque", "non détecté", "vérifie l'espace libre")),
+        None => checks.push(Check::warn(
+            "disque",
+            "non détecté",
+            "vérifie l'espace libre",
+        )),
     }
 
     // 7. 🔴 Horloge. Une dérive casse le chiffrement Raft de Swarm ET la validation
@@ -262,7 +277,11 @@ mod tests {
         o.is_root = false;
         let r = run(&o);
         assert!(!r.can_proceed());
-        assert!(r.blocking()[0].remedy.as_ref().expect("remède").contains("sudo"));
+        assert!(r.blocking()[0]
+            .remedy
+            .as_ref()
+            .expect("remède")
+            .contains("sudo"));
     }
 
     #[test]
@@ -318,7 +337,9 @@ mod tests {
 
         assert!(r.can_proceed());
         let w = r.warnings();
-        assert!(w.iter().any(|c| c.remedy.as_ref().is_some_and(|r| r.contains("light"))));
+        assert!(w
+            .iter()
+            .any(|c| c.remedy.as_ref().is_some_and(|r| r.contains("light"))));
     }
 
     #[test]
@@ -357,7 +378,11 @@ mod tests {
         let r = run(&o);
 
         assert!(r.can_proceed());
-        let w = r.warnings().into_iter().find(|c| c.name == "cgroups").expect("constat");
+        let w = r
+            .warnings()
+            .into_iter()
+            .find(|c| c.name == "cgroups")
+            .expect("constat");
         let remede = w.remedy.as_ref().expect("remède");
         assert!(remede.contains("JAMAIS"), "{remede}");
         assert!(remede.contains("à toi de le faire"));

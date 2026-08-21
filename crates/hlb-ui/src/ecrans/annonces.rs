@@ -28,7 +28,10 @@ pub enum Demande {
         epinglee: bool,
     },
     /// Ajouter une nouvelle au fil d'une annonce.
-    Suivre { id: i64, corps: String },
+    Suivre {
+        id: i64,
+        corps: String,
+    },
     Retirer(i64),
 }
 
@@ -246,7 +249,9 @@ fn carte(
 
             ui.add(
                 egui::TextEdit::multiline(&mut texte)
-                    .hint_text("Où en est-on ? Cette nouvelle s'ajoute au fil, elle ne remplace rien.")
+                    .hint_text(
+                        "Où en est-on ? Cette nouvelle s'ajoute au fil, elle ne remplace rien.",
+                    )
                     .desired_rows(2)
                     .desired_width(f32::INFINITY),
             );

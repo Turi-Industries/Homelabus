@@ -29,12 +29,7 @@ use hlb_api::{Attention, Topologie};
 use crate::client::Freshness;
 use crate::design::{composants as c, mesures};
 
-pub fn afficher(
-    ui: &mut egui::Ui,
-    topo: Option<&Topologie>,
-    fraicheur: &Freshness,
-    etroit: bool,
-) {
+pub fn afficher(ui: &mut egui::Ui, topo: Option<&Topologie>, fraicheur: &Freshness, etroit: bool) {
     let p = c::palette(ui);
 
     c::titre(ui, "Topologie");
@@ -124,11 +119,7 @@ pub fn afficher(
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         c::legende(
                             ui,
-                            &hlb_api::pluriel(
-                                sim.noeuds_perdus.len() as u64,
-                                "nœud",
-                                "nœuds",
-                            ),
+                            &hlb_api::pluriel(sim.noeuds_perdus.len() as u64, "nœud", "nœuds"),
                         );
                     });
                 });

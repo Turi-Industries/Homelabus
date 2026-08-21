@@ -47,7 +47,11 @@ impl Output {
 
     /// La première ligne de sortie, nettoyée. Le cas courant pour lire une version.
     pub fn first_line(&self) -> Option<String> {
-        self.stdout.lines().next().map(|l| l.trim().to_string()).filter(|l| !l.is_empty())
+        self.stdout
+            .lines()
+            .next()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
     }
 }
 
@@ -74,7 +78,11 @@ pub struct LocalRunner;
 impl Runner for LocalRunner {
     async fn run(&self, argv: &[String]) -> Result<Output> {
         let Some((prog, args)) = argv.split_first() else {
-            return Ok(Output { status: -1, stdout: String::new(), stderr: "commande vide".into() });
+            return Ok(Output {
+                status: -1,
+                stdout: String::new(),
+                stderr: "commande vide".into(),
+            });
         };
 
         let out = Command::new(prog)
@@ -143,8 +151,10 @@ impl SshRunner {
         let mut a = vec![
             // Pas d'invite interactive : un bootstrap qui attend une saisie sur un
             // nœud distant se bloque sans message.
-            "-o".into(), "BatchMode=yes".into(),
-            "-o".into(), "ConnectTimeout=10".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=10".into(),
         ];
         if let Some(p) = self.port {
             a.push("-p".into());
@@ -168,7 +178,12 @@ impl Runner for SshRunner {
         let mut args = self.base_args();
         // On passe la commande échappée : les noms de paquets viennent de constantes,
         // mais on ne construit jamais une ligne de commande distante sans échapper.
-        args.push(argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" "));
+        args.push(
+            argv.iter()
+                .map(|a| shell_quote(a))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
 
         let out = Command::new("ssh")
             .args(&args)
@@ -214,7 +229,10 @@ impl Runner for SshRunner {
 
 /// Échappement pour un shell distant.
 fn shell_quote(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_=./:@".contains(c)) {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_=./:@".contains(c))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
@@ -271,10 +289,13 @@ impl WriteFile for SshRunner {
             let _ = si.shutdown().await;
         }
 
-        let out = child.wait_with_output().await.map_err(|source| Error::Spawn {
-            command: format!("écriture de {path}"),
-            source,
-        })?;
+        let out = child
+            .wait_with_output()
+            .await
+            .map_err(|source| Error::Spawn {
+                command: format!("écriture de {path}"),
+                source,
+            })?;
 
         if !out.status.success() {
             return Err(Error::Ssh {
@@ -293,7 +314,10 @@ mod tests {
     #[test]
     fn simple_arguments_pass_through_unquoted() {
         assert_eq!(shell_quote("apt-get"), "apt-get");
-        assert_eq!(shell_quote("--no-install-recommends"), "--no-install-recommends");
+        assert_eq!(
+            shell_quote("--no-install-recommends"),
+            "--no-install-recommends"
+        );
         assert_eq!(shell_quote("/etc/os-release"), "/etc/os-release");
         assert_eq!(shell_quote("root@node1"), "root@node1");
     }

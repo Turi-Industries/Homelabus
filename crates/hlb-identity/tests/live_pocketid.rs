@@ -33,9 +33,7 @@ fn docker(args: &[&str]) -> std::process::Output {
 }
 
 fn sql(stmt: &str) {
-    let out = docker(&[
-        "exec", CONTAINER, "sqlite3", "/app/data/pocket-id.db", stmt,
-    ]);
+    let out = docker(&["exec", CONTAINER, "sqlite3", "/app/data/pocket-id.db", stmt]);
     assert!(
         out.status.success(),
         "sqlite : {}",
@@ -48,10 +46,16 @@ fn start() -> PocketId {
     let url = format!("http://localhost:{PORT}");
 
     let out = docker(&[
-        "run", "-d", "--name", CONTAINER,
-        "-p", &format!("{PORT}:1411"),
-        "-e", &format!("APP_URL={url}"),
-        "-e", "TRUST_PROXY=true",
+        "run",
+        "-d",
+        "--name",
+        CONTAINER,
+        "-p",
+        &format!("{PORT}:1411"),
+        "-e",
+        &format!("APP_URL={url}"),
+        "-e",
+        "TRUST_PROXY=true",
         "ghcr.io/pocket-id/pocket-id:v1",
     ]);
     assert!(
@@ -64,7 +68,14 @@ fn start() -> PocketId {
     let mut pret = false;
     for _ in 0..60 {
         let c = std::process::Command::new("curl")
-            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", &format!("{url}/healthz")])
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                &format!("{url}/healthz"),
+            ])
             .output()
             .expect("curl");
         if String::from_utf8_lossy(&c.stdout) == "204" {
@@ -105,14 +116,21 @@ async fn the_whole_client_lifecycle_works() {
     let urls = vec!["https://git.example.fr/user/oauth2/PocketID/callback".to_string()];
     let c = p.create("gitea", &urls, true).await.expect("création");
     assert_eq!(c.name, "gitea");
-    assert_eq!(c.callback_urls, urls, "les URI de rappel doivent être enregistrées");
+    assert_eq!(
+        c.callback_urls, urls,
+        "les URI de rappel doivent être enregistrées"
+    );
     assert!(c.pkce_enabled);
     assert!(!c.is_public, "une app serveur garde son secret");
     println!("✓ client créé : {}", c.id);
 
     // Le secret arrive par un appel séparé.
     let secret = p.regenerate_secret(&c.id).await.expect("secret");
-    assert!(secret.len() >= 24, "secret suspicieusement court : {}", secret.len());
+    assert!(
+        secret.len() >= 24,
+        "secret suspicieusement court : {}",
+        secret.len()
+    );
     println!("✓ secret obtenu ({} caractères)", secret.len());
 
     // Recherche par nom.
@@ -138,11 +156,17 @@ async fn ensure_never_regenerates_an_existing_secret() {
     let p = start();
     let urls = vec!["https://tasks.example.fr/auth/openid/pocketid".to_string()];
 
-    let premier = p.ensure("vikunja", &urls, true).await.expect("premier ensure");
+    let premier = p
+        .ensure("vikunja", &urls, true)
+        .await
+        .expect("premier ensure");
     let secret = premier.client_secret.expect("secret à la création");
     println!("✓ premier appel : client créé avec un secret");
 
-    let second = p.ensure("vikunja", &urls, true).await.expect("second ensure");
+    let second = p
+        .ensure("vikunja", &urls, true)
+        .await
+        .expect("second ensure");
     assert_eq!(second.client_id, premier.client_id, "même client");
     assert!(
         second.client_secret.is_none(),
@@ -152,7 +176,11 @@ async fn ensure_never_regenerates_an_existing_secret() {
 
     // Et le premier secret fonctionne toujours : il n'a pas été invalidé.
     assert!(!secret.is_empty());
-    assert_eq!(p.list(None).await.expect("liste").len(), 1, "pas de doublon");
+    assert_eq!(
+        p.list(None).await.expect("liste").len(),
+        1,
+        "pas de doublon"
+    );
 
     stop();
 }
@@ -165,13 +193,19 @@ async fn a_partial_name_does_not_match_the_wrong_client() {
     let p = start();
     let urls = vec!["https://x.fr/cb".to_string()];
 
-    p.create("gitea-runner", &urls, false).await.expect("création");
+    p.create("gitea-runner", &urls, false)
+        .await
+        .expect("création");
 
     assert!(
         p.find_by_name("gitea").await.expect("recherche").is_none(),
         "« gitea » ne doit PAS correspondre à « gitea-runner »"
     );
-    assert!(p.find_by_name("gitea-runner").await.expect("recherche").is_some());
+    assert!(p
+        .find_by_name("gitea-runner")
+        .await
+        .expect("recherche")
+        .is_some());
     println!("✓ la correspondance est exacte, pas partielle");
 
     stop();

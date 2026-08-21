@@ -338,10 +338,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Stalwart n'a aucune notion d'expiration, et une adresse donnée « pour trente
     // jours » reçoit indéfiniment.
     {
-        let mail = match (&cli.stalwart_url, &cli.stalwart_admin, &cli.stalwart_password) {
+        let mail = match (
+            &cli.stalwart_url,
+            &cli.stalwart_admin,
+            &cli.stalwart_password,
+        ) {
             (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
                 u,
-                hlb_mail::Auth::Basic { user: a.clone(), password: p.clone() },
+                hlb_mail::Auth::Basic {
+                    user: a.clone(),
+                    password: p.clone(),
+                },
             ))),
             _ => None,
         };
@@ -596,7 +603,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "🔴 agents interrogés en HTTP CLAIR — fournis --controller-cert \
                      et --controller-ca"
                 );
-                Arc::new(agents::AgentPoller::new(cli.agent_port, Duration::from_secs(10)))
+                Arc::new(agents::AgentPoller::new(
+                    cli.agent_port,
+                    Duration::from_secs(10),
+                ))
             }
             // Un seul des deux : refuser plutôt que de retomber en clair alors que
             // l'opérateur croit avoir activé le mTLS.
@@ -618,8 +628,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cli.agent_poll_secs),
             rx,
             move || {
-                let (poller, service, derniers, notif) =
-                    (poller.clone(), service.clone(), derniers.clone(), notif_ag.clone());
+                let (poller, service, derniers, notif) = (
+                    poller.clone(),
+                    service.clone(),
+                    derniers.clone(),
+                    notif_ag.clone(),
+                );
                 async move {
                     // `tasks.<service>` résout vers toutes les tâches ; une VIP
                     // classique n'en donnerait qu'une au hasard.
@@ -810,9 +824,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 Ok(o) => {
                     tracing::info!(issuer, rappel, "connexion par PocketID active");
-                    Some(std::sync::Arc::new(connexion::Connexion::new(
-                        o, &publique,
-                    )))
+                    Some(std::sync::Arc::new(connexion::Connexion::new(o, &publique)))
                 }
                 Err(e) => {
                     // 🔴 On refuse de démarrer plutôt que de continuer sans connexion.
@@ -879,7 +891,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None
             }
         },
-        mail: match (&cli.stalwart_url, &cli.stalwart_admin, &cli.stalwart_password) {
+        mail: match (
+            &cli.stalwart_url,
+            &cli.stalwart_admin,
+            &cli.stalwart_password,
+        ) {
             (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
                 u,
                 hlb_mail::Auth::Basic {
@@ -923,12 +939,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-        .with_graceful_shutdown(async move {
-            attendre_arret().await;
-            tracing::info!("arrêt demandé, fin des boucles de fond");
-            let _ = shutdown_tx.send(true);
-        })
-        .await?;
+    .with_graceful_shutdown(async move {
+        attendre_arret().await;
+        tracing::info!("arrêt demandé, fin des boucles de fond");
+        let _ = shutdown_tx.send(true);
+    })
+    .await?;
 
     for t in taches {
         let _ = t.await;
@@ -1010,7 +1026,9 @@ async fn dump_database(
     let d = match scheduled::produce(&dumper, app, &cible, at).await {
         Ok(d) => d,
         Err(e) => {
-            let _ = state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await;
+            let _ = state
+                .record_backup(app, "sql-dump", None, Some(&e.to_string()))
+                .await;
             return Err(e.to_string());
         }
     };
@@ -1021,7 +1039,9 @@ async fn dump_database(
             Ok(id)
         }
         Err(e) => {
-            let _ = state.record_backup(app, "sql-dump", None, Some(&e.to_string())).await;
+            let _ = state
+                .record_backup(app, "sql-dump", None, Some(&e.to_string()))
+                .await;
             Err(e.to_string())
         }
     }

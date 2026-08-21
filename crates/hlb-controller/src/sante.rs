@@ -186,26 +186,28 @@ pub async fn controles(
     });
 
     // --- Le journal d'audit ---------------------------------------------------
-    out.push(match state.verify_audit_chain().await.map(|i| i.est_intacte()) {
-        Ok(true) => ligne(
-            "Journal d'audit",
-            Verdict::Bon,
-            "Le chaînage est intact : aucune entrée n'a été retirée ni modifiée.".into(),
-            None,
-        ),
-        Ok(false) => ligne(
-            "Journal d'audit",
-            Verdict::Manquant,
-            "Le chaînage est ROMPU : une entrée a été retirée ou modifiée.".into(),
-            Some("hlb audit --verify"),
-        ),
-        Err(_) => ligne(
-            "Journal d'audit",
-            Verdict::Inconnu,
-            "Le journal n'a pas pu être relu.".into(),
-            Some("hlb audit --verify"),
-        ),
-    });
+    out.push(
+        match state.verify_audit_chain().await.map(|i| i.est_intacte()) {
+            Ok(true) => ligne(
+                "Journal d'audit",
+                Verdict::Bon,
+                "Le chaînage est intact : aucune entrée n'a été retirée ni modifiée.".into(),
+                None,
+            ),
+            Ok(false) => ligne(
+                "Journal d'audit",
+                Verdict::Manquant,
+                "Le chaînage est ROMPU : une entrée a été retirée ou modifiée.".into(),
+                Some("hlb audit --verify"),
+            ),
+            Err(_) => ligne(
+                "Journal d'audit",
+                Verdict::Inconnu,
+                "Le journal n'a pas pu être relu.".into(),
+                Some("hlb audit --verify"),
+            ),
+        },
+    );
 
     out
 }

@@ -171,7 +171,10 @@ mod tests {
 
     #[test]
     fn a_df_without_data_gives_none() {
-        assert_eq!(parse_df_available_mb("Filesystem 1M-blocks Used Available\n"), None);
+        assert_eq!(
+            parse_df_available_mb("Filesystem 1M-blocks Used Available\n"),
+            None
+        );
         assert_eq!(parse_df_available_mb(""), None);
     }
 

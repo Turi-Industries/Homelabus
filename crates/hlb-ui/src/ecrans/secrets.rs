@@ -15,11 +15,7 @@ pub const SECRETS_SANS_VALEUR: &str =
      l'API n'a aucun champ pour les porter. Pour en lire une, il faut la clé maîtresse \
      et la ligne de commande.";
 
-pub fn afficher(
-    ui: &mut egui::Ui,
-    items: &[SecretItem],
-    rotation: Option<&Vec<SecretARouler>>,
-) {
+pub fn afficher(ui: &mut egui::Ui, items: &[SecretItem], rotation: Option<&Vec<SecretARouler>>) {
     c::titre(ui, "Secrets");
     c::legende(ui, SECRETS_SANS_VALEUR);
     ui.add_space(mesures::ESPACE);
@@ -78,21 +74,18 @@ fn rotation_assistee(ui: &mut egui::Ui, rotation: Option<&Vec<SecretARouler>>) {
                 c::pastille(ui, s.attention());
                 ui.add_space(mesures::ESPACE_SERRE);
                 c::mono(ui, &s.nom);
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        // ⚠️ « jamais tourné » n'est pas « tourné il y a longtemps » :
-                        // l'un est l'état normal d'un secret récent, l'autre un oubli.
-                        c::legende(
-                            ui,
-                            &if s.jamais_tourne {
-                                format!("créé il y a {}", hlb_api::humanise(s.age_s))
-                            } else {
-                                format!("tourné il y a {}", hlb_api::humanise(s.age_s))
-                            },
-                        );
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // ⚠️ « jamais tourné » n'est pas « tourné il y a longtemps » :
+                    // l'un est l'état normal d'un secret récent, l'autre un oubli.
+                    c::legende(
+                        ui,
+                        &if s.jamais_tourne {
+                            format!("créé il y a {}", hlb_api::humanise(s.age_s))
+                        } else {
+                            format!("tourné il y a {}", hlb_api::humanise(s.age_s))
+                        },
+                    );
+                });
             });
 
             ui.add_space(mesures::ESPACE_SERRE);

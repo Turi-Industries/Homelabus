@@ -102,7 +102,12 @@ pub enum Severity {
 /// (§4.6bis). Variables d'environnement d'abord — déclaratif et vérifiable —,
 /// interface web en tout dernier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "method", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "method",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum Automation {
     /// Niveau 1 : variables d'environnement. Le plus fiable.
     Env {
@@ -131,7 +136,12 @@ pub enum Automation {
 
 /// Comment constater qu'une étape est faite.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum Verify {
     /// 🔴 Aucune vérification possible : l'utilisateur atteste, et l'UI doit le dire.
     ///
@@ -271,8 +281,8 @@ steps:
 
     #[test]
     fn http_verification_defaults_to_success_codes() {
-        let v: Verify = serde_yaml_ng::from_str("type: http\nurl: https://x.fr")
-            .expect("analysable");
+        let v: Verify =
+            serde_yaml_ng::from_str("type: http\nurl: https://x.fr").expect("analysable");
         match v {
             Verify::Http { expect_status, .. } => assert_eq!(expect_status, vec![200, 204]),
             _ => panic!("mauvaise variante"),
@@ -288,7 +298,10 @@ steps:
     fn templates_are_rendered() {
         let out = render(
             "{{ domain }} CNAME {{ cluster_fqdn }}",
-            &[("domain", "git.example.fr"), ("cluster_fqdn", "hlb.example.fr")],
+            &[
+                ("domain", "git.example.fr"),
+                ("cluster_fqdn", "hlb.example.fr"),
+            ],
         );
         assert_eq!(out, "git.example.fr CNAME hlb.example.fr");
     }

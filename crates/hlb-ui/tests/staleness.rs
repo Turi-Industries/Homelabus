@@ -35,9 +35,13 @@ impl Drop for Controller {
 /// portent sur la péremption des données, pas sur l'authentification, passent donc en
 /// mode ouvert — sinon ils échoueraient pour une raison qui n'est pas la leur.
 fn demarrer_avec(port: u16, base: &std::path::Path, ouvert: bool) -> Controller {
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/hlb-controller");
-    assert!(bin.exists(), "lance `cargo build` d'abord ({})", bin.display());
+    let bin =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hlb-controller");
+    assert!(
+        bin.exists(),
+        "lance `cargo build` d'abord ({})",
+        bin.display()
+    );
 
     let mut args = vec![
         "--listen".to_string(),
@@ -79,8 +83,12 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
     let mut ctrl = demarrer_avec(port, &base, true);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
-    let mut poller =
-        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+    let mut poller = hlb_ui::client::Poller::new(
+        format!("http://127.0.0.1:{port}"),
+        None,
+        1.0,
+        shared.clone(),
+    );
 
     // Le sondage est piloté par la boucle de rendu : ici on la simule, avec une
     // horloge qui avance — exactement comme celle d'egui.
@@ -100,7 +108,10 @@ fn a_dead_controller_makes_the_dashboard_say_so() {
             break;
         }
     }
-    assert!(vu_frais, "le controller répond, les données doivent être fiables");
+    assert!(
+        vu_frais,
+        "le controller répond, les données doivent être fiables"
+    );
 
     // 2. 🔴 On le tue. L'UI ne doit PAS continuer à faire comme si de rien n'était.
     ctrl.stop();
@@ -138,8 +149,12 @@ fn the_last_known_state_is_kept_but_marked() {
     let mut ctrl = demarrer_avec(port, &base, true);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
-    let mut poller =
-        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+    let mut poller = hlb_ui::client::Poller::new(
+        format!("http://127.0.0.1:{port}"),
+        None,
+        1.0,
+        shared.clone(),
+    );
 
     let mut horloge = 0.0_f64;
     let avancer = |poller: &mut hlb_ui::client::Poller, horloge: &mut f64| {
@@ -193,8 +208,7 @@ fn without_a_token_the_screen_says_how_to_get_one() {
         let rt = tokio::runtime::Runtime::new().expect("runtime");
         rt.block_on(async {
             let st = hlb_state::State::open(&base).await.expect("base");
-            let (_, jeton) =
-                hlb_types::generate_token("autre", hlb_types::Role::Viewer, [7u8; 32]);
+            let (_, jeton) = hlb_types::generate_token("autre", hlb_types::Role::Viewer, [7u8; 32]);
             st.store_token(&jeton).await.expect("jeton");
         });
     }
@@ -202,8 +216,12 @@ fn without_a_token_the_screen_says_how_to_get_one() {
     let mut ctrl = demarrer_avec(port, &base, false);
 
     let shared = std::sync::Arc::new(hlb_ui::client::Shared::default());
-    let mut poller =
-        hlb_ui::client::Poller::new(format!("http://127.0.0.1:{port}"), None, 1.0, shared.clone());
+    let mut poller = hlb_ui::client::Poller::new(
+        format!("http://127.0.0.1:{port}"),
+        None,
+        1.0,
+        shared.clone(),
+    );
 
     let mut horloge = 0.0_f64;
     for _ in 0..60 {

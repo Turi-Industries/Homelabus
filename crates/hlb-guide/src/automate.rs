@@ -72,7 +72,11 @@ pub async fn try_automate<O: Orchestrator>(
             // dupliquerait la logique du résolveur.
             Automation::Env { .. } => continue,
 
-            Automation::Exec { command, probe, probe_matches } => {
+            Automation::Exec {
+                command,
+                probe,
+                probe_matches,
+            } => {
                 // Sonde d'idempotence : ne pas rejouer une commande déjà appliquée.
                 // Beaucoup de CLI d'apps échouent si l'objet existe déjà.
                 if let Some(p) = probe {
@@ -144,22 +148,42 @@ mod tests {
             }
         }
         fn ok() -> ExecOutput {
-            ExecOutput { exit_code: 0, stdout: String::new(), stderr: String::new() }
+            ExecOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            }
         }
         fn ko(stderr: &str) -> ExecOutput {
-            ExecOutput { exit_code: 1, stdout: String::new(), stderr: stderr.into() }
+            ExecOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: stderr.into(),
+            }
         }
         fn disant(stdout: &str) -> ExecOutput {
-            ExecOutput { exit_code: 0, stdout: stdout.into(), stderr: String::new() }
+            ExecOutput {
+                exit_code: 0,
+                stdout: stdout.into(),
+                stderr: String::new(),
+            }
         }
     }
 
     #[async_trait]
     impl Orchestrator for Fake {
-        async fn ping(&self) -> hlb_orchestrator::Result<String> { Ok("fake".into()) }
-        async fn deploy(&self, _: &ServiceSpec) -> hlb_orchestrator::Result<String> { Ok("id".into()) }
-        async fn update_image(&self, _: &str, _: &str) -> hlb_orchestrator::Result<()> { Ok(()) }
-        async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> { Ok(()) }
+        async fn ping(&self) -> hlb_orchestrator::Result<String> {
+            Ok("fake".into())
+        }
+        async fn deploy(&self, _: &ServiceSpec) -> hlb_orchestrator::Result<String> {
+            Ok("id".into())
+        }
+        async fn update_image(&self, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
+            Ok(())
+        }
+        async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> {
+            Ok(())
+        }
         async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
             Ok("SWMKEY-fake".into())
         }
@@ -182,13 +206,25 @@ mod tests {
         async fn label_node(&self, _: &str, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
             Ok(())
         }
-        async fn exec_in_service(&self, _: &str, cmd: &[String]) -> hlb_orchestrator::Result<ExecOutput> {
+        async fn exec_in_service(
+            &self,
+            _: &str,
+            cmd: &[String],
+        ) -> hlb_orchestrator::Result<ExecOutput> {
             self.appels.lock().expect("mutex").push(cmd.to_vec());
             let mut s = self.sorties.lock().expect("mutex");
-            Ok(if s.len() > 1 { s.remove(0) } else { s.first().cloned().unwrap_or(Fake::ok()) })
+            Ok(if s.len() > 1 {
+                s.remove(0)
+            } else {
+                s.first().cloned().unwrap_or(Fake::ok())
+            })
         }
         async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<VolumeInfo> {
-            Ok(VolumeInfo { name: n.into(), mountpoint: "/v".into(), existed: false })
+            Ok(VolumeInfo {
+                name: n.into(),
+                mountpoint: "/v".into(),
+                existed: false,
+            })
         }
         async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<VolumeInfo> {
             self.create_volume(n).await
@@ -196,8 +232,12 @@ mod tests {
         async fn status(&self, _: &str) -> hlb_orchestrator::Result<ServiceStatus> {
             Err(hlb_orchestrator::Error::NotFound("x".into()))
         }
-        async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> { Ok(vec![]) }
-        async fn remove(&self, _: &str) -> hlb_orchestrator::Result<()> { Ok(()) }
+        async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> {
+            Ok(vec![])
+        }
+        async fn remove(&self, _: &str) -> hlb_orchestrator::Result<()> {
+            Ok(())
+        }
         async fn wait_healthy(&self, _: &str, _: u64) -> hlb_orchestrator::Result<ServiceStatus> {
             Err(hlb_orchestrator::Error::NotFound("x".into()))
         }
@@ -251,7 +291,11 @@ steps:
         let r = try_automate(&o, "gitea", &step(AVEC_EXEC), &[]).await;
 
         assert!(!r.handled());
-        assert!(r.describe().contains("permission refusée"), "{}", r.describe());
+        assert!(
+            r.describe().contains("permission refusée"),
+            "{}",
+            r.describe()
+        );
     }
 
     #[tokio::test]
@@ -313,7 +357,10 @@ steps:
         let r = try_automate(&o, "app", &step(y), &[]).await;
 
         assert_eq!(r, AutomationOutcome::Applied { method: "env" });
-        assert!(o.appels.lock().unwrap().is_empty(), "aucune commande ne doit tourner");
+        assert!(
+            o.appels.lock().unwrap().is_empty(),
+            "aucune commande ne doit tourner"
+        );
     }
 
     #[tokio::test]

@@ -233,7 +233,9 @@ mod tests {
             calls[0]
         );
         let envs = d.runner.envs.lock().expect("mutex");
-        assert!(envs[0].iter().any(|(k, v)| k == "PGPASSWORD" && v == "secret"));
+        assert!(envs[0]
+            .iter()
+            .any(|(k, v)| k == "PGPASSWORD" && v == "secret"));
     }
 
     #[tokio::test]
@@ -266,12 +268,17 @@ mod tests {
     #[tokio::test]
     async fn restore_can_clean_first() {
         let d = PgDumper::new(Fake::new(0, Vec::new(), ""));
-        d.restore(&target(), b"donnees", true).await.expect("restore");
+        d.restore(&target(), b"donnees", true)
+            .await
+            .expect("restore");
 
         let calls = d.runner.calls.lock().expect("mutex");
         let joined = calls[0].join(" ");
         assert!(joined.contains("--clean"));
-        assert!(joined.contains("--if-exists"), "sinon un objet absent fait échouer");
+        assert!(
+            joined.contains("--if-exists"),
+            "sinon un objet absent fait échouer"
+        );
     }
 
     #[test]
@@ -353,11 +360,7 @@ pub mod scheduled {
     ///
     /// ⚠️ Le dump contient les données en clair : le volume est détruit dans tous les
     /// cas, succès comme échec.
-    pub async fn archive(
-        repo_location: &str,
-        password: &str,
-        dump: &Dump,
-    ) -> Result<String> {
+    pub async fn archive(repo_location: &str, password: &str, dump: &Dump) -> Result<String> {
         let dest = crate::destination::Destination {
             nom: "defaut".into(),
             location: repo_location.to_string(),
@@ -415,9 +418,15 @@ pub mod scheduled {
         // le seul chemin qui traverse la frontière hôte/VM de façon fiable.
         let mut enfant = tokio::process::Command::new("docker")
             .args([
-                "run", "--rm", "-i", "--entrypoint", "sh",
-                "-v", &format!("{volume}:/staging"),
-                "restic/restic:latest", "-c",
+                "run",
+                "--rm",
+                "-i",
+                "--entrypoint",
+                "sh",
+                "-v",
+                &format!("{volume}:/staging"),
+                "restic/restic:latest",
+                "-c",
                 &format!("cat > /staging/{}", dump.filename),
             ])
             .stdin(std::process::Stdio::piped())

@@ -83,14 +83,20 @@ impl Orchestrator for Fake {
             stderr: String::new(),
         })
     }
-    async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+    async fn create_volume(
+        &self,
+        n: &str,
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         Ok(hlb_orchestrator::VolumeInfo {
             name: n.into(),
             mountpoint: format!("/volumes/{n}"),
             existed: false,
         })
     }
-    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+    async fn inspect_volume(
+        &self,
+        n: &str,
+    ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
         self.create_volume(n).await
     }
     async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
@@ -193,7 +199,11 @@ async fn manual_scaling_is_reverted_to_the_manifest() {
 
     assert!(matches!(
         report.drifts[0],
-        Drift::ReplicasDiverged { desired: 2, actual: 5, .. }
+        Drift::ReplicasDiverged {
+            desired: 2,
+            actual: 5,
+            ..
+        }
     ));
     assert_eq!(*o.scaled.lock().unwrap(), vec![("gitea".to_string(), 2)]);
 }
@@ -215,12 +225,7 @@ async fn a_manually_changed_image_is_reverted() {
 #[tokio::test]
 async fn swarm_resolving_the_digest_is_not_a_drift() {
     // Swarm réécrit couramment la référence en y ajoutant le digest résolu.
-    let o = Fake::with(vec![svc(
-        "gitea",
-        "gitea/gitea:1.24@sha256:abcdef",
-        2,
-        2,
-    )]);
+    let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24@sha256:abcdef", 2, 2)]);
     let s = state_with_running_gitea().await;
 
     let report = Reconciler::new(&o, &s).reconcile(false).await.unwrap();
@@ -238,7 +243,10 @@ async fn detection_alone_never_touches_anything() {
 
     assert_eq!(report.drifts.len(), 1, "l'écart est bien vu");
     assert!(report.corrected.is_empty());
-    assert!(o.deployed.lock().unwrap().is_empty(), "aucune action en détection");
+    assert!(
+        o.deployed.lock().unwrap().is_empty(),
+        "aucune action en détection"
+    );
 }
 
 #[tokio::test]
@@ -295,10 +303,17 @@ async fn a_converging_service_is_reported_but_not_forced() {
 
     assert!(matches!(
         report.drifts[0],
-        Drift::Converging { running: 1, desired: 2, .. }
+        Drift::Converging {
+            running: 1,
+            desired: 2,
+            ..
+        }
     ));
     assert!(!report.drifts[0].is_correctable());
-    assert!(o.scaled.lock().unwrap().is_empty(), "on n'empile pas d'ordres");
+    assert!(
+        o.scaled.lock().unwrap().is_empty(),
+        "on n'empile pas d'ordres"
+    );
     assert!(o.deployed.lock().unwrap().is_empty());
 }
 
@@ -309,44 +324,44 @@ async fn one_failure_does_not_stop_the_others() {
 
     #[async_trait]
     impl Orchestrator for HalfBroken {
-    async fn tasks(
-        &self,
-        _: Option<&str>,
-    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
-        Ok(Vec::new())
-    }
+        async fn tasks(
+            &self,
+            _: Option<&str>,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
+            // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+            Ok(Vec::new())
+        }
 
-    async fn logs(
-        &self,
-        _: &str,
-        _: u32,
-    ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
-        Ok(Vec::new())
-    }
+        async fn logs(
+            &self,
+            _: &str,
+            _: u32,
+        ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LigneLog>> {
+            Ok(Vec::new())
+        }
         async fn enable_autolock(&self) -> hlb_orchestrator::Result<String> {
-        Ok("SWMKEY-fake".into())
-    }
-    async fn autolock_enabled(&self) -> hlb_orchestrator::Result<bool> {
-        Ok(false)
-    }
-    async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
-        Ok("swarm-fake".into())
-    }
-    async fn join_tokens(&self) -> hlb_orchestrator::Result<hlb_orchestrator::JoinTokens> {
-        Ok(hlb_orchestrator::JoinTokens {
-            manager: "SWMTKN-mgr".into(),
-            worker: "SWMTKN-wrk".into(),
-            advertise_addr: "127.0.0.1:2377".into(),
-        })
-    }
-    async fn nodes(&self) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::NodeInfo>> {
-        Ok(Vec::new())
-    }
-    async fn label_node(&self, _: &str, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
-        Ok(())
-    }
-    async fn exec_in_service(
+            Ok("SWMKEY-fake".into())
+        }
+        async fn autolock_enabled(&self) -> hlb_orchestrator::Result<bool> {
+            Ok(false)
+        }
+        async fn cluster_init(&self, _: Option<&str>) -> hlb_orchestrator::Result<String> {
+            Ok("swarm-fake".into())
+        }
+        async fn join_tokens(&self) -> hlb_orchestrator::Result<hlb_orchestrator::JoinTokens> {
+            Ok(hlb_orchestrator::JoinTokens {
+                manager: "SWMTKN-mgr".into(),
+                worker: "SWMTKN-wrk".into(),
+                advertise_addr: "127.0.0.1:2377".into(),
+            })
+        }
+        async fn nodes(&self) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::NodeInfo>> {
+            Ok(Vec::new())
+        }
+        async fn label_node(&self, _: &str, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
+            Ok(())
+        }
+        async fn exec_in_service(
             &self,
             _: &str,
             _: &[String],
@@ -372,17 +387,23 @@ async fn one_failure_does_not_stop_the_others() {
         async fn scale(&self, n: &str, r: u64) -> hlb_orchestrator::Result<()> {
             self.0.scale(n, r).await
         }
-        async fn create_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
-        Ok(hlb_orchestrator::VolumeInfo {
-            name: n.into(),
-            mountpoint: format!("/volumes/{n}"),
-            existed: false,
-        })
-    }
-    async fn inspect_volume(&self, n: &str) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
-        self.create_volume(n).await
-    }
-    async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
+        async fn create_volume(
+            &self,
+            n: &str,
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+            Ok(hlb_orchestrator::VolumeInfo {
+                name: n.into(),
+                mountpoint: format!("/volumes/{n}"),
+                existed: false,
+            })
+        }
+        async fn inspect_volume(
+            &self,
+            n: &str,
+        ) -> hlb_orchestrator::Result<hlb_orchestrator::VolumeInfo> {
+            self.create_volume(n).await
+        }
+        async fn status(&self, n: &str) -> hlb_orchestrator::Result<ServiceStatus> {
             self.0.status(n).await
         }
         async fn list(&self) -> hlb_orchestrator::Result<Vec<ServiceStatus>> {
@@ -391,11 +412,7 @@ async fn one_failure_does_not_stop_the_others() {
         async fn remove(&self, n: &str) -> hlb_orchestrator::Result<()> {
             self.0.remove(n).await
         }
-        async fn wait_healthy(
-            &self,
-            n: &str,
-            t: u64,
-        ) -> hlb_orchestrator::Result<ServiceStatus> {
+        async fn wait_healthy(&self, n: &str, t: u64) -> hlb_orchestrator::Result<ServiceStatus> {
             self.0.wait_healthy(n, t).await
         }
     }
@@ -432,7 +449,11 @@ async fn the_deploy_uses_the_digest_resolved_earlier_in_the_same_plan() {
     s.set_app_digest("gitea", "sha256:deadbeef").await.unwrap();
 
     let plan = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
-    Executor::new(&o, &s).apply(true).run("gitea", &plan).await.unwrap();
+    Executor::new(&o, &s)
+        .apply(true)
+        .run("gitea", &plan)
+        .await
+        .unwrap();
 
     assert_eq!(
         *o.deployed_images.lock().unwrap(),

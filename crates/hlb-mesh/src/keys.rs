@@ -40,8 +40,8 @@ impl KeyPair {
 
     /// Reconstruit la paire à partir d'une clé privée conservée au coffre.
     pub fn from_private(private_b64: &str) -> Result<Self> {
-        let bytes = unb64(private_b64)
-            .ok_or_else(|| Error::InvalidKey("base64 illisible".into()))?;
+        let bytes =
+            unb64(private_b64).ok_or_else(|| Error::InvalidKey("base64 illisible".into()))?;
 
         let secret: [u8; 32] = bytes
             .try_into()
@@ -64,8 +64,16 @@ fn b64(data: &[u8]) -> String {
         let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
         out.push(TABLE[(n >> 18 & 63) as usize] as char);
         out.push(TABLE[(n >> 12 & 63) as usize] as char);
-        out.push(if c.len() > 1 { TABLE[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if c.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            TABLE[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -76,7 +84,10 @@ fn unb64(s: &str) -> Option<Vec<u8>> {
         idx[*c as usize] = i as u8;
     }
 
-    let clean: Vec<u8> = s.bytes().filter(|b| *b != b'=' && !b.is_ascii_whitespace()).collect();
+    let clean: Vec<u8> = s
+        .bytes()
+        .filter(|b| *b != b'=' && !b.is_ascii_whitespace())
+        .collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
 
     for chunk in clean.chunks(4) {

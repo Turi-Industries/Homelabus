@@ -227,9 +227,9 @@ pub(crate) async fn noeuds_summary(s: &AppState) -> Vec<hlb_api::NoeudSummary> {
             .iter()
             .filter(|t| t.est_vivante())
             .filter(|t| {
-                t.node_id.as_deref().is_some_and(|n| {
-                    hostname.as_deref().is_some_and(|h| n == h) || n == adresse
-                })
+                t.node_id
+                    .as_deref()
+                    .is_some_and(|n| hostname.as_deref().is_some_and(|h| n == h) || n == adresse)
             })
             .map(|t| t.service.clone())
             .collect();
@@ -265,8 +265,12 @@ pub(crate) async fn noeuds_summary(s: &AppState) -> Vec<hlb_api::NoeudSummary> {
                 })
                 .unwrap_or_default(),
             uptime_s: r.and_then(|r| r.systeme.as_ref()).and_then(|y| y.uptime_s),
-            distro: r.and_then(|r| r.systeme.as_ref()).and_then(|y| y.distro.clone()),
-            noyau: r.and_then(|r| r.systeme.as_ref()).and_then(|y| y.noyau.clone()),
+            distro: r
+                .and_then(|r| r.systeme.as_ref())
+                .and_then(|y| y.distro.clone()),
+            noyau: r
+                .and_then(|r| r.systeme.as_ref())
+                .and_then(|y| y.noyau.clone()),
             agent_version: r.map(|r| r.agent_version.clone()),
             protocole: r.map(|r| r.protocol),
             taches: sur_ce_noeud,
@@ -497,7 +501,10 @@ async fn export_csv(
 
     let (csv, nom) = match quoi.as_str() {
         "audit" => {
-            if let Some(refus) = auth.identite().role.refus(hlb_types::rbac::Action::GererComptes)
+            if let Some(refus) = auth
+                .identite()
+                .role
+                .refus(hlb_types::rbac::Action::GererComptes)
             {
                 return (StatusCode::FORBIDDEN, refus).into_response();
             }
@@ -513,7 +520,10 @@ async fn export_csv(
             "sauvegardes.csv",
         ),
         "comptes" => {
-            if let Some(refus) = auth.identite().role.refus(hlb_types::rbac::Action::GererComptes)
+            if let Some(refus) = auth
+                .identite()
+                .role
+                .refus(hlb_types::rbac::Action::GererComptes)
             {
                 return (StatusCode::FORBIDDEN, refus).into_response();
             }
@@ -590,14 +600,16 @@ async fn rotation_secrets(
     Json(
         secrets
             .into_iter()
-            .map(|(nom, usage, age_s, jamais_tourne)| hlb_api::rotation::SecretARouler {
-                nature: hlb_api::rotation::Nature::deduire(&nom, &usage),
-                app: hlb_api::rotation::app_de(&nom),
-                nom,
-                usage,
-                age_s,
-                jamais_tourne,
-            })
+            .map(
+                |(nom, usage, age_s, jamais_tourne)| hlb_api::rotation::SecretARouler {
+                    nature: hlb_api::rotation::Nature::deduire(&nom, &usage),
+                    app: hlb_api::rotation::app_de(&nom),
+                    nom,
+                    usage,
+                    age_s,
+                    jamais_tourne,
+                },
+            )
             .collect(),
     )
 }
@@ -778,7 +790,11 @@ async fn televerser_logo(
     if corps.len() > MAX {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
-            format!("logo trop lourd ({} Ko, maximum {} Ko)\n", corps.len() / 1024, MAX / 1024),
+            format!(
+                "logo trop lourd ({} Ko, maximum {} Ko)\n",
+                corps.len() / 1024,
+                MAX / 1024
+            ),
         )
             .into_response();
     }
@@ -876,7 +892,9 @@ async fn creer_alias(
                 "la boîte « {nom} » visée par ce jeton n'existe plus pour {user}. \
                  Recrée-la, ou refais un jeton sans --mailbox"
             ),
-            None => format!("{user} n'a aucune boîte par défaut : l'alias n'aurait nulle part où aller"),
+            None => {
+                format!("{user} n'a aucune boîte par défaut : l'alias n'aurait nulle part où aller")
+            }
         };
         return (
             StatusCode::CONFLICT,
@@ -935,21 +953,27 @@ async fn creer_alias(
     // ⚠️ Permanent par défaut — Bitwarden n'a aucune notion de durée, et fabriquer une
     // expiration que l'utilisateur n'a pas demandée ferait mourir ses adresses sans
     // prévenir.
-    if let Err(e) = s.state.add_alias(
-        &user,
-        &boite,
-        &genere.local,
-        None,
-        indice.as_deref(),
-        Some(&description),
-    ).await
+    if let Err(e) = s
+        .state
+        .add_alias(
+            &user,
+            &boite,
+            &genere.local,
+            None,
+            indice.as_deref(),
+            Some(&description),
+        )
+        .await
     {
         return ApiError(e.to_string()).into_response();
     }
 
     // Le dossier de tri proposé, que l'utilisateur pourra changer.
     if let Some(d) = hlb_users::sieve::Regle::dossier_par_defaut(indice.as_deref()) {
-        let _ = s.state.set_alias_folder(&user, &genere.local, Some(&d)).await;
+        let _ = s
+            .state
+            .set_alias_folder(&user, &genere.local, Some(&d))
+            .await;
     }
 
     tracing::info!(user, alias = %genere.local, "alias créé par l'API addy.io");
@@ -1299,10 +1323,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // hérite de la limitation sans que personne ait à y penser. C'est le même
         // raisonnement que l'extracteur d'autorisation — ce qu'on peut oublier finit
         // par être oublié.
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            limiter,
-        ))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), limiter))
         .with_state(state)
 }
 
@@ -1329,11 +1350,7 @@ async fn limiter(
     }
 
     let classe = crate::debit::Classe::de(requete.method(), requete.uri().path());
-    let qui = crate::debit::client(
-        requete.headers(),
-        pair,
-        s.confiance_proxy,
-    );
+    let qui = crate::debit::client(requete.headers(), pair, s.confiance_proxy);
 
     match s.debit.verifier(&qui, classe, crate::auth::maintenant()) {
         crate::debit::Verdict::Passe => suite.run(requete).await,
@@ -1658,8 +1675,16 @@ async fn prometheus(_auth: Autorise<PeutLire>, AxumState(s): AxumState<Arc<AppSt
         // TOUT le lot : le collecteur perdrait aussi les métriques des autres, et
         // la panne d'une seule app rendrait la supervision aveugle.
         let (b, v, g) = (
-            s.state.seconds_since_last_success(&name).await.ok().flatten(),
-            s.state.seconds_since_last_verification(&name).await.ok().flatten(),
+            s.state
+                .seconds_since_last_success(&name)
+                .await
+                .ok()
+                .flatten(),
+            s.state
+                .seconds_since_last_verification(&name)
+                .await
+                .ok()
+                .flatten(),
             s.state.unverified_blocking(&name).await.unwrap_or(0),
         );
         apps.push(AppMetrics {
@@ -1842,9 +1867,8 @@ mod tests {
             // Le gabarit devient un préfixe : l'interface construit ses URL par
             // `format!`, donc le nom exact n'y figure pas.
             let motif = chemin.split('{').next().unwrap_or(chemin);
-            let consommee = ui.contains(motif)
-                || ui_ecrans.contains(motif)
-                || shell.contains(motif);
+            let consommee =
+                ui.contains(motif) || ui_ecrans.contains(motif) || shell.contains(motif);
             if !consommee {
                 mortes.push(chemin.to_string());
             }
@@ -1998,7 +2022,12 @@ mod tests {
 
     async fn get(r: Router, uri: &str) -> (StatusCode, serde_json::Value) {
         let resp = r
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("requête"))
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("requête"),
+            )
             .await
             .expect("réponse");
         let status = resp.status();
@@ -2060,7 +2089,12 @@ mod tests {
 
     async fn texte(r: Router, uri: &str) -> (StatusCode, String, String) {
         let resp = r
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("requête"))
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("requête"),
+            )
             .await
             .expect("réponse");
         let status = resp.status();
@@ -2082,8 +2116,14 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         // Un `application/json` ferait rejeter tout le lot par le collecteur.
         assert!(ct.starts_with("text/plain"), "{ct}");
-        assert!(body.contains("hlb_app_up{app=\"gitea\",status=\"running\"} 1"), "{body}");
-        assert!(body.contains("hlb_blocking_guides{app=\"gitea\"} 1"), "{body}");
+        assert!(
+            body.contains("hlb_app_up{app=\"gitea\",status=\"running\"} 1"),
+            "{body}"
+        );
+        assert!(
+            body.contains("hlb_blocking_guides{app=\"gitea\"} 1"),
+            "{body}"
+        );
         // Jamais sauvegardée : aucun échantillon d'âge (cf. metrics::render).
         assert!(!body.contains("hlb_backup_age_seconds{app="), "{body}");
     }
@@ -2099,7 +2139,9 @@ mod tests {
     /// Une API protégée, et la valeur du jeton qui l'ouvre.
     async fn app_protegee() -> (Router, String) {
         let st = State::in_memory().await.expect("base");
-        st.upsert_app("gitea", &manifest("gitea"), None).await.expect("upsert");
+        st.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("upsert");
 
         let (valeur, stocke) =
             hlb_types::generate_token("test", hlb_types::Role::Viewer, [42u8; 32]);
@@ -2148,7 +2190,13 @@ mod tests {
     async fn every_route_refuses_an_anonymous_caller() {
         // 🔴 L'API expose l'état du parc, le journal d'audit et les NOMS des secrets.
         // Une seule route oubliée suffit à tout donner.
-        for route in ["/api/apps", "/api/todo", "/api/audit", "/api/secrets", "/metrics"] {
+        for route in [
+            "/api/apps",
+            "/api/todo",
+            "/api/audit",
+            "/api/secrets",
+            "/metrics",
+        ] {
             let (r, _) = app_protegee().await;
             let s = get_route_avec_jeton(r, route, None).await;
             assert_eq!(s, StatusCode::UNAUTHORIZED, "{route} accepte un anonyme");
@@ -2557,7 +2605,11 @@ mod tests {
             .expect("corps");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(v["applique"], false);
-        assert!(v["blocages"].to_string().contains("arrête"), "{}", v["blocages"]);
+        assert!(
+            v["blocages"].to_string().contains("arrête"),
+            "{}",
+            v["blocages"]
+        );
     }
 
     #[tokio::test]
@@ -2638,7 +2690,9 @@ mod tests {
                     .method("PUT")
                     .uri("/api/backup/destinations/nas?apply=true")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"location":"/mnt/nas","classes":"importante"}"#))
+                    .body(Body::from(
+                        r#"{"location":"/mnt/nas","classes":"importante"}"#,
+                    ))
                     .expect("requête"),
             )
             .await
@@ -2649,7 +2703,11 @@ mod tests {
             .expect("corps");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(v["applique"], false);
-        assert!(v["blocages"].to_string().contains("importante"), "{}", v["blocages"]);
+        assert!(
+            v["blocages"].to_string().contains("importante"),
+            "{}",
+            v["blocages"]
+        );
     }
 
     #[tokio::test]
@@ -2784,7 +2842,9 @@ mod tests {
                     .uri("/api/inscription?apply=true")
                     .header("content-type", "application/json")
                     // Majuscules et espace : invalide comme partie locale d'adresse.
-                    .body(Body::from(r#"{"invitation":"lien-test","nom":"Alice Martin"}"#))
+                    .body(Body::from(
+                        r#"{"invitation":"lien-test","nom":"Alice Martin"}"#,
+                    ))
                     .expect("requête"),
             )
             .await
@@ -2796,7 +2856,10 @@ mod tests {
             .invitations(crate::auth::maintenant())
             .await
             .expect("invitations");
-        assert!(reste[0].utilisable(), "le lien a été gâché par une faute de frappe");
+        assert!(
+            reste[0].utilisable(),
+            "le lien a été gâché par une faute de frappe"
+        );
     }
 
     #[tokio::test]
@@ -2849,7 +2912,11 @@ mod tests {
         // Et l'état du compte est nommé.
         let c = etat.state.compte("alice").await.expect("compte");
         assert_eq!(c.coherence(), hlb_users::Coherence::Vide);
-        assert!(c.coherence().describe().contains("aucune"), "{}", c.coherence().describe());
+        assert!(
+            c.coherence().describe().contains("aucune"),
+            "{}",
+            c.coherence().describe()
+        );
     }
 
     #[tokio::test]
@@ -2891,7 +2958,9 @@ mod tests {
         st.upsert_app("postgres", &manifest("postgres"), None)
             .await
             .expect("app");
-        st.set_app_status("postgres", "running").await.expect("statut");
+        st.set_app_status("postgres", "running")
+            .await
+            .expect("statut");
 
         let r = router(etat_statut_public(st));
 
@@ -2911,7 +2980,11 @@ mod tests {
             .expect("corps");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         let services = v["services"].as_array().expect("services");
-        assert_eq!(services.len(), 1, "un service non exposé a fuité : {services:?}");
+        assert_eq!(
+            services.len(),
+            1,
+            "un service non exposé a fuité : {services:?}"
+        );
         assert_eq!(services[0]["nom"], "gitea");
     }
 
@@ -3011,7 +3084,10 @@ mod tests {
             .await
             .expect("corps");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(v["applique"], false, "une confirmation erronée a été acceptée");
+        assert_eq!(
+            v["applique"], false,
+            "une confirmation erronée a été acceptée"
+        );
     }
 
     #[tokio::test]
@@ -3086,10 +3162,7 @@ mod tests {
         assert_eq!(v["etapes"][0]["etat"], "faite");
 
         // Et le guide n'est plus en attente.
-        assert_eq!(
-            state.unverified_blocking("gitea").await.expect("guides"),
-            0
-        );
+        assert_eq!(state.unverified_blocking("gitea").await.expect("guides"), 0);
     }
 
     #[tokio::test]
@@ -3172,8 +3245,17 @@ mod tests {
         // 🔴 Sans base de séries, la route rend « indisponible » AVEC le remède — et
         // surtout pas une série vide, qui se dessinerait en ligne plate à zéro et se
         // lirait « machine au repos ».
-        let (s, v) = get_avec_jeton(app().await, "/api/v1/metriques/serie?q=hlb_cpu_used_ratio", None).await;
-        assert_eq!(s, StatusCode::OK, "une base absente n'est pas une panne du controller");
+        let (s, v) = get_avec_jeton(
+            app().await,
+            "/api/v1/metriques/serie?q=hlb_cpu_used_ratio",
+            None,
+        )
+        .await;
+        assert_eq!(
+            s,
+            StatusCode::OK,
+            "une base absente n'est pas une panne du controller"
+        );
         let raison = v["raison"].as_str().expect("une raison");
         assert!(raison.contains("--metrics-url"), "{raison}");
         assert!(v["points"].is_null(), "aucune série ne doit être fabriquée");
@@ -3184,7 +3266,13 @@ mod tests {
         // 🔴 Le rôle `utilisateur` est celui d'une personne qui a un compte. Lui ouvrir
         // /api/audit et /api/secrets reviendrait à donner l'inventaire des secrets et
         // l'historique des opérations à quiconque a une boîte mail.
-        for route in ["/api/apps", "/api/todo", "/api/audit", "/api/secrets", "/metrics"] {
+        for route in [
+            "/api/apps",
+            "/api/todo",
+            "/api/audit",
+            "/api/secrets",
+            "/metrics",
+        ] {
             let st = State::in_memory().await.expect("base");
             let (valeur, stocke) =
                 hlb_types::generate_token("portail", hlb_types::Role::Utilisateur, [9u8; 32]);
@@ -3192,7 +3280,11 @@ mod tests {
             let r = router(etat(st, false));
 
             let s = get_route_avec_jeton(r, route, Some(&valeur)).await;
-            assert_eq!(s, StatusCode::FORBIDDEN, "{route} ouvert à un simple utilisateur");
+            assert_eq!(
+                s,
+                StatusCode::FORBIDDEN,
+                "{route} ouvert à un simple utilisateur"
+            );
         }
     }
 
@@ -3221,8 +3313,14 @@ mod tests {
             .await
             .expect("corps");
         let texte = String::from_utf8_lossy(&corps);
-        assert!(texte.contains("viewer"), "le rôle requis doit être nommé : {texte}");
-        assert!(texte.contains("utilisateur"), "le rôle détenu doit être nommé : {texte}");
+        assert!(
+            texte.contains("viewer"),
+            "le rôle requis doit être nommé : {texte}"
+        );
+        assert!(
+            texte.contains("utilisateur"),
+            "le rôle détenu doit être nommé : {texte}"
+        );
     }
 
     #[tokio::test]
@@ -3231,7 +3329,9 @@ mod tests {
         // aussi » alors que `add_alias` était appelé directement. Un profil `invite`,
         // limité à ZÉRO alias permanent, en créait autant qu'il voulait par HTTP.
         let st = State::in_memory().await.expect("base");
-        st.upsert_user("invite", "invite", None).await.expect("compte");
+        st.upsert_user("invite", "invite", None)
+            .await
+            .expect("compte");
         st.add_mailbox("invite", "invite", "turi.fr", true)
             .await
             .expect("boîte");
@@ -3239,7 +3339,9 @@ mod tests {
         let (valeur, stocke) =
             hlb_types::generate_token("bw", hlb_types::Role::Operator, [3u8; 32]);
         st.store_token(&stocke).await.expect("jeton");
-        st.set_token_user("bw", Some("invite")).await.expect("rattachement");
+        st.set_token_user("bw", Some("invite"))
+            .await
+            .expect("rattachement");
 
         let r = router(etat(st, false));
 
@@ -3290,5 +3392,4 @@ mod tests {
             .expect("réponse");
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
-
 }

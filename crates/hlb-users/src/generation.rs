@@ -69,13 +69,7 @@ pub fn nettoyer_indice(brut: &str) -> String {
     let s: String = brut
         .to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
 
     // Les tirets en tête, en queue ou en série sont laids et parfois refusés.

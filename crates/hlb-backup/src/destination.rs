@@ -121,7 +121,10 @@ impl Destination {
         if classes.is_empty() {
             // 🔴 Une destination qui n'accepte rien ne reçoit rien. Le dire, parce
             // qu'elle ressemble par ailleurs à une destination configurée.
-            format!("{} → {lieu}  ⚠️ n'accepte AUCUNE classe : rien n'y sera envoyé", self.nom)
+            format!(
+                "{} → {lieu}  ⚠️ n'accepte AUCUNE classe : rien n'y sera envoyé",
+                self.nom
+            )
         } else {
             format!("{} → {lieu}  [{}]", self.nom, classes.join(", "))
         }
@@ -173,10 +176,7 @@ impl Destination {
     ///
     /// `network` sert aux dépôts S3 servis DANS le cluster (Garage) : sans lui, le
     /// conteneur restic ne résout pas `garage`.
-    pub fn runner(
-        &self,
-        network: Option<&str>,
-    ) -> (crate::runner::ContainerRunner, String) {
+    pub fn runner(&self, network: Option<&str>) -> (crate::runner::ContainerRunner, String) {
         let mut r = crate::runner::ContainerRunner::default();
 
         if self.est_s3() {
@@ -200,9 +200,13 @@ pub enum Etat {
     /// protégé. La confondre avec un retard ferait chercher une panne récente, alors
     /// que le routage n'a peut-être jamais été branché.
     Jamais,
-    Frais { age_s: i64 },
+    Frais {
+        age_s: i64,
+    },
     /// En retard au-delà du seuil.
-    Perime { age_s: i64 },
+    Perime {
+        age_s: i64,
+    },
 }
 
 impl Etat {
@@ -321,11 +325,7 @@ pub async fn destinations_pour<S: SourceCouverture>(
 /// destinations fait passer un hors-site mort depuis trois semaines pour une sauvegarde
 /// de deux heures, parce que le NAS, lui, tourne. On croit le 3-2-1 tenu alors qu'il ne
 /// reste qu'une copie, sur les mêmes machines.
-pub async fn couverture_de<S: SourceCouverture>(
-    source: &S,
-    app: &str,
-    seuil_s: i64,
-) -> Couverture {
+pub async fn couverture_de<S: SourceCouverture>(source: &S, app: &str, seuil_s: i64) -> Couverture {
     let mut noms: Vec<String> = Vec::new();
     for c in [Classe::Critique, Classe::Volumineux] {
         for d in destinations_pour(source, app, c).await {
@@ -423,11 +423,7 @@ mod tests {
                 dest("nas", vec![Classe::Critique, Classe::Volumineux]),
                 dest("offsite", vec![Classe::Critique]),
             ],
-            routes: vec![(
-                "immich".into(),
-                Classe::Volumineux,
-                vec!["offsite".into()],
-            )],
+            routes: vec![("immich".into(), Classe::Volumineux, vec!["offsite".into()])],
             ages: Vec::new(),
         };
 
@@ -453,7 +449,11 @@ mod tests {
             ages: Vec::new(),
         };
         let c = couverture_de(&s, "seafile", 12 * 3_600).await;
-        assert_eq!(c.par_destination.len(), 2, "les destinations sont bien déclarées");
+        assert_eq!(
+            c.par_destination.len(),
+            2,
+            "les destinations sont bien déclarées"
+        );
         assert_eq!(c.copies_a_jour(), 0, "et ne protègent de rien");
     }
 
@@ -474,7 +474,6 @@ mod tests {
         let noms: Vec<&str> = c.par_destination.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(noms, vec!["aaa", "mmm", "zzz"]);
     }
-
 
     fn d(nom: &str, location: &str, classes: Vec<Classe>) -> Destination {
         Destination {
@@ -550,7 +549,11 @@ mod tests {
     fn credentials_never_reach_the_command_line() {
         // Par l'environnement seulement : une ligne de commande est lisible par tout
         // utilisateur de la machine via `ps`.
-        let dest = d("offsite", "s3:https://s3.example.com/depot", vec![Classe::Critique]);
+        let dest = d(
+            "offsite",
+            "s3:https://s3.example.com/depot",
+            vec![Classe::Critique],
+        );
         let env = dest.env(Some("AKIA123:secret456")).expect("identifiants");
 
         assert_eq!(env.len(), 2);
@@ -563,10 +566,17 @@ mod tests {
         // 🔴 Sans clés, restic échouerait sur une erreur d'autorisation S3 qui ne dit
         // pas que le secret n'a jamais été déposé. Mieux vaut refuser ici, avec la
         // commande à taper.
-        let dest = d("offsite", "s3:https://s3.example.com/depot", vec![Classe::Critique]);
+        let dest = d(
+            "offsite",
+            "s3:https://s3.example.com/depot",
+            vec![Classe::Critique],
+        );
         let e = dest.env(None).expect_err("doit refuser").to_string();
         assert!(e.contains("sans identifiants"), "{e}");
-        assert!(e.contains("hlb backup dest add"), "l'erreur doit dire quoi faire : {e}");
+        assert!(
+            e.contains("hlb backup dest add"),
+            "l'erreur doit dire quoi faire : {e}"
+        );
     }
 
     #[test]
@@ -609,7 +619,10 @@ mod tests {
         let s = dest.describe();
         assert!(!s.contains("tressecret"), "{s}");
         assert!(!s.contains("AKIA123"), "{s}");
-        assert!(s.contains("s3.example.com/depot"), "le lieu reste lisible : {s}");
+        assert!(
+            s.contains("s3.example.com/depot"),
+            "le lieu reste lisible : {s}"
+        );
     }
 
     #[test]
@@ -625,9 +638,17 @@ mod tests {
         // Le découpage réel d'une installation domestique : tout va sur le NAS, le
         // critique part aussi hors site, et le volumineux ne part hors site que pour
         // les apps qu'on choisit — parce qu'une connexion domestique ne l'avale pas.
-        let nas = d("nas", "/mnt/nas/restic", vec![Classe::Critique, Classe::Volumineux]);
+        let nas = d(
+            "nas",
+            "/mnt/nas/restic",
+            vec![Classe::Critique, Classe::Volumineux],
+        );
         let garage = d("garage", "s3:http://garage:3900/b", vec![Classe::Critique]);
-        let offsite = d("offsite", "s3:https://s3.ext/d", vec![Classe::Critique, Classe::Volumineux]);
+        let offsite = d(
+            "offsite",
+            "s3:https://s3.ext/d",
+            vec![Classe::Critique, Classe::Volumineux],
+        );
 
         assert!(nas.accepte(Classe::Volumineux));
         assert!(garage.accepte(Classe::Critique));

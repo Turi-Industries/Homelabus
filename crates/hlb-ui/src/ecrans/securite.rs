@@ -86,14 +86,11 @@ pub fn afficher(
                 c::pastille(ui, e.attention());
                 ui.add_space(mesures::ESPACE_SERRE);
                 c::mono(ui, &e.hote);
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        // Ce que le manifest DEMANDE, à droite : c'est la référence
-                        // contre laquelle on lit la ligne.
-                        c::legende(ui, &e.declaree);
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Ce que le manifest DEMANDE, à droite : c'est la référence
+                    // contre laquelle on lit la ligne.
+                    c::legende(ui, &e.declaree);
+                });
             });
             ui.add_space(mesures::ESPACE_SERRE);
             c::texte_libre(ui, &e.describe());
@@ -120,7 +117,10 @@ fn runbook(ui: &mut egui::Ui) {
          main, un runbook est faux le jour où l'on en a besoin.",
     );
     ui.add_space(mesures::ESPACE_SERRE);
-    c::mono(ui, "curl -H \"Authorization: Bearer <jeton>\" <controller>/api/runbook");
+    c::mono(
+        ui,
+        "curl -H \"Authorization: Bearer <jeton>\" <controller>/api/runbook",
+    );
     ui.add_space(mesures::ESPACE_SERRE);
     c::legende(
         ui,
@@ -156,12 +156,9 @@ fn acces_de_secours(ui: &mut egui::Ui, secours: Option<&Vec<GardeFou>>) -> Optio
                 c::pastille(ui, g.attention());
                 ui.add_space(mesures::ESPACE_SERRE);
                 c::texte_libre(ui, &g.titre);
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        c::legende(ui, &g.etat());
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    c::legende(ui, &g.etat());
+                });
             });
 
             ui.add_space(mesures::ESPACE_SERRE);

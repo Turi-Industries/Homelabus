@@ -51,12 +51,7 @@ pub struct Vue<'a> {
     pub etroit: bool,
 }
 
-pub fn afficher(
-    ui: &mut egui::Ui,
-    nom: &str,
-    onglet: OngletApp,
-    vue: Vue<'_>,
-) -> Option<Demande> {
+pub fn afficher(ui: &mut egui::Ui, nom: &str, onglet: OngletApp, vue: Vue<'_>) -> Option<Demande> {
     let Vue {
         detail,
         fraicheur,
@@ -148,12 +143,7 @@ pub fn afficher(
 /// ⚠️ Chacun lance un **aperçu**, jamais l'action : c'est le panneau qui, ensuite,
 /// propose d'appliquer. Un bouton qui agirait directement transformerait un clic
 /// distrait en installation.
-fn actions_app(
-    ui: &mut egui::Ui,
-    nom: &str,
-    d: &AppDetail,
-    etroit: bool,
-) -> Option<Demande> {
+fn actions_app(ui: &mut egui::Ui, nom: &str, d: &AppDetail, etroit: bool) -> Option<Demande> {
     let mut demande = None;
     let _ = etroit;
 
@@ -342,7 +332,11 @@ fn apercu(ui: &mut egui::Ui, d: &AppDetail, p: crate::design::Palette) {
         let bloquants = d.guides.iter().any(|g| g.blocking);
         c::carte_attention(
             ui,
-            if bloquants { Attention::Notice } else { Attention::Ok },
+            if bloquants {
+                Attention::Notice
+            } else {
+                Attention::Ok
+            },
             |ui| {
                 c::sous_titre(ui, "Actions manuelles");
                 ui.add_space(mesures::ESPACE_SERRE);
@@ -391,7 +385,11 @@ fn config(ui: &mut egui::Ui, d: &AppDetail, etroit: bool) {
                         }
                         c::badge(
                             ui,
-                            if v.sauvegarde { "sauvegardé" } else { "NON sauvegardé" },
+                            if v.sauvegarde {
+                                "sauvegardé"
+                            } else {
+                                "NON sauvegardé"
+                            },
                             if v.sauvegarde { p.ok } else { p.critique },
                         );
                     });
@@ -553,11 +551,7 @@ fn sauvegardes(ui: &mut egui::Ui, d: &AppDetail, p: crate::design::Palette) {
     });
 }
 
-fn historique(
-    ui: &mut egui::Ui,
-    d: &AppDetail,
-    versions: Option<&Vec<hlb_api::VersionManifest>>,
-) {
+fn historique(ui: &mut egui::Ui, d: &AppDetail, versions: Option<&Vec<hlb_api::VersionManifest>>) {
     if d.journal.is_empty() {
         c::etat_vide(ui, "Aucune action enregistrée sur cette application.", None);
     } else {

@@ -130,8 +130,14 @@ fn hosts_with_dashes_produce_valid_matchers() {
         sso_paths: vec!["/oidc/callback".into()],
         needs_forward_auth: false,
     };
-    caddy_validate(&render_frontend(std::slice::from_ref(&r), &Config::default()), "hôte avec tirets");
-    caddy_validate(&render_backend(&[r], &Config::default()), "backend avec tirets");
+    caddy_validate(
+        &render_frontend(std::slice::from_ref(&r), &Config::default()),
+        "hôte avec tirets",
+    );
+    caddy_validate(
+        &render_backend(&[r], &Config::default()),
+        "backend avec tirets",
+    );
 }
 
 /// Le forward-auth produit-il une configuration que Caddy accepte ? (§5.0)
@@ -199,17 +205,23 @@ fn the_wildcard_site_block_is_structurally_valid() {
     // On REMPLACE la ligne `dns` par une sous-directive standard plutôt que de la
     // retirer : un bloc `tls { }` vide est refusé par Caddy, et le test échouerait
     // sur son propre montage au lieu de vérifier le générateur.
-    let out = render_frontend(&[], &Config { acme: Some(a), ..Config::default() })
-        .lines()
-        .map(|l| {
-            if l.trim_start().starts_with("dns ") {
-                "\t\tprotocols tls1.2 tls1.3"
-            } else {
-                l
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let out = render_frontend(
+        &[],
+        &Config {
+            acme: Some(a),
+            ..Config::default()
+        },
+    )
+    .lines()
+    .map(|l| {
+        if l.trim_start().starts_with("dns ") {
+            "\t\tprotocols tls1.2 tls1.3"
+        } else {
+            l
+        }
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
 
     caddy_validate(&out, "bloc wildcard");
 }

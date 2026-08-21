@@ -56,7 +56,10 @@ impl NtfyClient {
             .body(n.body.clone())
             .send()
             .await
-            .map_err(|source| Error::Http { url: url.clone(), source })?;
+            .map_err(|source| Error::Http {
+                url: url.clone(),
+                source,
+            })?;
 
         if !resp.status().is_success() {
             return Err(Error::Rejected(resp.status().as_u16()));
@@ -99,7 +102,11 @@ pub async fn notify_or_log(client: Option<&NtfyClient>, n: &Notification) {
             }
         }
         None => {
-            let niveau = if n.level >= Level::Critical { "🔴" } else { "🟠" };
+            let niveau = if n.level >= Level::Critical {
+                "🔴"
+            } else {
+                "🟠"
+            };
             tracing::warn!("{niveau} {} — {} (aucun ntfy configuré)", n.title, n.body);
         }
     }

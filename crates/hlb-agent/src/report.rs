@@ -161,7 +161,10 @@ mod tests {
             // 48/50 Go = 96 %, au-delà du seuil critique.
             disque("/var/lib/docker", 50_000, 48_000),
         ]);
-        assert_eq!(r.worst_pressure(&Thresholds::default()), DiskPressure::Critical);
+        assert_eq!(
+            r.worst_pressure(&Thresholds::default()),
+            DiskPressure::Critical
+        );
         assert!(!r.allows_deploy(&Thresholds::default()));
     }
 
@@ -188,7 +191,10 @@ mod tests {
     #[test]
     fn a_node_without_disks_is_not_assumed_broken() {
         let r = rapport(Vec::new());
-        assert_eq!(r.worst_pressure(&Thresholds::default()), DiskPressure::Normal);
+        assert_eq!(
+            r.worst_pressure(&Thresholds::default()),
+            DiskPressure::Normal
+        );
         assert!(r.allows_deploy(&Thresholds::default()));
     }
 

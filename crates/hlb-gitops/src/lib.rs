@@ -219,7 +219,9 @@ impl GitMirror {
             let Ok(objet) = entree.to_object(&self.repo) else {
                 continue;
             };
-            let Some(blob) = objet.as_blob() else { continue };
+            let Some(blob) = objet.as_blob() else {
+                continue;
+            };
             let Ok(contenu) = std::str::from_utf8(blob.content()) else {
                 continue;
             };
@@ -297,7 +299,11 @@ mod tests {
         .expect("export 3");
 
         let v = m.versions("gitea", 10).expect("versions");
-        assert_eq!(v.len(), 2, "deux contenus distincts, pas trois commits : {v:#?}");
+        assert_eq!(
+            v.len(),
+            2,
+            "deux contenus distincts, pas trois commits : {v:#?}"
+        );
         assert!(v[0].2.contains("1.24"), "le plus récent d'abord");
         assert!(v[1].2.contains("1.23"));
     }
@@ -392,7 +398,11 @@ mod tests {
         m.export(
             &[
                 ("gitea".into(), "running".into(), manifest("gitea", "1.24")),
-                ("vikunja".into(), "running".into(), manifest("vikunja", "0.24")),
+                (
+                    "vikunja".into(),
+                    "running".into(),
+                    manifest("vikunja", "0.24"),
+                ),
             ],
             "deux apps",
         )

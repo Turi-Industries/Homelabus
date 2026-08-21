@@ -55,12 +55,7 @@ pub fn afficher(ui: &mut egui::Ui, data: &Snapshot, etroit: bool) -> Option<Stri
 }
 
 /// Rend `true` si la carte a été cliquée.
-fn carte_app(
-    ui: &mut egui::Ui,
-    a: &AppSummary,
-    etroit: bool,
-    p: crate::design::Palette,
-) -> bool {
+fn carte_app(ui: &mut egui::Ui, a: &AppSummary, etroit: bool, p: crate::design::Palette) -> bool {
     let att = a.attention();
     let reponse = c::carte_attention(ui, att, |ui| {
         ui.horizontal(|ui| {

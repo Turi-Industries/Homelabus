@@ -226,7 +226,10 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     let mut out = String::new();
 
     let _ = writeln!(out, "# Généré par Homelabus — ne pas éditer à la main.");
-    let _ = writeln!(out, "# Toute modification sera écrasée à la prochaine réconciliation.\n");
+    let _ = writeln!(
+        out,
+        "# Toute modification sera écrasée à la prochaine réconciliation.\n"
+    );
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "\temail {}", cfg.acme_email);
     let _ = writeln!(out, "\tadmin 0.0.0.0:2019");
@@ -275,7 +278,10 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
 
         // §9 — en-têtes de sécurité posés une fois, au point d'entrée.
         let _ = writeln!(out, "\theader {{");
-        let _ = writeln!(out, "\t\tStrict-Transport-Security \"max-age=31536000; includeSubDomains\"");
+        let _ = writeln!(
+            out,
+            "\t\tStrict-Transport-Security \"max-age=31536000; includeSubDomains\""
+        );
         let _ = writeln!(out, "\t\tX-Content-Type-Options nosniff");
         let _ = writeln!(out, "\t\tReferrer-Policy strict-origin-when-cross-origin");
         let _ = writeln!(out, "\t\t-Server");
@@ -283,7 +289,10 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
 
         if !r.public {
             // Exposition privée par défaut : seul le réseau interne passe.
-            let _ = writeln!(out, "\n\t# Route privée : accessible uniquement depuis le VPN.");
+            let _ = writeln!(
+                out,
+                "\n\t# Route privée : accessible uniquement depuis le VPN."
+            );
             let _ = writeln!(out, "\t@externe not remote_ip {}", PRIVATE_RANGES.join(" "));
             let _ = writeln!(out, "\trespond @externe 403");
         }
@@ -420,11 +429,7 @@ pub fn render_backend(routes: &[Route], cfg: &Config) -> String {
     let _ = writeln!(out, "\tauto_https off");
     let _ = writeln!(out, "}}\n");
 
-    let listen = cfg
-        .backend_upstream
-        .rsplit(':')
-        .next()
-        .unwrap_or("8080");
+    let listen = cfg.backend_upstream.rsplit(':').next().unwrap_or("8080");
 
     // ⚠️ Un SEUL bloc pour l'adresse d'écoute : Caddy refuse deux définitions de site
     // sur la même adresse (« ambiguous site definition »). Tous les hôtes cohabitent
@@ -497,7 +502,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("\n}").next())
             .expect("bloc gitea");
-        assert!(!gitea_block.contains("anubis"), "gitea ne doit pas passer par Anubis");
+        assert!(
+            !gitea_block.contains("anubis"),
+            "gitea ne doit pas passer par Anubis"
+        );
 
         let vikunja_block = out
             .split("tasks.example.fr {")
@@ -549,7 +557,10 @@ mod tests {
         let out = render_frontend(&[gitea()], &Config::default());
         assert!(out.contains("Strict-Transport-Security"));
         assert!(out.contains("X-Content-Type-Options nosniff"));
-        assert!(out.contains("-Server"), "la bannière serveur doit être retirée");
+        assert!(
+            out.contains("-Server"),
+            "la bannière serveur doit être retirée"
+        );
     }
 
     #[test]
@@ -584,7 +595,10 @@ mod tests {
     #[test]
     fn generated_files_warn_against_hand_editing() {
         let cfg = Config::default();
-        for out in [render_frontend(&[gitea()], &cfg), render_backend(&[gitea()], &cfg)] {
+        for out in [
+            render_frontend(&[gitea()], &cfg),
+            render_backend(&[gitea()], &cfg),
+        ] {
             assert!(out.contains("Généré par Homelabus"));
         }
     }
@@ -655,11 +669,17 @@ mod tests {
     }
 
     fn avec_portail() -> Config {
-        Config { forward_auth: Some(ForwardAuth::default()), ..Config::default() }
+        Config {
+            forward_auth: Some(ForwardAuth::default()),
+            ..Config::default()
+        }
     }
 
     fn protegee() -> Route {
-        Route { needs_forward_auth: true, ..vikunja() }
+        Route {
+            needs_forward_auth: true,
+            ..vikunja()
+        }
     }
 
     #[test]
@@ -689,9 +709,14 @@ mod tests {
             .and_then(|s| s.split("\n}").next())
             .expect("bloc");
 
-        let i_nettoyage = bloc.find("request_header -X-Auth-Request-User").expect("nettoyage");
+        let i_nettoyage = bloc
+            .find("request_header -X-Auth-Request-User")
+            .expect("nettoyage");
         let i_portail = bloc.find("forward_auth ").expect("forward_auth");
-        assert!(i_nettoyage < i_portail, "le nettoyage doit précéder le portail :\n{bloc}");
+        assert!(
+            i_nettoyage < i_portail,
+            "le nettoyage doit précéder le portail :\n{bloc}"
+        );
     }
 
     #[test]
@@ -702,7 +727,11 @@ mod tests {
         assert!(out.contains("handle /oauth2/* {"), "{out}");
 
         let bloc = out.split("handle /oauth2/* {").nth(1).expect("bloc");
-        assert!(bloc.trim_start().starts_with("reverse_proxy oauth2-proxy:4180"), "{bloc}");
+        assert!(
+            bloc.trim_start()
+                .starts_with("reverse_proxy oauth2-proxy:4180"),
+            "{bloc}"
+        );
     }
 
     #[test]
@@ -714,7 +743,10 @@ mod tests {
         // 🔴 Le matcher `status` n'existe QUE dans le bloc forward_auth : au niveau
         // du site, Caddy refuse de démarrer. Vérifié par caddy_validates.rs.
         let apres = out.split("forward_auth ").nth(1).expect("bloc");
-        assert!(apres.contains("@non-authentifie"), "doit être imbriqué :\n{apres}");
+        assert!(
+            apres.contains("@non-authentifie"),
+            "doit être imbriqué :\n{apres}"
+        );
         assert!(out.contains("redir * /oauth2/sign_in?rd="), "{out}");
     }
 
@@ -801,7 +833,10 @@ spec:
         // une semaine — tous les services en TLS invalide d'un coup.
         let out = render_frontend(&[gitea(), vikunja()], &avec_acme(false));
         // La directive elle-même, pas sa mention en commentaire.
-        let directives = out.lines().filter(|l| l.trim_start().starts_with("dns ")).count();
+        let directives = out
+            .lines()
+            .filter(|l| l.trim_start().starts_with("dns "))
+            .count();
         assert_eq!(directives, 1, "{out}");
     }
 
@@ -809,7 +844,10 @@ spec:
     fn staging_says_loudly_that_certificates_are_untrusted() {
         let out = render_frontend(&[], &avec_acme(true));
         assert!(out.contains("acme-staging-v02"), "{out}");
-        assert!(out.contains("ne sont PAS"), "l'avertissement doit être visible :\n{out}");
+        assert!(
+            out.contains("ne sont PAS"),
+            "l'avertissement doit être visible :\n{out}"
+        );
     }
 
     #[test]

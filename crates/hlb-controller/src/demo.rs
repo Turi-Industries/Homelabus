@@ -74,9 +74,16 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- Sauvegardes : les quatre cas qui comptent ---------------------------
-    state.upsert_destination("nas", "/mnt/nas/restic", "critique,volumineux", None).await?;
     state
-        .upsert_destination("offsite", "s3:s3.eu-central.example/hlb", "critique", Some("backup-dest-offsite"))
+        .upsert_destination("nas", "/mnt/nas/restic", "critique,volumineux", None)
+        .await?;
+    state
+        .upsert_destination(
+            "offsite",
+            "s3:s3.eu-central.example/hlb",
+            "critique",
+            Some("backup-dest-offsite"),
+        )
         .await?;
 
     // Fraîche partout : le cas nominal.
@@ -92,10 +99,18 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     // 🔴 Le cas piège du §8.1 : le NAS tourne, le hors-site est mort. Un résumé qui
     // prendrait le MAX passerait ça pour une sauvegarde de deux heures, alors qu'il ne
     // reste qu'une copie, sur les mêmes machines.
-    state.record_backup_to("immich", "volume", "nas", Some("c9d0e1f2"), None).await?;
+    state
+        .record_backup_to("immich", "volume", "nas", Some("c9d0e1f2"), None)
+        .await?;
     for _ in 0..4 {
         state
-            .record_backup_to("immich", "volume", "offsite", None, Some("connexion refusée"))
+            .record_backup_to(
+                "immich",
+                "volume",
+                "offsite",
+                None,
+                Some("connexion refusée"),
+            )
             .await?;
     }
 
@@ -171,14 +186,32 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     state
         .record_verification("immich", "e5f6a7b8", false, Some("3 blocs illisibles"))
         .await?;
-    state.record_drill("postgres", true, Some(42), 187, "restauration en bac à sable").await?;
+    state
+        .record_drill(
+            "postgres",
+            true,
+            Some(42),
+            187,
+            "restauration en bac à sable",
+        )
+        .await?;
 
     // --- Actions manuelles en attente ----------------------------------------
     state
-        .add_guide("n8n", "premier-admin", "Créer le compte administrateur", true)
+        .add_guide(
+            "n8n",
+            "premier-admin",
+            "Créer le compte administrateur",
+            true,
+        )
         .await?;
     state
-        .add_guide("jellyfin", "bibliotheques", "Déclarer les bibliothèques", false)
+        .add_guide(
+            "jellyfin",
+            "bibliotheques",
+            "Déclarer les bibliothèques",
+            false,
+        )
         .await?;
 
     // --- Secrets : noms et usages, jamais de valeurs -------------------------
@@ -197,18 +230,30 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- Comptes humains ------------------------------------------------------
-    state.upsert_user("remy", "illimite", Some("pid-remy")).await?;
+    state
+        .upsert_user("remy", "illimite", Some("pid-remy"))
+        .await?;
     state.add_mailbox("remy", "remy", "turi.fr", true).await?;
-    state.set_user_role("remy", hlb_types::Role::Admin, Some("bootstrap")).await?;
+    state
+        .set_user_role("remy", hlb_types::Role::Admin, Some("bootstrap"))
+        .await?;
 
-    state.upsert_user("camille", "standard", Some("pid-camille")).await?;
-    state.add_mailbox("camille", "camille", "turi.fr", true).await?;
-    state.set_user_role("camille", hlb_types::Role::Operator, Some("remy")).await?;
+    state
+        .upsert_user("camille", "standard", Some("pid-camille"))
+        .await?;
+    state
+        .add_mailbox("camille", "camille", "turi.fr", true)
+        .await?;
+    state
+        .set_user_role("camille", hlb_types::Role::Operator, Some("remy"))
+        .await?;
 
     // 🔴 Un compte à MOITIÉ créé : identité posée, aucune boîte. La personne se
     // connecte partout et son adresse ne reçoit rien — ça ne se voit qu'au premier
     // courriel perdu, souvent une réinitialisation de mot de passe.
-    state.upsert_user("dominique", "standard", Some("pid-dominique")).await?;
+    state
+        .upsert_user("dominique", "standard", Some("pid-dominique"))
+        .await?;
 
     // 🔴 Et l'inverse : boîte créée, aucune identité.
     state.upsert_user("sacha", "invite", None).await?;
@@ -218,28 +263,47 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     let jour = 86_400;
     // Permanent.
     state
-        .add_alias("remy", "remy", "impots-k3m9x2", None, Some("impots"), Some("impots.gouv.fr"))
+        .add_alias(
+            "remy",
+            "remy",
+            "impots-k3m9x2",
+            None,
+            Some("impots"),
+            Some("impots.gouv.fr"),
+        )
         .await?;
     // Temporaire encore valide.
     state
         .add_alias(
-            "remy", "remy", "concours-p7t4nz",
-            Some(maintenant + 20 * jour), Some("concours"), Some("jeu-concours"),
+            "remy",
+            "remy",
+            "concours-p7t4nz",
+            Some(maintenant + 20 * jour),
+            Some("concours"),
+            Some("jeu-concours"),
         )
         .await?;
     // 🔴 Expiré ET TOUJOURS ACTIF : la purge n'a pas tourné, l'adresse reçoit encore.
     // C'est le seul état qui trahit la promesse faite à l'utilisateur.
     state
         .add_alias(
-            "remy", "remy", "newsletter-w2r8kd",
-            Some(maintenant - 3 * jour), Some("newsletter"), Some("infolettre du fournisseur"),
+            "remy",
+            "remy",
+            "newsletter-w2r8kd",
+            Some(maintenant - 3 * jour),
+            Some("newsletter"),
+            Some("infolettre du fournisseur"),
         )
         .await?;
     // Expiré et retiré : l'état nominal après purge.
     state
         .add_alias(
-            "remy", "remy", "essai-b6h1qc",
-            Some(maintenant - 30 * jour), Some("essai"), None,
+            "remy",
+            "remy",
+            "essai-b6h1qc",
+            Some(maintenant - 30 * jour),
+            Some("essai"),
+            None,
         )
         .await?;
     state.deactivate_alias("remy", "essai-b6h1qc").await?;
@@ -247,11 +311,22 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     // ⚠️ Trois valeurs distinctes pour le dossier de tri : `NULL` (rien décidé, on
     // propose un défaut), `""` (choix explicite de ne PAS trier) et un dossier choisi.
     // Les confondre réimposerait un dossier à chaque régénération.
-    state.set_alias_folder("remy", "impots-k3m9x2", Some("Administratif/Impôts")).await?;
-    state.set_alias_folder("remy", "concours-p7t4nz", Some("")).await?;
+    state
+        .set_alias_folder("remy", "impots-k3m9x2", Some("Administratif/Impôts"))
+        .await?;
+    state
+        .set_alias_folder("remy", "concours-p7t4nz", Some(""))
+        .await?;
 
     state
-        .add_alias("camille", "camille", "amazon-r4j8mv", None, Some("amazon"), Some("amazon.fr"))
+        .add_alias(
+            "camille",
+            "camille",
+            "amazon-r4j8mv",
+            None,
+            Some("amazon"),
+            Some("amazon.fr"),
+        )
         .await?;
 
     // --- Annonces : les quatre niveaux, dont un incident SUIVI ----------------
@@ -330,7 +405,15 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
     // rapprocher « l'app est tombée » de « la mise à jour a été appliquée » — ne montre
     // rien du tout. C'est l'écran qui a rendu le défaut visible.
     for (acteur, role, action, cible, issue, detail, age) in [
-        ("remy", hlb_types::Role::Admin, "install", "immich", "ok", None, 6 * 86_400),
+        (
+            "remy",
+            hlb_types::Role::Admin,
+            "install",
+            "immich",
+            "ok",
+            None,
+            6 * 86_400,
+        ),
         // La paire qui raconte quelque chose : la mise à jour, puis l'échec deux
         // minutes plus tard.
         (
@@ -379,7 +462,9 @@ pub async fn peupler(state: &State) -> Result<(), Box<dyn std::error::Error>> {
             900,
         ),
     ] {
-        state.audit(acteur, role, action, cible, issue, detail).await?;
+        state
+            .audit(acteur, role, action, cible, issue, detail)
+            .await?;
         // L'identifiant de la ligne qu'on vient d'écrire : la plus récente.
         if let Some(dernier) = state.audit_trail(1).await?.first() {
             state.backdate_audit(dernier.id, age).await?;
@@ -440,18 +525,16 @@ pub fn topologie() -> hlb_api::Topologie {
                 noeuds: vec![noeud("n-small2", "small-02", "light", false, &[])],
             },
         ],
-        violations: vec![
-            hlb_api::ViolationSummary {
-                service: "gitea".into(),
-                domaine: Some("big-01 (fer unique)".into()),
-                replicas: 2,
-                total: 2,
-                totale: true,
-                explication: "gitea : ses 2 réplicas sont TOUS sur le domaine \
+        violations: vec![hlb_api::ViolationSummary {
+            service: "gitea".into(),
+            domaine: Some("big-01 (fer unique)".into()),
+            replicas: 2,
+            total: 2,
+            totale: true,
+            explication: "gitea : ses 2 réplicas sont TOUS sur le domaine \
                               « big-01 (fer unique) » — la redondance est une illusion"
-                    .into(),
-            },
-        ],
+                .into(),
+        }],
     }
 }
 
@@ -757,7 +840,11 @@ pub fn taches(app: &str) -> Vec<hlb_api::TacheSummary> {
         service: app.into(),
         slot: Some(1),
         noeud: Some(noeud.into()),
-        etat: if vivante { "running".into() } else { "failed".into() },
+        etat: if vivante {
+            "running".into()
+        } else {
+            "failed".into()
+        },
         etat_voulu: "running".into(),
         vivante,
         echouee: !vivante,
@@ -865,7 +952,10 @@ mod tests {
         );
 
         let vw = s.app_volumes("vaultwarden").await.expect("volumes");
-        assert!(vw.iter().any(|(_, _, _, sqlite)| *sqlite), "aucun volume SQLite");
+        assert!(
+            vw.iter().any(|(_, _, _, sqlite)| *sqlite),
+            "aucun volume SQLite"
+        );
     }
 
     #[tokio::test]
@@ -885,10 +975,7 @@ mod tests {
                 status: statut.clone(),
                 image: String::new(),
                 domain: None,
-                last_backup_secs: s
-                    .seconds_since_last_success(nom)
-                    .await
-                    .expect("sauvegarde"),
+                last_backup_secs: s.seconds_since_last_success(nom).await.expect("sauvegarde"),
                 last_verification_secs: None,
                 blocking_guides: s.unverified_blocking(nom).await.expect("guides") as i64,
             };
@@ -896,7 +983,10 @@ mod tests {
         }
 
         for niveau in [Attention::Ok, Attention::Notice, Attention::Critical] {
-            assert!(vus.contains(&niveau), "le jeu de démonstration n'a aucun cas {niveau:?}");
+            assert!(
+                vus.contains(&niveau),
+                "le jeu de démonstration n'a aucun cas {niveau:?}"
+            );
         }
     }
 
@@ -909,12 +999,18 @@ mod tests {
         peupler(&s).await.expect("peuplement");
 
         assert_eq!(
-            s.seconds_since_last_success("seafile").await.expect("jamais"),
+            s.seconds_since_last_success("seafile")
+                .await
+                .expect("jamais"),
             None,
             "aucun cas « jamais sauvegardée »"
         );
         assert!(
-            s.seconds_since_last_success("vikunja").await.expect("périmée").unwrap_or(0) > 86_400,
+            s.seconds_since_last_success("vikunja")
+                .await
+                .expect("périmée")
+                .unwrap_or(0)
+                > 86_400,
             "aucun cas « sauvegarde périmée »"
         );
         assert!(
@@ -949,7 +1045,10 @@ mod tests {
             "le hors-site n'a JAMAIS rien reçu, et ça doit se voir"
         );
         assert!(
-            s.consecutive_failures_on("immich", "offsite").await.expect("échecs") >= 4,
+            s.consecutive_failures_on("immich", "offsite")
+                .await
+                .expect("échecs")
+                >= 4,
             "les échecs répétés doivent se voir avant le seuil de péremption"
         );
     }
@@ -962,7 +1061,9 @@ mod tests {
         peupler(&s).await.expect("peuplement");
 
         assert_eq!(
-            s.seconds_since_last_success("seafile").await.expect("sauvegarde"),
+            s.seconds_since_last_success("seafile")
+                .await
+                .expect("sauvegarde"),
             None
         );
     }
@@ -975,7 +1076,10 @@ mod tests {
         peupler(&s).await.expect("peuplement");
 
         use hlb_users::Coherence;
-        assert_eq!(s.compte("remy").await.expect("compte").coherence(), Coherence::Complet);
+        assert_eq!(
+            s.compte("remy").await.expect("compte").coherence(),
+            Coherence::Complet
+        );
         assert_eq!(
             s.compte("dominique").await.expect("compte").coherence(),
             Coherence::SansBoite
@@ -996,7 +1100,9 @@ mod tests {
         let c = s.compte("remy").await.expect("compte");
         let rompues = c.promesses_rompues(crate::auth::maintenant());
         assert!(!rompues.is_empty(), "aucun alias ne trahit sa promesse");
-        assert!(rompues.iter().any(|(_, a)| a.local.starts_with("newsletter")));
+        assert!(rompues
+            .iter()
+            .any(|(_, a)| a.local.starts_with("newsletter")));
     }
 
     #[tokio::test]
@@ -1015,7 +1121,11 @@ mod tests {
                 .expect("alias présent")
         };
         assert_eq!(dossier("impots").as_deref(), Some("Administratif/Impôts"));
-        assert_eq!(dossier("concours").as_deref(), Some(""), "refus explicite de trier");
+        assert_eq!(
+            dossier("concours").as_deref(),
+            Some(""),
+            "refus explicite de trier"
+        );
         assert_eq!(dossier("newsletter"), None, "rien décidé");
     }
 
@@ -1075,14 +1185,20 @@ mod tests {
             .iter()
             .find(|d| d.concentre)
             .expect("aucun domaine concentré");
-        assert!(concentre.noeuds.len() >= 2, "un fer doit porter plusieurs nœuds");
+        assert!(
+            concentre.noeuds.len() >= 2,
+            "un fer doit porter plusieurs nœuds"
+        );
 
         assert!(
             t.domaines.iter().any(|d| d.nom.is_none()),
             "aucun domaine non déclaré : le cas « on ne sait pas » ne serait pas affiché"
         );
         assert!(
-            t.domaines.iter().flat_map(|d| &d.noeuds).any(|n| !n.joignable),
+            t.domaines
+                .iter()
+                .flat_map(|d| &d.noeuds)
+                .any(|n| !n.joignable),
             "aucun nœud injoignable dans la topologie"
         );
     }
@@ -1139,9 +1255,18 @@ mod tests {
         peupler(&s).await.expect("peuplement");
         let now = crate::auth::maintenant();
 
-        let actives = s.annonces(hlb_types::Role::Admin, now, false).await.expect("a");
-        let toutes = s.annonces(hlb_types::Role::Admin, now, true).await.expect("a");
-        assert!(toutes.len() > actives.len(), "aucune annonce expirée à l'historique");
+        let actives = s
+            .annonces(hlb_types::Role::Admin, now, false)
+            .await
+            .expect("a");
+        let toutes = s
+            .annonces(hlb_types::Role::Admin, now, true)
+            .await
+            .expect("a");
+        assert!(
+            toutes.len() > actives.len(),
+            "aucune annonce expirée à l'historique"
+        );
     }
 
     #[test]
@@ -1150,8 +1275,12 @@ mod tests {
         // jour venu s'il est mal rendu.
         let a = alertes(1_000_000);
 
-        assert!(a.iter().any(|x| x.niveau == hlb_api::NiveauAlerte::Critique));
-        assert!(a.iter().any(|x| x.niveau == hlb_api::NiveauAlerte::Important));
+        assert!(a
+            .iter()
+            .any(|x| x.niveau == hlb_api::NiveauAlerte::Critique));
+        assert!(a
+            .iter()
+            .any(|x| x.niveau == hlb_api::NiveauAlerte::Important));
         assert!(
             a.iter().any(|x| x.niveau == hlb_api::NiveauAlerte::Inconnu),
             "« non évaluable » manque : c'est le cas qu'on confond avec « tout va bien »"
@@ -1191,7 +1320,10 @@ mod tests {
             .values()
             .filter_map(|s| s.report())
             .any(|r| !r.allows_deploy(&seuils));
-        assert!(sature, "aucun nœud sous pression : le cas critique n'est pas montré");
+        assert!(
+            sature,
+            "aucun nœud sous pression : le cas critique n'est pas montré"
+        );
 
         let injoignable = n
             .values()

@@ -561,17 +561,11 @@ impl NoeudSummary {
                 ));
             }
             if d.pression >= 1 {
-                return Some(format!(
-                    "{} est à {:.0} %",
-                    d.chemin,
-                    d.utilise * 100.0
-                ));
+                return Some(format!("{} est à {:.0} %", d.chemin, d.utilise * 100.0));
             }
         }
         if self.swap_utilise.is_some_and(|s| s > 0.05) {
-            return Some(
-                "échange sur le disque — la machine ralentit avant de tomber".to_string(),
-            );
+            return Some("échange sur le disque — la machine ralentit avant de tomber".to_string());
         }
         if let Some(c) = self.charge_par_coeur.filter(|c| *c > 1.0) {
             return Some(format!("charge de {c:.1} par cœur"));
@@ -803,7 +797,10 @@ impl Annonce {
 
     /// La dernière nouvelle, ou le corps d'origine.
     pub fn derniere_nouvelle(&self) -> &str {
-        self.suivi.last().map(|m| m.corps.as_str()).unwrap_or(&self.corps)
+        self.suivi
+            .last()
+            .map(|m| m.corps.as_str())
+            .unwrap_or(&self.corps)
     }
 }
 
@@ -1048,11 +1045,7 @@ impl ResultatAction {
     /// ⚠️ Une étape non implémentée fait échouer ce verdict : « le plan s'est déroulé
     /// sans erreur » et « l'app est installée » ne sont pas la même chose.
     pub fn reussie(&self) -> bool {
-        self.applique
-            && self
-                .etapes
-                .iter()
-                .all(|e| e.etat == EtatEtape::Faite)
+        self.applique && self.etapes.iter().all(|e| e.etat == EtatEtape::Faite)
     }
 
     /// Ce qu'il faut afficher après coup.
@@ -1274,9 +1267,7 @@ impl CouvertureSummary {
 
     pub fn resume(&self) -> String {
         match self.copies_a_jour {
-            0 if self.par_destination.is_empty() => {
-                "aucune destination configurée".to_string()
-            }
+            0 if self.par_destination.is_empty() => "aucune destination configurée".to_string(),
             0 if self.jamais_sauvegardee() => "JAMAIS sauvegardée".to_string(),
             0 => format!(
                 "aucune copie À JOUR — {} trop {}",
@@ -1893,7 +1884,10 @@ mod tests {
         // L'intervalle visé est de 4 h (§8.1) ; au-delà de 24 h, quelque chose est
         // cassé et personne ne s'en est aperçu.
         assert_eq!(app("running", Some(3600), 0).attention(), Attention::Ok);
-        assert_eq!(app("running", Some(90_000), 0).attention(), Attention::Critical);
+        assert_eq!(
+            app("running", Some(90_000), 0).attention(),
+            Attention::Critical
+        );
     }
 
     #[test]
@@ -2030,11 +2024,13 @@ mod tests {
 
     #[test]
     fn initials_survive_an_empty_or_odd_name() {
-        let avec = |nom: &str| Marque {
-            nom: nom.into(),
-            ..Default::default()
-        }
-        .initiales();
+        let avec = |nom: &str| {
+            Marque {
+                nom: nom.into(),
+                ..Default::default()
+            }
+            .initiales()
+        };
         assert_eq!(avec(""), "?");
         assert_eq!(avec("---"), "?");
         assert_eq!(avec("ACME"), "A");
@@ -2328,7 +2324,8 @@ mod tests {
         // veut voir avant de le faire — pas un refus. Ranger un avertissement parmi
         // les blocages rendrait l'action impossible.
         let mut a = action(false, vec![EtatEtape::Prevue]);
-        a.avertissements.push("cinq personnes pourront entrer".into());
+        a.avertissements
+            .push("cinq personnes pourront entrer".into());
         assert!(a.applicable(), "un avertissement a bloqué l'action");
 
         a.blocages.push("le DNS n'existe pas".into());
@@ -2341,7 +2338,11 @@ mod tests {
         // actions : croire que c'est fait alors que c'est un aperçu.
         let a = action(false, vec![EtatEtape::Prevue, EtatEtape::Prevue]);
         assert!(!a.reussie());
-        assert!(a.verdict().contains("rien n'a été modifié"), "{}", a.verdict());
+        assert!(
+            a.verdict().contains("rien n'a été modifié"),
+            "{}",
+            a.verdict()
+        );
     }
 
     #[test]
@@ -2349,7 +2350,10 @@ mod tests {
         // 🔴 « Le plan s'est déroulé sans erreur » et « l'app est installée » ne sont
         // pas la même chose. On ne prétend jamais avoir provisionné une base.
         let a = action(true, vec![EtatEtape::Faite, EtatEtape::NonImplementee]);
-        assert!(!a.reussie(), "une étape non implémentée n'est pas une réussite");
+        assert!(
+            !a.reussie(),
+            "une étape non implémentée n'est pas une réussite"
+        );
         assert!(a.verdict().contains("INCOMPLÈTE"), "{}", a.verdict());
         // Et surtout : pas d'erreur, donc rien ne le signalerait sans ce message.
         assert!(!a.verdict().contains("échec"));
@@ -2373,8 +2377,12 @@ mod tests {
     fn blockers_prevent_application() {
         let mut a = action(false, vec![EtatEtape::Prevue]);
         assert!(a.applicable());
-        a.blocages.push("le DNS de git.example.fr n'existe pas".into());
-        assert!(!a.applicable(), "un guide bloquant doit empêcher d'appliquer");
+        a.blocages
+            .push("le DNS de git.example.fr n'existe pas".into());
+        assert!(
+            !a.applicable(),
+            "un guide bloquant doit empêcher d'appliquer"
+        );
     }
 
     #[test]
@@ -2437,7 +2445,10 @@ mod tests {
         // fer, sa perte emporte le quorum.
         let t = topo(
             Vec::new(),
-            vec![domaine(Some("big-01"), 2, true), domaine(Some("small"), 1, false)],
+            vec![
+                domaine(Some("big-01"), 2, true),
+                domaine(Some("small"), 1, false),
+            ],
         );
         assert_eq!(t.attention(), Attention::Notice);
         assert!(t.verdict().contains("quorum"), "{}", t.verdict());
@@ -2570,7 +2581,10 @@ mod tests {
         assert_eq!(n.attention(), Attention::Critical);
         let r = n.raison().expect("une raison");
         assert!(r.contains("injoignable"), "{r}");
-        assert!(r.contains("sauvegardées"), "la conséquence doit être dite : {r}");
+        assert!(
+            r.contains("sauvegardées"),
+            "la conséquence doit être dite : {r}"
+        );
     }
 
     #[test]
@@ -2630,7 +2644,10 @@ mod tests {
         };
         let perimee = CouvertureSummary {
             app: "vikunja".into(),
-            par_destination: vec![("nas".into(), Some(108_000)), ("offsite".into(), Some(111_600))],
+            par_destination: vec![
+                ("nas".into(), Some(108_000)),
+                ("offsite".into(), Some(111_600)),
+            ],
             copies_a_jour: 0,
         };
 
@@ -2721,7 +2738,11 @@ mod tests {
 
         assert!(a.est_silencee(9_999));
         assert!(!a.est_silencee(10_001));
-        assert_eq!(a.attention(10_001), Attention::Critical, "elle revient entière");
+        assert_eq!(
+            a.attention(10_001),
+            Attention::Critical,
+            "elle revient entière"
+        );
     }
 
     #[test]
@@ -2776,7 +2797,10 @@ mod tests {
         assert_eq!(Unite::Nombre.afficher(3.0), "3", "pas « 3,0 applications »");
         assert_eq!(Unite::Octets.afficher(512.0), "512 o");
         assert_eq!(Unite::Octets.afficher(1536.0), "1.5 Kio");
-        assert_eq!(Unite::Octets.afficher(5.0 * 1024.0 * 1024.0 * 1024.0), "5.0 Gio");
+        assert_eq!(
+            Unite::Octets.afficher(5.0 * 1024.0 * 1024.0 * 1024.0),
+            "5.0 Gio"
+        );
         assert_eq!(Unite::OctetsParSeconde.afficher(2048.0), "2.0 Kio/s");
         assert_eq!(Unite::Secondes.afficher(7200.0), "2 h");
     }
@@ -2791,7 +2815,9 @@ mod tests {
                 points: vec![(1, 2.0)],
                 unite: Unite::Octets,
             },
-            Serie::Indisponible { raison: "absent".into() },
+            Serie::Indisponible {
+                raison: "absent".into(),
+            },
         ] {
             let j = serde_json::to_string(&s).expect("sérialisable");
             let relue: Serie = serde_json::from_str(&j).expect("relisible");

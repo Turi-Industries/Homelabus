@@ -48,9 +48,7 @@ async fn the_chain_actually_validates() {
     let ag_p = ecrire(d.path(), "agent.crt", &agent.cert_pem);
 
     // 🔴 La preuve qui compte : la chaîne se vérifie, avec l'usage serveur exigé.
-    let (ok, sortie) = openssl(&[
-        "verify", "-CAfile", &ca_p, "-purpose", "sslserver", &ag_p,
-    ]);
+    let (ok, sortie) = openssl(&["verify", "-CAfile", &ca_p, "-purpose", "sslserver", &ag_p]);
     assert!(ok, "chaîne invalide :\n{sortie}");
 }
 
@@ -131,7 +129,10 @@ async fn a_certificate_from_another_authority_is_rejected() {
     let i_p = ecrire(d.path(), "intrus.crt", &intrus.cert_pem);
 
     let (ok, sortie) = openssl(&["verify", "-CAfile", &a_p, &i_p]);
-    assert!(!ok, "un certificat d'une autre CA doit être REFUSÉ :\n{sortie}");
+    assert!(
+        !ok,
+        "un certificat d'une autre CA doit être REFUSÉ :\n{sortie}"
+    );
 }
 
 #[tokio::test]

@@ -42,12 +42,7 @@ pub struct AppPortail {
     pub disponible: bool,
 }
 
-pub fn afficher(
-    ui: &mut egui::Ui,
-    portail: Option<&Portail>,
-    fraicheur: &Freshness,
-    etroit: bool,
-) {
+pub fn afficher(ui: &mut egui::Ui, portail: Option<&Portail>, fraicheur: &Freshness, etroit: bool) {
     let p = c::palette(ui);
 
     let Some(v) = portail else {
@@ -126,7 +121,11 @@ pub fn afficher(
             for b in &v.boites {
                 c::mono(
                     ui,
-                    &format!("{}{}", b.adresse, if b.par_defaut { " (principale)" } else { "" }),
+                    &format!(
+                        "{}{}",
+                        b.adresse,
+                        if b.par_defaut { " (principale)" } else { "" }
+                    ),
                 );
             }
         });
@@ -139,7 +138,11 @@ fn carte_app(ui: &mut egui::Ui, a: &AppPortail, p: crate::design::Palette) {
             c::monogramme(
                 ui,
                 &a.nom_affiche,
-                if a.disponible { p.accent } else { p.texte_faible },
+                if a.disponible {
+                    p.accent
+                } else {
+                    p.texte_faible
+                },
                 28.0,
             );
             ui.add_space(mesures::ESPACE_SERRE);

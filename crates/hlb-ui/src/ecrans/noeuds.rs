@@ -88,10 +88,7 @@ fn carte_noeud(ui: &mut egui::Ui, n: &NoeudSummary, etroit: bool, p: crate::desi
             ui.vertical(|ui| {
                 // Le nom d'hôte s'il est connu, l'adresse sinon — et jamais l'inverse :
                 // c'est l'adresse qui est l'identité stable.
-                c::sous_titre(
-                    ui,
-                    n.hostname.as_deref().unwrap_or(&n.adresse),
-                );
+                c::sous_titre(ui, n.hostname.as_deref().unwrap_or(&n.adresse));
                 c::mono(ui, &n.adresse);
             });
 
@@ -145,11 +142,19 @@ fn carte_noeud(ui: &mut egui::Ui, n: &NoeudSummary, etroit: bool, p: crate::desi
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     c::legende(
                         ui,
-                        &format!("{} libres", hlb_api::octets(d.libre_mb as f64 * 1_048_576.0)),
+                        &format!(
+                            "{} libres",
+                            hlb_api::octets(d.libre_mb as f64 * 1_048_576.0)
+                        ),
                     );
                 });
             });
-            c::jauge(ui, d.utilise as f32, teinte_pression(d.pression, p), ui.available_width());
+            c::jauge(
+                ui,
+                d.utilise as f32,
+                teinte_pression(d.pression, p),
+                ui.available_width(),
+            );
         }
 
         if !n.taches.is_empty() && !etroit {
@@ -273,7 +278,11 @@ mod tests {
         // VERT. Une machine qui échange déjà 70 % de son swap rame — elle n'est pas
         // « dans le vert ».
         let p = crate::design::Theme::turi_sombre().palette;
-        assert_eq!(teinte_swap(0.71, p), p.critique, "un swap à 71 % est critique");
+        assert_eq!(
+            teinte_swap(0.71, p),
+            p.critique,
+            "un swap à 71 % est critique"
+        );
         assert_eq!(teinte_taux(0.71, p), p.ok, "un CPU à 71 % ne l'est pas");
 
         assert_eq!(teinte_swap(0.03, p), p.ok, "quelques pages, c'est normal");

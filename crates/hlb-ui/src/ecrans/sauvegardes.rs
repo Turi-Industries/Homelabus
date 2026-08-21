@@ -71,7 +71,10 @@ pub fn afficher(
             ),
         )
     } else {
-        (p.ok, "Toutes les applications ont au moins deux copies.".to_string())
+        (
+            p.ok,
+            "Toutes les applications ont au moins deux copies.".to_string(),
+        )
     };
     c::bandeau(
         ui,
@@ -122,9 +125,7 @@ fn carte_couverture(ui: &mut egui::Ui, cv: &CouvertureSummary, p: crate::design:
                     // aucune. Les afficher pareil est exactement l'erreur qu'on évite.
                     let (texte, teinte) = match age {
                         None => ("JAMAIS".to_string(), p.critique),
-                        Some(s) if *s > SEUIL_PEREMPTION_S => {
-                            (hlb_api::humanise(*s), p.critique)
-                        }
+                        Some(s) if *s > SEUIL_PEREMPTION_S => (hlb_api::humanise(*s), p.critique),
                         Some(s) => (hlb_api::humanise(*s), p.texte_faible),
                     };
                     ui.label(

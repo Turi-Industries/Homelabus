@@ -81,16 +81,19 @@ pub async fn attester(
 
     let acteur = auth.identite().acteur.nom().to_string();
     if let Err(e) = s.state.attester_breakglass(&id, &acteur, None).await {
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            e.to_string(),
-        )
-            .into_response();
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     let _ = s
         .state
-        .audit(&acteur, auth.identite().role, "breakglass-attester", &id, "ok", None)
+        .audit(
+            &acteur,
+            auth.identite().role,
+            "breakglass-attester",
+            &id,
+            "ok",
+            None,
+        )
         .await;
 
     axum::Json(etat(&s.state).await).into_response()
@@ -149,7 +152,10 @@ mod tests {
             .expect("attestation");
 
         let g = etat(&s).await;
-        let pk = g.iter().find(|g| g.id == "deux-passkeys").expect("garde-fou");
+        let pk = g
+            .iter()
+            .find(|g| g.id == "deux-passkeys")
+            .expect("garde-fou");
         assert_eq!(pk.atteste_par.as_deref(), Some("camille"));
         assert_eq!(pk.attention(), hlb_api::Attention::Ok);
     }
