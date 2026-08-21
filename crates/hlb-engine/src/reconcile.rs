@@ -1,23 +1,22 @@
-//! La boucle de réconciliation (§2.1 du plan).
+//! The reconciliation loop.
 //!
-//! C'est ce qui distingue Homelabus d'un script d'installation. Le controller ne fait
-//! pas d'actions impératives one-shot : il maintient en permanence
-//! **état désiré → écart → correction → vérification**.
+//! This is what separates Homelabus from an install script. The controller does not
+//! perform one-shot imperative actions: it continuously maintains
+//! **desired state → drift → correction → verification**.
 //!
-//! Conséquence concrète : si un nœud tombe et revient, si quelqu'un fait un
-//! `docker service rm` à la main, ou si une image est changée à chaud, le système
-//! reconverge tout seul.
+//! Concretely: if a node goes down and comes back, if someone runs a `docker service
+//! rm` by hand, or if an image is swapped live, the system converges again on its own.
 //!
-//! # Ce que la réconciliation ne fait JAMAIS
+//! # What reconciliation NEVER does
 //!
-//! - **Toucher un service non géré.** Le filtre par label est absolu.
-//! - **Supprimer un service orphelin.** Un orphelin peut venir d'une base d'état
-//!   perdue, pas d'une désinstallation. Détruire des données sur cette base serait
-//!   inacceptable — on signale, l'humain tranche.
-//! - **Relancer une installation en échec.** Elle boucherait indéfiniment sur la même
-//!   erreur. Il faut une intervention explicite.
-//! - **Corriger une convergence en cours.** Si Swarm est en train de démarrer des
-//!   tâches, on le laisse finir plutôt que d'empiler des ordres contradictoires.
+//! - **Touch an unmanaged service.** The label filter is absolute.
+//! - **Delete an orphan service.** An orphan can come from a lost state database, not
+//!   from an uninstall. Destroying data on that basis would be unacceptable - it is
+//!   reported, and a human decides.
+//! - **Restart a failed installation.** It would loop forever on the same error. That
+//!   needs an explicit intervention.
+//! - **Correct a convergence in flight.** If Swarm is starting tasks, it is left to
+//!   finish rather than being given contradictory orders.
 
 use std::collections::BTreeSet;
 
@@ -28,28 +27,28 @@ use crate::Error;
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// Un écart entre l'état désiré et l'état observé.
+/// A drift between the desired state and the observed one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Drift {
-    /// Le service devrait exister mais a disparu (`docker service rm`, nœud perdu…).
+    /// The service should exist but is gone (`docker service rm`, a lost node...).
     ServiceMissing { app: String, image: String },
 
-    /// Quelqu'un a changé le nombre de réplicas hors de Homelabus.
+    /// Someone changed the replica count outside Homelabus.
     ReplicasDiverged {
         app: String,
         desired: u64,
         actual: u64,
     },
 
-    /// L'image tournante n'est pas celle du manifest figé.
+    /// The running image is not the frozen manifest's.
     ImageDiverged {
         app: String,
         expected: String,
         actual: String,
     },
 
-    /// Un service géré sans app correspondante en base.
-    /// **Jamais supprimé automatiquement** — signalé seulement.
+    /// A managed service with no matching app in the database.
+    /// **Never deleted automatically** - only reported.
     OrphanService { name: String },
 
     /// Swarm est en train de converger. Informatif, pas corrigible.
@@ -61,7 +60,7 @@ pub enum Drift {
 }
 
 impl Drift {
-    /// La réconciliation sait-elle corriger cet écart toute seule ?
+    /// Can reconciliation correct this drift on its own?
     pub fn is_correctable(&self) -> bool {
         matches!(
             self,
@@ -71,27 +70,28 @@ impl Drift {
         )
     }
 
-    /// Pourquoi cet écart n'est **délibérément pas** corrigé.
+    /// Why this drift is **deliberately not** corrected.
     ///
-    /// 🔴 Sans cette phrase, rien ne distingue « il n'y a rien à faire » de « il y a
-    /// quelque chose et j'ai choisi de ne pas y toucher ». Les deux se ressemblent à
-    /// l'écran, et la seconde fait douter du système — on finit par corriger à la main
-    /// ce qu'il a délibérément laissé, ou par croire qu'il n'a rien vu.
+    /// 🔴 Without this sentence, nothing separates "there is nothing to do" from
+    /// "there is something and I chose not to touch it". The two look alike on screen,
+    /// and the second makes you doubt the system - you end up correcting by hand what
+    /// it deliberately left alone, or believing it saw nothing.
     ///
-    /// Rend `None` quand l'écart EST corrigé : il n'y a alors aucun refus à expliquer.
+    /// Returns `None` when the drift IS corrected: there is then no refusal to
+    /// explain.
     pub fn refus(&self) -> Option<&'static str> {
         match self {
             Self::ServiceMissing { .. }
             | Self::ReplicasDiverged { .. }
             | Self::ImageDiverged { .. } => None,
             Self::OrphanService { .. } => Some(
-                "un orphelin n'est JAMAIS supprimé automatiquement : ce service porte \
-                 peut-être des données, et un système qui corrige trop est plus \
-                 dangereux qu'un système qui ne corrige rien",
+                "an orphan is NEVER deleted automatically: this service may hold \
+                 data, and a system that over-corrects is more dangerous than one \
+                 that corrects nothing",
             ),
             Self::Converging { .. } => Some(
-                "Swarm est en train de converger : l'avancement est transitoire et se \
-                 laisse tranquille — seule la consigne se corrige",
+                "Swarm is converging: progress is transient and gets left alone - \
+                 only the instruction is corrected",
             ),
         }
     }
@@ -111,7 +111,7 @@ impl std::fmt::Display for Drift {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ServiceMissing { app, image } => {
-                write!(f, "{app} : service absent, devrait tourner depuis {image}")
+                write!(f, "{app}: service missing, should be running from {image}")
             }
             Self::ReplicasDiverged {
                 app,
@@ -119,27 +119,27 @@ impl std::fmt::Display for Drift {
                 actual,
             } => write!(
                 f,
-                "{app} : {} {} en consigne, le manifest en demande {desired}",
+                "{app}: {} {} instructed, the manifest asks for {desired}",
                 actual,
-                if *actual > 1 { "réplicas" } else { "réplica" }
+                if *actual == 1 { "replica" } else { "replicas" }
             ),
             Self::ImageDiverged {
                 app,
                 expected,
                 actual,
             } => {
-                write!(f, "{app} : tourne sous {actual}, attendu {expected}")
+                write!(f, "{app}: running {actual}, expected {expected}")
             }
             Self::OrphanService { name } => write!(
                 f,
-                "{name} : service géré sans app correspondante — vérifie avant de supprimer"
+                "{name}: managed service with no matching app - check before deleting"
             ),
             Self::Converging {
                 app,
                 running,
                 desired,
             } => {
-                write!(f, "{app} : convergence en cours ({running}/{desired})")
+                write!(f, "{app}: converging ({running}/{desired})")
             }
         }
     }
@@ -162,11 +162,11 @@ impl Report {
     }
 }
 
-/// Les statuts d'app pour lesquels on ne réconcilie pas.
+/// The app statuses reconciliation stays away from.
 ///
-/// Une installation en échec ou en cours ne doit pas être « réparée » : dans le
-/// premier cas on bouclerait sur la même erreur, dans le second on entrerait en
-/// concurrence avec l'installation elle-même.
+/// A failed or in-progress installation must not be "repaired": in the first case we
+/// would loop on the same error, in the second we would race the installation
+/// itself.
 fn is_reconcilable(status: &str) -> bool {
     matches!(status, "running" | "partial")
 }
@@ -184,7 +184,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         }
     }
 
-    /// Détecte les écarts. **Strictement en lecture seule.**
+    /// Detects drifts. **Strictly read-only.**
     pub async fn detect(&self) -> Result<Vec<Drift>> {
         let apps = self.state.installed_apps().await?;
         let observed = self.orchestrator.list().await?;
@@ -210,10 +210,10 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 continue;
             };
 
-            // Distinction essentielle : ce que Swarm a pour consigne (`desired`) vient
-            // d'une décision — la nôtre ou celle d'un humain. Ce qui tourne vraiment
-            // (`running`) est juste l'avancement. On corrige la consigne, jamais
-            // l'avancement.
+            // The essential distinction: what Swarm has been instructed (`desired`)
+            // comes from a decision - ours or a human's. What actually runs
+            // (`running`) is just progress. We correct the instruction, never the
+            // progress.
             if svc.desired_replicas != expected_replicas {
                 drifts.push(Drift::ReplicasDiverged {
                     app: name.clone(),
@@ -228,9 +228,9 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 });
             }
 
-            // L'image n'est comparée que si le manifest est épinglé sur un digest ou
-            // un tag précis ; Swarm réécrit souvent la référence avec le digest résolu,
-            // d'où la comparaison par préfixe plutôt que stricte.
+            // The image is only compared when the manifest is pinned to a digest or a
+            // precise tag; Swarm often rewrites the reference with the resolved digest,
+            // hence a prefix comparison rather than a strict one.
             if !svc.image.starts_with(&expected_image) && svc.image != expected_image {
                 drifts.push(Drift::ImageDiverged {
                     app: name.clone(),
@@ -240,7 +240,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             }
         }
 
-        // Un service géré que l'état ne connaît pas.
+        // A managed service the state does not know about.
         for svc in &observed {
             if !seen.contains(&svc.name) && !apps.iter().any(|(n, _)| n == &svc.name) {
                 drifts.push(Drift::OrphanService {
@@ -252,7 +252,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         Ok(drifts)
     }
 
-    /// Détecte puis, si `apply`, corrige ce qui est corrigeable.
+    /// Detects and then, when `apply`, corrects what is correctable.
     pub async fn reconcile(&self, apply: bool) -> Result<Report> {
         let drifts = self.detect().await?;
         let mut report = Report {
@@ -267,13 +267,13 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         for d in drifts.into_iter().filter(Drift::is_correctable) {
             match self.correct(&d).await {
                 Ok(()) => {
-                    tracing::info!(app = d.app(), "écart corrigé");
+                    tracing::info!(app = d.app(), "drift corrected");
                     report.corrected.push(d);
                 }
                 Err(e) => {
-                    // Un échec sur un service n'empêche pas de réparer les autres :
-                    // contrairement à l'installation, il n'y a pas de dépendance
-                    // entre les corrections.
+                    // A failure on one service does not stop the others being
+                    // repaired: unlike installation, corrections have no dependency
+                    // between them.
                     tracing::warn!(app = d.app(), error = %e, "correction impossible");
                     report.failed.push((d, e.to_string()));
                 }
@@ -306,7 +306,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 Ok(())
             }
 
-            // Volontairement inertes : voir l'en-tête du module.
+            // Deliberately inert: see the module header.
             Drift::OrphanService { .. } | Drift::Converging { .. } => Ok(()),
         }
     }
@@ -318,10 +318,10 @@ mod tests {
 
     #[test]
     fn every_uncorrected_drift_explains_why_it_was_left_alone() {
-        // 🔴 L'invariant du lot 9.8. Un écart signalé sans raison de refus fait douter :
-        // on ne sait pas si le système ne sait pas faire, s'il a échoué, ou s'il a
-        // délibérément choisi de ne pas toucher. On corrige alors à la main ce qu'il
-        // protégeait — ou on croit qu'il n'a rien vu.
+        // 🔴 A drift reported with no refusal reason makes you doubt: you cannot tell
+        // whether the system does not know how, failed, or deliberately chose not to
+        // touch it. You then correct by hand what it was protecting - or believe it saw
+        // nothing.
         let tous = [
             Drift::ServiceMissing {
                 app: "gitea".into(),
@@ -348,20 +348,20 @@ mod tests {
         ];
 
         for d in &tous {
-            // La règle exacte : corrigible ⇔ aucun refus à expliquer. Un écart qui
-            // serait les deux (ou ni l'un ni l'autre) laisserait un trou à l'écran.
+            // The exact rule: correctable ⇔ no refusal to explain. A drift that was
+            // both (or neither) would leave a hole on screen.
             assert_eq!(
                 d.is_correctable(),
                 d.refus().is_none(),
-                "{d} : corrigible et refus doivent être exactement complémentaires"
+                "{d}: correctable and refused must be exactly complementary"
             );
         }
     }
 
     #[test]
     fn a_single_replica_is_not_announced_in_the_plural() {
-        // Le tic « réplique(s) », relevé dans le message d'écart : c'est du texte
-        // affiché par le CLI, et bientôt par l'interface.
+        // The "replica(s)" tic, spotted in the drift message: this is text the CLI
+        // displays, and the interface after it.
         let d = Drift::ReplicasDiverged {
             app: "gitea".into(),
             desired: 2,
@@ -370,6 +370,6 @@ mod tests {
         let texte = d.to_string();
         let tic = format!("({})", "s");
         assert!(!texte.contains(&tic), "{texte}");
-        assert!(texte.contains("1 réplica en consigne"), "{texte}");
+        assert!(texte.contains("1 replica instructed"), "{texte}");
     }
 }

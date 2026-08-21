@@ -1,8 +1,8 @@
-//! Tests de la boucle de réconciliation (§2.1).
+//! Reconciliation loop tests.
 //!
-//! La moitié de ces tests vérifient ce que la réconciliation **ne fait pas**. C'est le
-//! plus important : un système qui corrige trop est plus dangereux qu'un système qui
-//! ne corrige rien.
+//! Half of these check what reconciliation **does not do**. That is the important
+//! half: a system that over-corrects is more dangerous than one that corrects
+//! nothing.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -123,7 +123,7 @@ impl Orchestrator for Fake {
         &self,
         _: Option<&str>,
     ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+        // A fake orchestrator has no tasks: empty is the honest answer.
         Ok(Vec::new())
     }
 
@@ -158,7 +158,7 @@ spec:
     tier: heavy
 "#;
 
-/// État avec gitea installée et considérée en marche.
+/// A state with gitea installed and considered running.
 async fn state_with_running_gitea() -> State {
     let s = State::in_memory().await.unwrap();
     let m: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
@@ -173,7 +173,7 @@ async fn a_healthy_cluster_reports_no_drift() {
     let s = state_with_running_gitea().await;
 
     let report = Reconciler::new(&o, &s).reconcile(false).await.unwrap();
-    assert!(report.is_clean(), "écarts inattendus : {:?}", report.drifts);
+    assert!(report.is_clean(), "unexpected drifts: {:?}", report.drifts);
 }
 
 #[tokio::test]
@@ -224,7 +224,7 @@ async fn a_manually_changed_image_is_reverted() {
 
 #[tokio::test]
 async fn swarm_resolving_the_digest_is_not_a_drift() {
-    // Swarm réécrit couramment la référence en y ajoutant le digest résolu.
+    // Swarm commonly rewrites the reference by appending the resolved digest.
     let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24@sha256:abcdef", 2, 2)]);
     let s = state_with_running_gitea().await;
 
@@ -232,7 +232,7 @@ async fn swarm_resolving_the_digest_is_not_a_drift() {
     assert!(report.is_clean(), "faux positif : {:?}", report.drifts);
 }
 
-// ── Ce que la réconciliation ne doit JAMAIS faire ────────────────────────────
+// ── What reconciliation must NEVER do ────────────────────────────────────────
 
 #[tokio::test]
 async fn detection_alone_never_touches_anything() {
@@ -241,18 +241,18 @@ async fn detection_alone_never_touches_anything() {
 
     let report = Reconciler::new(&o, &s).reconcile(false).await.unwrap();
 
-    assert_eq!(report.drifts.len(), 1, "l'écart est bien vu");
+    assert_eq!(report.drifts.len(), 1, "the drift is seen");
     assert!(report.corrected.is_empty());
     assert!(
         o.deployed.lock().unwrap().is_empty(),
-        "aucune action en détection"
+        "no action during detection"
     );
 }
 
 #[tokio::test]
 async fn an_orphan_service_is_reported_but_never_deleted() {
-    // Cas réel : base d'état perdue puis reconstruite. Le service porte peut-être
-    // des données. Le supprimer automatiquement serait inacceptable.
+    // A real case: the state database was lost and rebuilt. The service may hold
+    // data. Deleting it automatically would be unacceptable.
     let o = Fake::with(vec![svc("inconnue", "img:1", 1, 1)]);
     let s = State::in_memory().await.unwrap();
 
@@ -262,31 +262,31 @@ async fn an_orphan_service_is_reported_but_never_deleted() {
     assert!(!report.drifts[0].is_correctable());
     assert!(
         o.removed.lock().unwrap().is_empty(),
-        "un orphelin ne doit JAMAIS être supprimé automatiquement"
+        "an orphan must NEVER be deleted automatically"
     );
     assert!(report.corrected.is_empty());
 }
 
 #[tokio::test]
 async fn a_failed_install_is_not_resurrected() {
-    // Sans ce garde-fou, on boucle indéfiniment sur la même erreur.
+    // Without this guard, we loop forever on the same error.
     let o = Fake::with(vec![]);
     let s = state_with_running_gitea().await;
     s.set_app_status("gitea", "failed").await.unwrap();
 
     let report = Reconciler::new(&o, &s).reconcile(true).await.unwrap();
 
-    assert!(report.is_clean(), "une install en échec doit être ignorée");
+    assert!(report.is_clean(), "a failed install must be left alone");
     assert!(o.deployed.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn an_install_in_progress_is_left_alone() {
-    // Statut « installing » : l'exécuteur travaille, on ne se met pas en concurrence.
+    // Status "installing": the executor is working, we do not race it.
     let o = Fake::with(vec![]);
     let s = State::in_memory().await.unwrap();
     let m: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
-    s.upsert_app("gitea", &m, None).await.unwrap(); // statut par défaut : installing
+    s.upsert_app("gitea", &m, None).await.unwrap(); // default status: installing
 
     let report = Reconciler::new(&o, &s).reconcile(true).await.unwrap();
     assert!(report.is_clean());
@@ -295,7 +295,7 @@ async fn an_install_in_progress_is_left_alone() {
 
 #[tokio::test]
 async fn a_converging_service_is_reported_but_not_forced() {
-    // Swarm démarre les tâches : 1/2 en cours. On le laisse finir.
+    // Swarm is starting tasks: 1/2 running. We let it finish.
     let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24", 2, 1)]);
     let s = state_with_running_gitea().await;
 
@@ -319,7 +319,7 @@ async fn a_converging_service_is_reported_but_not_forced() {
 
 #[tokio::test]
 async fn one_failure_does_not_stop_the_others() {
-    // Contrairement à l'installation, les corrections sont indépendantes.
+    // Unlike installation, corrections are independent of each other.
     struct HalfBroken(Fake);
 
     #[async_trait]
@@ -328,7 +328,7 @@ async fn one_failure_does_not_stop_the_others() {
             &self,
             _: Option<&str>,
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-            // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+            // A fake orchestrator has no tasks: empty is the honest answer.
             Ok(Vec::new())
         }
 
@@ -377,7 +377,9 @@ async fn one_failure_does_not_stop_the_others() {
         }
         async fn deploy(&self, s: &ServiceSpec) -> hlb_orchestrator::Result<String> {
             if s.name == "gitea" {
-                return Err(hlb_orchestrator::Error::Unexpected("échec simulé".into()));
+                return Err(hlb_orchestrator::Error::Unexpected(
+                    "simulated failure".into(),
+                ));
             }
             self.0.deploy(s).await
         }
@@ -430,12 +432,12 @@ async fn one_failure_does_not_stop_the_others() {
 
     let report = Reconciler::new(&o, &s).reconcile(true).await.unwrap();
 
-    assert_eq!(report.failed.len(), 1, "gitea échoue");
-    assert_eq!(report.corrected.len(), 1, "vikunja est quand même réparée");
+    assert_eq!(report.failed.len(), 1, "gitea fails");
+    assert_eq!(report.corrected.len(), 1, "vikunja is repaired anyway");
     assert_eq!(*o.0.deployed.lock().unwrap(), vec!["vikunja"]);
 }
 
-/// Le digest résolu pendant l'exécution doit primer sur le tag figé dans le plan.
+/// The digest resolved during execution must win over the tag frozen in the plan.
 #[tokio::test]
 async fn the_deploy_uses_the_digest_resolved_earlier_in_the_same_plan() {
     use hlb_engine::Executor;
@@ -445,7 +447,7 @@ async fn the_deploy_uses_the_digest_resolved_earlier_in_the_same_plan() {
     let m: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
     s.upsert_app("gitea", &m, None).await.unwrap();
 
-    // Simule ce que fait `ResolveDigest` juste avant le déploiement.
+    // Simulates what `ResolveDigest` does just before the deployment.
     s.set_app_digest("gitea", "sha256:deadbeef").await.unwrap();
 
     let plan = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).unwrap();
@@ -458,6 +460,6 @@ async fn the_deploy_uses_the_digest_resolved_earlier_in_the_same_plan() {
     assert_eq!(
         *o.deployed_images.lock().unwrap(),
         vec!["gitea/gitea:1.24@sha256:deadbeef"],
-        "c'est le digest qui doit être déployé, pas le tag"
+        "the digest is what must be deployed, not the tag"
     );
 }
