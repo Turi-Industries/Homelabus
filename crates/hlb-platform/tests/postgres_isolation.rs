@@ -1,7 +1,7 @@
-//! Vérifie la promesse d'isolation du §3.1 : **un Gitea compromis ne doit pas pouvoir
-//! lire la base de Vaultwarden.**
+//! Checks the isolation promise: **a compromised Gitea must not be able to read
+//! Vaultwarden's database.**
 //!
-//! C'est une revendication de sécurité, donc elle se prouve, elle ne se suppose pas.
+//! This is a security claim, so it is proven, not assumed.
 //!
 //! ```sh
 //! docker run -d --name hlb-test-pg -e POSTGRES_PASSWORD=test \
@@ -11,23 +11,23 @@
 //! docker rm -f hlb-test-pg
 //! ```
 
-// Dans un test, `expect` EST l'assertion.
+// In a test, `expect` IS the assertion.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use hlb_platform::{connection_url, PostgresProvisioner};
 
 fn admin_url() -> String {
     std::env::var("HLB_TEST_PG")
-        .expect("HLB_TEST_PG doit pointer vers un PostgreSQL de test (voir l'en-tête)")
+        .expect("HLB_TEST_PG must point at a test PostgreSQL (see the header)")
 }
 
 async fn provisioner() -> PostgresProvisioner {
     PostgresProvisioner::connect(&admin_url())
         .await
-        .expect("connexion admin")
+        .expect("admin connection")
 }
 
-/// Nettoie les objets d'un test précédent. Sans ça, un test interrompu bloque le suivant.
+/// Cleans objects left by a previous test. Without this an interrupted test blocks the next.
 async fn drop_all(p: &PostgresProvisioner, names: &[&str]) {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -46,10 +46,10 @@ async fn drop_all(p: &PostgresProvisioner, names: &[&str]) {
     let _ = p.version().await;
 }
 
-/// Tente une connexion applicative. `Ok(true)` = connexion acceptée.
+/// Attempts an application connection. `Ok(true)` means it was accepted.
 async fn can_connect(db: &str, role: &str, password: &str) -> bool {
     let base = admin_url();
-    // On réutilise hôte et port de l'URL d'admin.
+    // Host and port are reused from the admin URL.
     let after_at = base.rsplit('@').next().expect("url");
     let hostport = after_at.split('/').next().expect("hostport");
     let (host, port) = hostport.split_once(':').unwrap_or((hostport, "5432"));
@@ -65,7 +65,7 @@ async fn can_connect(db: &str, role: &str, password: &str) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un PostgreSQL (voir HLB_TEST_PG)"]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
 async fn provision_creates_role_and_database() {
     let p = provisioner().await;
     drop_all(&p, &["hlbtest_a"]).await;
@@ -76,19 +76,19 @@ async fn provision_creates_role_and_database() {
         .expect("provisionnement");
 
     assert!(created);
-    assert!(p.role_exists("hlbtest_a").await.expect("rôle"));
+    assert!(p.role_exists("hlbtest_a").await.expect("role"));
     assert!(p.database_exists("hlbtest_a").await.expect("base"));
     assert!(
         can_connect("hlbtest_a", "hlbtest_a", "motdepasse_a").await,
-        "l'app doit pouvoir se connecter à SA base"
+        "the app must be able to connect to ITS OWN database"
     );
 
-    println!("✓ rôle + base créés, connexion applicative fonctionnelle");
+    println!("✓ role + database created, application connection works");
     drop_all(&p, &["hlbtest_a"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un PostgreSQL (voir HLB_TEST_PG)"]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
 async fn provision_is_idempotent() {
     let p = provisioner().await;
     drop_all(&p, &["hlbtest_idem"]).await;
@@ -102,20 +102,20 @@ async fn provision_is_idempotent() {
         .await
         .expect("second passage");
 
-    assert!(first, "le premier passage crée");
-    assert!(!second, "le second ne recrée rien");
+    assert!(first, "the first pass creates");
+    assert!(!second, "the second recreates nothing");
     assert!(
         can_connect("hlbtest_idem", "hlbtest_idem", "pw").await,
-        "le mot de passe ne doit pas avoir été écrasé"
+        "the password must not have been overwritten"
     );
 
-    println!("✓ relance sans effet, mot de passe préservé");
+    println!("✓ rerun had no effect, password preserved");
     drop_all(&p, &["hlbtest_idem"]).await;
 }
 
-/// 🔴 LE test de sécurité : l'isolation entre applications.
+/// 🔴 THE security test: isolation between applications.
 #[tokio::test]
-#[ignore = "nécessite un PostgreSQL (voir HLB_TEST_PG)"]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
 async fn an_app_cannot_reach_another_apps_database() {
     let p = provisioner().await;
     drop_all(&p, &["hlbtest_gitea", "hlbtest_vault"]).await;
@@ -127,27 +127,27 @@ async fn an_app_cannot_reach_another_apps_database() {
         .await
         .expect("vault");
 
-    // Chacun accède à la sienne.
+    // Each reaches its own.
     assert!(can_connect("hlbtest_gitea", "hlbtest_gitea", "pw_gitea").await);
     assert!(can_connect("hlbtest_vault", "hlbtest_vault", "pw_vault").await);
-    println!("✓ chaque app accède à sa propre base");
+    println!("✓ each app reaches its own database");
 
-    // 🔴 Mais pas à celle du voisin, même avec ses propres identifiants valides.
+    // 🔴 But not the neighbour's, even with its own valid credentials.
     assert!(
         !can_connect("hlbtest_vault", "hlbtest_gitea", "pw_gitea").await,
-        "FAILLE : gitea a pu se connecter à la base de vaultwarden — \
+        "BREACH: gitea was able to connect to vaultwarden's database - \
          le REVOKE ALL ... FROM PUBLIC ne fonctionne pas"
     );
     println!("✓ gitea ne peut PAS atteindre la base de vaultwarden");
 
-    // Et un mauvais mot de passe reste refusé, évidemment.
+    // And a wrong password stays refused, obviously.
     assert!(!can_connect("hlbtest_gitea", "hlbtest_gitea", "mauvais").await);
 
     drop_all(&p, &["hlbtest_gitea", "hlbtest_vault"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un PostgreSQL (voir HLB_TEST_PG)"]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
 async fn password_rotation_works() {
     let p = provisioner().await;
     drop_all(&p, &["hlbtest_rot"]).await;
@@ -164,15 +164,15 @@ async fn password_rotation_works() {
     assert!(can_connect("hlbtest_rot", "hlbtest_rot", "nouveau").await);
     assert!(
         !can_connect("hlbtest_rot", "hlbtest_rot", "ancien").await,
-        "l'ancien mot de passe doit être révoqué"
+        "the old password must be revoked"
     );
 
-    println!("✓ rotation effective, ancien mot de passe révoqué");
+    println!("✓ rotation effective, old password revoked");
     drop_all(&p, &["hlbtest_rot"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un PostgreSQL (voir HLB_TEST_PG)"]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
 async fn injection_attempt_is_refused_before_reaching_sql() {
     let p = provisioner().await;
 
@@ -186,10 +186,10 @@ async fn injection_attempt_is_refused_before_reaching_sql() {
         "{err}"
     );
 
-    // Et la base d'administration est toujours là.
+    // And the admin database is still there.
     assert!(p
         .database_exists("postgres")
         .await
         .expect("postgres existe"));
-    println!("✓ tentative d'injection refusée à la validation : {err}");
+    println!("✓ injection attempt refused at validation: {err}");
 }

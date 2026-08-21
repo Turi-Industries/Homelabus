@@ -1,45 +1,45 @@
-//! Provisionnement MariaDB isolé (§3.1).
+//! Isolated MariaDB provisioning.
 //!
-//! Même promesse que PostgreSQL — *un Gitea compromis ne peut pas lire la base de
-//! Vaultwarden* — mais les pièges sont **différents**, et transposer le code Postgres
-//! tel quel donnerait une isolation qui n'en est pas une.
+//! Same promise as PostgreSQL - *a compromised Gitea cannot read Vaultwarden's
+//! database* - but the traps are **different**, and transposing the Postgres code
+//! as-is would give an isolation that is not one.
 //!
-//! ## 🔴 Piège n°1 : un utilisateur MariaDB, c'est `'nom'@'hôte'`
+//! ## 🔴 Trap 1: a MariaDB user is `'name'@'host'`
 //!
-//! Le nom seul n'identifie personne. `'gitea'@'localhost'` et `'gitea'@'%'` sont deux
-//! comptes **distincts**, avec des mots de passe et des droits distincts.
+//! The name alone identifies nobody. `'gitea'@'localhost'` and `'gitea'@'%'` are two
+//! **distinct** accounts, with distinct passwords and distinct grants.
 //!
-//! Conséquence directe : un `CREATE USER 'gitea'` sans partie hôte crée
-//! `'gitea'@'%'` sur certaines versions et `'gitea'@'localhost'` sur d'autres. Dans le
-//! second cas, l'app tourne dans un autre conteneur, n'est donc pas « localhost », et
-//! se voit refuser l'accès avec un message qui parle de mot de passe incorrect — alors
-//! que le mot de passe est bon.
+//! Direct consequence: a `CREATE USER 'gitea'` with no host part creates
+//! `'gitea'@'%'` on some versions and `'gitea'@'localhost'` on others. In the second
+//! case the app runs in another container, is therefore not "localhost", and is
+//! refused access with a message about an incorrect password - while the password is
+//! correct.
 //!
-//! On déclare donc **toujours** l'hôte explicitement.
+//! So the host is **always** declared explicitly.
 //!
-//! ## 🔴 Piège n°2 : `GRANT ALL ON *.*` détruit l'isolation
+//! ## 🔴 Trap 2: `GRANT ALL ON *.*` destroys the isolation
 //!
-//! C'est l'exemple qu'on trouve partout. Il donne accès à **toutes** les bases de
-//! l'instance, ce qui est exactement ce qu'on cherche à empêcher. La portée doit être
-//! `base.*`, jamais `*.*`.
+//! It is the example found everywhere. It grants access to **every** database on the
+//! instance, which is exactly what this is meant to prevent. The scope must be
+//! `database.*`, never `*.*`.
 //!
-//! ## 🔴 Piège n°3 : les jokers dans le nom de base
+//! ## 🔴 Trap 3: wildcards in the database name
 //!
-//! Dans un `GRANT`, `_` et `%` sont des **jokers**. Une base nommée `mon_app` donne un
-//! droit sur `monXapp`, `mon-app`, `monapp`… Il faut échapper ces caractères, ou
-//! refuser les noms qui en contiennent — ce qu'on fait ici, parce qu'un nom de base
-//! qui ressemble à un motif est une mauvaise idée de toute façon.
+//! In a `GRANT`, `_` and `%` are **wildcards**. A database named `my_app` grants a
+//! right over `myXapp`, `my-app`, `myapp`... Either escape those characters or refuse
+//! names containing them - which is what happens here, because a database name that
+//! looks like a pattern is a bad idea anyway.
 
 use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
 use sqlx::{MySqlPool, Row};
 
 use crate::{Error, Result};
 
-/// L'hôte depuis lequel les apps se connectent.
+/// The host applications connect from.
 ///
-/// `%` = n'importe où. Sur un réseau overlay Docker, l'adresse d'un conteneur change
-/// à chaque redéploiement : restreindre par IP casserait au premier redémarrage. C'est
-/// le réseau qui isole, pas cette colonne.
+/// `%` means anywhere. On a Docker overlay network a container's address changes on
+/// every redeploy, so restricting by IP would break on the first restart. The network
+/// is what isolates, not this column.
 const APP_HOST: &str = "%";
 
 pub struct MariadbProvisioner {
@@ -58,9 +58,9 @@ impl MariadbProvisioner {
         Ok(Self { pool })
     }
 
-    /// Crée la base et son utilisateur isolé.
+    /// Creates the database and its isolated user.
     ///
-    /// Renvoie `true` si quelque chose a été créé.
+    /// Returns `true` when something was created.
     pub async fn provision(&self, database: &str, user: &str, password: &str) -> Result<bool> {
         validate_identifier(database)?;
         validate_identifier(user)?;
@@ -68,8 +68,8 @@ impl MariadbProvisioner {
         let mut created = false;
 
         // `utf8mb4` explicitement : le `utf8` de MySQL ne fait que 3 octets et ne
-        // stocke PAS les émojis ni certains idéogrammes. Une insertion échoue alors
-        // sur « Incorrect string value » longtemps après l'installation.
+        // does NOT store emoji or some ideographs. An insert then fails on
+        // "Incorrect string value" long after installation.
         if !self.database_exists(database).await? {
             let stmt = format!(
                 "CREATE DATABASE `{}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
@@ -80,10 +80,10 @@ impl MariadbProvisioner {
                 .await
                 .map_err(|e| Error::Sql(e.to_string()))?;
             created = true;
-            tracing::info!(database, "base créée");
+            tracing::info!(database, "database created");
         }
 
-        // 🔴 L'hôte fait partie de l'identité. Sans lui, l'app ne se connecte pas.
+        // 🔴 The host is part of the identity. Without it the app cannot connect.
         if !self.user_exists(user).await? {
             let stmt = format!(
                 "CREATE USER '{}'@'{APP_HOST}' IDENTIFIED BY '{}'",
@@ -95,10 +95,10 @@ impl MariadbProvisioner {
                 .await
                 .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
             created = true;
-            tracing::info!(user, "utilisateur créé");
+            tracing::info!(user, "user created");
         }
 
-        // 🔴 La portée : `base.*` et JAMAIS `*.*`. C'est toute l'isolation.
+        // 🔴 The scope: `database.*` and NEVER `*.*`. That is the whole isolation.
         let grant = format!(
             "GRANT ALL PRIVILEGES ON `{}`.* TO '{}'@'{APP_HOST}'",
             escape_ident(database),
@@ -109,8 +109,8 @@ impl MariadbProvisioner {
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;
 
-        // MariaDB relit ses tables de droits au démarrage : sans FLUSH, un droit
-        // accordé peut n'être visible qu'après un redémarrage du serveur.
+        // MariaDB reloads its grant tables at startup: without FLUSH, a granted right
+        // may only become visible after a server restart.
         sqlx::query("FLUSH PRIVILEGES")
             .execute(&self.pool)
             .await
@@ -155,9 +155,9 @@ impl MariadbProvisioner {
         Ok(r.is_some())
     }
 
-    /// Les bases auxquelles un utilisateur a réellement accès.
+    /// The databases a user actually has access to.
     ///
-    /// Sert à **prouver** l'isolation en test d'intégration plutôt qu'à la supposer.
+    /// Used to **prove** the isolation in integration tests rather than assume it.
     pub async fn granted_databases(&self, user: &str) -> Result<Vec<String>> {
         let rows = sqlx::query(
             "SELECT DISTINCT table_schema FROM information_schema.schema_privileges
@@ -174,13 +174,13 @@ impl MariadbProvisioner {
             .collect())
     }
 
-    /// Les valeurs de la première colonne d'une requête, en texte.
+    /// The first column of a query's rows, as text.
     ///
-    /// ⚠️ Réservé aux vues d'`information_schema`, dont la forme varie d'une version à
-    /// l'autre : une requête typée figerait la version supportée.
+    /// ⚠️ Reserved for `information_schema` views, whose shape varies between
+    /// versions: a typed query would freeze the supported version.
     ///
-    /// Sert notamment à lire les moteurs de stockage d'une base avant de la dumper —
-    /// `--single-transaction` ne protège pas les tables non transactionnelles.
+    /// Notably used to read a database's storage engines before dumping it -
+    /// `--single-transaction` does not protect non-transactional tables.
     pub async fn column_values(&self, sql: &str) -> Result<Vec<String>> {
         let rows = sqlx::query(sql)
             .fetch_all(&self.pool)
@@ -196,8 +196,8 @@ impl MariadbProvisioner {
 
 /// Un identifiant acceptable ?
 ///
-/// Strict **délibérément**. Les identifiants ne peuvent pas être des paramètres liés
-/// en SQL : ils sont interpolés. Plutôt que d'échapper des cas exotiques, on refuse
+/// **Deliberately** strict. Identifiers cannot be bound parameters in SQL: they are
+/// interpolated. Rather than escaping exotic cases, we refuse
 /// tout ce qui n'est pas manifestement sûr.
 ///
 /// 🔴 `_` et `%` sont exclus parce qu'ils sont des **jokers** dans un `GRANT` : une
@@ -205,12 +205,12 @@ impl MariadbProvisioner {
 pub fn validate_identifier(s: &str) -> Result<()> {
     if s.is_empty() || s.len() > 64 {
         return Err(Error::InvalidIdentifier(format!(
-            "« {s} » : 1 à 64 caractères (limite MariaDB)"
+            "\"{s}\": 1 to 64 characters (MariaDB limit)"
         )));
     }
     if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(Error::InvalidIdentifier(format!(
-            "« {s} » : seuls les caractères alphanumériques ASCII et « - » sont admis. \
+            "\"{s}\": only ASCII alphanumerics and \"-\" are accepted. \
              Les « _ » et « % » sont des JOKERS dans un GRANT : « mon_app » donnerait \
              un droit sur « monXapp »"
         )));
@@ -218,16 +218,16 @@ pub fn validate_identifier(s: &str) -> Result<()> {
     Ok(())
 }
 
-/// Échappe un identifiant pour un contexte `` `…` ``.
+/// Escapes an identifier for a `` `...` `` context.
 fn escape_ident(s: &str) -> String {
     s.replace('`', "``")
 }
 
-/// Échappe une chaîne pour un contexte `'…'`.
+/// Escapes a string for a `'...'` context.
 ///
-/// ⚠️ MariaDB traite `\` comme caractère d'échappement dans les littéraux (contrairement
-/// à PostgreSQL par défaut). Un mot de passe finissant par `\` échapperait le guillemet
-/// fermant et casserait la requête — ou pire, la transformerait.
+/// ⚠️ MariaDB treats `\` as an escape character inside literals (unlike PostgreSQL by
+/// default). A password ending in `\` would escape the closing quote and break the
+/// query - or worse, transform it.
 fn escape_str(s: &str) -> String {
     s.replace('\\', r"\\").replace('\'', "''")
 }
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn wildcards_are_refused_in_identifiers() {
-        // 🔴 Le piège propre à MariaDB : dans un GRANT, `_` et `%` sont des jokers.
+        // 🔴 The MariaDB-specific trap: in a GRANT, `_` and `%` are wildcards.
         // Une base « mon_app » donnerait un droit sur « monXapp », « mon-app »…
         assert!(validate_identifier("mon_app").is_err());
         assert!(validate_identifier("mon%app").is_err());
@@ -255,7 +255,7 @@ mod tests {
         assert!(e.contains("JOKER"), "{e}");
         assert!(
             e.contains("monXapp"),
-            "l'erreur doit montrer la conséquence : {e}"
+            "the error must show the consequence: {e}"
         );
     }
 
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn the_identifier_length_matches_mariadb() {
-        // 64 caractères : au-delà, MariaDB refuse avec une erreur qui ne dit pas que
+        // 64 characters: beyond that MariaDB refuses with an error that does not say
         // c'est la longueur.
         assert!(validate_identifier(&"a".repeat(64)).is_ok());
         assert!(validate_identifier(&"a".repeat(65)).is_err());
@@ -284,9 +284,9 @@ mod tests {
 
     #[test]
     fn a_backslash_in_a_password_is_escaped() {
-        // ⚠️ MariaDB traite `\` comme échappement dans les littéraux, contrairement à
-        // PostgreSQL. Un mot de passe finissant par `\` échapperait le guillemet
-        // fermant — et transformerait la requête.
+        // ⚠️ MariaDB treats `\` as an escape inside literals, unlike PostgreSQL. A
+        // password ending in `\` would escape the closing quote - and transform the
+        // query.
         assert_eq!(escape_str(r"mdp\"), r"mdp\\");
         assert_eq!(escape_str("mdp'suite"), "mdp''suite");
         assert_eq!(escape_str(r"a\'b"), r"a\\''b");

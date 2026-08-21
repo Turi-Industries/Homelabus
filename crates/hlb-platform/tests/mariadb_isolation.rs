@@ -1,13 +1,12 @@
-//! La promesse d'isolation du §3.1, côté MariaDB : **un Gitea compromis ne doit pas
-//! pouvoir lire la base de Vaultwarden.**
+//! The isolation promise on the MariaDB side: **a compromised Gitea must not be able
+//! to read Vaultwarden's database.**
 //!
-//! Les pièges ne sont PAS les mêmes que pour PostgreSQL, et c'est précisément pour ça
-//! que ce fichier existe : transposer le test Postgres ne prouverait rien ici.
+//! The traps are NOT the same as for PostgreSQL, which is precisely why this file
+//! exists: transposing the Postgres test would prove nothing here.
 //!
-//! ⚠️ **Ces tests n'ont pas encore été exécutés** : l'image MariaDB n'était pas
-//! présente sur la machine de développement, et la télécharger n'était pas possible.
-//! Ils sont écrits, gated, et attendent une exécution réelle — c'est dit plutôt que
-//! sous-entendu.
+//! ⚠️ **These tests have not been run yet**: the MariaDB image was not present on the
+//! development machine and could not be pulled. They are written, gated, and waiting
+//! for a real run - said plainly rather than left implied.
 //!
 //! ```sh
 //! docker run -d --name hlb-test-my -e MARIADB_ROOT_PASSWORD=test \
@@ -23,7 +22,7 @@ use hlb_platform::MariadbProvisioner;
 
 fn admin_url() -> String {
     std::env::var("HLB_TEST_MYSQL")
-        .expect("HLB_TEST_MYSQL doit pointer vers un MariaDB de test (voir l'en-tête)")
+        .expect("HLB_TEST_MYSQL must point at a test MariaDB (see the header)")
 }
 
 async fn provisioner() -> MariadbProvisioner {
@@ -32,7 +31,7 @@ async fn provisioner() -> MariadbProvisioner {
         .expect("connexion admin")
 }
 
-/// Nettoie les objets d'un test précédent : un test interrompu bloquerait le suivant.
+/// Cleans objects left by a previous test: an interrupted test would block the next.
 async fn nettoyer(bases: &[&str], users: &[&str]) {
     let pool = sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(1)
@@ -53,9 +52,9 @@ async fn nettoyer(bases: &[&str], users: &[&str]) {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn an_app_cannot_reach_another_apps_database() {
-    // 🔴 LE test. Tout le reste du crate n'a d'intérêt que si celui-ci passe.
+    // 🔴 THE test. The rest of the crate only matters if this one passes.
     nettoyer(&["giteatest", "vaulttest"], &["giteatest", "vaulttest"]).await;
     let p = provisioner().await;
 
@@ -68,38 +67,38 @@ async fn an_app_cannot_reach_another_apps_database() {
 
     // Gitea se connecte avec SES identifiants et tente de lire la base de Vaultwarden.
     let url = admin_url();
-    let hote = url.split('@').nth(1).expect("hôte dans l'URL");
+    let host = url.split('@').nth(1).expect("host in the URL");
     let gitea_url = format!(
         "mysql://giteatest:mdp-gitea@{}",
-        hote.replace("/mysql", "/giteatest")
+        host.replace("/mysql", "/giteatest")
     );
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(1)
         .connect(&gitea_url)
         .await
-        .expect("gitea doit pouvoir se connecter à SA base");
+        .expect("gitea must be able to connect to ITS OWN database");
 
     let r = sqlx::query("SELECT 1 FROM vaulttest.information_schema_placeholder")
         .execute(&pool)
         .await;
     assert!(r.is_err(), "gitea ne doit RIEN pouvoir lire chez vaulttest");
 
-    // Et la preuve positive : la liste des bases accordées ne contient que la sienne.
-    let accordees = p.granted_databases("giteatest").await.expect("droits");
+    // And the positive proof: the granted list contains only its own.
+    let granted = p.granted_databases("giteatest").await.expect("grants");
     assert!(
-        !accordees.iter().any(|b| b == "vaulttest"),
-        "🔴 gitea a un droit sur vaulttest : {accordees:?}"
+        !granted.iter().any(|b| b == "vaulttest"),
+        "🔴 gitea holds a grant on vaulttest: {granted:?}"
     );
 
     nettoyer(&["giteatest", "vaulttest"], &["giteatest", "vaulttest"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn the_grant_is_scoped_to_one_database_not_all() {
-    // 🔴 `GRANT ALL ON *.*` est l'exemple qu'on trouve partout, et il donne accès à
-    // TOUTE l'instance. La portée doit être `base.*`.
+    // 🔴 `GRANT ALL ON *.*` is the example found everywhere, and it grants access to
+    // the WHOLE instance. The scope must be `database.*`.
     nettoyer(&["scopetest"], &["scopetest"]).await;
     let p = provisioner().await;
 
@@ -107,21 +106,21 @@ async fn the_grant_is_scoped_to_one_database_not_all() {
         .await
         .expect("provisionnement");
 
-    let accordees = p.granted_databases("scopetest").await.expect("droits");
+    let granted = p.granted_databases("scopetest").await.expect("grants");
     assert_eq!(
-        accordees,
+        granted,
         vec!["scopetest".to_string()],
-        "une seule base doit être accordée, pas {accordees:?}"
+        "exactly one database must be granted, not {granted:?}"
     );
 
     nettoyer(&["scopetest"], &["scopetest"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn the_user_can_connect_from_another_container() {
-    // 🔴 Le piège n°1 de MariaDB : un utilisateur créé en `'nom'@'localhost'` est
-    // refusé depuis un autre conteneur, avec un message qui parle de mot de passe
+    // 🔴 MariaDB trap 1: a user created as `'name'@'localhost'` is refused from
+    // another container, with a message about the password
     // incorrect alors qu'il est bon.
     nettoyer(&["hosttest"], &["hosttest"]).await;
     let p = provisioner().await;
@@ -138,7 +137,7 @@ async fn the_user_can_connect_from_another_container() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn provisioning_is_idempotent() {
     nettoyer(&["idemtest"], &["idemtest"]).await;
     let p = provisioner().await;
@@ -151,14 +150,14 @@ async fn provisioning_is_idempotent() {
         !p.provision("idemtest", "idemtest", "mdp")
             .await
             .expect("2e"),
-        "le second passage ne doit rien créer"
+        "the second pass must create nothing"
     );
 
     nettoyer(&["idemtest"], &["idemtest"]).await;
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn password_rotation_works() {
     nettoyer(&["rottest"], &["rottest"]).await;
     let p = provisioner().await;
@@ -171,10 +170,10 @@ async fn password_rotation_works() {
         .expect("rotation");
 
     let url = admin_url();
-    let hote = url.split('@').nth(1).expect("hôte");
+    let host = url.split('@').nth(1).expect("host");
     let nouvelle = format!(
         "mysql://rottest:nouveau@{}",
-        hote.replace("/mysql", "/rottest")
+        host.replace("/mysql", "/rottest")
     );
 
     sqlx::mysql::MySqlPoolOptions::new()
@@ -187,9 +186,9 @@ async fn password_rotation_works() {
 }
 
 #[tokio::test]
-#[ignore = "nécessite un MariaDB (voir HLB_TEST_MYSQL)"]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn a_wildcard_name_is_refused_before_reaching_sql() {
-    // La validation doit refuser AVANT toute requête : `mon_app` donnerait un droit
+    // Validation must refuse BEFORE any query: `my_app` would grant a right
     // sur `monXapp` et toutes ses variantes.
     let p = provisioner().await;
     assert!(p.provision("mon_app", "mon_app", "mdp").await.is_err());
