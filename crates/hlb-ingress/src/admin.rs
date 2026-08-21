@@ -1,11 +1,11 @@
-//! Client de l'API d'administration de Caddy.
+//! Client for Caddy's admin API.
 //!
-//! Caddy accepte un Caddyfile brut sur `POST /load` avec le bon `Content-Type`, ce qui
-//! évite d'avoir à produire du JSON ou à embarquer le binaire `caddy` pour l'adapter.
+//! Caddy accepts a raw Caddyfile on `POST /load` with the right `Content-Type`, which
+//! avoids producing JSON or embedding the `caddy` binary to adapt it.
 //!
-//! Le rechargement est **atomique et sans coupure** : si la configuration est refusée,
-//! l'ancienne reste active. C'est ce qui rend acceptable de régénérer la config à
-//! chaque réconciliation.
+//! Reloading is **atomic and without downtime**: if the configuration is refused, the
+//! previous one stays active. That is what makes it acceptable to regenerate the config
+//! on every reconciliation.
 
 use crate::{Error, Result};
 
@@ -25,7 +25,7 @@ impl CaddyAdmin {
         }
     }
 
-    /// Charge un Caddyfile. Renvoie une erreur détaillée si Caddy le refuse.
+    /// Loads a Caddyfile. Returns a detailed error if Caddy refuses it.
     pub async fn load_caddyfile(&self, caddyfile: &str) -> Result<()> {
         let url = format!("{}/load", self.base_url.trim_end_matches('/'));
 
@@ -43,7 +43,7 @@ impl CaddyAdmin {
 
         let status = resp.status();
         if status.is_success() {
-            tracing::info!("configuration Caddy rechargée");
+            tracing::info!("Caddy configuration reloaded");
             return Ok(());
         }
 

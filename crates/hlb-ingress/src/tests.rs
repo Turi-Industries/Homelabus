@@ -33,14 +33,14 @@ fn the_domain_template_is_resolved() {
 
 #[test]
 fn after_guide_stays_internal_until_the_guide_is_done() {
-    // §4.6bis — c'est ce qui ferme la fenêtre « premier inscrit = admin ».
+    // This is what closes the "first to sign up becomes admin" window.
     let before = routes_from_manifest(&manifest(GITEA), Some("git.example.fr"), false);
     assert!(!before[0].public, "la route doit rester interne");
 
     let after = routes_from_manifest(&manifest(GITEA), Some("git.example.fr"), true);
     assert!(
         after[0].public,
-        "une fois le guide traité, la route s'ouvre"
+        "once the guide is handled, the route opens"
     );
 }
 
@@ -70,5 +70,5 @@ fn anubis_is_deduced_from_the_chain() {
 fn a_private_manifest_never_becomes_public() {
     let y = GITEA.replace("expose: after-guide", "expose: private");
     let r = routes_from_manifest(&manifest(&y), Some("x.fr"), true);
-    assert!(!r[0].public, "private reste private, guide traité ou non");
+    assert!(!r[0].public, "private stays private, guide handled or not");
 }

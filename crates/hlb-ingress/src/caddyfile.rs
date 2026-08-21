@@ -1,35 +1,35 @@
-//! Génération des Caddyfile (§6.1 du plan).
+//! Generating the Caddyfiles.
 //!
-//! La chaîne d'entrée est à trois maillons :
+//! The ingress chain has three links:
 //!
 //! ```text
 //! Internet → [Caddy frontend] → [Anubis] → [Caddy backend] → services
-//!                TLS, ACME       anti-bot      routage
+//!                TLS, ACME       anti-bot      routing
 //! ```
 //!
-//! Les deux Caddyfile sont **entièrement générés** depuis les manifests. On n'écrit
-//! plus de configuration à la main, donc on ne l'oublie plus non plus.
+//! Both Caddyfiles are **entirely generated** from the manifests. No configuration is
+//! written by hand any more, so none is forgotten either.
 //!
-//! La sortie est déterministe : les routes sont triées, ce qui rend les tests
-//! d'instantané possibles et les diffs lisibles (§12bis).
+//! The output is deterministic: routes are sorted, which makes snapshot tests possible
+//! and diffs readable.
 
 use std::fmt::Write;
 
-/// Une route à publier, dérivée d'un `Ingress` de manifest.
+/// A route to publish, derived from a manifest's `Ingress`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Route {
     pub host: String,
-    /// Nom du service Swarm, résolu par le DNS interne de l'overlay.
+    /// The Swarm service name, resolved by the overlay's internal DNS.
     pub service: String,
     pub port: u16,
-    /// Passe par Anubis ? Déduit de `chain` dans le manifest.
+    /// Goes through Anubis? Derived from `chain` in the manifest.
     pub through_anubis: bool,
     /// `false` = joignable uniquement depuis le VPN (§9).
     pub public: bool,
-    /// Chemins de callback OIDC de cette app, à exclure d'Anubis (§5.8).
+    /// This app's OIDC callback paths, to be excluded from Anubis.
     pub sso_paths: Vec<String>,
-    /// L'app a-t-elle besoin du portail ? Vrai pour `proxy-header` et `proxy-only`,
-    /// faux pour `native` (elle parle OIDC elle-même) et `none`.
+    /// Does the app need the portal? True for `proxy-header` and `proxy-only`, false
+    /// for `native` (it speaks OIDC itself) and `none`.
     pub needs_forward_auth: bool,
 }
 
@@ -47,11 +47,11 @@ impl Route {
     }
 }
 
-/// Chemins qu'Anubis ne doit **jamais** intercepter (§5.8).
+/// Paths Anubis must **never** intercept.
 ///
-/// Un challenge proof-of-work devant un callback OAuth casse la connexion : la
-/// redirection depuis le fournisseur d'identité est une navigation automatique, pas
-/// une action de l'utilisateur, et certains agents ne résoudront jamais le challenge.
+/// A proof-of-work challenge in front of an OAuth callback breaks sign-in: the redirect
+/// from the identity provider is an automatic navigation, not a user action, and some
+/// agents will never solve the challenge.
 pub const ANUBIS_ALWAYS_BYPASS: &[&str] = &[
     "/.well-known/*",
     "/oauth2/*",
@@ -59,24 +59,23 @@ pub const ANUBIS_ALWAYS_BYPASS: &[&str] = &[
     "/identity/connect/*",
 ];
 
-/// Plages considérées comme « internes » pour les routes non publiques.
+/// The ranges treated as "internal" for non-public routes.
 const PRIVATE_RANGES: &[&str] = &["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fd00::/8"];
 
-/// Le videur CrowdSec, posé sur le frontal (§8bis).
+/// The CrowdSec bouncer, installed on the front.
 ///
-/// 🔴 **Il n'a de sens qu'au tout premier maillon de la chaîne.**
+/// 🔴 **It only makes sense on the very first link of the chain.**
 ///
-/// CrowdSec bannit sur l'adresse IP source. Le Caddy *backend* ne voit que l'adresse
-/// du frontal (ou d'Anubis) : y poser le videur reviendrait à bannir son propre
-/// frontal au premier attaquant, coupant le site pour tout le monde. C'est pour ça
-/// que `render_backend` n'émet jamais de directive `crowdsec`, et qu'un test le
-/// vérifie.
+/// CrowdSec bans on the source IP address. The *backend* Caddy only sees the front's
+/// address (or Anubis'): putting the bouncer there would ban its own front on the first
+/// attacker, cutting the site for everyone. That is why `render_backend` never emits a
+/// `crowdsec` directive, and why a test checks it.
 #[derive(Debug, Clone)]
 pub struct CrowdSec {
     /// L'API locale de CrowdSec dans l'overlay.
     pub api_url: String,
-    /// Clé du bouncer, obtenue par `cscli bouncers add`. Vient du coffre (§7) —
-    /// elle n'est jamais écrite dans un manifest.
+    /// The bouncer key, obtained with `cscli bouncers add`. It comes from the vault -
+    /// it is never written into a manifest.
     pub api_key: String,
 }
 
@@ -89,28 +88,28 @@ impl Default for CrowdSec {
     }
 }
 
-/// Portail d'authentification devant les apps sans OIDC natif (§5.0).
+/// The authentication portal in front of apps without native OIDC.
 ///
-/// 🔴 **La faille classique du forward-auth : les en-têtes entrants.**
+/// 🔴 **The classic forward-auth flaw: incoming headers.**
 ///
-/// Le portail authentifie l'utilisateur puis ajoute `X-Auth-Request-User` à la requête
-/// transmise à l'app, qui lui fait confiance. Si le proxy laisse passer un en-tête du
-/// même nom **envoyé par le client**, alors :
+/// The portal authenticates the user and then adds `X-Auth-Request-User` to the request
+/// forwarded to the app, which trusts it. If the proxy lets a header of the same name
+/// **sent by the client** through, then:
 ///
 /// ```text
-/// curl -H "X-Auth-Request-User: admin" https://app.example.fr/
+/// curl -H "X-Auth-Request-User: admin" https://app.example.org/
 /// ```
 ///
-/// …suffit à devenir administrateur. La requête est authentifiée par le portail (avec
-/// un compte quelconque, ou même sans), et l'app lit l'en-tête falsifié.
+/// ...is enough to become an administrator. The request is authenticated by the portal
+/// (with any account, or even none), and the app reads the forged header.
 ///
-/// D'où le `request_header -X-Auth-Request-*` posé **avant** tout le reste : les
-/// en-têtes d'identité ne peuvent venir que du portail, jamais du réseau.
+/// Hence the `request_header -X-Auth-Request-*` placed **before** everything else:
+/// identity headers can only come from the portal, never from the network.
 #[derive(Debug, Clone)]
 pub struct ForwardAuth {
-    /// Hôte:port du portail dans l'overlay.
+    /// The portal's host:port on the overlay.
     pub upstream: String,
-    /// Chemin de vérification. `/oauth2/auth` pour oauth2-proxy.
+    /// Verification path. `/oauth2/auth` for oauth2-proxy.
     pub verify_path: String,
     /// Chemin de connexion, vers lequel un 401 redirige.
     pub sign_in_path: String,
@@ -126,11 +125,11 @@ impl Default for ForwardAuth {
     }
 }
 
-/// Les en-têtes que le portail pose, et que le client ne doit JAMAIS pouvoir poser.
+/// The headers the portal sets, and that the client must NEVER be able to set.
 ///
-/// ⚠️ `copy_headers` n'a d'effet que si oauth2-proxy tourne avec `--set-xauthrequest` :
-/// sans ce drapeau, les en-têtes sont simplement absents et l'app voit un utilisateur
-/// anonyme — sans la moindre erreur.
+/// ⚠️ `copy_headers` only has an effect when oauth2-proxy runs with
+/// `--set-xauthrequest`: without that flag the headers are simply absent and the app
+/// sees an anonymous user - with no error at all.
 pub const AUTH_HEADERS: &[&str] = &[
     "X-Auth-Request-User",
     "X-Auth-Request-Email",
@@ -138,26 +137,26 @@ pub const AUTH_HEADERS: &[&str] = &[
     "X-Auth-Request-Groups",
 ];
 
-/// Obtention des certificats par DNS-01 (§6.4).
+/// Obtaining certificates through DNS-01.
 ///
-/// ## Pourquoi DNS-01 plutôt que HTTP-01
+/// ## Why DNS-01 rather than HTTP-01
 ///
-/// HTTP-01 exige que chaque nom soit déjà joignable en HTTP depuis Internet, donc un
-/// enregistrement DNS **par app**, créé avant l'installation. DNS-01 permet un
-/// **certificat wildcard** : un seul `*.example.fr` créé une fois, et toute nouvelle
-/// app est immédiatement servie en TLS sans la moindre action DNS.
+/// HTTP-01 requires every name to already be reachable over HTTP from the internet,
+/// and therefore a DNS record **per app**, created before installation. DNS-01 allows a
+/// **wildcard certificate**: one `*.example.org` created once, and any new app is
+/// immediately served over TLS with no DNS action at all.
 ///
-/// Bénéfice de sécurité en prime : les sous-domaines n'apparaissent pas dans les
-/// journaux de Certificate Transparency, qui sont publics et indexés. Sans wildcard,
-/// installer `comptabilite.example.fr` l'annonce au monde entier.
+/// A security benefit comes with it: subdomains do not appear in Certificate
+/// Transparency logs, which are public and indexed. Without a wildcard, installing
+/// `accounting.example.org` announces it to the whole world.
 ///
-/// ## 🔴 Le piège des quotas Let's Encrypt
+/// ## 🔴 The Let's Encrypt rate-limit trap
 ///
-/// Une boucle de réconciliation qui redemande un certificat en continu fait bannir le
-/// domaine **pour une semaine** — et tous les services passent en TLS invalide d'un
-/// coup. C'est pour ça que `staging` existe, et qu'il faut s'en servir au premier
-/// essai. Les certificats de staging ne sont pas reconnus par les navigateurs : c'est
-/// le but, on vérifie la mécanique sans consommer de quota.
+/// A reconciliation loop that keeps re-requesting a certificate gets the domain banned
+/// **for a week** - and every service switches to an invalid certificate at once. That
+/// is why `staging` exists, and why it should be used on the first attempt. Staging
+/// certificates are not trusted by browsers: that is the point, the mechanism is
+/// checked without consuming quota.
 #[derive(Debug, Clone)]
 pub struct Acme {
     /// Le module DNS de Caddy : `cloudflare`, `ovh`, `desec`, `gandi`…
@@ -171,17 +170,17 @@ pub struct Acme {
 }
 
 impl Acme {
-    /// Les noms couverts par le certificat.
+    /// The names covered by the certificate.
     ///
-    /// 🔴 **`*.example.fr` ne couvre PAS `example.fr`.** C'est la règle des jokers
-    /// TLS, et l'erreur est classique : le wildcard est obtenu, tous les sous-domaines
-    /// fonctionnent, et le domaine nu affiche une erreur de certificat que personne ne
-    /// comprend. Les deux noms sont donc toujours demandés ensemble.
+    /// 🔴 **`*.example.org` does NOT cover `example.org`.** That is the TLS wildcard
+    /// rule, and the mistake is classic: the wildcard is obtained, every subdomain
+    /// works, and the bare domain shows a certificate error nobody understands. So both
+    /// names are always requested together.
     pub fn subjects(&self) -> Vec<String> {
         vec![format!("*.{}", self.base_domain), self.base_domain.clone()]
     }
 
-    /// L'URL de l'autorité, ou `None` pour le défaut (production).
+    /// The authority URL, or `None` for the default (production).
     pub fn ca_url(&self) -> Option<&'static str> {
         self.staging
             .then_some("https://acme-staging-v02.api.letsencrypt.org/directory")
@@ -190,18 +189,18 @@ impl Acme {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Hôte:port du service Anubis dans l'overlay.
+    /// The Anubis service's host:port on the overlay.
     pub anubis_upstream: String,
-    /// Hôte:port du Caddy backend.
+    /// The backend Caddy's host:port.
     pub backend_upstream: String,
     /// Adresse mail pour l'inscription ACME.
     pub acme_email: String,
-    /// Videur CrowdSec. `None` = pas de filtrage réputationnel.
+    /// CrowdSec bouncer. `None` means no reputation filtering.
     pub crowdsec: Option<CrowdSec>,
     /// Portail d'authentification. `None` = pas de forward-auth.
     pub forward_auth: Option<ForwardAuth>,
-    /// Certificats par DNS-01. `None` = Caddy se débrouille en HTTP-01, ce qui
-    /// impose un enregistrement DNS par app.
+    /// DNS-01 certificates. `None` means Caddy falls back to HTTP-01, which requires
+    /// a DNS record per app.
     pub acme: Option<Acme>,
 }
 
@@ -218,26 +217,26 @@ impl Default for Config {
     }
 }
 
-/// Le Caddyfile du frontal : TLS, filtrage réseau, aiguillage vers Anubis ou non.
+/// The front Caddyfile: TLS, network filtering, and whether to route through Anubis.
 pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     let mut routes = routes.to_vec();
     routes.sort();
 
     let mut out = String::new();
 
-    let _ = writeln!(out, "# Généré par Homelabus — ne pas éditer à la main.");
+    let _ = writeln!(out, "# Generated by Homelabus - do not edit by hand.");
     let _ = writeln!(
         out,
-        "# Toute modification sera écrasée à la prochaine réconciliation.\n"
+        "# Any change will be overwritten on the next reconciliation.\n"
     );
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "\temail {}", cfg.acme_email);
     let _ = writeln!(out, "\tadmin 0.0.0.0:2019");
 
     if let Some(cs) = &cfg.crowdsec {
-        // ⚠️ `order crowdsec first` est indispensable : sans lui, Caddy applique la
-        // directive après le `reverse_proxy`, c'est-à-dire APRÈS avoir transmis la
-        // requête au service. Le videur ne bloquerait plus rien.
+        // ⚠️ `order crowdsec first` is essential: without it, Caddy applies the
+        // directive after the `reverse_proxy`, that is AFTER forwarding the request to
+        // the service. The bouncer would block nothing.
         let _ = writeln!(out, "\torder crowdsec first");
         let _ = writeln!(out, "\tcrowdsec {{");
         let _ = writeln!(out, "\t\tapi_url {}", cs.api_url);
@@ -255,17 +254,17 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     if cfg.crowdsec.is_some() {
         let _ = writeln!(
             out,
-            "# ⚠️ Ce Caddyfile exige une image Caddy construite avec le module\n\
-             # github.com/hslatman/caddy-crowdsec-bouncer. Une image Caddy standard\n\
-             # refusera de démarrer sur la directive « crowdsec ».\n"
+            "# ⚠️ This Caddyfile needs a Caddy image built with the module\n\
+             # github.com/hslatman/caddy-crowdsec-bouncer. A standard Caddy image\n\
+             # will refuse to start on the \"crowdsec\" directive.\n"
         );
     }
 
     for r in &routes {
         let _ = writeln!(out, "{} {{", r.host);
 
-        // 🔴 Avant tout le reste : un attaquant déjà connu ne doit consommer ni le
-        // proof-of-work d'Anubis, ni un aller-retour vers le service.
+        // 🔴 Before everything else: an already-known attacker must consume neither
+        // Anubis' proof-of-work nor a round trip to the service.
         if cfg.crowdsec.is_some() {
             let _ = writeln!(out, "\tcrowdsec");
         }
@@ -276,7 +275,7 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
             }
         }
 
-        // §9 — en-têtes de sécurité posés une fois, au point d'entrée.
+        // Security headers, set once, at the entry point.
         let _ = writeln!(out, "\theader {{");
         let _ = writeln!(
             out,
@@ -288,11 +287,8 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
         let _ = writeln!(out, "\t}}");
 
         if !r.public {
-            // Exposition privée par défaut : seul le réseau interne passe.
-            let _ = writeln!(
-                out,
-                "\n\t# Route privée : accessible uniquement depuis le VPN."
-            );
+            // Private exposure by default: only the internal network gets through.
+            let _ = writeln!(out, "\n\t# Private route: reachable from the VPN only.");
             let _ = writeln!(out, "\t@externe not remote_ip {}", PRIVATE_RANGES.join(" "));
             let _ = writeln!(out, "\trespond @externe 403");
         }
@@ -325,26 +321,26 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
     out
 }
 
-/// Le bloc qui obtient le certificat wildcard.
+/// The block that obtains the wildcard certificate.
 ///
-/// Il est déclaré **une fois**, pour tous les noms : chaque site le réutilise ensuite
-/// automatiquement. Un `tls` par site redemanderait un certificat par sous-domaine,
-/// ce qui épuise le quota Let's Encrypt en quelques apps et fait bannir le domaine.
+/// It is declared **once**, for every name: each site then reuses it automatically. A
+/// `tls` per site would request a certificate per subdomain, which exhausts the Let's
+/// Encrypt quota within a few apps and gets the domain banned.
 fn rendre_acme(out: &mut String, a: &Acme) {
     if a.staging {
         let _ = writeln!(
             out,
-            "# 🔴 ENVIRONNEMENT DE TEST Let's Encrypt : ces certificats ne sont PAS\n\
-             # reconnus par les navigateurs. C'est voulu — on vérifie la mécanique\n\
-             # sans consommer de quota. Retire --acme-staging quand ça marche.\n"
+            "# 🔴 Let's Encrypt STAGING ENVIRONMENT: these certificates are NOT\n\
+             # trusted by browsers. That is intended - the mechanism is checked\n\
+             # without consuming quota. Drop --acme-staging once it works.\n"
         );
     }
 
     let _ = writeln!(
         out,
-        "# ⚠️ Exige une image Caddy construite avec le module DNS « {} » :\n\
+        "# ⚠️ Needs a Caddy image built with the \"{}\" DNS module:\n\
          #   xcaddy build --with github.com/caddy-dns/{}\n\
-         # Une image Caddy standard refuse de démarrer sur « dns {} ».\n",
+         # A standard Caddy image refuses to start on \"dns {}\".\n",
         a.provider, a.provider, a.provider
     );
 
@@ -361,51 +357,51 @@ fn rendre_acme(out: &mut String, a: &Acme) {
     let _ = writeln!(out, "}}\n");
 }
 
-/// Le bloc forward-auth d'une route.
+/// A route's forward-auth block.
 ///
-/// L'ordre des directives à l'intérieur porte deux décisions de sécurité :
+/// The order of the directives inside carries two security decisions:
 ///
-/// 1. **Le nettoyage des en-têtes en PREMIER.** Sans lui, un client qui envoie
-///    `X-Auth-Request-User: admin` voit son en-tête transmis tel quel à l'app, qui lui
-///    fait confiance. C'est l'authentification contournée en une seule requête `curl`.
-/// 2. **Les chemins du portail exclus du portail.** `/oauth2/*` doit atteindre
-///    oauth2-proxy directement : le faire passer par `forward_auth` créerait une
-///    boucle — pour s'authentifier il faudrait déjà être authentifié.
+/// 1. **Header scrubbing FIRST.** Without it, a client sending
+///    `X-Auth-Request-User: admin` has its header forwarded as-is to the app, which
+///    trusts it. That is authentication bypassed in a single `curl`.
+/// 2. **The portal's own paths excluded from the portal.** `/oauth2/*` must reach
+///    oauth2-proxy directly: sending it through `forward_auth` would create a loop -
+///    to authenticate you would already have to be authenticated.
 fn rendre_forward_auth(out: &mut String, fa: &ForwardAuth) {
-    let _ = writeln!(out, "\n\t# §5.0 — portail d'authentification.");
+    let _ = writeln!(out, "\n\t# Authentication portal.");
     let _ = writeln!(
         out,
-        "\t# 🔴 Les en-têtes d'identité ne peuvent venir QUE du portail : sans cette"
+        "\t# 🔴 Identity headers can come ONLY from the portal: without this"
     );
     let _ = writeln!(
         out,
-        "\t# ligne, « curl -H \"X-Auth-Request-User: admin\" » suffit à usurper un compte."
+        "\t# line, `curl -H \"X-Auth-Request-User: admin\"` is enough to impersonate."
     );
     for h in AUTH_HEADERS {
         let _ = writeln!(out, "\trequest_header -{h}");
     }
 
-    // Le portail doit être joignable sans passer par lui-même.
-    let _ = writeln!(out, "\n\t# Le portail lui-même, sinon la connexion boucle.");
+    // The portal must be reachable without going through itself.
+    let _ = writeln!(out, "\n\t# The portal itself, or sign-in loops.");
     let _ = writeln!(out, "\thandle /oauth2/* {{");
     let _ = writeln!(out, "\t\treverse_proxy {}", fa.upstream);
     let _ = writeln!(out, "\t}}");
 
     let _ = writeln!(out, "\n\tforward_auth {} {{", fa.upstream);
     let _ = writeln!(out, "\t\turi {}", fa.verify_path);
-    // ⚠️ Sans `--set-xauthrequest` côté oauth2-proxy, ces en-têtes n'existent pas et
-    // l'app voit un utilisateur anonyme — sans erreur nulle part.
+    // ⚠️ Without `--set-xauthrequest` on the oauth2-proxy side, these headers do not
+    // exist and the app sees an anonymous user - with no error anywhere.
     let _ = writeln!(out, "\t\tcopy_headers {}", AUTH_HEADERS.join(" "));
 
-    // 🔴 `status` est un matcher de RÉPONSE : il n'existe qu'à l'intérieur du bloc
-    // forward_auth. Écrit au niveau du site, Caddy refuse de démarrer sur
-    // « module not registered: http.matchers.status » — un message qui ne dit pas
-    // que c'est une question de portée.
+    // 🔴 `status` is a RESPONSE matcher: it only exists inside the forward_auth block.
+    // Written at site level, Caddy refuses to start on
+    // "module not registered: http.matchers.status" - a message that does not say this
+    // is a question of scope.
     //
-    // Sans cette redirection, un utilisateur non connecté reçoit un 401 brut et n'a
-    // jamais vu de page de connexion : de son point de vue, le SSO est cassé.
-    let _ = writeln!(out, "\n\t\t@non-authentifie status 401");
-    let _ = writeln!(out, "\t\thandle_response @non-authentifie {{");
+    // Without this redirect, a signed-out user receives a bare 401 and has never seen a
+    // sign-in page: from their point of view, the SSO is broken.
+    let _ = writeln!(out, "\n\t\t@unauthenticated status 401");
+    let _ = writeln!(out, "\t\thandle_response @unauthenticated {{");
     let _ = writeln!(
         out,
         "\t\t\tredir * {}?rd={{scheme}}://{{host}}{{uri}}",
@@ -415,25 +411,25 @@ fn rendre_forward_auth(out: &mut String, fa: &ForwardAuth) {
     let _ = writeln!(out, "\t}}");
 }
 
-/// Le Caddyfile arrière : aiguillage vers les services de l'overlay.
+/// The backend Caddyfile: routing to the overlay's services.
 pub fn render_backend(routes: &[Route], cfg: &Config) -> String {
     let mut routes = routes.to_vec();
     routes.sort();
 
     let mut out = String::new();
-    let _ = writeln!(out, "# Généré par Homelabus — ne pas éditer à la main.\n");
+    let _ = writeln!(out, "# Generated by Homelabus - do not edit by hand.\n");
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "\tadmin 0.0.0.0:2019");
-    // Le TLS est déjà terminé par le frontal : on écoute en clair sur l'overlay,
-    // lui-même chiffré par IPsec (§6.3).
+    // TLS is already terminated by the front: we listen in clear on the overlay, which
+    // is itself encrypted by IPsec.
     let _ = writeln!(out, "\tauto_https off");
     let _ = writeln!(out, "}}\n");
 
     let listen = cfg.backend_upstream.rsplit(':').next().unwrap_or("8080");
 
-    // ⚠️ Un SEUL bloc pour l'adresse d'écoute : Caddy refuse deux définitions de site
-    // sur la même adresse (« ambiguous site definition »). Tous les hôtes cohabitent
-    // donc dans ce bloc, distingués par des matchers.
+    // ⚠️ ONE block for the listen address: Caddy refuses two site definitions on the
+    // same address ("ambiguous site definition"). So every host lives in this block,
+    // distinguished by matchers.
     let _ = writeln!(out, ":{listen} {{");
     for r in &routes {
         let m = sanitize(&r.host);
@@ -441,7 +437,7 @@ pub fn render_backend(routes: &[Route], cfg: &Config) -> String {
         let _ = writeln!(out, "\treverse_proxy @{m} {}:{}", r.service, r.port);
     }
     if routes.is_empty() {
-        let _ = writeln!(out, "\trespond \"aucune application publiée\" 404");
+        let _ = writeln!(out, "\trespond \"no application published\" 404");
     }
     let _ = writeln!(out, "}}");
 
@@ -488,7 +484,7 @@ mod tests {
         let cfg = Config::default();
         let a = render_frontend(&[vikunja(), gitea()], &cfg);
         let b = render_frontend(&[gitea(), vikunja()], &cfg);
-        assert_eq!(a, b, "l'ordre d'entrée ne doit pas changer la sortie");
+        assert_eq!(a, b, "input order must not change the output");
     }
 
     #[test]
@@ -517,12 +513,12 @@ mod tests {
 
     #[test]
     fn oidc_callbacks_bypass_anubis() {
-        // §5.8 — sans ça, la connexion SSO se casse de façon très difficile à diagnostiquer.
+        // Without this, SSO sign-in breaks in a way that is very hard to diagnose.
         let out = render_frontend(&[vikunja()], &Config::default());
 
         assert!(out.contains("/.well-known/*"));
         assert!(out.contains("/oauth2/*"));
-        // Le chemin déclaré par l'app est ajouté aux exclusions.
+        // The path the app declares is added to the exclusions.
         assert!(
             out.contains("/auth/openid/pocketid*"),
             "le redirectPath de l'app doit contourner Anubis :\n{out}"
@@ -557,10 +553,7 @@ mod tests {
         let out = render_frontend(&[gitea()], &Config::default());
         assert!(out.contains("Strict-Transport-Security"));
         assert!(out.contains("X-Content-Type-Options nosniff"));
-        assert!(
-            out.contains("-Server"),
-            "la bannière serveur doit être retirée"
-        );
+        assert!(out.contains("-Server"), "the server banner must be removed");
     }
 
     #[test]
@@ -568,18 +561,18 @@ mod tests {
         let out = render_backend(&[gitea()], &Config::default());
         assert!(out.contains("host git.example.fr"));
         assert!(out.contains("reverse_proxy @git_example_fr gitea:3000"));
-        // Le TLS est terminé au frontal.
+        // TLS is terminated at the front.
         assert!(out.contains("auto_https off"));
     }
 
     #[test]
     fn the_backend_declares_its_listener_only_once() {
-        // Caddy refuse deux définitions de site sur la même adresse.
+        // Caddy refuses two site definitions on the same address.
         let out = render_backend(&[gitea(), vikunja()], &Config::default());
         assert_eq!(
             out.matches(":8080 {").count(),
             1,
-            "un seul bloc d'écoute attendu :\n{out}"
+            "exactly one listen block expected:\n{out}"
         );
         assert!(out.contains("gitea:3000"));
         assert!(out.contains("vikunja:3456"));
@@ -599,7 +592,7 @@ mod tests {
             render_frontend(&[gitea()], &cfg),
             render_backend(&[gitea()], &cfg),
         ] {
-            assert!(out.contains("Généré par Homelabus"));
+            assert!(out.contains("Generated by Homelabus"));
         }
     }
 
@@ -617,8 +610,8 @@ mod tests {
     fn the_crowdsec_bouncer_runs_before_everything_else() {
         let out = render_frontend(&[vikunja()], &avec_crowdsec());
 
-        // ⚠️ Sans `order crowdsec first`, Caddy évalue la directive APRÈS le
-        // reverse_proxy : la requête est déjà partie, le videur ne bloque rien.
+        // ⚠️ Without `order crowdsec first`, Caddy evaluates the directive AFTER the
+        // reverse_proxy: the request has already gone, and the bouncer blocks nothing.
         assert!(out.contains("order crowdsec first"), "{out}");
 
         let bloc = out
@@ -628,22 +621,22 @@ mod tests {
             .expect("bloc vikunja");
         let i_cs = bloc.find("crowdsec").expect("directive crowdsec");
         let i_px = bloc.find("reverse_proxy").expect("reverse_proxy");
-        assert!(i_cs < i_px, "le videur doit précéder le proxy :\n{bloc}");
+        assert!(i_cs < i_px, "the bouncer must precede the proxy:\n{bloc}");
     }
 
     #[test]
     fn the_bouncer_never_lands_on_the_backend() {
-        // 🔴 L'invariant central : le backend ne voit que l'IP du frontal. Y poser
-        // le videur ferait bannir le frontal lui-même au premier attaquant, coupant
-        // le site pour TOUT LE MONDE.
+        // 🔴 The central invariant: the backend only sees the front's IP. Putting the
+        // bouncer there would ban the front itself on the first attacker, cutting the
+        // site for EVERYONE.
         let out = render_backend(&[gitea(), vikunja()], &avec_crowdsec());
         assert!(!out.contains("crowdsec"), "{out}");
     }
 
     #[test]
     fn without_crowdsec_nothing_is_emitted() {
-        // Une image Caddy standard refuse de démarrer sur une directive inconnue :
-        // il ne doit rien rester quand le videur n'est pas configuré.
+        // A standard Caddy image refuses to start on an unknown directive: nothing may
+        // remain when the bouncer is not configured.
         let out = render_frontend(&[gitea()], &Config::default());
         assert!(!out.contains("crowdsec"), "{out}");
         assert!(!out.contains("order "), "{out}");
@@ -651,16 +644,16 @@ mod tests {
 
     #[test]
     fn the_required_caddy_build_is_announced() {
-        // Le message d'erreur de Caddy sur une directive inconnue n'aide pas :
-        // autant le dire dans le fichier lui-même.
+        // Caddy's error message on an unknown directive does not help: better to say
+        // it in the file itself.
         let out = render_frontend(&[gitea()], &avec_crowdsec());
         assert!(out.contains("caddy-crowdsec-bouncer"), "{out}");
     }
 
     #[test]
     fn crowdsec_and_anubis_coexist() {
-        // Les deux répondent à des menaces différentes : réputation connue d'un
-        // côté, automatisation anonyme de l'autre. L'un ne remplace pas l'autre.
+        // The two answer different threats: known reputation on one side, anonymous
+        // automation on the other. Neither replaces the other.
         let out = render_frontend(&[vikunja()], &avec_crowdsec());
         assert!(out.contains("crowdsec"));
         assert!(out.contains("anubis:8923"));
@@ -684,24 +677,24 @@ mod tests {
 
     #[test]
     fn incoming_identity_headers_are_stripped() {
-        // 🔴 LA faille du forward-auth. Sans ce nettoyage :
+        // 🔴 THE forward-auth flaw. Without this scrubbing:
         //   curl -H "X-Auth-Request-User: admin" https://app/
-        // suffit à devenir administrateur, parce que l'app fait confiance à l'en-tête
-        // et que le proxy l'a laissé passer tel quel.
+        // is enough to become an administrator, because the app trusts the header and
+        // the proxy let it through as-is.
         let out = render_frontend(&[protegee()], &avec_portail());
 
         for h in AUTH_HEADERS {
             assert!(
                 out.contains(&format!("request_header -{h}")),
-                "{h} non nettoyé :\n{out}"
+                "{h} not scrubbed:\n{out}"
             );
         }
     }
 
     #[test]
     fn headers_are_stripped_before_the_portal_runs() {
-        // L'ordre décide de tout : nettoyer APRÈS le forward_auth effacerait aussi
-        // les en-têtes légitimes posés par le portail.
+        // Order decides everything: scrubbing AFTER the forward_auth would also erase
+        // the legitimate headers the portal sets.
         let out = render_frontend(&[protegee()], &avec_portail());
         let bloc = out
             .split("tasks.example.fr {")
@@ -715,14 +708,14 @@ mod tests {
         let i_portail = bloc.find("forward_auth ").expect("forward_auth");
         assert!(
             i_nettoyage < i_portail,
-            "le nettoyage doit précéder le portail :\n{bloc}"
+            "scrubbing must precede the portal:\n{bloc}"
         );
     }
 
     #[test]
     fn the_portal_itself_bypasses_the_portal() {
-        // 🔴 Sans ça, la connexion boucle : pour s'authentifier il faudrait déjà
-        // l'être. L'utilisateur voit une redirection infinie.
+        // 🔴 Without this, sign-in loops: to authenticate you would already have to be
+        // authenticated. The user sees an infinite redirect.
         let out = render_frontend(&[protegee()], &avec_portail());
         assert!(out.contains("handle /oauth2/* {"), "{out}");
 
@@ -739,13 +732,13 @@ mod tests {
         // Un 401 brut donnerait « le SSO ne marche pas » du point de vue de
         // l'utilisateur, qui n'a jamais vu de page de connexion.
         let out = render_frontend(&[protegee()], &avec_portail());
-        assert!(out.contains("@non-authentifie status 401"), "{out}");
-        // 🔴 Le matcher `status` n'existe QUE dans le bloc forward_auth : au niveau
-        // du site, Caddy refuse de démarrer. Vérifié par caddy_validates.rs.
+        assert!(out.contains("@unauthenticated status 401"), "{out}");
+        // 🔴 The `status` matcher exists ONLY inside the forward_auth block: at site
+        // level Caddy refuses to start. Checked by caddy_validates.rs.
         let apres = out.split("forward_auth ").nth(1).expect("bloc");
         assert!(
-            apres.contains("@non-authentifie"),
-            "doit être imbriqué :\n{apres}"
+            apres.contains("@unauthenticated"),
+            "must be nested:\n{apres}"
         );
         assert!(out.contains("redir * /oauth2/sign_in?rd="), "{out}");
     }
@@ -761,23 +754,23 @@ mod tests {
 
     #[test]
     fn without_a_portal_configured_nothing_is_emitted() {
-        // Une app qui EN A BESOIN mais sans portail configuré : on ne doit pas
-        // produire une configuration à moitié faite.
+        // An app that NEEDS one but has no portal configured: a half-built
+        // configuration must not be produced.
         let out = render_frontend(&[protegee()], &Config::default());
         assert!(!out.contains("forward_auth"), "{out}");
     }
 
     #[test]
     fn the_backend_never_carries_the_portal() {
-        // Même raison que CrowdSec : le portail va au premier maillon. Le dupliquer
-        // au backend ferait une double authentification et casserait les callbacks.
+        // Same reason as CrowdSec: the portal goes on the first link. Duplicating it
+        // on the backend would double-authenticate and break the callbacks.
         let out = render_backend(&[protegee()], &avec_portail());
         assert!(!out.contains("forward_auth"), "{out}");
     }
 
     #[test]
     fn a_route_needing_a_portal_is_derived_from_the_manifest() {
-        // Le besoin vient du mode SSO déclaré, pas d'un drapeau à cocher à la main.
+        // The need comes from the declared SSO mode, not from a flag ticked by hand.
         let y = r#"
 apiVersion: hlb/v1
 kind: App
@@ -811,9 +804,9 @@ spec:
 
     #[test]
     fn the_wildcard_also_covers_the_bare_domain() {
-        // 🔴 `*.example.fr` ne couvre PAS `example.fr` — règle des jokers TLS. Sans
-        // les deux, le wildcard marche pour tous les sous-domaines et le domaine nu
-        // affiche une erreur de certificat que personne ne comprend.
+        // 🔴 `*.example.org` does NOT cover `example.org` - the TLS wildcard rule.
+        // Without both, the wildcard works for every subdomain and the bare domain shows
+        // a certificate error nobody understands.
         let a = Acme {
             provider: "cloudflare".into(),
             api_token: "x".into(),
@@ -832,7 +825,7 @@ spec:
         // le quota Let's Encrypt saute en quelques apps, et le domaine est banni
         // une semaine — tous les services en TLS invalide d'un coup.
         let out = render_frontend(&[gitea(), vikunja()], &avec_acme(false));
-        // La directive elle-même, pas sa mention en commentaire.
+        // The directive itself, not its mention in a comment.
         let directives = out
             .lines()
             .filter(|l| l.trim_start().starts_with("dns "))
@@ -845,14 +838,14 @@ spec:
         let out = render_frontend(&[], &avec_acme(true));
         assert!(out.contains("acme-staging-v02"), "{out}");
         assert!(
-            out.contains("ne sont PAS"),
-            "l'avertissement doit être visible :\n{out}"
+            out.contains("are NOT"),
+            "the warning must be visible:\n{out}"
         );
     }
 
     #[test]
     fn production_uses_no_explicit_ca() {
-        // Laisser Caddy sur son défaut évite de figer une URL qui peut changer.
+        // Leaving Caddy on its default avoids freezing a URL that can change.
         let out = render_frontend(&[], &avec_acme(false));
         assert!(!out.contains("acme-staging"), "{out}");
         assert!(!out.contains("\t\tca "), "{out}");

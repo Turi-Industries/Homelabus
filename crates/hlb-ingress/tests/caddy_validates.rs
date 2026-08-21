@@ -1,8 +1,8 @@
-//! Vérifie que Caddy accepte réellement la configuration générée.
+//! Checks Caddy actually accepts the generated configuration.
 //!
-//! Générer du texte qui *ressemble* à un Caddyfile ne prouve rien. Ce test le soumet
-//! au vrai binaire Caddy — c'est la seule façon d'attraper une directive mal placée,
-//! un matcher invalide ou une syntaxe qui a changé de version.
+//! Generating text that *looks like* a Caddyfile proves nothing. This test submits it
+//! to the real Caddy binary - the only way to catch a misplaced directive, an invalid
+//! matcher, or a syntax that changed between versions.
 //!
 //! ```sh
 //! export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
@@ -18,10 +18,10 @@ use hlb_ingress::{render_backend, render_frontend, Config, Route};
 
 const CADDY_IMAGE: &str = "caddy:2-alpine";
 
-/// Soumet un Caddyfile à `caddy validate` dans un conteneur jetable.
+/// Submits a Caddyfile to `caddy validate` in a throwaway container.
 ///
-/// La config passe par **stdin**, pas par un montage : sur macOS, le dossier temporaire
-/// de l'hôte n'est pas partagé dans la VM Docker, et le bind mount échoue.
+/// The config goes through **stdin**, not a mount: on macOS the host's temp directory
+/// is not shared into the Docker VM, and the bind mount fails.
 fn caddy_validate(caddyfile: &str, label: &str) {
     let mut child = Command::new("docker")
         .args([
@@ -38,7 +38,7 @@ fn caddy_validate(caddyfile: &str, label: &str) {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("docker doit être joignable (DOCKER_HOST ?)");
+        .expect("docker must be reachable (DOCKER_HOST?)");
 
     child
         .stdin
@@ -53,12 +53,12 @@ fn caddy_validate(caddyfile: &str, label: &str) {
 
     assert!(
         out.status.success(),
-        "Caddy a refusé le Caddyfile « {label} » :\n\
+        "Caddy refused the \"{label}\" Caddyfile:\n\
          ───── sortie de caddy ─────\n{stderr}\n\
-         ───── config générée ─────\n{caddyfile}"
+         ───── generated config ─────\n{caddyfile}"
     );
 
-    println!("✓ {label} accepté par Caddy");
+    println!("✓ {label} accepted by Caddy");
 }
 
 fn routes() -> Vec<Route> {
@@ -73,7 +73,7 @@ fn routes() -> Vec<Route> {
             sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
             needs_forward_auth: false,
         },
-        // Vikunja : derrière Anubis, avec exclusion du callback OIDC.
+        // Vikunja: behind Anubis, with the OIDC callback excluded.
         Route {
             host: "tasks.example.fr".into(),
             service: "vikunja".into(),
@@ -83,7 +83,7 @@ fn routes() -> Vec<Route> {
             sso_paths: vec!["/auth/openid/pocketid".into()],
             needs_forward_auth: false,
         },
-        // Vaultwarden : privé, accessible seulement depuis le VPN.
+        // Vaultwarden: private, reachable from the VPN only.
         Route {
             host: "vault.example.fr".into(),
             service: "vaultwarden".into(),
@@ -97,28 +97,28 @@ fn routes() -> Vec<Route> {
 }
 
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn frontend_config_is_accepted_by_caddy() {
     caddy_validate(&render_frontend(&routes(), &Config::default()), "frontend");
 }
 
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn backend_config_is_accepted_by_caddy() {
     caddy_validate(&render_backend(&routes(), &Config::default()), "backend");
 }
 
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn an_empty_catalog_still_produces_valid_configs() {
-    // Cas du premier démarrage : aucune app installée.
+    // The first-boot case: no app installed.
     let cfg = Config::default();
     caddy_validate(&render_frontend(&[], &cfg), "frontend vide");
     caddy_validate(&render_backend(&[], &cfg), "backend vide");
 }
 
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn hosts_with_dashes_produce_valid_matchers() {
     // Les noms de matcher Caddy n'acceptent ni points ni tirets.
     let r = Route {
@@ -132,7 +132,7 @@ fn hosts_with_dashes_produce_valid_matchers() {
     };
     caddy_validate(
         &render_frontend(std::slice::from_ref(&r), &Config::default()),
-        "hôte avec tirets",
+        "host with hyphens",
     );
     caddy_validate(
         &render_backend(&[r], &Config::default()),
@@ -140,14 +140,14 @@ fn hosts_with_dashes_produce_valid_matchers() {
     );
 }
 
-/// Le forward-auth produit-il une configuration que Caddy accepte ? (§5.0)
+/// Does forward-auth produce a configuration Caddy accepts?
 ///
-/// 🔴 Ce test compte plus que les autres : le bloc forward-auth mélange
-/// `request_header`, `handle`, `forward_auth` et `handle_response`, dont l'ordre
-/// d'évaluation dans Caddy n'est pas celui de l'écriture. Une erreur ici donnerait un
-/// Caddy qui refuse de démarrer — ou pire, qui démarre en n'authentifiant rien.
+/// 🔴 This test matters more than the others: the forward-auth block mixes
+/// `request_header`, `handle`, `forward_auth` and `handle_response`, whose evaluation
+/// order in Caddy is not the order they are written in. A mistake here would give a
+/// Caddy that refuses to start - or worse, one that starts and authenticates nothing.
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn forward_auth_config_is_accepted_by_caddy() {
     let mut r = Route::new("vieux.example.fr", "vieux-truc", 80);
     r.public = true;
@@ -164,7 +164,7 @@ fn forward_auth_config_is_accepted_by_caddy() {
 
 /// Un mélange réaliste : une app à SSO natif et une app derrière portail.
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn a_mixed_frontend_is_accepted_by_caddy() {
     let mut native = Route::new("git.example.fr", "gitea", 3000);
     native.public = true;
@@ -183,18 +183,19 @@ fn a_mixed_frontend_is_accepted_by_caddy() {
     caddy_validate(&render_frontend(&[native, portail], &cfg), "frontend mixte");
 }
 
-/// Le bloc ACME wildcard est-il syntaxiquement valide ? (§6.4)
+/// Is the ACME wildcard block syntactically valid?
 ///
-/// ⚠️ `caddy validate` ne peut PAS vérifier la directive `dns` : elle vient d'un
-/// module absent de l'image standard. On valide donc la structure sans elle — c'est
-/// une vérification partielle, et c'est dit plutôt que sous-entendu.
+/// ⚠️ `caddy validate` can NOT check the `dns` directive: it comes from a module absent
+/// from the standard image. So the structure is validated without it - a partial check,
+/// and said rather than left implied.
 #[test]
-#[ignore = "nécessite Docker"]
+#[ignore = "needs Docker"]
 fn the_wildcard_site_block_is_structurally_valid() {
     use hlb_ingress::caddyfile::Acme;
 
-    // Sans jeton ni fournisseur, `tls` seul est accepté par un Caddy standard : ça
-    // valide la structure du bloc (noms, imbrication, respond) sans exiger le module.
+    // With no token and no provider, a bare `tls` is accepted by a standard Caddy:
+    // that validates the block's structure (names, nesting, respond) without needing
+    // the module.
     let a = Acme {
         provider: "internal".into(),
         api_token: String::new(),
@@ -202,9 +203,9 @@ fn the_wildcard_site_block_is_structurally_valid() {
         staging: false,
     };
 
-    // On REMPLACE la ligne `dns` par une sous-directive standard plutôt que de la
-    // retirer : un bloc `tls { }` vide est refusé par Caddy, et le test échouerait
-    // sur son propre montage au lieu de vérifier le générateur.
+    // The `dns` line is REPLACED by a standard sub-directive rather than removed: an
+    // empty `tls { }` block is refused by Caddy, and the test would fail on its own
+    // scaffolding instead of checking the generator.
     let out = render_frontend(
         &[],
         &Config {

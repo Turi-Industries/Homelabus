@@ -1,7 +1,7 @@
-//! Génération et rechargement de la configuration d'entrée (§6 du plan).
+//! Generating and reloading the ingress configuration.
 //!
-//! Homelabus génère **intégralement** les Caddyfile depuis les manifests, puis les
-//! recharge par l'API d'administration de Caddy — sans coupure, sans redémarrage.
+//! Homelabus generates the Caddyfiles **entirely** from the manifests, then reloads
+//! them through Caddy's admin API - no downtime, no restart.
 
 pub mod admin;
 pub mod caddyfile;
@@ -28,21 +28,20 @@ pub enum Error {
         source: reqwest::Error,
     },
 
-    #[error("Caddy a refusé la configuration ({status}) : {body}")]
+    #[error("Caddy refused the configuration ({status}): {body}")]
     Rejected { status: u16, body: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Extrait les routes d'un manifest, en résolvant le gabarit de domaine.
+/// Extracts the routes from a manifest, resolving the domain template.
 ///
-/// Le passage par Anubis et les chemins OIDC à exclure sont déduits du manifest :
-/// rien n'est à redéclarer côté ingress.
+/// Whether traffic goes through Anubis, and which OIDC paths to exclude, are derived
+/// from the manifest: nothing has to be restated on the ingress side.
 ///
-/// `guides_cleared` dit si les actions manuelles bloquantes de l'app ont été traitées.
-/// C'est ce qui donne son sens à `expose: after-guide` (§4.6bis) : la route reste
-/// interne tant que le compte administrateur n'est pas créé et les inscriptions
-/// fermées, puis s'ouvre.
+/// `guides_cleared` says whether the app's blocking manual actions have been handled.
+/// That is what gives `expose: after-guide` its meaning: the route stays internal
+/// until the administrator account is created and sign-ups closed, then opens.
 pub fn routes_from_manifest(
     m: &Manifest,
     domain: Option<&str>,
@@ -59,9 +58,9 @@ pub fn routes_from_manifest(
         .flatten()
         .collect();
 
-    // 🔴 `proxy-header` et `proxy-only` n'ont AUCUNE notion d'identité propre : sans
-    // portail devant, l'app est simplement ouverte à tout le monde. `native` parle
-    // OIDC elle-même et n'en a pas besoin ; `none` est une exclusion volontaire.
+    // 🔴 `proxy-header` and `proxy-only` have NO notion of identity of their own:
+    // without a portal in front, the app is simply open to everyone. `native` speaks
+    // OIDC itself and needs none; `none` is a deliberate exclusion.
     let besoin_portail = m.spec.requires.iter().any(|c| {
         matches!(
             c,
