@@ -1399,6 +1399,10 @@ async fn list_apps(
     Ok(Json(out))
 }
 
+// `Response` fait 128 octets, ce que clippy juge gros pour un variant d'erreur. C'est
+// pourtant LE type d'erreur d'un handler axum : le boxer ajouterait une allocation sur
+// chaque chemin d'erreur pour rendre la signature moins lisible.
+#[allow(clippy::result_large_err)]
 async fn get_app(
     _auth: Autorise<PeutLire>,
     AxumState(s): AxumState<Arc<AppState>>,
@@ -1432,6 +1436,10 @@ async fn get_app(
 /// qu'elles sont dans le manifest**, jetons compris (`{{ db.password }}`). C'est
 /// délibéré : la valeur ne doit pas traverser l'API, et un jeton visible dit à quoi
 /// l'app est câblée — ce que des astérisques ne disent pas.
+// `Response` fait 128 octets, ce que clippy juge gros pour un variant d'erreur. C'est
+// pourtant LE type d'erreur d'un handler axum : le boxer ajouterait une allocation sur
+// chaque chemin d'erreur pour rendre la signature moins lisible.
+#[allow(clippy::result_large_err)]
 async fn app_detail(
     _auth: Autorise<PeutLire>,
     AxumState(s): AxumState<Arc<AppState>>,

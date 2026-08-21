@@ -221,6 +221,12 @@ during an outage.
   is exactly what exhaustiveness was supposed to prevent.
 - **`sqlx` uses runtime queries**, not compile-time macros: those need `DATABASE_URL` at
   build time. Compile-time SQL checking is therefore **not** in place.
+- **CI runs a newer clippy than a Homebrew toolchain.** `/opt/homebrew/bin/rustc` is
+  Homebrew's own build, not a rustup shim, and it shadows rustup on `PATH`. A lint
+  added in a newer clippy passes locally and fails CI — `result_large_err` did exactly
+  that. Use `~/.rustup/toolchains/*/bin/cargo` when you need to match CI, and note that
+  the wasm target's std only exists in the rustup toolchain, so `--target
+  wasm32-unknown-unknown` fails with "can't find crate for `core`" under Homebrew cargo.
 - **In-memory SQLite** requires `max_connections(1)`, or each connection sees a
   different database.
 - **`SystemTime::now()` has no nanosecond resolution on macOS.** A unique id built on it
