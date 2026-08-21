@@ -6,3 +6,12 @@
 *.db
 *.db-shm
 *.db-wal
+
+# 🔴 Clé maîtresse du coffre — sa fuite expose TOUS les secrets et TOUTES
+# les sauvegardes. Elle ne va jamais dans git (§9quater).
+hlb-master.key
+*.key
+!crates/**/*.key
+
+# Artefacts de session Claude Code
+.claude/RESUME.md
