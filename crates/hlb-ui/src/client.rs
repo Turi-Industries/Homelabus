@@ -210,12 +210,14 @@ impl Acces {
     /// portée par un cookie de session. `SameSite=Lax` seul ne couvre pas un `POST`
     /// déclenché depuis un autre site ; un en-tête personnalisé, si.
     pub fn action(&self, methode: &str, chemin: &str, corps: &str) -> ehttp::Request {
-        let mut r = ehttp::Request {
-            method: methode.to_string(),
-            url: format!("{}{chemin}", self.base_url),
-            body: corps.as_bytes().to_vec(),
-            headers: ehttp::Headers::new(&[("Content-Type", "application/json"), (ENTETE_UI, "1")]),
-        };
+        // ⚠️ Construit depuis `Request::get` plutôt qu'en literal : `ehttp::Request`
+        // porte un champ `mode` qui n'existe QUE sur wasm32. Un literal exhaustif
+        // compile nativement et casse le build web — panne invisible tant que le wasm
+        // n'est pas construit quelque part d'automatique.
+        let mut r = ehttp::Request::get(format!("{}{chemin}", self.base_url));
+        r.method = methode.to_string();
+        r.body = corps.as_bytes().to_vec();
+        r.headers = ehttp::Headers::new(&[("Content-Type", "application/json"), (ENTETE_UI, "1")]);
         self.autoriser(&mut r);
         r
     }

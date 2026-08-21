@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Window", "Location", "HtmlCanvasElement", "Storage"] }
+web-sys = { version = "0.3", features = ["Document", "Window", "Location", "History", "HtmlCanvasElement", "Storage"] }
 console_error_panic_hook = "0.1"
 
 [[bin]]
@@ -30,7 +30,15 @@ egui = "0.33"
 # `glow` plutôt que `wgpu` : le rendu OpenGL démarre partout, y compris dans une
 # machine virtuelle ou en SSH avec redirection X11 — soit exactement les conditions
 # d'un homelab. `wgpu` échoue à s'initialiser sur beaucoup de ces configurations.
-eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts"] }
+# ⚠️ `x11` et `wayland` sont indispensables sur Linux : sans elles, winit refuse de
+# compiler sur « The platform you're compiling for is not supported ». Elles sont sans
+# effet sur macOS et Windows, d'où leur absence remarquée seulement en CI.
+eframe = { version = "0.33", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

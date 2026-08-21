@@ -85,11 +85,11 @@ mod duree_lisible {
 
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
         let secs = d.as_secs();
-        let texte = if secs % 86400 == 0 && secs > 0 {
+        let texte = if secs.is_multiple_of(86400) && secs > 0 {
             format!("{}d", secs / 86400)
-        } else if secs % 3600 == 0 && secs > 0 {
+        } else if secs.is_multiple_of(3600) && secs > 0 {
             format!("{}h", secs / 3600)
-        } else if secs % 60 == 0 && secs > 0 {
+        } else if secs.is_multiple_of(60) && secs > 0 {
             format!("{}m", secs / 60)
         } else {
             format!("{secs}s")

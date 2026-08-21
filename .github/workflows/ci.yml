@@ -20,6 +20,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: System dependencies for the native UI
+        # eframe pulls winit; on Linux it needs the X11/xkb development packages.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
       - name: cargo fmt
         run: cargo fmt --all --check
       - name: cargo clippy
@@ -32,6 +38,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: System dependencies for the native UI
+        # eframe pulls winit; on Linux it needs the X11/xkb development packages.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
       # Integration tests are #[ignore]d on purpose: they need Docker, a live
       # registry, or a real controller. CI runs the unit suite, which needs nothing.
       - name: cargo test
@@ -42,8 +54,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
+      - name: System dependencies for the native UI
+        # eframe pulls winit; on Linux it needs the X11/xkb development packages.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
       - name: cargo check
         run: cargo check --workspace --all-targets
 

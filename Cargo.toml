@@ -34,7 +34,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+# 1.88 vient d'egui 0.33 (et d'`image`, et de `time`). La valeur annoncée jusqu'ici
+# était 1.85, sur laquelle le workspace ne compilait pas — un job de CI le vérifie.
+rust-version = "1.88"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/Turi-Industries/Homelabus"
 
