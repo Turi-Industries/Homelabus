@@ -1,7 +1,7 @@
 # Homelabus
 
 [![CI](https://github.com/Turi-Industries/Homelabus/actions/workflows/ci.yml/badge.svg)](https://github.com/Turi-Industries/Homelabus/actions/workflows/ci.yml)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Self-hosting platform for a Docker Swarm cluster: app deployment, shared databases,
 SSO, reverse proxy, backups and automatic updates — with one rule running through all
@@ -419,4 +419,4 @@ thing that makes it acceptable to let a system update your services at 3 a.m.
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE).
+[MIT](LICENSE).

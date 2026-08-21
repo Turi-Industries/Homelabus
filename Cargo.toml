@@ -37,7 +37,7 @@ edition = "2021"
 # 1.88 vient d'egui 0.33 (et d'`image`, et de `time`). La valeur annoncée jusqu'ici
 # était 1.85, sur laquelle le workspace ne compilait pas — un job de CI le vérifie.
 rust-version = "1.88"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 repository = "https://github.com/Turi-Industries/Homelabus"
 
 [workspace.dependencies]
