@@ -43,7 +43,7 @@ spec:
     ROUNDCUBEMAIL_DB_PASSWORD: "{{ db.password }}"
 
     # 🔴 `managesieve` est le greffon qui rend les règles de tri MODIFIABLES par
-    # l'utilisateur. Sans lui, les règles générées par HomelabUS existent chez
+    # l'utilisateur. Sans lui, les règles générées par Homelabus existent chez
     # Stalwart mais personne ne peut les relire ni les corriger — et une règle qu'on
     # ne peut pas inspecter est une règle à laquelle on ne fait pas confiance.
     ROUNDCUBEMAIL_PLUGINS: "archive,zipdownload,managesieve"

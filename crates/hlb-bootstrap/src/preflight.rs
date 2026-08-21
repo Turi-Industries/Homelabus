@@ -158,7 +158,7 @@ pub fn run(obs: &Observation) -> Report {
         checks.push(Check::block(
             "docker",
             "Docker installé via snap : son confinement casse les montages de volumes",
-            "snap remove docker, puis laisse HomelabUS installer le paquet officiel",
+            "snap remove docker, puis laisse Homelabus installer le paquet officiel",
         ));
     } else {
         match &obs.docker_version {
@@ -222,7 +222,7 @@ pub fn run(obs: &Observation) -> Report {
             "cgroups",
             "v1 — les limites de ressources par conteneur seront partielles",
             "un redémarrage avec systemd.unified_cgroup_hierarchy=1 les active. \
-             🔴 HomelabUS ne redémarre JAMAIS une machine tout seul : à toi de le faire",
+             🔴 Homelabus ne redémarre JAMAIS une machine tout seul : à toi de le faire",
         )),
         None => {}
     }
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn cgroups_v1_says_a_reboot_is_needed_but_never_does_it() {
-        // 🔴 HomelabUS ne redémarre jamais une machine tout seul.
+        // 🔴 Homelabus ne redémarre jamais une machine tout seul.
         let mut o = saine();
         o.cgroups_v2 = Some(false);
         let r = run(&o);

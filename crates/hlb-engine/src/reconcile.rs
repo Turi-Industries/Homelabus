@@ -1,6 +1,6 @@
 //! La boucle de réconciliation (§2.1 du plan).
 //!
-//! C'est ce qui distingue HomelabUS d'un script d'installation. Le controller ne fait
+//! C'est ce qui distingue Homelabus d'un script d'installation. Le controller ne fait
 //! pas d'actions impératives one-shot : il maintient en permanence
 //! **état désiré → écart → correction → vérification**.
 //!
@@ -34,7 +34,7 @@ pub enum Drift {
     /// Le service devrait exister mais a disparu (`docker service rm`, nœud perdu…).
     ServiceMissing { app: String, image: String },
 
-    /// Quelqu'un a changé le nombre de réplicas hors de HomelabUS.
+    /// Quelqu'un a changé le nombre de réplicas hors de Homelabus.
     ReplicasDiverged {
         app: String,
         desired: u64,

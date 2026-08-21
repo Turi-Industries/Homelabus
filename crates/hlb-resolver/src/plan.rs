@@ -1,4 +1,4 @@
-//! Le plan d'exécution : ce que HomelabUS **va** faire, avant de le faire.
+//! Le plan d'exécution : ce que Homelabus **va** faire, avant de le faire.
 //!
 //! C'est la sortie de `--dry-run`, et le principe directeur du §2ter.4 : *tu valides un
 //! plan, tu ne subis pas un script*. Rien ne doit être modifié sans être annoncé.

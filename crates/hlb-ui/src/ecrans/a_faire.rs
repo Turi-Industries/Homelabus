@@ -10,7 +10,7 @@
 //!
 //! Cocher « fait » sans l'avoir fait débloque un déploiement qui échouera plus loin,
 //! avec un message sans rapport. L'écran le dit ; c'est le seul garde-fou possible,
-//! HomelabUS ne pouvant pas vérifier qu'un enregistrement DNS existe vraiment.
+//! Homelabus ne pouvant pas vérifier qu'un enregistrement DNS existe vraiment.
 
 use hlb_api::GuideItem;
 

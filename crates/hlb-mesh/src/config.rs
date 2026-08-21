@@ -115,7 +115,7 @@ impl MeshConfig {
         let moi = self.peers.get(node)?;
         let mut s = String::new();
 
-        s.push_str("# Généré par HomelabUS — ne pas éditer à la main.\n");
+        s.push_str("# Généré par Homelabus — ne pas éditer à la main.\n");
         s.push_str(&format!("# nœud : {}\n\n", moi.name));
         s.push_str("[Interface]\n");
         s.push_str(&format!("PrivateKey = {private_key}\n"));

@@ -26,15 +26,15 @@
 //! effacerait les règles écrites à la main — des heures de réglages, perdues sans un
 //! avertissement, pour une simple création d'alias.
 //!
-//! D'où le bloc **délimité** : HomelabUS n'écrit qu'entre ses deux marqueurs et
+//! D'où le bloc **délimité** : Homelabus n'écrit qu'entre ses deux marqueurs et
 //! recopie le reste tel quel. Voir [`fusionner`].
 
 use serde::{Deserialize, Serialize};
 
 /// Début du bloc géré. Tout ce qui est **hors** de ce bloc appartient à l'utilisateur.
-pub const DEBUT: &str = "# >>> HomelabUS — début du bloc géré. Ne pas modifier à la main.";
+pub const DEBUT: &str = "# >>> Homelabus — début du bloc géré. Ne pas modifier à la main.";
 /// Fin du bloc géré.
-pub const FIN: &str = "# <<< HomelabUS — fin du bloc géré.";
+pub const FIN: &str = "# <<< Homelabus — fin du bloc géré.";
 
 /// Une règle de tri.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

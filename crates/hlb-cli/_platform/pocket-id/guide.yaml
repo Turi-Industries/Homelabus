@@ -24,12 +24,12 @@ steps:
       type: attest
 
   - id: api-key
-    title: Créer une clé d'API pour HomelabUS
+    title: Créer une clé d'API pour Homelabus
     phase: post-install
     severity: blocking
     after: [second-passkey]
     body: |
-      Sans elle, HomelabUS ne peut pas provisionner les clients OIDC des apps.
+      Sans elle, Homelabus ne peut pas provisionner les clients OIDC des apps.
       Passe-la ensuite via --pocketid-key ou HLB_POCKETID_KEY.
     deeplink: "https://{{ domain }}/settings/api-keys"
     verify:

@@ -1,4 +1,4 @@
-//! Mise à jour de HomelabUS lui-même (§7bis).
+//! Mise à jour de Homelabus lui-même (§7bis).
 //!
 //! C'est l'opération la plus délicate du système : on remplace l'outil qui pilote
 //! tout, **pendant qu'il pilote tout**.

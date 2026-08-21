@@ -4,7 +4,7 @@
 //!
 //! Une mise à jour remplace **le binaire qui a tous les droits** : il pilote Docker,
 //! détient la clé du coffre, s'authentifie auprès des agents. Un attaquant qui place
-//! son code ici n'a plus rien à contourner — il *est* HomelabUS.
+//! son code ici n'a plus rien à contourner — il *est* Homelabus.
 //!
 //! Aucune des protections du reste du système ne s'applique : le RBAC, le mTLS, le
 //! journal d'audit sont tous *dans* le binaire qu'on remplace.

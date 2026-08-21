@@ -101,7 +101,7 @@ impl WalArchive {
     /// erreur et reste sans effet : l'archivage semble activé et n'archive rien.
     pub fn render_settings(&self) -> String {
         format!(
-            "# Généré par HomelabUS (§8.1) — ne pas éditer à la main.\n\
+            "# Généré par Homelabus (§8.1) — ne pas éditer à la main.\n\
              # ⚠️ Ces trois réglages exigent un REDÉMARRAGE, pas un reload.\n\
              wal_level = replica\n\
              archive_mode = on\n\
@@ -282,7 +282,7 @@ pub fn wal_prunable_before(bases: &[BaseBackup]) -> Option<i64> {
 /// fichier démarre normalement et ignore la cible — sans le moindre avertissement.
 pub fn render_recovery(archive: &WalArchive, target: i64) -> String {
     format!(
-        "# Généré par HomelabUS (§8.1) — reprise à un instant précis.\n\
+        "# Généré par Homelabus (§8.1) — reprise à un instant précis.\n\
          # ⚠️ Créer AUSSI un fichier vide `recovery.signal` dans le répertoire de\n\
          # données : sans lui, PostgreSQL démarre normalement et ignore tout ceci.\n\
          restore_command = '{restore}'\n\

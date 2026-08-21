@@ -1,6 +1,6 @@
 //! Le portail : ce que voit quelqu'un qui a un compte et rien d'autre (lot 7).
 //!
-//! ## 🔴 Ce que HomelabUS n'accorde pas
+//! ## 🔴 Ce que Homelabus n'accorde pas
 //!
 //! Le portail **annonce** les applications disponibles ; il ne donne pas l'accès. Celui-ci
 //! vient de PocketID et du forward-auth. La distinction n'est pas théorique : afficher

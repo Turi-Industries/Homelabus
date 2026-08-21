@@ -1,4 +1,4 @@
-# HomelabUS
+# Homelabus
 
 Plateforme de gestion d'un cluster Docker Swarm auto-hébergé : déploiement d'apps,
 bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatiques.
@@ -235,7 +235,7 @@ supprimé, et **expiré-mais-toujours-actif**.
 
 ### Génération depuis Vaultwarden
 
-HomelabUS parle le protocole d'addy.io, celui que Bitwarden sait appeler :
+Homelabus parle le protocole d'addy.io, celui que Bitwarden sait appeler :
 
 ```sh
 hlb token create bw-perso --user remy                  # → boîte par défaut
@@ -276,7 +276,7 @@ hlb metrics deadman --ntfy https://ntfy.sh/mon-veilleur > veilleur.sh
 #   */5 * * * * /srv/hlb/veilleur.sh
 ```
 
-Son sujet ntfy doit être **distinct** de celui de HomelabUS : si le controller est
+Son sujet ntfy doit être **distinct** de celui de Homelabus : si le controller est
 mort, c'est le veilleur seul qui doit pouvoir parler.
 
 ## Observabilité
@@ -328,7 +328,7 @@ Go sur la partie Swarm. Sept questions devaient être tranchées avant d'écrire
 | 7 | Erreurs typées plutôt que panics | ✅ `NotFound` |
 
 **Conclusion : aucun repli vers l'API HTTP brute n'est nécessaire.** `bollard` couvre
-toute la surface Swarm dont HomelabUS dépend. Le pari du §1 est validé.
+toute la surface Swarm dont Homelabus dépend. Le pari du §1 est validé.
 
 Le point 5 est le plus important : il prouve que `failure_action: rollback` +
 `order: start-first` fonctionnent réellement — c'est le socle du pipeline de mise à

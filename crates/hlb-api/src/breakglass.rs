@@ -2,10 +2,10 @@
 //!
 //! ## 🔴 Un SSO centralisé est un point de défaillance unique SUR L'ACCÈS
 //!
-//! Si PocketID tombe, on ne peut plus se connecter à HomelabUS — donc plus piloter la
+//! Si PocketID tombe, on ne peut plus se connecter à Homelabus — donc plus piloter la
 //! restauration de PocketID. Le §5.7bis pose quatre garde-fous contre ça.
 //!
-//! ## Ce que HomelabUS peut, et ne peut pas
+//! ## Ce que Homelabus peut, et ne peut pas
 //!
 //! Il ne sait **pas** combien de passkeys sont enregistrées, ni si les codes à usage
 //! unique sont imprimés et rangés dans un tiroir. Cocher ces cases à sa place serait le
@@ -32,7 +32,7 @@ pub struct GardeFou {
     pub atteste_il_y_a_s: Option<i64>,
     #[serde(default)]
     pub atteste_par: Option<String>,
-    /// 🔴 Vrai quand HomelabUS peut le vérifier lui-même — un seul l'est.
+    /// 🔴 Vrai quand Homelabus peut le vérifier lui-même — un seul l'est.
     pub verifiable: bool,
     /// ⚠️ Vrai quand l'âge n'a qu'une résolution d'un JOUR.
     ///
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn only_one_guardrail_claims_to_be_verifiable() {
-        // ⚠️ HomelabUS ne sait pas combien de passkeys existent, ni si des codes sont
+        // ⚠️ Homelabus ne sait pas combien de passkeys existent, ni si des codes sont
         // imprimés. Prétendre le contraire donnerait un écran vert sur des garanties
         // inexistantes.
         let v: Vec<_> = garde_fous().into_iter().filter(|g| g.verifiable).collect();

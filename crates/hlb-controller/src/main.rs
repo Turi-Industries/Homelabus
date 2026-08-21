@@ -18,7 +18,7 @@ use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_state::State;
 
 #[derive(Parser)]
-#[command(name = "hlb-controller", version, about = "Daemon HomelabUS")]
+#[command(name = "hlb-controller", version, about = "Daemon Homelabus")]
 struct Cli {
     /// Adresse d'écoute de l'API.
     #[arg(long, default_value = "127.0.0.1:8420", env = "HLB_LISTEN")]

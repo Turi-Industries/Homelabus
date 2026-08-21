@@ -31,7 +31,7 @@ CREATE TABLE apparence (
 
 -- La marque par défaut, pour que l'interface ait quelque chose à afficher au premier
 -- démarrage plutôt qu'un en-tête vide.
-INSERT INTO apparence (id, nom, produit) VALUES (1, 'Turi Industries', 'HomelabUS');
+INSERT INTO apparence (id, nom, produit) VALUES (1, 'Turi Industries', 'Homelabus');
 
 -- Les préférences d'affichage d'une personne.
 --

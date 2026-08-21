@@ -2208,7 +2208,7 @@ impl State {
         Ok(r.rows_affected())
     }
 
-    /// Le compte HomelabUS rattaché à cette identité PocketID.
+    /// Le compte Homelabus rattaché à cette identité PocketID.
     ///
     /// 🔴 On rattache par le `sub`, pas par le nom d'utilisateur : le `sub` est stable
     /// alors qu'un nom se renomme. Un rattachement par le nom perdrait le lien au
@@ -2650,7 +2650,7 @@ impl State {
     ///
     /// 🔴 L'absence de ligne — et un rôle illisible en base — valent
     /// `Role::default()`, c'est-à-dire `utilisateur`. Une identité PocketID inconnue de
-    /// HomelabUS entre au plus bas, jamais plus : le défaut doit toujours aller dans le
+    /// Homelabus entre au plus bas, jamais plus : le défaut doit toujours aller dans le
     /// sens sûr.
     pub async fn user_role(&self, user: &str) -> Result<hlb_types::Role> {
         let row = sqlx::query("SELECT role FROM user_roles WHERE user = ?1")
@@ -3919,7 +3919,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_person_gets_the_least_privileged_role() {
-        // Une identité PocketID que HomelabUS ne connaît pas entre au plus bas.
+        // Une identité PocketID que Homelabus ne connaît pas entre au plus bas.
         let s = st().await;
         assert_eq!(
             s.user_role("jamais-vu").await.expect("rôle"),

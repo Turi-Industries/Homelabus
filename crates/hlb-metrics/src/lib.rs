@@ -11,8 +11,8 @@
 //! Trois pièces comblent ce vide :
 //!
 //! - [`scrape`] — la configuration de collecte de VictoriaMetrics, qui stocke.
-//! - [`rules`] — les seuils, évalués par HomelabUS et routés vers `hlb-notify`.
-//! - [`deadman`] — le veilleur externe, pour le cas où HomelabUS lui-même est mort.
+//! - [`rules`] — les seuils, évalués par Homelabus et routés vers `hlb-notify`.
+//! - [`deadman`] — le veilleur externe, pour le cas où Homelabus lui-même est mort.
 //!
 //! ## 🔴 Pourquoi les deux derniers ne se remplacent pas
 //!

@@ -1,6 +1,6 @@
 //! Le portail : ce que voit quelqu'un qui a un compte et rien d'autre.
 //!
-//! ## 🔴 HomelabUS ANNONCE, il n'accorde pas
+//! ## 🔴 Homelabus ANNONCE, il n'accorde pas
 //!
 //! Le portail liste les applications exposées. Il ne donne pas l'accès — celui-ci vient
 //! de PocketID et du forward-auth. La distinction n'est pas théorique : afficher une
@@ -81,7 +81,7 @@ pub fn afficher(
     c::sous_titre(ui, "Vos applications");
     c::legende(
         ui,
-        "Ces applications existent et sont exposées. HomelabUS ne décide pas de vos \
+        "Ces applications existent et sont exposées. Homelabus ne décide pas de vos \
          droits d'accès : c'est votre identité qui les porte.",
     );
     ui.add_space(mesures::ESPACE_SERRE);

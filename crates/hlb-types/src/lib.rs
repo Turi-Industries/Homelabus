@@ -1,4 +1,4 @@
-//! Types partagés de HomelabUS.
+//! Types partagés de Homelabus.
 //!
 //! Ce crate est volontairement le seul endroit où le schéma est défini. Il alimente :
 //!   - le controller et le CLI (Rust, directement) ;

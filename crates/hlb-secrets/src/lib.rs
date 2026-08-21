@@ -210,7 +210,7 @@ pub fn fill_random(buf: &mut [u8]) {
 
 fn write_private(path: &Path, contents: &str) -> Result<()> {
     let body = format!(
-        "# Clé maîtresse HomelabUS — NE PAS PARTAGER, NE PAS COMMITER.\n\
+        "# Clé maîtresse Homelabus — NE PAS PARTAGER, NE PAS COMMITER.\n\
          # Sa perte rend TOUS les secrets et TOUTES les sauvegardes irrécupérables.\n\
          # Garde deux copies hors ligne (§9quater du plan).\n\
          {contents}\n"

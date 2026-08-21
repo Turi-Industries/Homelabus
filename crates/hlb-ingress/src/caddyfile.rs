@@ -225,7 +225,7 @@ pub fn render_frontend(routes: &[Route], cfg: &Config) -> String {
 
     let mut out = String::new();
 
-    let _ = writeln!(out, "# Généré par HomelabUS — ne pas éditer à la main.");
+    let _ = writeln!(out, "# Généré par Homelabus — ne pas éditer à la main.");
     let _ = writeln!(out, "# Toute modification sera écrasée à la prochaine réconciliation.\n");
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "\temail {}", cfg.acme_email);
@@ -348,7 +348,7 @@ fn rendre_acme(out: &mut String, a: &Acme) {
     }
     let _ = writeln!(out, "\t}}");
     // Ce bloc n'existe que pour obtenir le certificat : il ne sert rien.
-    let _ = writeln!(out, "\trespond \"HomelabUS\" 200");
+    let _ = writeln!(out, "\trespond \"Homelabus\" 200");
     let _ = writeln!(out, "}}\n");
 }
 
@@ -412,7 +412,7 @@ pub fn render_backend(routes: &[Route], cfg: &Config) -> String {
     routes.sort();
 
     let mut out = String::new();
-    let _ = writeln!(out, "# Généré par HomelabUS — ne pas éditer à la main.\n");
+    let _ = writeln!(out, "# Généré par Homelabus — ne pas éditer à la main.\n");
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "\tadmin 0.0.0.0:2019");
     // Le TLS est déjà terminé par le frontal : on écoute en clair sur l'overlay,
@@ -585,7 +585,7 @@ mod tests {
     fn generated_files_warn_against_hand_editing() {
         let cfg = Config::default();
         for out in [render_frontend(&[gitea()], &cfg), render_backend(&[gitea()], &cfg)] {
-            assert!(out.contains("Généré par HomelabUS"));
+            assert!(out.contains("Généré par Homelabus"));
         }
     }
 

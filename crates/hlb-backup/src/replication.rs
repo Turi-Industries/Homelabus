@@ -74,7 +74,7 @@ pub fn slot_name(standby: &str) -> Result<String> {
 /// la réplication paraît configurée et aucun standby ne peut se connecter.
 pub fn primary_settings(max_standbys: u32) -> String {
     format!(
-        "# Généré par HomelabUS (§3.2) — primaire.\n\
+        "# Généré par Homelabus (§3.2) — primaire.\n\
          # ⚠️ wal_level et max_wal_senders exigent un REDÉMARRAGE, pas un reload.\n\
          wal_level = replica\n\
          # Un émetteur par standby, plus une marge pour pg_basebackup qui en\n\
@@ -110,7 +110,7 @@ pub fn primary_settings(max_standbys: u32) -> String {
 /// silencieusement perdus — voir [`APPLIQUER_APRES_BASEBACKUP`].
 pub fn standby_settings(primary_host: &str, port: u16, slot: &str, user: &str) -> String {
     format!(
-        "# Généré par HomelabUS (§3.2) — standby.\n\
+        "# Généré par Homelabus (§3.2) — standby.\n\
          # ⚠️ À écrire dans postgresql.auto.conf APRÈS `pg_basebackup -R` (qui\n\
          # réécrit ce fichier), ou à poser via ALTER SYSTEM. Avant, c'est perdu.\n\
          # ⚠️ Le fichier `standby.signal` (VIDE) doit exister dans le répertoire de\n\

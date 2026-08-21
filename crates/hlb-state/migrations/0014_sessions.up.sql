@@ -17,7 +17,7 @@ CREATE TABLE sessions (
     -- — qui part dans les sauvegardes, donc hors site — serait un trousseau de clés.
     fingerprint TEXT PRIMARY KEY,
 
-    -- Le compte HomelabUS. La suppression du compte tue ses sessions : sinon une
+    -- Le compte Homelabus. La suppression du compte tue ses sessions : sinon une
     -- personne révoquée resterait connectée jusqu'à l'expiration du cookie.
     user        TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
 
@@ -41,7 +41,7 @@ CREATE TABLE sessions (
 CREATE INDEX idx_sessions_user ON sessions(user, expires_at DESC);
 CREATE INDEX idx_sessions_expiry ON sessions(expires_at);
 
--- Le rôle d'une personne dans HomelabUS.
+-- Le rôle d'une personne dans Homelabus.
 --
 -- ## 🔴 Le rôle n'est PAS copié dans la session
 --
@@ -54,7 +54,7 @@ CREATE INDEX idx_sessions_expiry ON sessions(expires_at);
 -- requête suivante.
 --
 -- L'absence de ligne vaut `utilisateur` (le défaut de `hlb_types::Role`) : une
--- identité PocketID inconnue de HomelabUS entre au plus bas, jamais plus.
+-- identité PocketID inconnue de Homelabus entre au plus bas, jamais plus.
 CREATE TABLE user_roles (
     user       TEXT PRIMARY KEY REFERENCES users(name) ON DELETE CASCADE,
     role       TEXT NOT NULL,

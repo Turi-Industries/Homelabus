@@ -475,7 +475,7 @@ pub struct Inscrit {
 ///    rouge, et qu'une relance répare.
 ///
 /// L'inverse — tout créer ailleurs avant d'enregistrer — laisserait des identités
-/// orphelines dont HomelabUS ignorerait l'existence.
+/// orphelines dont Homelabus ignorerait l'existence.
 ///
 /// ⚠️ **Sans authentification** : c'est la personne invitée qui appelle, et elle n'a
 /// pas encore de compte. L'invitation EST l'autorisation.

@@ -217,7 +217,7 @@ pub fn list_command(fs: Filesystem, dataset: &str) -> Vec<String> {
     }
 }
 
-/// Les instantanés créés par HomelabUS.
+/// Les instantanés créés par Homelabus.
 ///
 /// 🔴 On ne liste **que les nôtres** (préfixe `hlb-`). Afficher les instantanés du
 /// NAS ou d'un autre outil laisserait croire qu'on peut les supprimer — et un

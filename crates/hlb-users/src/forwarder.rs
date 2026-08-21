@@ -9,7 +9,7 @@
 //! inscription sans y penser ».
 //!
 //! Pour en profiter sans installer idmail — qui remplacerait l'annuaire de Stalwart et
-//! ne pourrait donc pas coexister avec `hlb-mail` — HomelabUS parle le même protocole.
+//! ne pourrait donc pas coexister avec `hlb-mail` — Homelabus parle le même protocole.
 //!
 //! ## 🔴 Le contrat est imposé par le CLIENT, pas par nous
 //!

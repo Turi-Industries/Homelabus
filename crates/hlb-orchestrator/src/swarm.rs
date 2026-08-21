@@ -59,7 +59,7 @@ fn horodatage_unix(s: &str) -> Option<i64> {
     Some(jours * 86_400 + h * 3_600 + mi * 60 + se)
 }
 
-/// Marque les services que HomelabUS gère, pour ne jamais toucher au reste.
+/// Marque les services que Homelabus gère, pour ne jamais toucher au reste.
 pub const MANAGED_LABEL: &str = "hlb.managed";
 
 pub struct SwarmOrchestrator {
@@ -236,7 +236,7 @@ impl SwarmOrchestrator {
                 filters.insert("service".to_string(), vec![s.to_string()]);
             }
             None => {
-                // Sans filtre de service, on se restreint à ce que HomelabUS gère :
+                // Sans filtre de service, on se restreint à ce que Homelabus gère :
                 // les autres services du Swarm ne nous regardent pas, et les afficher
                 // laisserait croire qu'on les pilote.
                 filters.insert("label".to_string(), vec![MANAGED_LABEL.to_string()]);

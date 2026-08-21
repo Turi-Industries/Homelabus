@@ -1,6 +1,6 @@
 //! Génération et rechargement de la configuration d'entrée (§6 du plan).
 //!
-//! HomelabUS génère **intégralement** les Caddyfile depuis les manifests, puis les
+//! Homelabus génère **intégralement** les Caddyfile depuis les manifests, puis les
 //! recharge par l'API d'administration de Caddy — sans coupure, sans redémarrage.
 
 pub mod admin;

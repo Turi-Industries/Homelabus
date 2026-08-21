@@ -1,7 +1,7 @@
 //! Spike `bollard` — la question n°1 du plan (§13).
 //!
 //! Objectif : prouver **avant** d'écrire le reste du produit que `bollard` couvre
-//! réellement la surface Swarm dont HomelabUS dépend. Si un trou existe, il vaut mieux
+//! réellement la surface Swarm dont Homelabus dépend. Si un trou existe, il vaut mieux
 //! le découvrir maintenant que dans quatre mois.
 //!
 //! Ces tests exigent un Swarm actif. Ils sont `#[ignore]` pour que `cargo test` reste
@@ -170,7 +170,7 @@ async fn q5_rollback_automatique_sur_mise_a_jour_ratee() {
     cleanup(&o, &n).await;
 }
 
-/// Q6 — le filtrage par label : HomelabUS ne doit jamais toucher aux services
+/// Q6 — le filtrage par label : Homelabus ne doit jamais toucher aux services
 /// qu'il n'a pas créés.
 #[tokio::test]
 #[ignore = "nécessite un Docker Swarm actif"]
@@ -244,7 +244,7 @@ async fn hardening_reaches_swarm() {
 #[ignore = "nécessite un Docker Swarm actif"]
 async fn a_relaxed_manifest_is_honoured_too() {
     // Une app qui a besoin de plus doit pouvoir le demander — sinon le durcissement
-    // par défaut serait contourné en désactivant HomelabUS.
+    // par défaut serait contourné en désactivant Homelabus.
     let o = orch();
     let n = name("assoupli");
     cleanup(&o, &n).await;

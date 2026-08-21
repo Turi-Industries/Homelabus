@@ -111,7 +111,7 @@ impl GitMirror {
             // L'en-tête porte ce qui ne tient pas dans le manifest : le statut, et le
             // rappel que ce fichier est généré.
             let contenu = format!(
-                "# Généré par HomelabUS — état déployé, ne pas éditer à la main.\n\
+                "# Généré par Homelabus — état déployé, ne pas éditer à la main.\n\
                  # app: {name}\n# statut: {status}\n\n{yaml}"
             );
 
@@ -176,7 +176,7 @@ impl GitMirror {
             }
         }
 
-        let sig = Signature::now("HomelabUS", "homelabus@localhost")?;
+        let sig = Signature::now("Homelabus", "homelabus@localhost")?;
         let parents: Vec<&git2::Commit> = parent.iter().collect();
 
         let oid = self

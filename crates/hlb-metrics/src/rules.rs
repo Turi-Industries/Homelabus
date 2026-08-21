@@ -1,6 +1,6 @@
 //! Les règles d'alerte (§8bis).
 //!
-//! ## 🔴 Pourquoi HomelabUS évalue lui-même, plutôt qu'Alertmanager
+//! ## 🔴 Pourquoi Homelabus évalue lui-même, plutôt qu'Alertmanager
 //!
 //! La chaîne canonique est `vmalert → Alertmanager → webhook → ntfy`. On ne la prend
 //! pas, pour une raison précise : `hlb-notify` porte déjà les quatre niveaux du §8bis
@@ -135,7 +135,7 @@ impl Regle {
     }
 }
 
-/// Les règles livrées avec HomelabUS.
+/// Les règles livrées avec Homelabus.
 ///
 /// Elles portent sur les métriques que le controller expose déjà : rien à instrumenter
 /// de plus, et chacune correspond à une panne qu'on a réellement vue coûter cher.

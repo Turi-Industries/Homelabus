@@ -2,7 +2,7 @@
 //!
 //! ## Pourquoi ce module existe
 //!
-//! Jusqu'ici, HomelabUS n'authentifiait que des **machines** : un jeton d'API porté par
+//! Jusqu'ici, Homelabus n'authentifiait que des **machines** : un jeton d'API porté par
 //! un en-tête `Authorization`. C'est le bon outil pour le CLI, pour Bitwarden et pour un
 //! scrape de métriques. C'est le mauvais pour vingt personnes — il faudrait leur faire
 //! conserver et coller une valeur de 52 caractères, sans déconnexion possible et sans
@@ -114,13 +114,13 @@ pub struct Identite {
     #[serde(default)]
     pub name: Option<String>,
     /// Les groupes PocketID, conservés pour qui préfère l'ancien schéma du §5.9
-    /// (`Role::from_groups`). HomelabUS ne s'en sert pas par défaut.
+    /// (`Role::from_groups`). Homelabus ne s'en sert pas par défaut.
     #[serde(default)]
     pub groups: Vec<String>,
 }
 
 impl Identite {
-    /// Le nom de compte à chercher côté HomelabUS.
+    /// Le nom de compte à chercher côté Homelabus.
     ///
     /// `preferred_username` d'abord, `sub` en dernier recours : un identifiant opaque
     /// vaut mieux qu'un compte impossible à rattacher.

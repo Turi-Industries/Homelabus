@@ -2,7 +2,7 @@
 //!
 //! ## Ce que ce crate ajoute
 //!
-//! Jusqu'ici HomelabUS ne connaissait que des **applications**. `hlb-identity` créait
+//! Jusqu'ici Homelabus ne connaissait que des **applications**. `hlb-identity` créait
 //! des clients OIDC, `hlb-mail` créait la boîte d'une app qui en déclarait le besoin —
 //! et aucun code ne savait ce qu'était une *personne*. Créer un compte se faisait à la
 //! main dans PocketID, sa boîte à la main dans Stalwart, et rien ne reliait les deux :

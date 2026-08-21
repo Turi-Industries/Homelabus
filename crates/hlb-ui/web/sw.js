@@ -1,4 +1,4 @@
-// Le service worker de HomelabUS (lot 11.3).
+// Le service worker de Homelabus (lot 11.3).
 //
 // 🔴 IL NE MET JAMAIS L'API EN CACHE.
 //

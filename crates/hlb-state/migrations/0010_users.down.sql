@@ -1,4 +1,4 @@
--- Retour arrière : les comptes disparaissent du registre HomelabUS.
+-- Retour arrière : les comptes disparaissent du registre Homelabus.
 --
 -- ⚠️ Les comptes PocketID et les boîtes Stalwart ne sont PAS touchés : ils existent
 -- indépendamment, et les supprimer sur un retour de migration détruirait des données

@@ -1,4 +1,4 @@
-# HomelabUS — Plan d'architecture
+# Homelabus — Plan d'architecture
 
 > Plateforme de gestion d'un cluster Docker Swarm self-hosted : déploiement d'apps,
 > bases de données mutualisées, SSO, reverse proxy, sécurité, backups et mises à jour
@@ -251,7 +251,7 @@ volumes `tier: local`, distinct du pool de disques mécaniques du NAS.
 
 ### 2bis.1 Profils de cluster (auto-détectés)
 
-HomelabUS calcule un profil au démarrage et à chaque `hlb node add/rm`, puis
+Homelabus calcule un profil au démarrage et à chaque `hlb node add/rm`, puis
 **recalcule automatiquement le placement de toutes les apps**.
 
 | Profil | Nœuds | Managers | Comportement |
@@ -457,7 +457,7 @@ de l'UI et du premier code de connexion.
 
 C'est le cœur de ta demande. Le principe important :
 
-> 🔑 **HomelabUS génère sa propre paire de clés SSH. Tu ne lui donnes jamais tes clés
+> 🔑 **Homelabus génère sa propre paire de clés SSH. Tu ne lui donnes jamais tes clés
 > personnelles.**
 
 ```
@@ -470,7 +470,7 @@ C'est le cœur de ta demande. Le principe important :
                        │  sur le nœud cible (ssh-copy-id)
                        ▼
 ┌─ Nœud cible ────────────────────────────────────────┐
-│  1. HomelabUS se connecte en SSH                    │
+│  1. Homelabus se connecte en SSH                    │
 │  2. Détecte la distro, exécute les préchecks        │
 │  3. Installe Docker, rejoint le Swarm               │
 │  4. Déploie l'agent (service Swarm global)          │
@@ -494,8 +494,8 @@ Trois modes d'authentification proposés par l'assistant :
 
 | Mode | Fonctionnement | Quand |
 |---|---|---|
-| **Clé dédiée** ⭐ | Tu installes la clé publique de HomelabUS toi-même | ✅ **Recommandé** |
-| Agent SSH | HomelabUS emprunte ton agent le temps du bootstrap | Rapide, rien à installer |
+| **Clé dédiée** ⭐ | Tu installes la clé publique de Homelabus toi-même | ✅ **Recommandé** |
+| Agent SSH | Homelabus emprunte ton agent le temps du bootstrap | Rapide, rien à installer |
 | Identifiants ponctuels | Saisis dans l'assistant, jamais stockés | Machine neuve sans clé |
 
 Alternative **pull** disponible, pour ne pas exposer de SSH du tout : le maître affiche
@@ -617,7 +617,7 @@ hlb node remove 192.168.1.42 --drain   # sortie propre : vide le nœud d'abord
 
 **Principe : tu n'installes rien à la main. Jamais.** Le seul geste manuel de tout le
 projet, c'est de télécharger et vérifier le binaire `hlb`. Tout le reste est déduit et
-installé par HomelabUS.
+installé par Homelabus.
 
 #### Ce qui est installé, et pourquoi
 
@@ -662,7 +662,7 @@ paquet, sa version et sa provenance **avant** toute modification. C'est le princ
 l'assistant : tu valides un plan, tu ne subis pas un script.
 
 **3. 🔴 Ne jamais mettre à niveau ce qu'on n'a pas installé.** Si Docker est déjà
-présent et suffisant, HomelabUS le laisse strictement tranquille. Écraser la
+présent et suffisant, Homelabus le laisse strictement tranquille. Écraser la
 configuration Docker d'une machine existante est le meilleur moyen de casser autre
 chose. La règle : **on ajoute, on ne remplace pas.**
 
@@ -678,14 +678,14 @@ hlb node deps 192.168.1.42 --fix    # installe uniquement ce qui manque
 - **Podman présent au lieu de Docker** : l'émulation ne couvre pas Swarm → refuser
   proprement plutôt que d'échouer plus tard.
 - **Redémarrage nécessaire** (cgroups v2, comptabilité swap, modules kernel) :
-  HomelabUS ne redémarre **jamais** une machine tout seul. Il le signale comme action
+  Homelabus ne redémarre **jamais** une machine tout seul. Il le signale comme action
   manuelle (§4.6) et poursuit ce qui peut l'être.
 
 ---
 
 ## 3. Couche « plateforme » (services partagés)
 
-Ce sont les services que HomelabUS installe et gère lui-même, dont les apps
+Ce sont les services que Homelabus installe et gère lui-même, dont les apps
 dépendent. Ils sont décrits par les mêmes manifests que les apps, mais marqués
 `kind: PlatformService`.
 
@@ -698,7 +698,7 @@ dépendent. Ils sont décrits par les mêmes manifests que les apps, mais marqu�
 | **PocketID** | Fournisseur OIDC (SSO) | Passkey-first, léger |
 | **Caddy frontend** | TLS, entrée unique | ACME DNS-01 wildcard |
 | **Anubis** | Filtrage bots / scrapers IA | Entre les deux Caddy, comme chez toi |
-| **Caddy backend** | Routage vers les services | Config générée par HomelabUS |
+| **Caddy backend** | Routage vers les services | Config générée par Homelabus |
 | **CrowdSec** | Détection d'intrusion + WAF (AppSec) | Bouncer Caddy + l'UI que tu as repérée |
 | **Restic / rclone** | Moteur de backup | Piloté par l'agent |
 | **VictoriaMetrics + Grafana + Alloy** | Métriques / logs / alertes | Plus léger que Prometheus+Loki |
@@ -713,7 +713,7 @@ Install de "vikunja"
    │
    ├─► manifest déclare: requires.database = {engine: postgres, name: vikunja}
    │
-   ├─► HomelabUS génère un mot de passe aléatoire (32 octets)
+   ├─► Homelabus génère un mot de passe aléatoire (32 octets)
    ├─► CREATE ROLE vikunja LOGIN PASSWORD '...';
    ├─► CREATE DATABASE vikunja OWNER vikunja;
    ├─► REVOKE ALL ON DATABASE vikunja FROM PUBLIC;   ← isolation entre apps
@@ -788,7 +788,7 @@ Vaultwarden (par défaut), PocketID et pas mal d'autres utilisent SQLite. Il ne 
 - soit **Litestream** (réplication continue du WAL vers S3) → RPO de quelques secondes
 - soit hook de backup `sqlite3 db.sqlite ".backup /tmp/snap.db"` avant restic
 
-Le manifest déclare `storage[].sqlite: true` et HomelabUS applique la bonne méthode
+Le manifest déclare `storage[].sqlite: true` et Homelabus applique la bonne méthode
 automatiquement.
 
 ### 3.5 Stockage objet — fait (`Capability::ObjectStorage`, Garage)
@@ -1173,7 +1173,7 @@ un jeton, cliquer sur « lancer la migration » après une montée de version…
 #### 🔴 Le principe : automatiser d'abord, guider seulement en dernier recours
 
 La faute serait de traiter toutes ces étapes comme manuelles. **La plupart ne le sont
-pas.** Chaque étape déclare comment elle peut être exécutée, et HomelabUS descend
+pas.** Chaque étape déclare comment elle peut être exécutée, et Homelabus descend
 l'échelle jusqu'à ce que quelque chose fonctionne :
 
 | Niveau | Moyen | Fiabilité | Exemple |
@@ -1219,7 +1219,7 @@ six mois plus tard. Le format impose donc :
     steps:
       - "Section « Dépôts » → activer « Actions »"
       - "Copier le jeton d'enregistrement du runner"
-    input:                                        # ce que HomelabUS récupère ensuite
+    input:                                        # ce que Homelabus récupère ensuite
       - { id: runner_token, label: "Jeton du runner", secret: true }
   verify: { type: api, endpoint: /api/v1/admin/runners, expect: { reachable: true } }
 ```
@@ -1229,7 +1229,7 @@ Trois éléments obligatoires :
 - **`deeplink`** — un lien cliquable vers la page exacte, pas « va dans les
   paramètres ». C'est ce qui divise par dix le temps passé.
 - **`steps`** — les clics précis, dans l'ordre.
-- **`input`** — si l'étape produit une valeur (jeton, identifiant), HomelabUS la
+- **`input`** — si l'étape produit une valeur (jeton, identifiant), Homelabus la
   récupère, la chiffre dans le coffre et la réinjecte là où elle est attendue. C'est ce
   qui permet de **chaîner** une action manuelle vers une configuration automatique.
 
@@ -1240,7 +1240,7 @@ compte créé**. Si l'app est exposée publiquement avant que tu ne t'inscrives,
 qui peut devenir administrateur de ton instance**. C'est une fenêtre de quelques minutes,
 et elle est réellement exploitée par les scanners automatiques.
 
-HomelabUS doit rendre ce scénario impossible par construction :
+Homelabus doit rendre ce scénario impossible par construction :
 
 ```yaml
 ingress:
@@ -1295,7 +1295,7 @@ au-dessus.
 #### Ce que ça change pour le catalogue
 
 Chaque app du catalogue gagne un fichier `guide.yaml` qui devient, de fait, **la
-documentation exécutable de son installation**. C'est ce qui distingue HomelabUS d'un
+documentation exécutable de son installation**. C'est ce qui distingue Homelabus d'un
 simple générateur de `docker-compose` : le compose te donne un conteneur qui tourne,
 le guide te donne un **service réellement utilisable et correctement fermé**.
 
@@ -1395,7 +1395,7 @@ hlb app adopt gitea --to v3  # applique, avec plan et sauvegarde préalable
 ### 5.0 Les quatre modes d'intégration
 
 Toute app self-hosted tombe dans un de ces quatre cas. Le manifest déclare lequel,
-et HomelabUS applique la bonne mécanique.
+et Homelabus applique la bonne mécanique.
 
 | Mode | Quand | Mécanique | Sécurité |
 |---|---|---|---|
@@ -1486,7 +1486,7 @@ et **`method: api`** (appel HTTP à l'app après démarrage, pour celles qui n'e
 que ça).
 
 ⚠️ **Ne jamais couper le login local avant d'avoir vérifié que le SSO fonctionne.**
-HomelabUS applique la séquence : déployer avec login local → tester le flux OIDC de
+Homelabus applique la séquence : déployer avec login local → tester le flux OIDC de
 bout en bout → seulement alors désactiver le local. Sinon tu te verrouilles dehors.
 
 ### 5.4 L'alternative : forward-auth (modes `proxy-*`)
@@ -1522,7 +1522,7 @@ sans passer par le proxy peut se faire passer pour n'importe qui**. Un simple
 
 C'est la faille la plus courante des setups forward-auth en homelab.
 
-HomelabUS doit rendre ça impossible par construction :
+Homelabus doit rendre ça impossible par construction :
 - l'app en `proxy-header` est **seule sur son réseau overlay**, avec le proxy comme
   unique voisin autorisé
 - **aucun port publié** sur l'hôte (`ports:` interdit par le validateur de manifest)
@@ -1558,7 +1558,7 @@ Ce n'est pas un défaut de mailcow : les clients mail gèrent très mal OAuth fa
 IdP générique. **Tout le monde vit avec ça, y compris les offres commerciales.**
 
 ⚠️ Mailcow étant en mode adoption (§10.1), la bascule OIDC se fait **à la main, une
-fois**, quand tu le décides. HomelabUS crée le client dans PocketID et te fournit les
+fois**, quand tu le décides. Homelabus crée le client dans PocketID et te fournit les
 trois endpoints à coller — il ne modifie pas la config mailcow tout seul.
 
 ⚠️ Le connecteur OIDC de mailcow est relativement récent et a connu des ratés
@@ -1607,7 +1607,7 @@ Autres variables disponibles : `SSO_MASTER_PASSWORD_POLICY`,
 `SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION`, `SSO_AUDIENCE_TRUSTED`,
 `SSO_AUTH_ONLY_NOT_SESSION`, `SSO_DEBUG_TOKENS` (débogage uniquement).
 
-L'URL de callback est **générée automatiquement depuis `DOMAIN`** — HomelabUS n'a
+L'URL de callback est **générée automatiquement depuis `DOMAIN`** — Homelabus n'a
 donc rien à calculer, il suffit qu'il déclare la même valeur des deux côtés.
 
 🔴 **Garder `SSO_ONLY: false`.** C'est le seul point de vigilance restant : mettre
@@ -1616,7 +1616,7 @@ perds l'accès au coffre qui contient les identifiants nécessaires pour le rép
 Avec `false`, la dépendance circulaire est neutralisée — tu gardes toujours une porte
 d'entrée locale.
 
-Le validateur de manifest de HomelabUS **refuse** `SSO_ONLY=true` sur Vaultwarden
+Le validateur de manifest de Homelabus **refuse** `SSO_ONLY=true` sur Vaultwarden
 sans un `--i-understand-the-lockout-risk` explicite.
 
 ### 5.7 Le fournisseur d'identité — PocketID et ses alternatives
@@ -1676,13 +1676,13 @@ PocketID ne pouvant pas servir d'annuaire LDAP à Stalwart, il reste trois voies
 
 | Voie | Architecture | Verdict |
 |---|---|---|
-| **A — HomelabUS synchronise** ⭐ | PocketID = identités. Stalwart = boîtes et aliases. **HomelabUS réconcilie les deux via leurs API.** | ✅ **Retenu et fait** — c'est littéralement la raison d'être de ton produit |
+| **A — Homelabus synchronise** ⭐ | PocketID = identités. Stalwart = boîtes et aliases. **Homelabus réconcilie les deux via leurs API.** | ✅ **Retenu et fait** — c'est littéralement la raison d'être de ton produit |
 | **B — LLDAP en source de vérité** | LLDAP porte les utilisateurs. PocketID synchronise depuis LLDAP. Stalwart lit LLDAP directement. | Solide et éprouvé, mais **une brique de plus** et la gestion des comptes se fait dans LLDAP |
 | **C — Migrer vers Kanidm** | Un seul composant : OIDC + LDAP + passkeys + attestation | Le plus élégant sur le papier, mais **tu perds PocketID** et sa simplicité |
 
 **La voie A est celle qui a été construite** — mais sans idmail, qui remplacerait
 l'annuaire de Stalwart et ne peut donc pas coexister avec le client JMAP (voir la
-décision au §5bis.3). HomelabUS parle directement aux deux :
+décision au §5bis.3). Homelabus parle directement aux deux :
 
 ```bash
 hlb user add remy --email remy@example.fr   # identité PocketID + boîte Stalwart
@@ -1729,7 +1729,7 @@ garde-fous :
    maximale, sauvegarde vérifiée, et `hlb dr promote pocketid` testé **pour de vrai**
    au moins une fois.
 
-L'UI de HomelabUS doit avoir un chemin d'accès local d'urgence, utilisable si PocketID
+L'UI de Homelabus doit avoir un chemin d'accès local d'urgence, utilisable si PocketID
 est HS — sinon tu ne peux même pas piloter la restauration.
 
 ### 5.8 ⚠️ Anubis et les endpoints d'authentification
@@ -1738,7 +1738,7 @@ Un challenge proof-of-work devant un callback OAuth **casse le flux de connexion
 la redirection depuis PocketID est une navigation automatique, pas une action
 utilisateur, et certains agents ne résoudront pas le challenge.
 
-HomelabUS exclut automatiquement d'Anubis :
+Homelabus exclut automatiquement d'Anubis :
 `/.well-known/*`, `/oauth2/*`, `/login/oauth/*`, et les `redirectPaths` déclarés
 dans le `sso.yaml` de chaque app.
 
@@ -1755,7 +1755,7 @@ roleMapping:
 ```
 
 Support inégal selon les apps (Gitea gère le mapping de groupe vers admin, d'autres
-non). Quand ce n'est pas supporté, HomelabUS le signale à l'installation au lieu de
+non). Quand ce n'est pas supporté, Homelabus le signale à l'installation au lieu de
 faire semblant.
 
 ### 5.10 Commandes
@@ -1870,7 +1870,7 @@ fine par alias.
                     └────────────────────────────────┘
 ```
 
-⚠️ Les aliases ne sont **pas** un service : ils sont portés par HomelabUS lui-même
+⚠️ Les aliases ne sont **pas** un service : ils sont portés par Homelabus lui-même
 (`hlb user alias`, API addy.io sur le controller). idmail figurait ici dans une version
 antérieure du plan — il remplacerait l'annuaire de Stalwart, ce qui est incompatible
 avec le client JMAP. Voir la décision au §5bis.3.
@@ -1993,7 +1993,7 @@ un vrai risque à peser.
 sous-domaines. Ils tapent le même serveur, ne partagent aucun état. Tu utilises
 Bulwark au quotidien, et Roundcube reste ton filet de sécurité si Bulwark casse à
 une mise à jour. Coût : ~100 Mo de RAM. C'est exactement le genre de chose que le
-catalogue HomelabUS rend trivial.
+catalogue Homelabus rend trivial.
 
 ### 5bis.3 Les aliases — modèle complet en libre-service
 
@@ -2032,7 +2032,7 @@ mailcow.**
 
 > 🔴 **Décision du 18/08/2026 : idmail n'est PAS intégré.** Ce qui suit décrit ce qu'il
 > apporte, parce que ça reste le bon inventaire du besoin — mais la voie retenue est
-> que HomelabUS porte le modèle lui-même. La raison est structurelle et se trouve
+> que Homelabus porte le modèle lui-même. La raison est structurelle et se trouve
 > juste après le tableau.
 
 **idmail** (MIT) est une interface de gestion de comptes et d'aliases conçue
@@ -2068,11 +2068,11 @@ base SQLite d'idmail. Conséquence : **idmail devient la source de vérité des 
 ce qui entre en tension avec le provisionnement JIT par PocketID décrit en §5bis.3bis.
 
 → ✅ **Arbitré en §5.7 (voie A)** : PocketID reste la source de vérité des identités,
-idmail gère comptes mail et aliases, et **HomelabUS réconcilie les deux via leurs
+idmail gère comptes mail et aliases, et **Homelabus réconcilie les deux via leurs
 API** (`hlb identity sync`). Tu évites d'ajouter un annuaire LDAP, et la
 réconciliation est exactement le motif « résolveur de capacités » du §4.3.
 
-#### Ce que HomelabUS doit apporter par-dessus
+#### Ce que Homelabus doit apporter par-dessus
 
 Le manque le plus visible d'idmail — **les aliases à expiration** — est aussi le plus
 facile à combler, et c'est typiquement le rôle de ton projet.
@@ -2096,11 +2096,11 @@ hlb mail alias disable inscription-truc@…        # coupe une fuite
 C'est ~200 lignes, et ça te redonne **exactement** la fonction « alias temporaire » de
 mailcow, en mieux (durée choisie plutôt que figée).
 
-À terme, si idmail te semble trop fragile, HomelabUS peut porter le portail d'aliases
+À terme, si idmail te semble trop fragile, Homelabus peut porter le portail d'aliases
 lui-même : le modèle de données est trivial, et tu gagnes l'intégration PocketID
 native. À garder en phase 7, pas au démarrage.
 
-#### 🔴 Décision : idmail n'est PAS intégré — HomelabUS porte le modèle
+#### 🔴 Décision : idmail n'est PAS intégré — Homelabus porte le modèle
 
 Vérification faite, **idmail et `hlb-mail` ne peuvent pas coexister**, et ce n'est pas
 une question de redondance.
@@ -2115,7 +2115,7 @@ consulte plus → l'adresse ne reçoit rien, **et rien ne le signale**. C'est ex
 le mode de panne silencieux que tout ce document cherche à éliminer.
 
 Ce qu'idmail apportait de vraiment distinctif, c'était son **API pour gestionnaires de
-mots de passe**. HomelabUS la parle désormais (`POST /api/v1/aliases`, format addy.io
+mots de passe**. Homelabus la parle désormais (`POST /api/v1/aliases`, format addy.io
 relevé dans le code de Bitwarden), sans le service ni le conflit d'annuaire.
 
 #### Récapitulatif : tes trois besoins
@@ -2236,7 +2236,7 @@ tout ce qui compte pour toi.
 #### Les autres
 
 **`docker-mailserver`** : tout se configure par fichiers plats, ce qui en fait le
-candidat le plus naturel pour une plateforme déclarative comme HomelabUS. Mais ni
+candidat le plus naturel pour une plateforme déclarative comme Homelabus. Mais ni
 webmail, ni interface d'administration, ni CalDAV, ni SSO — tout à assembler.
 
 **Mailu** : mailcow en plus léger, mais sans CalDAV/CardDAV ni alias temporaires.
@@ -2287,7 +2287,7 @@ gérable.
 🔴 **Ne lance jamais la phase D un vendredi**, et garde le plan de retour arrière
 écrit noir sur blanc avant de commencer.
 
-### 5bis.7 Intégration dans HomelabUS
+### 5bis.7 Intégration dans Homelabus
 
 ```yaml
 # catalog/stalwart/manifest.yaml
@@ -2309,7 +2309,7 @@ spec:
 ```
 
 Contrairement à mailcow (mode adoption, `deploy: false`), une pile Stalwart déployée
-par HomelabUS peut être **entièrement gérée** : déploiement, sauvegarde, mise à jour
+par Homelabus peut être **entièrement gérée** : déploiement, sauvegarde, mise à jour
 automatique, supervision. C'est un gain de cohérence réel — mais il se paie par la
 migration.
 
@@ -2335,7 +2335,7 @@ Internet
 [réseau overlay chiffré]  →  services applicatifs
 ```
 
-HomelabUS **génère intégralement les Caddyfile** depuis les manifests et recharge
+Homelabus **génère intégralement les Caddyfile** depuis les manifests et recharge
 Caddy via son API admin (`POST /load`, zéro downtime). Tu n'écris plus jamais de
 config Caddy à la main.
 
@@ -2373,8 +2373,8 @@ supposait résolu sans jamais le décrire.
 | Mode | Fonctionnement | Quand |
 |---|---|---|
 | **Wildcard** ⭐ | Un seul `*.{{ base_domain }}` créé une fois. Toute nouvelle app est immédiatement joignable, **sans aucune action DNS** | ✅ **Recommandé** |
-| **API fournisseur** | HomelabUS crée/supprime les enregistrements via l'API (Cloudflare, OVH, deSEC, Gandi…) | Si tu veux des enregistrements précis |
-| **Manuel** | HomelabUS affiche l'enregistrement à créer, en action de guide vérifiée (§4.6) | Registrar sans API |
+| **API fournisseur** | Homelabus crée/supprime les enregistrements via l'API (Cloudflare, OVH, deSEC, Gandi…) | Si tu veux des enregistrements précis |
+| **Manuel** | Homelabus affiche l'enregistrement à créer, en action de guide vérifiée (§4.6) | Registrar sans API |
 
 Le mode wildcard est de loin le meilleur compromis : **une action manuelle une seule
 fois**, puis plus jamais. Et il se combine avec l'ACME DNS-01 pour obtenir un
@@ -2390,7 +2390,7 @@ Let's Encrypt applique des quotas stricts. Une boucle de réconciliation boguée
 redemande un certificat en continu te fait bannir pour une semaine — et **tous** tes
 services passent en TLS invalide.
 
-Protections obligatoires dans HomelabUS :
+Protections obligatoires dans Homelabus :
 - **Toujours tester contre l'environnement de staging** avant le premier certificat réel
 - Cache persistant des certificats, jamais régénérés au redémarrage
 - Compteur de tentatives avec repli exponentiel, et arrêt net après N échecs
@@ -2459,7 +2459,7 @@ autant l'intégrer proprement pour contrôler la politique.
   (`hlb app upgrade gitea --to 1.24.0`), avec affichage des release notes.
 - Mode **canary** possible : 1 réplica sur N mis à jour, observation, puis le reste.
 
-## 7bis. La mise à jour de HomelabUS lui-même — trou identifié
+## 7bis. La mise à jour de Homelabus lui-même — trou identifié
 
 Le plan décrivait comment mettre à jour **les apps**, jamais comment mettre à jour
 **le controller et les agents**. C'est pourtant l'opération la plus délicate du
@@ -2547,7 +2547,7 @@ backup:
 
 **Un backup non testé n'est pas un backup.**
 
-HomelabUS doit intégrer une **vérification automatique de restauration** :
+Homelabus doit intégrer une **vérification automatique de restauration** :
 - tous les mois, restauration d'une app dans un namespace isolé (`app-verify`)
 - lancement des healthchecks + requêtes de validation (ex. : `SELECT count(*)`)
 - comparaison avec les métriques attendues
@@ -2656,7 +2656,7 @@ Grafana → tableaux de bord → intégré en iframe dans l'UI, pas réimplémen
 
 ### 🔴 Qui surveille le surveillant ?
 
-Si HomelabUS tombe, **rien ne t'alerte** — c'est lui qui envoie les alertes. Faille
+Si Homelabus tombe, **rien ne t'alerte** — c'est lui qui envoie les alertes. Faille
 classique et rarement traitée.
 
 Solution sans service externe : un **deadman switch inversé**. Le controller écrit un
@@ -2665,7 +2665,7 @@ NAS vérifie l'horodatage et te notifie directement s'il n'a pas bougé depuis 1
 
 ```bash
 # sur le NAS, indépendant du cluster
-[ $(( $(date +%s) - $(stat -c %Y /srv/hlb/heartbeat) )) -gt 900 ] && notify "HomelabUS muet"
+[ $(( $(date +%s) - $(stat -c %Y /srv/hlb/heartbeat) )) -gt 900 ] && notify "Homelabus muet"
 ```
 
 C'est trivial, et c'est la seule chose qui te préviendra si le cluster entier meurt.
@@ -2702,7 +2702,7 @@ Wi-Fi est une alerte qu'on finit par couper, et un deadman coupé ne protège de
 stockage distant ajouterait deux services à maintenir pour un résultat identique, et
 Alloy n'apporte rien tant qu'il n'y a pas de journaux à router.
 
-**Les règles sont évaluées par HomelabUS**, pas par `vmalert` → Alertmanager. La raison
+**Les règles sont évaluées par Homelabus**, pas par `vmalert` → Alertmanager. La raison
 est précise : `hlb-notify` porte déjà les quatre niveaux de ce paragraphe et les heures
 calmes, testés. Confier le routage à Alertmanager obligerait à **redire** ces règles
 dans sa configuration, dans une autre syntaxe et sans test — et deux définitions de
@@ -2745,7 +2745,7 @@ plutôt qu'à zéro, appliqué un cran plus haut.
 - **CrowdSec** : collections Caddy + composant **AppSec (WAF)**, bouncer au niveau
   du Caddy frontend, partage de la blocklist communautaire
 
-### Niveau HomelabUS lui-même
+### Niveau Homelabus lui-même
 - L'UI est protégée par PocketID + passkey obligatoire
 - **Journal d'audit immuable** : qui a fait quoi, quand, avec le diff
 - API en mTLS entre agent et controller, certificats à rotation courte
@@ -2808,7 +2808,7 @@ retention: { hourly: 24, daily: 14, weekly: 8, monthly: 12, yearly: 3 }
 
 ---
 
-## 9ter. Modèle d'accès à HomelabUS (RBAC) — trou identifié
+## 9ter. Modèle d'accès à Homelabus (RBAC) — trou identifié
 
 Listé comme « à vérifier » depuis le début sans jamais être tranché. Décision :
 
@@ -2822,10 +2822,10 @@ Listé comme « à vérifier » depuis le début sans jamais être tranché. Dé
 
 > 🔴 **Amendé le 18/08/2026.** Les *identités* restent dans PocketID — une seule source
 > de vérité pour « qui est cette personne ». Mais les **rôles sont attribués dans
-> HomelabUS** (table `user_roles`), et non plus déduits des groupes PocketID.
+> Homelabus** (table `user_roles`), et non plus déduits des groupes PocketID.
 >
-> **Pourquoi :** gérer les droits d'accès à HomelabUS depuis l'interface de PocketID, en
-> éditant des groupes dont seul HomelabUS connaît le sens, cachait la moitié du modèle
+> **Pourquoi :** gérer les droits d'accès à Homelabus depuis l'interface de PocketID, en
+> éditant des groupes dont seul Homelabus connaît le sens, cachait la moitié du modèle
 > dans un autre produit. `Role::from_groups` existe toujours pour qui préfère l'ancien
 > schéma.
 >
@@ -2834,7 +2834,7 @@ Listé comme « à vérifier » depuis le début sans jamais être tranché. Dé
 > étaient tous des rôles d'**exploitation** ; donner `viewer` à quelqu'un qui a
 > simplement une adresse mail lui ouvrirait l'état du cluster, l'inventaire des secrets
 > et le journal d'audit. C'est le rôle par défaut, donc celui d'un jeton dont le rôle est
-> illisible et d'une identité PocketID inconnue de HomelabUS.
+> illisible et d'une identité PocketID inconnue de Homelabus.
 >
 > **Le §9ter disait aussi « journal d'audit immuable ».** Il ne l'était que par
 > convention — aucune commande n'exposait de suppression, mais `hlb.db` est un fichier
@@ -2925,7 +2925,7 @@ hlb dr drill --controller-loss      # simule la perte, sans rien casser
 🔴 **Le jour où tout est éteint, tu n'as accès ni à ton wiki, ni à ton Gitea, ni à ce
 document.**
 
-HomelabUS doit générer un **document de reprise autonome**, à imprimer et ranger avec
+Homelabus doit générer un **document de reprise autonome**, à imprimer et ranger avec
 la clé maîtresse :
 
 ```bash
@@ -2950,7 +2950,7 @@ C'est officiel et documenté chez eux : mailcow-dockerized est prévu pour
 démarrage, sa propre MariaDB, son propre Redis). Le faire tourner en Swarm = casse
 à chaque mise à jour.
 
-**Solution recommandée :** HomelabUS gère deux types de cibles de déploiement.
+**Solution recommandée :** Homelabus gère deux types de cibles de déploiement.
 
 ```yaml
 spec:
@@ -2959,13 +2959,13 @@ spec:
 ```
 
 Mailcow tourne sur un hôte dédié (VM ou machine physique, hors du swarm), mais reste
-**piloté par HomelabUS** : backups, mises à jour, monitoring, certificats, routage.
+**piloté par Homelabus** : backups, mises à jour, monitoring, certificats, routage.
 Bonus : un serveur mail veut une IP fixe avec bonne réputation, du rDNS et du
 SPF/DKIM/DMARC — le mettre à part est de toute façon la bonne pratique.
 
 > 📌 **Deux stratégies possibles** — celle décrite ci-dessous (garder mailcow en mode
 > adoption) reste la recommandation par défaut. Si tu veux le remplacer par une pile
-> entièrement gérée par HomelabUS, **voir §5bis** : architecture complète, comparatif
+> entièrement gérée par Homelabus, **voir §5bis** : architecture complète, comparatif
 > et plan de migration.
 
 #### Situation retenue : mailcow existe déjà et fonctionne — on n'y touche pas
@@ -2975,7 +2975,7 @@ opérationnels. **C'est de loin le meilleur des cas** : le sujet le plus fragile
 homelab est déjà résolu, et il n'y a aucune raison de le rejouer.
 
 → Mailcow est donc le seul service en **mode adoption**, à l'inverse du reste du
-projet qui est greenfield. HomelabUS le pilote **sans jamais le redéployer** :
+projet qui est greenfield. Homelabus le pilote **sans jamais le redéployer** :
 
 ```yaml
 apiVersion: hlb/v1
@@ -2993,16 +2993,16 @@ spec:
     monitoring: true        # ✅ métriques, healthchecks, alertes ntfy
     certificates: false     # ❌ mailcow gère son ACME, on n'y touche pas
     updates: notify-only    # ⚠️ update.sh manuel, jamais automatique
-    deploy: false           # ❌ HomelabUS ne fait jamais de docker compose up ici
+    deploy: false           # ❌ Homelabus ne fait jamais de docker compose up ici
 ```
 
 **Pourquoi `updates: notify-only` :** `mailcow.sh update` fait bien plus qu'un pull
 d'images (migrations de schéma, changements de config, parfois interventions
 manuelles documentées dans les release notes). L'automatiser, c'est se réveiller un
-matin sans mail. HomelabUS **détecte** la disponibilité d'une mise à jour, la
+matin sans mail. Homelabus **détecte** la disponibilité d'une mise à jour, la
 notifie, sauvegarde à la demande — et te laisse lancer `update.sh` toi-même.
 
-**Ce que HomelabUS apporte quand même :**
+**Ce que Homelabus apporte quand même :**
 - sauvegarde unifiée dans la même politique que le reste (restic → OMV + Hetzner),
   en appelant `mailcow_backup.sh` comme hook plutôt qu'en copiant les volumes à chaud
 - snapshot de la VM avant chaque mise à jour manuelle (`hlb snapshot create mailcow-vm`)
@@ -3036,7 +3036,7 @@ Stratégie par type de donnée :
 **Ne mets jamais** une base SQLite ou Postgres sur du NFS : le verrouillage de
 fichiers y est non fiable → corruption garantie à terme.
 
-Le manifest déclare `storage[].tier` et HomelabUS applique automatiquement les
+Le manifest déclare `storage[].tier` et Homelabus applique automatiquement les
 bonnes contraintes de placement.
 
 ### 10.3 Quorum Swarm
@@ -3044,7 +3044,7 @@ bonnes contraintes de placement.
 Il faut **3 managers** (ou 5) pour tolérer une panne. Avec 2 managers, la perte d'un
 seul bloque tout le cluster — c'est pire qu'un seul manager. Avec 1 manager, prévoir
 la procédure de restauration du Raft (`docker swarm init --force-new-cluster`), que
-HomelabUS doit savoir exécuter.
+Homelabus doit savoir exécuter.
 
 ### 10.4 « Pourquoi pas k3s ? »
 
@@ -3130,7 +3130,7 @@ Piège classique : réimplémenter des outils qui existent déjà, et passer 6 m
 - **Un terminal web / un explorateur de fichiers** → surface d'attaque énorme pour
   un bénéfice faible. Tu as SSH.
 
-**HomelabUS agrège et relie. Il ne remplace pas.**
+**Homelabus agrège et relie. Il ne remplace pas.**
 
 ---
 
@@ -3292,7 +3292,7 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 - **Trait `DistroAdapter`** : Debian/Ubuntu + RHEL en niveau 1 (§2ter.3)
 - **Moteur de préchecks en lecture seule** — c'est la brique de confiance
 - Binaire **statique musl signé**, `hlb cluster init` avec **assistant TUI** (`ratatui`)
-- `hlb node add` par SSH avec **clé dédiée générée par HomelabUS**, révocable
+- `hlb node add` par SSH avec **clé dédiée générée par Homelabus**, révocable
 - Agent en service global, **bascule SSH → mTLS** après bootstrap
 - WireGuard + Swarm join + autolock
 - **Détection des ressources + tiers automatiques + profils de cluster** (§2bis)
@@ -3346,7 +3346,7 @@ Chaque phase produit quelque chose d'**utilisable en production**. Pas de big ba
 - Veille registry, épinglage par digest, canaux de version
 - Fenêtres de maintenance, backup préalable, rollback automatique
 - Scan Trivy, vérification cosign
-- **Mise à jour de HomelabUS lui-même** : compatibilité agent N/N+1, migrations
+- **Mise à jour de Homelabus lui-même** : compatibilité agent N/N+1, migrations
   réversibles, `hlb self update/rollback` (§7bis)
 - ✅ **Livrable** : le cluster se met à jour seul, en sécurité, la nuit
 
@@ -3467,8 +3467,8 @@ pas de façon inattendue entre deux versions (tests d'instantané). C'est peu co
 | Mailcow | Deux voies (§5bis) : **rester** en `adopt`/`notify-only`, ou **migrer** vers Stalwart CE + Bulwark + ClamAV + idmail |
 | Webmail | **Bulwark seul** (JMAP), + un client IMAP en filet de sécurité |
 | SSO | Gitea, Vikunja, **Vaultwarden (1.35.0+, officiel)**, Stalwart : OIDC natif |
-| Fournisseur d'identité | **PocketID conservé** (§5.7) ; identités réconciliées par HomelabUS, pas de LDAP ajouté |
-| Aliases | **idmail** en libre-service + **expiration ajoutée par HomelabUS** |
+| Fournisseur d'identité | **PocketID conservé** (§5.7) ; identités réconciliées par Homelabus, pas de LDAP ajouté |
+| Aliases | **idmail** en libre-service + **expiration ajoutée par Homelabus** |
 | Accès OS | 🔴 **Pas d'auth Unix centralisée** — `authorized_keys` distribués par l'agent |
 | Installation | Binaire **statique musl signé**, TUI pour le maître, assistant web pour les nœuds |
 | Dépendances | **Installées automatiquement**, annoncées avant, jamais écrasées si déjà présentes |
@@ -3486,7 +3486,7 @@ pas de façon inattendue entre deux versions (tests d'instantané). C'est peu co
 
 | Trou | Traité en |
 |---|---|
-| Mise à jour de HomelabUS lui-même | §7bis |
+| Mise à jour de Homelabus lui-même | §7bis |
 | Ordonnancement des dépendances entre services | §4.7 |
 | Gestion du DNS et limites ACME | §6.4 |
 | Saturation disque (panne n°1 des homelabs) | §9bis |

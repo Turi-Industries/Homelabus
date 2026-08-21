@@ -102,7 +102,7 @@ impl Refus {
 
 /// Plage maximale interrogeable : sept jours.
 ///
-/// Au-delà, c'est de l'analyse, et Grafana est fait pour ça (§11bis : « HomelabUS
+/// Au-delà, c'est de l'analyse, et Grafana est fait pour ça (§11bis : « Homelabus
 /// agrège et relie, il ne remplace pas »).
 pub const PLAGE_MAX_S: i64 = 7 * 86_400;
 

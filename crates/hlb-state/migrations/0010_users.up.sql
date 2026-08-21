@@ -1,6 +1,6 @@
 -- Comptes humains, boîtes mail et aliases (§5bis.3).
 --
--- 🔴 Pourquoi HomelabUS tient ce registre alors que PocketID et Stalwart existent :
+-- 🔴 Pourquoi Homelabus tient ce registre alors que PocketID et Stalwart existent :
 -- aucun des deux ne connaît la notion d'alias TEMPORAIRE. Stalwart stocke une liste
 -- d'aliases sans date, PocketID ignore les boîtes. La date d'expiration ne vit donc
 -- nulle part ailleurs — et sans elle, « temporaire » n'est qu'un mot.

@@ -25,7 +25,7 @@ pub async fn engendrer(
 ) -> String {
     let mut s = String::new();
 
-    s.push_str("# Runbook HomelabUS\n\n");
+    s.push_str("# Runbook Homelabus\n\n");
     s.push_str(
         "Généré automatiquement depuis l'état réel. Une fois imprimé, ce document \
          commence à vieillir : régénère-le après tout changement d'infrastructure.\n\n",
@@ -133,7 +133,7 @@ pub async fn engendrer(
     s.push_str("## Si l'on ne peut plus se connecter\n\n");
     s.push_str(
         "PocketID est le point de défaillance unique sur l'ACCÈS : s'il est tombé, on \
-         ne peut plus entrer dans HomelabUS, donc plus piloter sa restauration.\n\n\
+         ne peut plus entrer dans Homelabus, donc plus piloter sa restauration.\n\n\
          - Les codes de connexion à usage unique PocketID (imprimés séparément).\n\
          - La connexion locale de Vaultwarden, qui ne dépend d'aucun autre service.\n\
          - Un jeton d'API `admin` permet de tout piloter en ligne de commande sans \

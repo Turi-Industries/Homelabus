@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Mise à jour de HomelabUS lui-même : compatibilité, séquence, retour arrière."
+description = "Mise à jour de Homelabus lui-même : compatibilité, séquence, retour arrière."
 
 [dependencies]
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }

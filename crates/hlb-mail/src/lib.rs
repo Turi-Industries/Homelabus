@@ -706,7 +706,7 @@ fn account_body(
                 })
             })
             .collect::<Vec<_>>(),
-        "description": "Créé par HomelabUS",
+        "description": "Créé par Homelabus",
     })
 }
 

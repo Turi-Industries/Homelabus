@@ -2,7 +2,7 @@
 //!
 //! ## 🔴 Pourquoi la compatibilité est le cœur du problème
 //!
-//! Mettre à jour HomelabUS, c'est remplacer l'outil qui pilote tout **pendant qu'il
+//! Mettre à jour Homelabus, c'est remplacer l'outil qui pilote tout **pendant qu'il
 //! pilote tout**. Le remplacement ne peut pas être atomique sur plusieurs machines :
 //! il existe forcément une fenêtre où des agents en version N parlent à un controller
 //! en N+1, ou l'inverse.

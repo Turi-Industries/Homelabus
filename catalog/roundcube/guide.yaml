@@ -20,7 +20,7 @@ steps:
       est côté serveur et Roundcube ne la remonte pas clairement.
 
       C'est aussi par ce chemin que tu reliras et corrigeras les règles de tri
-      que HomelabUS génère pour tes aliases.
+      que Homelabus génère pour tes aliases.
 
   - id: pourquoi-sans-sso
     title: Pourquoi Roundcube n'est PAS derrière le SSO

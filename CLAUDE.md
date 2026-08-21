@@ -369,7 +369,7 @@ qui a tort, pas le test.
 - **Un script Sieve est un fichier UNIQUE par compte.** Le réécrire entièrement
   effacerait les règles écrites à la main — des heures de réglages, perdues sans un
   avertissement, pour une simple création d'alias. D'où un bloc délimité par des
-  marqueurs : HomelabUS n'écrit qu'entre eux, et le bloc va en FIN de script (en tête,
+  marqueurs : Homelabus n'écrit qu'entre eux, et le bloc va en FIN de script (en tête,
   il capterait les messages avant les règles de l'utilisateur).
 - **Un guillemet non échappé dans un nom de dossier casse TOUT le script**, y compris
   les règles de l'utilisateur, que Stalwart refuse alors en bloc. Le nom vient de
@@ -381,7 +381,7 @@ qui a tort, pas le test.
   il REMPLACE son annuaire (`directory` externe de type sqlite). Les deux ensemble
   donneraient un alias créé en JMAP dans un annuaire que Stalwart ne consulte plus —
   l'adresse ne recevrait rien, sans que rien ne le signale. D'où l'API compatible
-  addy.io côté HomelabUS plutôt que l'intégration d'idmail.
+  addy.io côté Homelabus plutôt que l'intégration d'idmail.
 - **Le contrat de l'API addy.io est imposé par BITWARDEN**, pas par nous. Relevé dans
   son code (`libs/tools/generator/core/src/integration/addy-io.ts`) : la réponse doit
   être `{data:{email}}` — à la racine, le client lit `undefined` et l'alias existe côté
@@ -652,7 +652,7 @@ qui a tort, pas le test.
   qui comptent. Un test énumère les noms que le code produit réellement.
 - **Une démonstration qui invente ses propres noms enseigne une fausse convention.**
   C'est elle qui a fait passer le défaut ci-dessus inaperçu.
-- **HomelabUS ne peut vérifier AUCUN des garde-fous d'accès**, sauf l'exercice de
+- **Homelabus ne peut vérifier AUCUN des garde-fous d'accès**, sauf l'exercice de
   reprise : il ne sait pas combien de passkeys existent ni si les codes sont imprimés.
   Il demande donc une attestation datée, qu'il fait expirer — et le seul point dont il a
   la trace ne s'atteste PAS à la main, sinon on peindrait en vert le garde-fou le plus
@@ -703,7 +703,7 @@ qui a tort, pas le test.
 - **Un champ CSV non cité décale toutes les colonnes suivantes.** Le journal d'audit
   contient des détails écrits par des humains : virgules et guillemets y sont la norme.
   Et le fin de ligne est CRLF, sinon Excel fusionne les lignes.
-- **L'état de HomelabUS n'était PAS sauvegardé.** Marque, thèmes, annonces, rôles,
+- **L'état de Homelabus n'était PAS sauvegardé.** Marque, thèmes, annonces, rôles,
   invitations, attestations de secours, plans, routes réellement posées : tout vit dans
   la base d'état, et rien ne la copiait. Une restauration rendait des apps qui tournent
   dans une installation qui ne sait plus qui est administrateur.
@@ -750,7 +750,7 @@ qui a tort, pas le test.
 - **Une annonce qui ne concerne pas son lecteur est du bruit.** Inonder l'utilisateur du
   portail de messages d'exploitation lui fait cesser de les lire — au moment précis où
   l'un d'eux comptera. D'où l'audience par rôle.
-- **HomelabUS ANNONCE les applications, il n'accorde pas l'accès.** Celui-ci vient de
+- **Homelabus ANNONCE les applications, il n'accorde pas l'accès.** Celui-ci vient de
   PocketID et du forward-auth. Et un lien vers une app arrêtée envoie sur une page
   d'erreur qu'on prend pour un problème de ses propres droits.
 - **Un texte partagé ne doit dépendre d'AUCUN de ses consommateurs.** Les messages de
@@ -845,7 +845,7 @@ Fait aussi : les **dumps MariaDB** (`hlb-backup::mariadump`), qui manquaient —
 MariaDB était provisionnée mais n'avait aucune sauvegarde logique.
 
 Fait enfin : l'**observabilité complète** (`hlb-metrics`) — VictoriaMetrics et Grafana
-au catalogue, règles d'alerte évaluées par HomelabUS et routées vers `hlb-notify`
+au catalogue, règles d'alerte évaluées par Homelabus et routées vers `hlb-notify`
 (plutôt qu'Alertmanager, qui dupliquerait les niveaux et les heures calmes), et le
 **deadman switch** du §8bis avec son veilleur pour le NAS. `hlb metrics rules / scrape /
 check / deadman`.
@@ -872,7 +872,7 @@ le permet), avec un réglage par app. `hlb backup run` sert chaque destination
 séparément — un échec sur l'une n'empêche pas les autres, et chacune a sa propre
 échéance.
 
-Fait : les **comptes humains** (`hlb-users`, `hlb user`). Jusque-là HomelabUS ne
+Fait : les **comptes humains** (`hlb-users`, `hlb user`). Jusque-là Homelabus ne
 connaissait que des applications — `hlb-identity` créait des clients OIDC, jamais des
 personnes. Un compte se crée maintenant en une commande : identité PocketID + boîte
 mail, avec un lien d'inscription à usage unique. Les aliases couvrent **trois axes
@@ -1000,7 +1000,7 @@ désigne comme la troisième raison d'être de l'interface.
 **Rotation assistée** (`hlb-api::rotation`) : ce que tourner un secret IMPLIQUE, par
 nature, dans l'ordre — le coffre n'est pas la source de vérité. **Break-glass vivant**
 (`hlb-api::breakglass` + `hlb-controller::secours`) : quatre garde-fous, trois
-attestations datées qui expirent, et un seul point que HomelabUS prouve lui-même.
+attestations datées qui expirent, et un seul point que Homelabus prouve lui-même.
 **Runbook imprimable** (`hlb-controller::runbook`) engendré depuis l'état réel, sans
 aucun secret. **Plans nommés** (migration `0022`) : préparer à froid, exécuter à l'heure
 creuse, en rejouant exactement ce qui a été prévisualisé.

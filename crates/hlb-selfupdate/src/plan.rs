@@ -21,7 +21,7 @@
 //! pour revenir en arrière.
 //!
 //! **Un agent à la fois**, parce qu'un agent injoignable n'empêche pas le cluster de
-//! fonctionner (les services tournent sous Swarm, pas sous HomelabUS), alors que dix
+//! fonctionner (les services tournent sous Swarm, pas sous Homelabus), alors que dix
 //! agents cassés simultanément aveuglent complètement la supervision.
 //!
 //! ## 🔴 Ce qui rend le retour arrière possible — ou impossible

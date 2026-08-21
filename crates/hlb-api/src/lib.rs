@@ -167,7 +167,7 @@ pub struct SecretItem {
 /// qu'un écran de connexion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Moi {
-    /// Le compte HomelabUS. `None` pour un jeton de service, qui n'agit au nom de
+    /// Le compte Homelabus. `None` pour un jeton de service, qui n'agit au nom de
     /// personne — et l'interface doit alors masquer tout ce qui est « mes … ».
     pub compte: Option<String>,
     pub role: String,
@@ -254,7 +254,7 @@ impl Droits {
 pub struct Marque {
     /// La maison. Apparaît en tête de la barre latérale et au pied des pages.
     pub nom: String,
-    /// Le produit. Distinct du précédent : « Turi Industries » exploite « HomelabUS »,
+    /// Le produit. Distinct du précédent : « Turi Industries » exploite « Homelabus »,
     /// et confondre les deux rendrait la page incompréhensible pour un visiteur.
     pub produit: String,
     /// Composantes RVB. `None` = l'accent du thème.
@@ -278,7 +278,7 @@ impl Default for Marque {
     fn default() -> Self {
         Self {
             nom: "Turi Industries".into(),
-            produit: "HomelabUS".into(),
+            produit: "Homelabus".into(),
             accent: None,
             logo: false,
             pied: None,
@@ -1459,7 +1459,7 @@ impl GenreEvenement {
 pub struct VersionManifest {
     /// Le commit court du miroir.
     pub reference: String,
-    /// Le résumé du commit : ce que HomelabUS faisait à ce moment-là.
+    /// Le résumé du commit : ce que Homelabus faisait à ce moment-là.
     pub sujet: String,
     /// Les lignes changées depuis la version précédente, préfixées `+` ou `-`.
     ///
@@ -2005,13 +2005,13 @@ mod tests {
     fn the_default_brand_is_the_one_this_installation_was_made_for() {
         let m = Marque::default();
         assert_eq!(m.nom, "Turi Industries");
-        assert_eq!(m.produit, "HomelabUS");
+        assert_eq!(m.produit, "Homelabus");
         assert_eq!(m.initiales(), "TI");
     }
 
     #[test]
     fn the_house_and_the_product_are_never_merged() {
-        // « Turi Industries » exploite « HomelabUS ». Les confondre rendrait la page
+        // « Turi Industries » exploite « Homelabus ». Les confondre rendrait la page
         // incompréhensible pour quelqu'un qui découvre l'outil.
         let m = Marque::default();
         assert!(m.titre().contains(&m.nom));

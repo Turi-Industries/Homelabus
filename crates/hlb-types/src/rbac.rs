@@ -12,11 +12,11 @@
 //!
 //! ## Ce qui a changé par rapport au §9ter
 //!
-//! Le plan disait « rattachés aux **groupes PocketID**, pas gérés dans HomelabUS ».
+//! Le plan disait « rattachés aux **groupes PocketID**, pas gérés dans Homelabus ».
 //! **Décision amendée** : les *identités* restent dans PocketID — une seule source de
 //! vérité pour « qui est cette personne » — mais les *rôles* sont attribués ici. Gérer
-//! les droits d'accès à HomelabUS depuis l'interface de PocketID, en éditant des
-//! groupes dont seul HomelabUS connaît le sens, revenait à cacher la moitié du modèle
+//! les droits d'accès à Homelabus depuis l'interface de PocketID, en éditant des
+//! groupes dont seul Homelabus connaît le sens, revenait à cacher la moitié du modèle
 //! dans un autre produit. [`Role::from_groups`] reste disponible pour qui préfère
 //! l'ancien schéma.
 //!
@@ -37,7 +37,7 @@ pub enum Role {
     /// portail. Ce n'est **pas** un rôle d'exploitation.
     ///
     /// C'est le défaut, donc ce qu'obtient un jeton dont le rôle est illisible et une
-    /// identité PocketID inconnue de HomelabUS. Le défaut doit toujours être le moins
+    /// identité PocketID inconnue de Homelabus. Le défaut doit toujours être le moins
     /// privilégié.
     #[default]
     Utilisateur,
@@ -189,7 +189,7 @@ impl Role {
     /// Le rôle déduit des groupes PocketID (§5.9).
     ///
     /// Conservé pour qui préfère piloter les droits depuis PocketID plutôt que depuis
-    /// HomelabUS (cf. l'en-tête du module). Le plus élevé gagne : appartenir à
+    /// Homelabus (cf. l'en-tête du module). Le plus élevé gagne : appartenir à
     /// `homelab-admins` et `homelab-users` donne `admin`, pas l'inverse.
     pub fn from_groups(groups: &[String], mapping: &[(String, Role)]) -> Self {
         groups

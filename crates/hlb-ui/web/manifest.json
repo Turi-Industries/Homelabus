@@ -1,6 +1,6 @@
 {
-  "name": "HomelabUS",
-  "short_name": "HomelabUS",
+  "name": "Homelabus",
+  "short_name": "Homelabus",
   "description": "La console de votre homelab.",
   "start_url": "./",
   "scope": "./",

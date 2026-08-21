@@ -50,7 +50,7 @@ impl Cible {
 
 /// L'intervalle de collecte.
 ///
-/// 30 s : les métriques de HomelabUS changent à l'échelle de la minute (âge de
+/// 30 s : les métriques de Homelabus changent à l'échelle de la minute (âge de
 /// sauvegarde, état d'app). Collecter toutes les secondes multiplierait le stockage
 /// par trente sans rien révéler de plus.
 pub const INTERVALLE_S: u32 = 30;
@@ -62,7 +62,7 @@ pub const INTERVALLE_S: u32 = 30;
 /// (rôle `metrics`), ce qui limite les dégâts d'une fuite sans les annuler.
 pub fn config_collecte(cibles: &[Cible]) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "# Généré par HomelabUS (§8bis). Ne pas modifier à la main.");
+    let _ = writeln!(s, "# Généré par Homelabus (§8bis). Ne pas modifier à la main.");
     let _ = writeln!(s, "#");
     let _ = writeln!(s, "# ⚠️ Ce fichier contient un jeton en clair : pose-le en secret");
     let _ = writeln!(s, "#    Docker, jamais dans un dépôt Git.");
@@ -89,7 +89,7 @@ pub fn config_collecte(cibles: &[Cible]) -> String {
 /// 🔴 Treize mois, et non trente jours. La question qu'on pose à un historique de
 /// métriques est presque toujours « est-ce que c'était déjà comme ça l'an dernier ? » —
 /// une rétention courte y répond « je ne sais pas » précisément quand elle servirait.
-/// Le coût est dérisoire : les métriques de HomelabUS sont peu nombreuses et
+/// Le coût est dérisoire : les métriques de Homelabus sont peu nombreuses et
 /// VictoriaMetrics les compresse fortement.
 pub const RETENTION: &str = "13mo";
 

@@ -1,4 +1,4 @@
-//! Le controller HomelabUS.
+//! Le controller Homelabus.
 //!
 //! Exposé en bibliothèque autant qu'en binaire : les tests d'intégration doivent
 //! pouvoir exercer l'interrogation des agents et l'API sans passer par un

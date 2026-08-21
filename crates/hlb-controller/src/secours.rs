@@ -2,7 +2,7 @@
 //!
 //! ## 🔴 Ce module ne vérifie presque rien, et c'est le sujet
 //!
-//! HomelabUS ne sait pas combien de passkeys sont enregistrées, ni si des codes à usage
+//! Homelabus ne sait pas combien de passkeys sont enregistrées, ni si des codes à usage
 //! unique sont imprimés et rangés hors du cluster. Il ne peut donc pas cocher ces cases
 //! — il peut demander qu'on les atteste, garder la date, et redevenir rouge quand
 //! l'attestation vieillit.
@@ -24,7 +24,7 @@ pub async fn etat(state: &State) -> Vec<GardeFou> {
             g.atteste_par = Some(par.clone());
         }
 
-        // 🔴 L'exercice de restauration est le SEUL point dont HomelabUS a la trace.
+        // 🔴 L'exercice de restauration est le SEUL point dont Homelabus a la trace.
         // Une attestation humaine ne doit pas pouvoir le déclarer fait : c'est
         // précisément le garde-fou qu'on croit tenu et qui ne l'est pas.
         if g.verifiable {
@@ -64,7 +64,7 @@ pub async fn attester(
             .into_response();
     }
 
-    // Et celui que HomelabUS vérifie lui-même ne s'atteste pas à la main : la trace de
+    // Et celui que Homelabus vérifie lui-même ne s'atteste pas à la main : la trace de
     // l'exercice fait foi, et rien d'autre.
     if hlb_api::breakglass::garde_fous()
         .iter()

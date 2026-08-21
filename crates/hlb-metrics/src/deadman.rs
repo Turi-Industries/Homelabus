@@ -173,7 +173,7 @@ impl Veille {
             Self::Vivant { .. } => None,
 
             Self::Silencieux { depuis_s } => Some(format!(
-                "🔴 HomelabUS ne donne plus signe de vie depuis {} minutes.\n\n\
+                "🔴 Homelabus ne donne plus signe de vie depuis {} minutes.\n\n\
                  Le controller est probablement arrêté, figé, ou coupé du réseau. \
                  Tant qu'il l'est, AUCUNE autre alerte ne peut partir : ni sauvegarde \
                  manquée, ni app tombée, ni disque plein. Ce silence est donc le seul \
@@ -198,7 +198,7 @@ impl Veille {
 /// maillon, celui que personne ne surveille — chaque ligne qu'on y ajoute est une ligne
 /// qui peut le faire échouer en silence. Sa bêtise est une propriété, pas une limite.
 ///
-/// ⚠️ Il pousse vers ntfy **directement**, sans passer par HomelabUS : demander au
+/// ⚠️ Il pousse vers ntfy **directement**, sans passer par Homelabus : demander au
 /// système surveillé de relayer l'alerte de sa propre mort ne peut pas marcher.
 ///
 /// 🔴 **Et si ntfy est injoignable ?** Constaté en exécutant réellement le script : un
@@ -209,13 +209,13 @@ impl Veille {
 pub fn script_veilleur(fichier_battement: &str, ntfy_url: &str, sujet: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "#!/bin/sh");
-    let _ = writeln!(s, "# Veilleur HomelabUS (§8bis) — à lancer par cron sur le NAS.");
+    let _ = writeln!(s, "# Veilleur Homelabus (§8bis) — à lancer par cron sur le NAS.");
     let _ = writeln!(s, "#");
     let _ = writeln!(s, "# 🔴 Ce script NE DOIT PAS tourner sur la machine qu'il");
     let _ = writeln!(s, "#    surveille : il mourrait avec elle, et ne détecterait rien.");
     let _ = writeln!(s, "#");
-    let _ = writeln!(s, "# 🔴 Il pousse vers ntfy DIRECTEMENT. Passer par HomelabUS pour");
-    let _ = writeln!(s, "#    signaler que HomelabUS est mort ne peut pas fonctionner.");
+    let _ = writeln!(s, "# 🔴 Il pousse vers ntfy DIRECTEMENT. Passer par Homelabus pour");
+    let _ = writeln!(s, "#    signaler que Homelabus est mort ne peut pas fonctionner.");
     let _ = writeln!(s, "#");
     let _ = writeln!(s, "# Pose-le en cron toutes les 5 minutes :");
     let _ = writeln!(s, "#   */5 * * * * /chemin/veilleur.sh");
@@ -353,7 +353,7 @@ mod tests {
     fn the_watcher_never_routes_through_the_watched_system() {
         // 🔴 Demander au système surveillé de signaler sa propre mort ne peut pas
         // marcher. Le veilleur doit pousser vers ntfy directement.
-        let s = script_veilleur("/var/lib/hlb/battement", "https://ntfy.sh/mon-sujet", "HomelabUS");
+        let s = script_veilleur("/var/lib/hlb/battement", "https://ntfy.sh/mon-sujet", "Homelabus");
 
         assert!(s.contains("https://ntfy.sh/mon-sujet"), "{s}");
         assert!(
@@ -367,7 +367,7 @@ mod tests {
     fn the_watcher_distinguishes_never_armed_too() {
         // La distinction doit survivre jusque dans le script, sinon elle ne sert à
         // rien : c'est lui qui parle à l'humain.
-        let s = script_veilleur("/b", "https://ntfy.sh/x", "HomelabUS");
+        let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         assert!(s.contains("jamais armé"), "{s}");
         assert!(s.contains("if [ ! -f"), "il doit tester l'absence du fichier : {s}");
     }
@@ -381,7 +381,7 @@ mod tests {
         //
         // stderr est le repli : cron l'envoie par courriel, et cette voie-là ne partage
         // ni le réseau ni le service de ntfy.
-        let s = script_veilleur("/b", "https://ntfy.sh/x", "HomelabUS");
+        let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         assert_eq!(
             s.matches("alerte PERDUE").count(),
             2,
@@ -395,7 +395,7 @@ mod tests {
         // 🔴 C'est le dernier maillon, celui que personne ne surveille. Chaque ligne
         // ajoutée est une ligne qui peut le faire échouer en silence. Sa bêtise est
         // une propriété.
-        let s = script_veilleur("/b", "https://ntfy.sh/x", "HomelabUS");
+        let s = script_veilleur("/b", "https://ntfy.sh/x", "Homelabus");
         let code: Vec<&str> = s
             .lines()
             .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())

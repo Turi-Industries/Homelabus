@@ -73,7 +73,7 @@ struct Parc {
 }
 
 async fn parc() -> Parc {
-    let ca = pki::generate_ca("HomelabUS CA").await.expect("CA");
+    let ca = pki::generate_ca("Homelabus CA").await.expect("CA");
     let agent = pki::issue(&ca, "agent", &["localhost".into()], Purpose::Server)
         .await
         .expect("agent");

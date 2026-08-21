@@ -33,7 +33,7 @@ fn ecrire(dir: &std::path::Path, nom: &str, contenu: &str) -> String {
 
 #[tokio::test]
 async fn the_chain_actually_validates() {
-    let ca = pki::generate_ca("HomelabUS CA de test").await.expect("CA");
+    let ca = pki::generate_ca("Homelabus CA de test").await.expect("CA");
     let agent = pki::issue(
         &ca,
         "node1",

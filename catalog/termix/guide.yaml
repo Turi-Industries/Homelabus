@@ -38,7 +38,7 @@ steps:
     phase: post-install
     severity: blocking
     body: |
-      🔴 N'y mets JAMAIS la clé de HomelabUS.
+      🔴 N'y mets JAMAIS la clé de Homelabus.
 
       Elle sert au provisionnement des nœuds et sa révocation couperait le
       cluster de lui-même. Termix doit avoir une clé à lui, révocable seule :

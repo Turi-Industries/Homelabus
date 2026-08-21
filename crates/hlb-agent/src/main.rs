@@ -32,7 +32,7 @@ use hlb_agent::disk::DiskUsage;
 use hlb_agent::NodeReport;
 
 #[derive(Parser)]
-#[command(name = "hlb-agent", version, about = "Agent de nœud HomelabUS")]
+#[command(name = "hlb-agent", version, about = "Agent de nœud Homelabus")]
 struct Cli {
     #[arg(long, default_value = "0.0.0.0:8421", env = "HLB_AGENT_LISTEN")]
     listen: String,

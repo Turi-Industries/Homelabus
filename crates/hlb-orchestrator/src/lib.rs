@@ -334,7 +334,7 @@ pub trait Orchestrator: Send + Sync {
     /// d'apps ne se configurent que par leur CLI (`gitea admin`, `occ`…).
     async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput>;
 
-    /// Crée un volume nommé, étiqueté comme géré par HomelabUS.
+    /// Crée un volume nommé, étiqueté comme géré par Homelabus.
     ///
     /// Idempotent : un volume existant est conservé tel quel — il porte des données.
     async fn create_volume(&self, name: &str) -> Result<VolumeInfo>;

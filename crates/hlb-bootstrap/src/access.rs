@@ -1,8 +1,8 @@
-//! Accès SSH gérés par HomelabUS (§2ter, phase 0bis).
+//! Accès SSH gérés par Homelabus (§2ter, phase 0bis).
 //!
 //! ## Pourquoi une clé dédiée plutôt que celle de l'utilisateur
 //!
-//! Si HomelabUS empruntait la clé personnelle de l'administrateur, la révoquer
+//! Si Homelabus empruntait la clé personnelle de l'administrateur, la révoquer
 //! reviendrait à lui couper son propre accès. Avec une clé à part :
 //!
 //! - on peut la révoquer sur tout le parc sans toucher aux accès humains ;
@@ -12,7 +12,7 @@
 //! ## 🔴 `authorized_keys` ne se réécrit JAMAIS en aveugle
 //!
 //! C'est le fichier le plus dangereux du système. Une écriture qui l'écrase enferme
-//! dehors **tout le monde** — HomelabUS *et* l'administrateur — sans recours autre
+//! dehors **tout le monde** — Homelabus *et* l'administrateur — sans recours autre
 //! qu'un accès physique ou une console de secours.
 //!
 //! Trois règles en découlent, chacune vérifiée par un test :
@@ -43,7 +43,7 @@ pub const MARKER: &str = "homelabus-managed";
 
 /// Restrictions posées sur la clé.
 ///
-/// HomelabUS a besoin d'un shell (il lance `docker`, `apt`…), donc pas de
+/// Homelabus a besoin d'un shell (il lance `docker`, `apt`…), donc pas de
 /// `command=`. En revanche rien ne justifie les redirections de ports ou d'agent :
 /// les interdire limite ce qu'une fuite de la clé privée permettrait.
 const OPTIONS: &str = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc";
@@ -53,7 +53,7 @@ const OPTIONS: &str = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,
 pub struct ManagedKey {
     /// Le corps de la clé : `ssh-ed25519 AAAA…`.
     pub public: String,
-    /// Nom du cluster, pour distinguer deux HomelabUS sur une même machine.
+    /// Nom du cluster, pour distinguer deux Homelabus sur une même machine.
     pub cluster: String,
 }
 
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn forwarding_is_disabled() {
-        // HomelabUS a besoin d'un shell, mais rien ne justifie les redirections :
+        // Homelabus a besoin d'un shell, mais rien ne justifie les redirections :
         // les interdire limite ce qu'une fuite de la clé permettrait.
         let l = cle().line();
         assert!(l.contains("no-port-forwarding"), "{l}");
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn two_clusters_do_not_revoke_each_other() {
-        // 🔴 Deux HomelabUS sur une même machine : révoquer l'un ne doit pas couper
+        // 🔴 Deux Homelabus sur une même machine : révoquer l'un ne doit pas couper
         // l'autre. C'est pourquoi on teste le commentaire ENTIER, pas le marqueur.
         let (a, _) = grant("", &cle());
         let bureau = ManagedKey::new("ssh-ed25519 AAAABUREAU x@y", "bureau");

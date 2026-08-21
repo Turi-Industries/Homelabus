@@ -73,7 +73,7 @@ pub fn afficher(ui: &mut egui::Ui, ecarts: Option<&Vec<EcartSummary>>, fraicheur
         c::legende(
             ui,
             "Un système qui corrige trop est plus dangereux qu'un système qui ne \
-             corrige rien. Voici ce que HomelabUS a vu et n'a pas touché, et pourquoi.",
+             corrige rien. Voici ce que Homelabus a vu et n'a pas touché, et pourquoi.",
         );
         ui.add_space(mesures::ESPACE_SERRE);
 

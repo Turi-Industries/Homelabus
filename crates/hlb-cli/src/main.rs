@@ -172,7 +172,7 @@ enum Command {
     #[command(subcommand)]
     Node(NodeCmd),
 
-    /// État des services gérés par HomelabUS.
+    /// État des services gérés par Homelabus.
     Ps,
 
     /// Actions manuelles en attente, toutes apps confondues (§4.6).
@@ -199,7 +199,7 @@ enum Command {
     #[command(subcommand)]
     Snapshot(SnapshotCmd),
 
-    /// Mise à jour de HomelabUS lui-même (§7bis).
+    /// Mise à jour de Homelabus lui-même (§7bis).
     #[command(subcommand)]
     #[command(name = "self")]
     Selfy(SelfCmd),
@@ -330,7 +330,7 @@ enum NodeCmd {
         user: Option<String>,
         #[arg(long)]
         port: Option<u16>,
-        /// Clé SSH pour le PREMIER contact. Ensuite HomelabUS utilise la sienne.
+        /// Clé SSH pour le PREMIER contact. Ensuite Homelabus utilise la sienne.
         #[arg(long)]
         identity: Option<String>,
         /// `manager` ou `worker`. Par défaut : ce que le profil recommande.
@@ -513,7 +513,7 @@ enum SnapshotCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// Les instantanés créés par HomelabUS sur ce dataset.
+    /// Les instantanés créés par Homelabus sur ce dataset.
     List { dataset: String },
 }
 
@@ -599,7 +599,7 @@ enum UserCmd {
         #[arg(long)]
         profil: String,
     },
-    /// Le rôle d'une personne dans HomelabUS (§9ter).
+    /// Le rôle d'une personne dans Homelabus (§9ter).
     ///
     /// ⚠️ Distinct du PROFIL, qui porte les quotas. « Combien de boîtes as-tu droit »
     /// et « peux-tu détruire le cluster » sont deux questions différentes : les
@@ -700,7 +700,7 @@ enum AliasCmd {
     },
     /// Le script Sieve de tri, tel qu'il serait posé.
     ///
-    /// ⚠️ Affiche le bloc géré par HomelabUS. Les règles écrites à la main hors de ce
+    /// ⚠️ Affiche le bloc géré par Homelabus. Les règles écrites à la main hors de ce
     /// bloc ne sont jamais touchées.
     Sieve {
         nom: String,
@@ -746,7 +746,7 @@ enum MetricsCmd {
         /// Fichier où le NAS reçoit les battements.
         #[arg(long, default_value = "/var/lib/hlb/battement")]
         heartbeat_file: String,
-        /// Sujet ntfy du veilleur. DISTINCT de celui de HomelabUS.
+        /// Sujet ntfy du veilleur. DISTINCT de celui de Homelabus.
         #[arg(long)]
         ntfy: String,
     },
@@ -817,7 +817,7 @@ enum PkiCmd {
 
 #[derive(Subcommand)]
 enum AccessCmd {
-    /// Poser la clé de HomelabUS sur une machine.
+    /// Poser la clé de Homelabus sur une machine.
     Grant {
         host: String,
         #[arg(long, default_value = "root")]
@@ -830,7 +830,7 @@ enum AccessCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// 🔴 Retirer la clé de HomelabUS d'une machine. Les accès humains sont préservés.
+    /// 🔴 Retirer la clé de Homelabus d'une machine. Les accès humains sont préservés.
     Revoke {
         host: String,
         #[arg(long, default_value = "root")]
@@ -842,7 +842,7 @@ enum AccessCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// Ce que HomelabUS voit dans l'authorized_keys d'une machine.
+    /// Ce que Homelabus voit dans l'authorized_keys d'une machine.
     List {
         host: String,
         #[arg(long, default_value = "root")]
@@ -1548,7 +1548,7 @@ async fn provider_pour(
 /// Les destinations à servir, avec repli sur `--backup-repo`.
 ///
 /// ⚠️ Le repli existe pour ne pas casser une installation qui n'a pas encore déclaré de
-/// destination : sans lui, une mise à jour de HomelabUS arrêterait silencieusement
+/// destination : sans lui, une mise à jour de Homelabus arrêterait silencieusement
 /// toutes les sauvegardes — le pire moment pour découvrir un changement de format.
 async fn destinations_effectives(
     state: &State,
@@ -1810,7 +1810,7 @@ async fn gerer_alias(
 
             let Some(m) = mail else {
                 eprintln!("🔴 Stalwart non configuré : le script n'a PAS été posé.");
-                eprintln!("   Les règles existent dans HomelabUS et ne trient rien.");
+                eprintln!("   Les règles existent dans Homelabus et ne trient rien.");
                 return Ok(ExitCode::FAILURE);
             };
 
@@ -2068,7 +2068,7 @@ async fn snapshot_sqlite_volume(
     Ok(ok)
 }
 
-/// L'état de HomelabUS lui-même (lot 11.6).
+/// L'état de Homelabus lui-même (lot 11.6).
 ///
 /// ## 🔴 Sans ça, une restauration rend un système fonctionnel mais AMNÉSIQUE
 ///
@@ -2286,7 +2286,7 @@ fn encoder_url(s: &str) -> String {
     o
 }
 
-/// Nom du secret portant la clé privée de HomelabUS.
+/// Nom du secret portant la clé privée de Homelabus.
 const SECRET_SSH: &str = "homelabus-ssh-key";
 
 /// La clé SSH du cluster, créée au premier usage.
@@ -2313,7 +2313,7 @@ async fn cluster_ssh_key(
         .store_secret_if_absent(
             SECRET_SSH,
             &vault.encrypt(&json.to_string())?,
-            "clé SSH de HomelabUS pour piloter les nœuds",
+            "clé SSH de Homelabus pour piloter les nœuds",
         )
         .await?;
     eprintln!("✓ clé SSH du cluster générée (au coffre, jamais réaffichée)");
@@ -2346,7 +2346,7 @@ fn ecrire_cle_temporaire(
 ///
 /// 1. **Préchecks d'abord**, en lecture seule. Poser une clé sur une machine qui ne
 ///    pourra jamais accueillir de nœud laisse une trace à nettoyer pour rien.
-/// 2. **Clé ensuite** : à partir de là, HomelabUS a son propre accès et ne dépend
+/// 2. **Clé ensuite** : à partir de là, Homelabus a son propre accès et ne dépend
 ///    plus de la clé personnelle qui a servi au premier contact.
 /// 3. **Dépendances**, puis **join**, puis **tier**.
 ///
@@ -2434,7 +2434,7 @@ async fn node_add(
         return Ok(ExitCode::SUCCESS);
     }
 
-    // ── 2. La clé de HomelabUS ────────────────────────────────────────────────
+    // ── 2. La clé de Homelabus ────────────────────────────────────────────────
     let kp = cluster_ssh_key(&state, &vault).await?;
     let cle = access::ManagedKey::new(&kp.public, "hlb");
 
@@ -2468,7 +2468,7 @@ async fn node_add(
     );
 
     match notre.run(&["true".to_string()]).await {
-        Ok(o) if o.ok() => println!("✓ accès par la clé de HomelabUS vérifié"),
+        Ok(o) if o.ok() => println!("✓ accès par la clé de Homelabus vérifié"),
         _ => {
             eprintln!("🔴 La clé a été posée mais ne permet PAS de se connecter.");
             eprintln!("   Cause la plus fréquente : sshd ignore authorized_keys quand");
@@ -3177,7 +3177,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     if atteste {
                         println!(
                             "\n⚠️  Attestation : cette étape n'est pas vérifiable \
-                             automatiquement, HomelabUS te croit sur parole."
+                             automatiquement, Homelabus te croit sur parole."
                         );
                     }
                     Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS)
@@ -3417,7 +3417,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         let v = snap::parse_list(fs, &String::from_utf8_lossy(&out.stdout));
                         if v.is_empty() {
-                            println!("Aucun instantané HomelabUS sur {dataset} ({}).", fs.as_str());
+                            println!("Aucun instantané Homelabus sur {dataset} ({}).", fs.as_str());
                             println!("  hlb snapshot create {dataset} --apply");
                             return Ok(ExitCode::SUCCESS);
                         }
@@ -3512,7 +3512,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 match cmd {
                     SelfCmd::Status => {
-                        println!("HomelabUS {courante}  (protocole {})", su::PROTOCOL);
+                        println!("Homelabus {courante}  (protocole {})", su::PROTOCOL);
                         println!();
 
                         println!("Compatibilité du parc : à vérifier depuis le controller,");
@@ -4307,14 +4307,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 MetricsCmd::Deadman { heartbeat_file, ntfy } => {
-                    println!("{}", deadman::script_veilleur(heartbeat_file, ntfy, "HomelabUS"));
+                    println!("{}", deadman::script_veilleur(heartbeat_file, ntfy, "Homelabus"));
                     eprintln!("# ─────────────────────────────────────────────────────");
                     eprintln!("# 🔴 À poser sur le NAS, PAS sur le nœud du controller :");
                     eprintln!("#    un veilleur hébergé par ce qu'il surveille meurt");
                     eprintln!("#    avec lui et ne détecte rien.");
                     eprintln!("#");
                     eprintln!("# 🔴 Le sujet ntfy doit être DISTINCT de celui de");
-                    eprintln!("#    HomelabUS : si le controller est mort, c'est le");
+                    eprintln!("#    Homelabus : si le controller est mort, c'est le");
                     eprintln!("#    veilleur seul qui doit pouvoir parler.");
                     eprintln!("#");
                     eprintln!("# Battements manqués tolérés : 3 (soit {} s de silence).", deadman::SILENCE_MAX_S);
@@ -4645,7 +4645,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             return Ok(ExitCode::SUCCESS);
                         }
 
-                        let ca = pki::generate_ca("HomelabUS Cluster CA").await?;
+                        let ca = pki::generate_ca("Homelabus Cluster CA").await?;
                         let j = serde_json::json!({
                             "cert": ca.cert_pem, "key": ca.key_pem
                         });
@@ -4746,10 +4746,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         println!("{host} — {total} clé(s) dans authorized_keys");
                         if gerees.is_empty() {
-                            println!("  aucune gérée par HomelabUS");
+                            println!("  aucune gérée par Homelabus");
                         } else {
                             for c in &gerees {
-                                println!("  gérée par HomelabUS (cluster « {c} »)");
+                                println!("  gérée par Homelabus (cluster « {c} »)");
                             }
                         }
                         println!("  {} clé(s) humaine(s), auxquelles on ne touche jamais",
@@ -4767,7 +4767,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             return Ok(ExitCode::SUCCESS);
                         }
                         if !*apply {
-                            println!("Poserait la clé de HomelabUS sur {host}.");
+                            println!("Poserait la clé de Homelabus sur {host}.");
                             println!("  {} ajoutée, {} remplacée(s)", ch.added, ch.removed);
                             println!("  {} clé(s) existante(s) PRÉSERVÉE(s)", ch.kept);
                             println!("\n  Relance avec --apply.");
@@ -4786,14 +4786,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         let (apres, ch) = access::revoke(&avant, &cle);
 
                         if ch.is_noop() {
-                            println!("✓ aucune clé HomelabUS sur {host} — rien à retirer.");
+                            println!("✓ aucune clé Homelabus sur {host} — rien à retirer.");
                             return Ok(ExitCode::SUCCESS);
                         }
                         if !*apply {
-                            println!("Retirerait la clé de HomelabUS de {host}.");
+                            println!("Retirerait la clé de Homelabus de {host}.");
                             println!("  {} clé(s) humaine(s) PRÉSERVÉE(s)", ch.kept);
                             println!();
-                            println!("  🔴 Après ça, HomelabUS ne pourra plus piloter cette");
+                            println!("  🔴 Après ça, Homelabus ne pourra plus piloter cette");
                             println!("     machine : ni mise à jour, ni sauvegarde, ni");
                             println!("     réconciliation. Le nœud continuera de tourner.");
                             println!("\n  Relance avec --apply.");
@@ -6165,7 +6165,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let services = o.list().await?;
 
                 if services.is_empty() {
-                    println!("Aucun service géré par HomelabUS.");
+                    println!("Aucun service géré par Homelabus.");
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 }
 

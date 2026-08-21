@@ -438,7 +438,7 @@ pub mod litestream {
     /// jamais sur un fichier figé.
     pub fn render(databases: &[std::path::PathBuf], replica: &Replica) -> String {
         let mut s = String::from(
-            "# Généré par HomelabUS (§8.1) — ne pas éditer à la main.\n\
+            "# Généré par Homelabus (§8.1) — ne pas éditer à la main.\n\
              #\n\
              # ⚠️ Litestream ne REMPLACE pas les instantanés restic : une table\n\
              # effacée par erreur est répliquée en quelques secondes. C'est\n\

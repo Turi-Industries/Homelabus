@@ -145,7 +145,7 @@ fn acces_de_secours(ui: &mut egui::Ui, secours: Option<&Vec<GardeFou>>) -> Optio
     ui.add_space(mesures::ESPACE_SERRE);
     c::legende(
         ui,
-        "HomelabUS ne peut vérifier lui-même que le dernier point. Les trois autres \
+        "Homelabus ne peut vérifier lui-même que le dernier point. Les trois autres \
          sont des déclarations : il en garde la date, et redemande quand elle vieillit.",
     );
     ui.add_space(mesures::ESPACE_SERRE);
@@ -176,7 +176,7 @@ fn acces_de_secours(ui: &mut egui::Ui, secours: Option<&Vec<GardeFou>>) -> Optio
                 // important sans qu'aucun exercice n'ait eu lieu.
                 c::legende(
                     ui,
-                    "Vérifié par HomelabUS : la trace d'un exercice réussi fait foi, \
+                    "Vérifié par Homelabus : la trace d'un exercice réussi fait foi, \
                      et rien d'autre.",
                 );
             } else if ui.button("J'ai vérifié ce point").clicked() {

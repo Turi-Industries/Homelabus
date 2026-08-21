@@ -13,7 +13,7 @@
 //! ## 🔴 Une identité PocketID ne suffit PAS à entrer
 //!
 //! PocketID dit *qui* est la personne. Il ne dit pas qu'elle a le droit d'être ici.
-//! Sans compte HomelabUS correspondant, la connexion est **refusée** — et non pas
+//! Sans compte Homelabus correspondant, la connexion est **refusée** — et non pas
 //! honorée en créant un compte à la volée.
 //!
 //! C'est délibéré et cohérent avec l'exposition privée par défaut du projet : PocketID
@@ -208,13 +208,13 @@ pub async fn retour(
                 "connexion",
                 &identite.sub,
                 "refused",
-                Some("aucun compte HomelabUS pour cette identité PocketID"),
+                Some("aucun compte Homelabus pour cette identité PocketID"),
             )
             .await;
         return (
             StatusCode::FORBIDDEN,
             format!(
-                "« {} » est bien connu de PocketID, mais n'a pas de compte HomelabUS.\n\
+                "« {} » est bien connu de PocketID, mais n'a pas de compte Homelabus.\n\
                  \n\
                  C'est voulu : l'annuaire de PocketID sert aussi les autres applications, \
                  et y figurer ne donne pas accès au controller.\n\

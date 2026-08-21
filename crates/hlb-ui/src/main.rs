@@ -29,7 +29,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "hlb-ui", version, about = "Tableau de bord HomelabUS")]
+#[command(name = "hlb-ui", version, about = "Tableau de bord Homelabus")]
 struct Cli {
     /// URL de l'API du controller.
     #[arg(long, default_value = "http://localhost:8420", env = "HLB_CONTROLLER_URL")]
@@ -95,7 +95,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([320.0, 300.0])
             // ⚠️ Le titre définitif vient de la marque, servie par le controller.
             // Celui-ci n'est visible que le temps du premier sondage.
-            .with_title("HomelabUS"),
+            .with_title("Homelabus"),
         ..Default::default()
     };
 
@@ -108,7 +108,7 @@ fn main() -> eframe::Result<()> {
     );
 
     eframe::run_native(
-        "HomelabUS",
+        "Homelabus",
         options,
         Box::new(move |_cc| {
             let app = shell::Application::new(partage, poller, route);

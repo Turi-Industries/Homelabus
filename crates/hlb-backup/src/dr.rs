@@ -261,7 +261,7 @@ pub fn plan_promotion(
 /// Les réglages à écrire, prêts à poser.
 pub fn render_settings(p: Profile) -> Result<String> {
     let mut s = String::from(
-        "# Généré par HomelabUS (§2bis.5) — profil de ressources PostgreSQL.\n",
+        "# Généré par Homelabus (§2bis.5) — profil de ressources PostgreSQL.\n",
     );
     if p == Profile::Minimal {
         s.push_str(
