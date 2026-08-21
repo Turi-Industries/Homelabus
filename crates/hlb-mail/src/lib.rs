@@ -1,69 +1,67 @@
-//! Client de l'API d'administration Stalwart (§5.9).
+//! Client for Stalwart's administration API.
 //!
-//! C'est ce qui rend une boîte mail aussi automatique qu'une base de données :
-//! installer une app crée son compte, son mot de passe et ses aliases sans qu'on
-//! ouvre jamais l'interface de Stalwart.
+//! This is what makes a mailbox as automatic as a database: installing an app creates
+//! its account, its password and its aliases without ever opening Stalwart's own
+//! interface.
 //!
-//! ## 🔴 Ce n'est pas une API REST
+//! ## 🔴 This is not a REST API
 //!
-//! Contrairement à ce qu'on attend d'un serveur mail, Stalwart 0.16 n'expose **aucun**
-//! `/api/principal`. Sa surface `/api/` se limite à `auth`, `account`, `schema`,
-//! `token`, `live`, `telemetry` et `diagnose` ; toute la gestion des comptes passe par
-//! **JMAP**, en `POST /jmap/`, avec la capacité propriétaire `urn:stalwart:jmap`.
+//! Contrary to what one expects from a mail server, Stalwart 0.16 exposes **no**
+//! `/api/principal`. Its `/api/` surface is limited to `auth`, `account`, `schema`,
+//! `token`, `live`, `telemetry` and `diagnose`; all account management goes through
+//! **JMAP**, at `POST /jmap/`, with the vendor capability `urn:stalwart:jmap`.
 //!
-//! Les méthodes suivent la forme `x:Objet/verbe` :
+//! Methods follow the shape `x:Object/verb`:
 //!
-//! | Opération | Appel JMAP |
+//! | Operation | JMAP call |
 //! |---|---|
-//! | Trouver un domaine | `x:Domain/query` |
-//! | Chercher un compte | `x:Account/query` |
-//! | Créer / modifier | `x:Account/set` |
+//! | Find a domain | `x:Domain/query` |
+//! | Look up an account | `x:Account/query` |
+//! | Create or modify | `x:Account/set` |
 //!
-//! Cette forme est vérifiée contre le schéma que Stalwart publie lui-même
-//! (`resources/schema/schema.json.gz`, servi par le serveur sur `/api/schema/{hash}`)
-//! et contre `crates/registry/src/schema/structs.rs` du dépôt amont — pas déduite
-//! d'un billet de blog.
+//! This shape is checked against the schema Stalwart itself publishes
+//! (`resources/schema/schema.json.gz`, served at `/api/schema/{hash}`) and against
+//! `crates/registry/src/schema/structs.rs` upstream - not inferred from a blog post.
 //!
-//! ## 🔴 Un filtre = UNE propriété
+//! ## 🔴 One filter condition carries ONE property
 //!
-//! La désérialisation d'un filtre de registre fait `*self = RegistryFilter::Property
-//! { … }` **à chaque clé rencontrée**. Une condition portant deux propriétés n'en
-//! garde donc qu'une — la dernière — sans le moindre avertissement.
+//! Deserialising a registry filter runs `*self = RegistryFilter::Property { ... }` **on
+//! every key it meets**. A condition carrying two properties therefore keeps only one -
+//! the last - without the slightest warning.
 //!
-//! Chercher `{"name": "gitea", "domainId": "d1"}` revient à chercher `{"domainId":
-//! "d1"}` : on retrouverait n'importe quel compte du domaine, ou un `gitea` d'un
-//! **autre** domaine selon l'ordre des clés. Pour un provisionnement idempotent, c'est
-//! l'erreur qui fait qu'une app reçoit les identifiants d'une boîte qui n'est pas la
-//! sienne.
+//! Searching for `{"name": "gitea", "domainId": "d1"}` amounts to searching for
+//! `{"domainId": "d1"}`: you would match any account in the domain, or a `gitea` from
+//! **another** domain depending on key order. For idempotent provisioning, this is the
+//! mistake that hands an app the credentials of a mailbox that is not its own.
 //!
-//! La forme correcte est le `AND` de JMAP, une propriété par condition :
+//! The correct shape is JMAP's `AND`, one property per condition:
 //!
 //! ```json
 //! { "filter": { "operator": "AND", "conditions": [
 //!     { "name": "gitea" }, { "domainId": "d1" } ] } }
 //! ```
 //!
-//! Seul `AND` est accepté : `OR` et `NOT` sont rejetés par le serveur.
+//! Only `AND` is accepted: `OR` and `NOT` are rejected by the server.
 //!
-//! ## Sur `accountId`
+//! ## About `accountId`
 //!
-//! Les méthodes JMAP standard exigent un `accountId`. Ici, **non** : `Account` et
-//! `Domain` portent les drapeaux `OBJ_FILTER_TENANT | OBJ_SEQ_ID`, pas
-//! `OBJ_FILTER_ACCOUNT`. Le serveur ne lit `accountId` que pour les objets marqués de
-//! ce dernier (`ArchivedItem`, `MaskedEmail`, `PublicKey`, `SpamTrainingSample`), et
-//! `SetResponse::from_request` traite son absence sans erreur. On l'omet donc
-//! délibérément — ce n'est pas un oubli.
+//! Standard JMAP methods require an `accountId`. Here they do **not**: `Account` and
+//! `Domain` carry the flags `OBJ_FILTER_TENANT | OBJ_SEQ_ID`, not
+//! `OBJ_FILTER_ACCOUNT`. The server only reads `accountId` for objects marked with the
+//! latter (`ArchivedItem`, `MaskedEmail`, `PublicKey`, `SpamTrainingSample`), and
+//! `SetResponse::from_request` handles its absence without error. Omitting it is
+//! deliberate, not an oversight.
 //!
-//! ## Les trois autres pièges de cette API
+//! ## The three other traps in this API
 //!
-//! 1. **`emailAddress` est calculé par le serveur.** On pose `name` (la partie locale)
-//!    et `domainId` ; envoyer `emailAddress` ne produit aucune erreur et n'a aucun
-//!    effet. On croirait avoir créé `gitea@example.fr` en ayant créé autre chose.
-//! 2. **`domainId` est une référence d'objet, pas une chaîne.** Le domaine doit exister
-//!    dans Stalwart *avant* le compte, et il faut résoudre son identifiant.
-//! 3. **JMAP renvoie HTTP 200 même quand la création échoue.** L'échec vit dans
-//!    `notCreated`. Un client qui ne regarde que le code HTTP rapporte un succès
-//!    imaginaire — c'est le piège central de ce module.
+//! 1. **`emailAddress` is computed by the server.** You set `name` (the local part)
+//!    and `domainId`; sending `emailAddress` raises no error and has no effect. You
+//!    would believe you created `gitea@example.org` having created something else.
+//! 2. **`domainId` is an object reference, not a string.** The domain must exist in
+//!    Stalwart *before* the account, and its id has to be resolved.
+//! 3. **JMAP returns HTTP 200 even when creation fails.** The failure lives in
+//!    `notCreated`. A client that only looks at the HTTP code reports an imaginary
+//!    success - the central trap of this module.
 
 use serde::{Deserialize, Serialize};
 
@@ -76,33 +74,33 @@ pub enum Error {
         context: String,
     },
 
-    #[error("Stalwart a répondu {status} — {detail}")]
+    #[error("Stalwart answered {status} - {detail}")]
     Api { status: u16, detail: String },
 
-    #[error("identifiants refusés par Stalwart")]
+    #[error("credentials refused by Stalwart")]
     Unauthorized,
 
-    #[error("réponse inattendue de Stalwart : {0}")]
+    #[error("unexpected response from Stalwart: {0}")]
     Unexpected(String),
 
-    /// 🔴 L'échec que le code HTTP ne dit pas.
-    #[error("Stalwart a refusé de créer {object} : {reason}")]
+    /// 🔴 The failure the HTTP code does not report.
+    #[error("Stalwart refused to create {object}: {reason}")]
     NotCreated { object: String, reason: String },
 
     #[error(
-        "le domaine « {0} » n'existe pas dans Stalwart — un compte ne peut pas être \
-         créé sur un domaine absent ; crée-le d'abord"
+        "domain \"{0}\" does not exist in Stalwart - an account cannot be created \
+         on a missing domain; create it first"
     )]
     UnknownDomain(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// La capacité propriétaire, sans laquelle Stalwart rejette les méthodes `x:`.
+/// The vendor capability, without which Stalwart rejects the `x:` methods.
 const CAPABILITY: &str = "urn:stalwart:jmap";
 const CORE: &str = "urn:ietf:params:jmap:core";
 
-/// Une requête JMAP.
+/// A JMAP request.
 #[derive(Debug, Serialize)]
 struct JmapRequest {
     using: Vec<&'static str>,
@@ -126,22 +124,22 @@ struct JmapResponse {
 }
 
 impl JmapResponse {
-    /// Les arguments de la première réponse.
+    /// The arguments of the first response.
     ///
-    /// Une réponse `error` est renvoyée en tant que telle : JMAP encode les erreurs
-    /// de méthode dans la liste des réponses, pas dans le code HTTP.
+    /// An `error` response is returned as such: JMAP encodes method errors in the
+    /// response list, not in the HTTP code.
     fn first(self) -> Result<serde_json::Value> {
         let r = self
             .method_responses
             .into_iter()
             .next()
-            .ok_or_else(|| Error::Unexpected("aucune réponse de méthode".into()))?;
+            .ok_or_else(|| Error::Unexpected("no method response".into()))?;
 
         let nom = r.get(0).and_then(|v| v.as_str()).unwrap_or("?").to_string();
         let args = r
             .get(1)
             .cloned()
-            .ok_or_else(|| Error::Unexpected("réponse sans arguments".into()))?;
+            .ok_or_else(|| Error::Unexpected("response carried no arguments".into()))?;
 
         if nom == "error" {
             let t = args
@@ -157,7 +155,7 @@ impl JmapResponse {
     }
 }
 
-/// Un compte tel que Stalwart le décrit.
+/// An account as Stalwart describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailAccount {
     pub id: String,
@@ -166,16 +164,16 @@ pub struct MailAccount {
     pub domain_id: String,
 }
 
-/// Ce qu'on obtient après provisionnement.
+/// What provisioning returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provisioned {
     pub account_id: String,
     pub address: String,
-    /// `false` si le compte existait déjà : son mot de passe n'a **pas** été changé.
+    /// `false` when the account already existed: its password was **not** changed.
     pub created: bool,
 }
 
-/// Comment on s'authentifie auprès de Stalwart.
+/// How we authenticate to Stalwart.
 #[derive(Debug, Clone)]
 pub enum Auth {
     /// Compte d'administration : `Authorization: Basic`.
@@ -234,25 +232,25 @@ impl Stalwart {
         let body: JmapResponse = resp
             .json()
             .await
-            .map_err(|e| Error::Unexpected(format!("réponse illisible : {e}")))?;
+            .map_err(|e| Error::Unexpected(format!("unreadable response: {e}")))?;
         body.first()
     }
 
-    /// Vérifie que l'API répond et que les identifiants passent.
+    /// Checks the API answers and the credentials are accepted.
     pub async fn ping(&self) -> Result<()> {
         self.call("x:Domain/query", serde_json::json!({ "limit": 1 }))
             .await
             .map(|_| ())
     }
 
-    /// L'identifiant interne d'un domaine.
+    /// A domain's internal id.
     ///
-    /// 🔴 Indispensable : `domainId` est une référence d'objet, pas le nom du domaine.
-    /// Un domaine absent de Stalwart ne peut pas accueillir de compte, et il vaut
-    /// mieux le dire ici que laisser la création échouer de façon obscure.
+    /// 🔴 Required: `domainId` is an object reference, not the domain's name. A domain
+    /// missing from Stalwart cannot host an account, and it is better said here than
+    /// left to fail obscurely at creation time.
     pub async fn domain_id(&self, domain: &str) -> Result<String> {
-        // Une seule propriété : la forme plate convient ici, contrairement à la
-        // recherche de compte qui en croise deux.
+        // A single property: the flat shape is fine here, unlike the account lookup
+        // which crosses two.
         let args = self
             .call(
                 "x:Domain/query",
@@ -266,11 +264,11 @@ impl Stalwart {
             .ok_or_else(|| Error::UnknownDomain(domain.to_string()))
     }
 
-    /// Cherche un compte par sa partie locale, dans un domaine donné.
+    /// Looks up an account by its local part, within a given domain.
     ///
-    /// 🔴 Les deux critères sont indispensables **et** doivent être des conditions
-    /// séparées (cf. l'en-tête du module). Sur `name` seul, deux domaines hébergeant
-    /// chacun un `contact@` se confondraient.
+    /// 🔴 Both criteria are required **and** must be separate conditions (see the
+    /// module header). On `name` alone, two domains each hosting a `contact@` would be
+    /// confused for one another.
     pub async fn find_account(&self, local: &str, domain_id: &str) -> Result<Option<String>> {
         let args = self
             .call(
@@ -284,10 +282,10 @@ impl Stalwart {
         Ok(ids(&args).into_iter().next())
     }
 
-    /// Crée un compte utilisateur.
+    /// Creates a user account.
     ///
-    /// Le corps suit la forme du schéma amont : discriminant `@type`, partie locale
-    /// dans `name`, et mot de passe dans une entrée `credentials`.
+    /// The body follows the upstream schema: `@type` discriminator, local part in
+    /// `name`, and the password in a `credentials` entry.
     pub async fn create_account(
         &self,
         local: &str,
@@ -304,7 +302,7 @@ impl Stalwart {
             )
             .await?;
 
-        // 🔴 Le piège central : HTTP 200 ne veut PAS dire créé.
+        // 🔴 The central trap: HTTP 200 does NOT mean created.
         if let Some(err) = args.get("notCreated").and_then(|v| v.get("nouveau")) {
             return Err(Error::NotCreated {
                 object: format!("le compte « {local} »"),
@@ -317,29 +315,27 @@ impl Stalwart {
             .and_then(|v| v.get("nouveau"))
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                Error::Unexpected(format!("création sans identifiant renvoyé : {args}"))
-            })?
+            .ok_or_else(|| Error::Unexpected(format!("creation returned no id: {args}")))?
             .to_string();
 
-        tracing::info!(compte = local, id = %id, "compte mail créé");
+        tracing::info!(account = local, id = %id, "mail account created");
         Ok(id)
     }
 
-    /// Téléverse un contenu et rend son `blobId`.
+    /// Uploads content and returns its `blobId`.
     ///
-    /// 🔴 Le contenu d'un script Sieve ne voyage PAS dans l'appel JMAP : `SieveScript`
-    /// ne porte qu'un `blobId`. Il faut donc téléverser d'abord, référencer ensuite.
-    /// Envoyer le script directement dans `SieveScript/set` échouerait sur une
-    /// propriété inconnue — et JMAP ignore silencieusement ce qu'il ne connaît pas,
-    /// donc le script serait « créé » et vide.
-    pub async fn upload_blob(&self, account_id: &str, contenu: &str) -> Result<String> {
+    /// 🔴 A Sieve script's content does NOT travel in the JMAP call: `SieveScript`
+    /// carries only a `blobId`. So upload first, reference second. Sending the script
+    /// straight into `SieveScript/set` would fail on an unknown property - and JMAP
+    /// silently ignores what it does not know, so the script would be "created" and
+    /// empty.
+    pub async fn upload_blob(&self, account_id: &str, content: &str) -> Result<String> {
         let url = format!("{}/jmap/upload/{account_id}/", self.base_url);
         let req = self
             .http
             .post(&url)
             .header("Content-Type", "application/sieve")
-            .body(contenu.to_string());
+            .body(content.to_string());
 
         let req = match &self.auth {
             Auth::Basic { user, password } => req.basic_auth(user, Some(password)),
@@ -348,7 +344,7 @@ impl Stalwart {
 
         let resp = req.send().await.map_err(|source| Error::Http {
             source,
-            context: "téléversement du script".into(),
+            context: "script upload".into(),
         })?;
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -363,15 +359,15 @@ impl Stalwart {
         let v: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| Error::Unexpected(format!("réponse de téléversement illisible : {e}")))?;
+            .map_err(|e| Error::Unexpected(format!("unreadable upload response: {e}")))?;
 
         v.get("blobId")
             .and_then(|b| b.as_str())
             .map(str::to_string)
-            .ok_or_else(|| Error::Unexpected(format!("aucun blobId dans la réponse : {v}")))
+            .ok_or_else(|| Error::Unexpected(format!("no blobId in the response: {v}")))
     }
 
-    /// Récupère le contenu d'un blob.
+    /// Fetches a blob's content.
     pub async fn download_blob(&self, account_id: &str, blob_id: &str) -> Result<String> {
         let url = format!(
             "{}/jmap/download/{account_id}/{blob_id}/script?accept=application/sieve",
@@ -385,20 +381,20 @@ impl Stalwart {
 
         let resp = req.send().await.map_err(|source| Error::Http {
             source,
-            context: "téléchargement du script".into(),
+            context: "script download".into(),
         })?;
 
         if !resp.status().is_success() {
-            // ⚠️ Un script absent n'est pas une erreur : c'est un compte qui n'en a
-            // pas encore. Rendre une chaîne vide laisse la fusion créer le premier.
+            // ⚠️ A missing script is not an error: it is an account that has none
+            // yet. Returning an empty string lets the merge create the first one.
             return Ok(String::new());
         }
         resp.text()
             .await
-            .map_err(|e| Error::Unexpected(format!("script illisible : {e}")))
+            .map_err(|e| Error::Unexpected(format!("unreadable script: {e}")))
     }
 
-    /// Le script Sieve actif d'un compte : `(id, blobId)`.
+    /// An account's active Sieve script: `(id, blobId)`.
     pub async fn active_sieve_script(&self, account_id: &str) -> Result<Option<(String, String)>> {
         let args = self
             .call(
@@ -416,8 +412,8 @@ impl Stalwart {
             .and_then(|l| {
                 l.iter()
                     .find(|s| s.get("isActive").and_then(|a| a.as_bool()) == Some(true))
-                    // À défaut d'actif, le premier : mieux vaut compléter un script
-                    // inactif que d'en créer un second qui ferait doublon.
+                    // Failing an active one, the first: better to extend an inactive
+                    // script than to create a second that would duplicate it.
                     .or_else(|| l.first())
             })
             .and_then(|s| {
@@ -428,41 +424,40 @@ impl Stalwart {
             }))
     }
 
-    /// Pose le script de tri, en préservant ce que l'utilisateur a écrit.
+    /// Installs the sorting script, preserving what the user wrote.
     ///
-    /// 🔴 Lecture-modification-écriture, comme pour les aliases. `regles` ne remplace
-    /// que le bloc délimité : les règles écrites à la main vivent hors des marqueurs et
-    /// sont recopiées telles quelles. Sans ça, une simple création d'alias effacerait
-    /// des heures de réglages.
+    /// 🔴 Read-modify-write, as for aliases. Only the delimited block is replaced:
+    /// hand-written rules live outside the markers and are copied across untouched.
+    /// Without that, a simple alias creation would erase hours of tuning.
     ///
-    /// Renvoie le script final, pour que l'appelant puisse le montrer.
+    /// Returns the final script so the caller can show it.
     pub async fn apply_sieve(
         &self,
         address: &str,
-        bloc_genere: &dyn Fn(&str) -> String,
+        render_block: &dyn Fn(&str) -> String,
     ) -> Result<String> {
         let (local, domain) = address
             .split_once('@')
-            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+            .ok_or_else(|| Error::Unexpected(format!("address with no domain: {address}")))?;
         let domain_id = self.domain_id(domain).await?;
         let account_id = self
             .find_account(local, &domain_id)
             .await?
-            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+            .ok_or_else(|| Error::Unexpected(format!("account \"{address}\" not found")))?;
 
-        let existant = match self.active_sieve_script(&account_id).await? {
+        let existing = match self.active_sieve_script(&account_id).await? {
             Some((_, blob)) => self.download_blob(&account_id, &blob).await?,
             None => String::new(),
         };
 
-        let final_ = bloc_genere(&existant);
+        let final_ = render_block(&existing);
         let blob = self.upload_blob(&account_id, &final_).await?;
 
-        let precedent = self.active_sieve_script(&account_id).await?;
-        let args = match &precedent {
-            // Mise à jour du script existant : on garde son identifiant, donc son
-            // état actif. En créer un second laisserait l'ancien actif, et le
-            // nouveau ne s'appliquerait jamais.
+        let previous = self.active_sieve_script(&account_id).await?;
+        let args = match &previous {
+            // Updating the existing script keeps its id, and therefore its active
+            // state. Creating a second one would leave the old one active, and the new
+            // one would never apply.
             Some((id, _)) => {
                 self.call(
                     "SieveScript/set",
@@ -479,9 +474,9 @@ impl Stalwart {
                     serde_json::json!({
                         "accountId": account_id,
                         "create": { "hlb": { "name": "homelabus", "blobId": blob } },
-                        // 🔴 Sans activation, le script existe et ne trie RIEN. La
-                        // panne est totalement silencieuse : les règles sont là,
-                        // visibles dans Roundcube, et sans effet.
+                        // 🔴 Without activation the script exists and sorts NOTHING.
+                        // The failure is completely silent: the rules are there,
+                        // visible in Roundcube, and have no effect.
                         "onSuccessActivateScript": "#hlb"
                     }),
                 )
@@ -489,28 +484,28 @@ impl Stalwart {
             }
         };
 
-        // 🔴 HTTP 200 ne veut pas dire posé. L'échec vit dans notCreated/notUpdated.
-        for clef in ["notCreated", "notUpdated"] {
-            if let Some(obj) = args.get(clef).and_then(|v| v.as_object()) {
+        // 🔴 HTTP 200 does not mean installed. The failure lives in notCreated/notUpdated.
+        for key in ["notCreated", "notUpdated"] {
+            if let Some(obj) = args.get(key).and_then(|v| v.as_object()) {
                 if let Some((_, err)) = obj.iter().next() {
                     return Err(Error::NotCreated {
-                        object: format!("le script Sieve de « {address} »"),
+                        object: format!("the Sieve script of \"{address}\""),
                         reason: describe_set_error(err),
                     });
                 }
             }
         }
 
-        tracing::info!(compte = %address, octets = final_.len(), "script Sieve posé");
+        tracing::info!(account = %address, bytes = final_.len(), "Sieve script installed");
         Ok(final_)
     }
 
-    /// Les aliases actuellement posés sur un compte.
+    /// The aliases currently set on an account.
     ///
-    /// ⚠️ Nécessaire avant toute modification : JMAP `update` **remplace** la propriété
-    /// entière. Écrire un seul alias effacerait tous les autres — et l'utilisateur
-    /// perdrait d'un coup toutes les adresses qu'il avait données à des tiers, sans
-    /// qu'aucune erreur ne soit levée.
+    /// ⚠️ Required before any modification: JMAP `update` **replaces** the whole
+    /// property. Writing a single alias would erase all the others - and the user
+    /// would lose in one go every address they had handed to third parties, without a
+    /// single error being raised.
     pub async fn aliases_of(&self, account_id: &str) -> Result<Vec<String>> {
         let args = self
             .call(
@@ -536,20 +531,20 @@ impl Stalwart {
             .unwrap_or_default())
     }
 
-    /// Remplace la liste d'aliases d'un compte.
+    /// Replaces an account's alias list.
     ///
-    /// 🔴 **Lecture-modification-écriture.** JMAP n'a pas d'opération « ajouter un
-    /// alias » : `update` écrase la propriété. On lit donc l'existant, on modifie, on
-    /// réécrit — et deux modifications simultanées feraient perdre la première. Sur un
-    /// homelab piloté par une seule commande à la fois, c'est acceptable ; le noter
-    /// évite de le redécouvrir le jour où le controller le fera en parallèle.
+    /// 🔴 **Read-modify-write.** JMAP has no "add an alias" operation: `update`
+    /// overwrites the property. So we read the existing list, modify it and write it
+    /// back - and two simultaneous modifications would lose the first. On a homelab
+    /// driven by one command at a time that is acceptable; noting it avoids
+    /// rediscovering it the day the controller does this in parallel.
     async fn set_aliases(
         &self,
         account_id: &str,
         domain_id: &str,
         aliases: &[String],
     ) -> Result<()> {
-        let liste: Vec<serde_json::Value> = aliases
+        let list: Vec<serde_json::Value> = aliases
             .iter()
             .filter_map(|a| {
                 let local = a.split('@').next()?;
@@ -567,80 +562,79 @@ impl Stalwart {
             .call(
                 "x:Account/set",
                 serde_json::json!({
-                    "update": { account_id: { "aliases": liste } }
+                    "update": { account_id: { "aliases": list } }
                 }),
             )
             .await?;
 
-        // 🔴 Comme pour la création : HTTP 200 ne veut pas dire modifié. L'échec vit
-        // dans `notUpdated`, et le manquer ferait croire l'alias posé alors qu'aucun
-        // courrier n'arriverait jamais.
+        // 🔴 As with creation: HTTP 200 does not mean modified. The failure lives in
+        // `notUpdated`, and missing it would make the alias look installed while no
+        // mail would ever arrive.
         if let Some(err) = args.get("notUpdated").and_then(|v| v.get(account_id)) {
             return Err(Error::NotCreated {
-                object: format!("les aliases du compte « {account_id} »"),
+                object: format!("the aliases of account \"{account_id}\""),
                 reason: describe_set_error(err),
             });
         }
         Ok(())
     }
 
-    /// Ajoute un alias à un compte existant, sans toucher aux autres.
+    /// Adds an alias to an existing account without touching the others.
     ///
-    /// Renvoie `false` si l'alias y était déjà — l'opération est idempotente, ce qui
-    /// permet de relancer une pose interrompue.
+    /// Returns `false` when the alias was already there - the operation is idempotent,
+    /// which allows an interrupted run to be restarted.
     pub async fn add_alias(&self, address: &str, alias_local: &str) -> Result<bool> {
         let (local, domain) = address
             .split_once('@')
-            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+            .ok_or_else(|| Error::Unexpected(format!("address with no domain: {address}")))?;
         let domain_id = self.domain_id(domain).await?;
         let account_id = self
             .find_account(local, &domain_id)
             .await?
-            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+            .ok_or_else(|| Error::Unexpected(format!("account \"{address}\" not found")))?;
 
-        let mut actuels = self.aliases_of(&account_id).await?;
-        if actuels.iter().any(|a| a == alias_local) {
+        let mut current = self.aliases_of(&account_id).await?;
+        if current.iter().any(|a| a == alias_local) {
             return Ok(false);
         }
-        actuels.push(alias_local.to_string());
-        self.set_aliases(&account_id, &domain_id, &actuels).await?;
+        current.push(alias_local.to_string());
+        self.set_aliases(&account_id, &domain_id, &current).await?;
 
-        tracing::info!(compte = %address, alias = alias_local, "alias posé");
+        tracing::info!(account = %address, alias = alias_local, "alias installed");
         Ok(true)
     }
 
-    /// Retire un alias d'un compte, sans toucher aux autres.
+    /// Removes an alias from an account without touching the others.
     ///
-    /// Renvoie `false` s'il n'y était pas. 🔴 C'est ce qui rend l'expiration RÉELLE :
-    /// sans cet appel, un alias « temporaire » reste vivant pour toujours, Stalwart
-    /// n'ayant aucune notion de date.
+    /// Returns `false` when it was not there. 🔴 This is what makes expiry REAL:
+    /// without this call a "temporary" alias stays alive forever, Stalwart having no
+    /// notion of a date.
     pub async fn remove_alias(&self, address: &str, alias_local: &str) -> Result<bool> {
         let (local, domain) = address
             .split_once('@')
-            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+            .ok_or_else(|| Error::Unexpected(format!("address with no domain: {address}")))?;
         let domain_id = self.domain_id(domain).await?;
         let account_id = self
             .find_account(local, &domain_id)
             .await?
-            .ok_or_else(|| Error::Unexpected(format!("compte « {address} » introuvable")))?;
+            .ok_or_else(|| Error::Unexpected(format!("account \"{address}\" not found")))?;
 
-        let actuels = self.aliases_of(&account_id).await?;
-        if !actuels.iter().any(|a| a == alias_local) {
+        let current = self.aliases_of(&account_id).await?;
+        if !current.iter().any(|a| a == alias_local) {
             return Ok(false);
         }
-        let restants: Vec<String> = actuels.into_iter().filter(|a| a != alias_local).collect();
+        let restants: Vec<String> = current.into_iter().filter(|a| a != alias_local).collect();
         self.set_aliases(&account_id, &domain_id, &restants).await?;
 
-        tracing::info!(compte = %address, alias = alias_local, "alias retiré");
+        tracing::info!(account = %address, alias = alias_local, "alias removed");
         Ok(true)
     }
 
-    /// Provisionnement idempotent d'une adresse complète.
+    /// Idempotent provisioning of a complete address.
     ///
-    /// 🔴 **Ne change jamais le mot de passe d'un compte existant.** Le remplacer
-    /// couperait l'accès IMAP/SMTP de l'app qui tourne déjà avec l'ancien — pour une
-    /// simple relance de plan censée ne rien changer. C'est la même règle que pour les
-    /// secrets OIDC (§5.2).
+    /// 🔴 **Never changes the password of an existing account.** Replacing it would cut
+    /// the IMAP/SMTP access of the app already running with the old one - for a plain
+    /// plan rerun that was supposed to change nothing. Same rule as for OIDC secrets.
     pub async fn ensure_account(
         &self,
         address: &str,
@@ -649,12 +643,12 @@ impl Stalwart {
     ) -> Result<Provisioned> {
         let (local, domain) = address
             .split_once('@')
-            .ok_or_else(|| Error::Unexpected(format!("adresse sans domaine : {address}")))?;
+            .ok_or_else(|| Error::Unexpected(format!("address with no domain: {address}")))?;
 
         let domain_id = self.domain_id(domain).await?;
 
         if let Some(id) = self.find_account(local, &domain_id).await? {
-            tracing::debug!(compte = local, "compte mail déjà présent, conservé");
+            tracing::debug!(account = local, "mail account already present, kept");
             return Ok(Provisioned {
                 account_id: id,
                 address: address.to_string(),
@@ -674,10 +668,10 @@ impl Stalwart {
     }
 }
 
-/// Le corps d'une création de compte.
+/// The body of an account creation.
 ///
-/// Extrait pour être testable sans réseau : c'est la partie où une faute de frappe
-/// serait silencieuse, JMAP ignorant les propriétés qu'il ne connaît pas.
+/// Extracted so it is testable without a network: this is the part where a typo would
+/// be silent, JMAP ignoring properties it does not know.
 fn account_body(
     local: &str,
     domain_id: &str,
@@ -685,10 +679,10 @@ fn account_body(
     aliases: &[String],
 ) -> serde_json::Value {
     serde_json::json!({
-        // Discriminant du schéma amont : `#[serde(tag = "@type")] enum Account`.
+        // Upstream schema discriminator: `#[serde(tag = "@type")] enum Account`.
         "@type": "User",
-        // ⚠️ La partie locale SEULE. `emailAddress` est calculé par le serveur à
-        // partir de `name` et `domainId` ; l'envoyer n'a aucun effet.
+        // ⚠️ The local part ONLY. `emailAddress` is computed by the server from
+        // `name` and `domainId`; sending it has no effect.
         "name": local,
         "domainId": domain_id,
         "credentials": [{
@@ -698,9 +692,9 @@ fn account_body(
         "aliases": aliases
             .iter()
             .filter_map(|a| {
-                // Un alias porte sa propre partie locale et son domaine. On n'accepte
-                // que des aliases sur le même domaine : ailleurs, il faudrait résoudre
-                // un second `domainId`, et deviner lequel serait faux.
+                // An alias carries its own local part and domain. Only aliases on the
+                // same domain are accepted: elsewhere a second `domainId` would have to
+                // be resolved, and guessing which one would be wrong.
                 let local = a.split('@').next()?;
                 (!local.is_empty()).then(|| {
                     serde_json::json!({
@@ -711,22 +705,22 @@ fn account_body(
                 })
             })
             .collect::<Vec<_>>(),
-        "description": "Créé par Homelabus",
+        "description": "Created by Homelabus",
     })
 }
 
-/// Un `AND` de conditions, chacune ne portant qu'une seule propriété.
+/// An `AND` of conditions, each carrying exactly one property.
 ///
-/// Une seule condition n'a pas besoin de l'enveloppe : la passer telle quelle évite
-/// une indirection inutile côté serveur.
+/// A single condition needs no envelope: passing it through as-is avoids a pointless
+/// indirection on the server side.
 fn and(conditions: &[serde_json::Value]) -> serde_json::Value {
     match conditions {
-        [seule] => seule.clone(),
-        autres => serde_json::json!({ "operator": "AND", "conditions": autres }),
+        [only] => only.clone(),
+        many => serde_json::json!({ "operator": "AND", "conditions": many }),
     }
 }
 
-/// Les identifiants renvoyés par un `/query`.
+/// The ids returned by a `/query`.
 fn ids(args: &serde_json::Value) -> Vec<String> {
     args.get("ids")
         .and_then(|v| v.as_array())
@@ -753,7 +747,7 @@ mod tests {
 
     fn client() -> Stalwart {
         Stalwart::new(
-            "https://mail.example.fr/",
+            "https://mail.example.org/",
             Auth::Basic {
                 user: "admin".into(),
                 password: "secret".into(),
@@ -765,12 +759,12 @@ mod tests {
     fn the_endpoint_is_jmap_not_api() {
         // 🔴 Stalwart 0.16 n'a pas de /api/principal : tout passe par JMAP.
         let c = client();
-        assert_eq!(c.endpoint(), "https://mail.example.fr/jmap/");
+        assert_eq!(c.endpoint(), "https://mail.example.org/jmap/");
     }
 
     #[test]
     fn the_stalwart_capability_is_always_declared() {
-        // Sans `urn:stalwart:jmap`, le serveur rejette toute méthode « x: ».
+        // Without `urn:stalwart:jmap`, the server rejects every "x:" method.
         let r = JmapRequest::one("x:Account/query", serde_json::json!({}));
         assert!(r.using.contains(&"urn:stalwart:jmap"), "{:?}", r.using);
         assert!(r.using.contains(&"urn:ietf:params:jmap:core"));
@@ -778,36 +772,36 @@ mod tests {
 
     #[test]
     fn the_creation_body_never_carries_an_email_address() {
-        // 🔴 `emailAddress` est calculé par le serveur depuis `name` + `domainId`.
-        // L'envoyer ne produit AUCUNE erreur et n'a aucun effet : on croirait avoir
-        // créé gitea@example.fr en ayant créé tout autre chose.
-        let b = account_body("gitea", "d1", "mdp", &[]);
+        // 🔴 `emailAddress` is computed by the server from `name` + `domainId`.
+        // Sending it produces NO error and has no effect: you would believe you had
+        // created gitea@example.org having created something else entirely.
+        let b = account_body("gitea", "d1", "pw", &[]);
         assert!(b.get("emailAddress").is_none(), "{b}");
-        assert_eq!(b["name"], "gitea", "la partie locale SEULE");
+        assert_eq!(b["name"], "gitea", "the local part ONLY");
         assert_eq!(b["domainId"], "d1");
     }
 
     #[test]
     fn the_creation_body_carries_the_type_discriminator() {
-        // Le schéma amont utilise `#[serde(tag = "@type")]` — un simple « type »
-        // serait ignoré et la création échouerait sans dire pourquoi.
-        let b = account_body("gitea", "d1", "mdp", &[]);
+        // The upstream schema uses `#[serde(tag = "@type")]` - a plain "type" would
+        // be ignored and creation would fail without saying why.
+        let b = account_body("gitea", "d1", "pw", &[]);
         assert_eq!(b["@type"], "User");
         assert_eq!(b["credentials"][0]["@type"], "Password");
-        assert_eq!(b["credentials"][0]["secret"], "mdp");
+        assert_eq!(b["credentials"][0]["secret"], "pw");
     }
 
     #[test]
     fn aliases_keep_only_their_local_part() {
-        // Un alias porte `name` + `domainId`, comme le compte : y coller l'adresse
-        // complète créerait un alias « contact@example.fr@example.fr ».
+        // An alias carries `name` + `domainId`, like the account: pasting the full
+        // address in would create an alias "contact@example.org@example.org".
         let b = account_body(
             "gitea",
             "d1",
-            "mdp",
-            &["contact@example.fr".into(), "info".into()],
+            "pw",
+            &["contact@example.org".into(), "info".into()],
         );
-        let a = b["aliases"].as_array().expect("liste");
+        let a = b["aliases"].as_array().expect("list");
         assert_eq!(a.len(), 2);
         assert_eq!(a[0]["name"], "contact");
         assert_eq!(a[0]["domainId"], "d1");
@@ -817,15 +811,15 @@ mod tests {
 
     #[test]
     fn an_empty_alias_is_dropped() {
-        let b = account_body("gitea", "d1", "mdp", &["@example.fr".into(), "".into()]);
-        assert!(b["aliases"].as_array().expect("liste").is_empty(), "{b}");
+        let b = account_body("gitea", "d1", "pw", &["@example.org".into(), "".into()]);
+        assert!(b["aliases"].as_array().expect("list").is_empty(), "{b}");
     }
 
     #[test]
     fn a_two_property_filter_becomes_an_and_of_conditions() {
-        // 🔴 Le bug que ce test verrouille : côté serveur, chaque clé d'une même
-        // condition ÉCRASE la précédente. Un filtre plat à deux propriétés n'en
-        // garderait qu'une, et l'on retrouverait le « contact@ » d'un autre domaine.
+        // 🔴 The bug this test locks down: server-side, each key within one condition
+        // OVERWRITES the previous. A flat two-property filter would keep only one, and
+        // you would match the "contact@" of another domain.
         let f = and(&[
             serde_json::json!({ "name": "gitea" }),
             serde_json::json!({ "domainId": "d1" }),
@@ -833,11 +827,11 @@ mod tests {
 
         assert_eq!(f["operator"], "AND");
         let c = f["conditions"].as_array().expect("conditions");
-        assert_eq!(c.len(), 2, "chaque propriété doit avoir SA condition");
+        assert_eq!(c.len(), 2, "each property must get ITS OWN condition");
         assert_eq!(c[0]["name"], "gitea");
         assert_eq!(c[1]["domainId"], "d1");
 
-        // Et surtout : jamais les deux propriétés dans le même objet.
+        // And above all: never both properties in the same object.
         assert!(c[0].get("domainId").is_none(), "{f}");
         assert!(c[1].get("name").is_none(), "{f}");
     }
@@ -859,11 +853,11 @@ mod tests {
 
     #[test]
     fn a_method_error_is_read_from_the_body_not_the_status() {
-        // JMAP encode les erreurs de méthode DANS la réponse : le code HTTP reste 200.
+        // JMAP encodes method errors INSIDE the response: the HTTP code stays 200.
         let r: JmapResponse = serde_json::from_str(
             r#"{"methodResponses":[["error",{"type":"unknownMethod"},"c0"]]}"#,
         )
-        .expect("analysable");
+        .expect("parsable");
 
         let e = r.first().unwrap_err();
         assert!(matches!(e, Error::Api { status: 200, .. }), "{e:?}");
@@ -872,8 +866,7 @@ mod tests {
 
     #[test]
     fn an_empty_response_is_an_error_not_a_success() {
-        let r: JmapResponse =
-            serde_json::from_str(r#"{"methodResponses":[]}"#).expect("analysable");
+        let r: JmapResponse = serde_json::from_str(r#"{"methodResponses":[]}"#).expect("parsable");
         assert!(matches!(r.first(), Err(Error::Unexpected(_))));
     }
 
@@ -882,7 +875,7 @@ mod tests {
         let r: JmapResponse = serde_json::from_str(
             r#"{"methodResponses":[["x:Account/query",{"ids":["z9"]},"c0"]]}"#,
         )
-        .expect("analysable");
+        .expect("parsable");
         assert_eq!(ids(&r.first().expect("arguments")), vec!["z9"]);
     }
 
@@ -905,28 +898,28 @@ mod tests {
     #[tokio::test]
     async fn an_address_without_a_domain_is_refused() {
         let e = client()
-            .ensure_account("gitea", "mdp", &[])
+            .ensure_account("gitea", "pw", &[])
             .await
             .unwrap_err();
-        assert!(e.to_string().contains("sans domaine"), "{e}");
+        assert!(e.to_string().contains("no domain"), "{e}");
     }
 
     #[test]
     fn a_missing_domain_says_what_to_do() {
-        // Le message doit porter l'action, pas seulement le constat : sans le
-        // domaine créé au préalable, aucun compte n'est possible.
-        let e = Error::UnknownDomain("example.fr".into()).to_string();
-        assert!(e.contains("example.fr"), "{e}");
-        assert!(e.contains("crée-le d'abord"), "{e}");
+        // The message must carry the action, not only the observation: without the
+        // domain created first, no account is possible.
+        let e = Error::UnknownDomain("example.org".into()).to_string();
+        assert!(e.contains("example.org"), "{e}");
+        assert!(e.contains("create it first"), "{e}");
     }
 
     #[test]
     fn provisioning_says_whether_it_created_anything() {
-        // 🔴 La distinction porte une conséquence : `created: false` veut dire que le
-        // mot de passe au coffre est celui d'AVANT, et qu'on n'y a pas touché.
+        // 🔴 The distinction carries a consequence: `created: false` means the
+        // password in the vault is the one from BEFORE, and was not touched.
         let p = Provisioned {
             account_id: "a1".into(),
-            address: "gitea@example.fr".into(),
+            address: "gitea@example.org".into(),
             created: false,
         };
         assert!(!p.created);

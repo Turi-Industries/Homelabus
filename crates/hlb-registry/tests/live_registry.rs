@@ -1,14 +1,14 @@
-//! Vérifie la résolution de digest contre de vrais registres.
+//! Checks digest resolution against real registries.
 //!
-//! La danse d'authentification OCI (401 → `WWW-Authenticate` → jeton → réessai) ne se
-//! teste pas contre un bouchon : chaque registre a ses particularités. Docker Hub et
+//! The OCI auth dance (401 → `WWW-Authenticate` → token → retry) cannot be tested
+//! against a stub: every registry has its quirks. Docker Hub and
 //! ghcr.io sont les deux qu'utilise le catalogue.
 //!
 //! ```sh
 //! cargo test -p hlb-registry -- --ignored --nocapture
 //! ```
 //!
-//! ⚠️ Nécessite un accès réseau. Docker Hub applique des quotas par IP.
+//! ⚠️ Needs network access. Docker Hub applies per-IP rate limits.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -16,46 +16,46 @@ use hlb_registry::{best_upgrade, ImageRef, RegistryClient};
 use hlb_types::UpdateChannel;
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn resolves_a_digest_on_docker_hub_without_pulling() {
     let c = RegistryClient::new();
     let image = ImageRef::parse("postgres:17-alpine");
 
-    let digest = c.resolve_digest(&image).await.expect("résolution");
+    let digest = c.resolve_digest(&image).await.expect("resolution");
 
     assert!(digest.starts_with("sha256:"), "digest inattendu : {digest}");
-    assert_eq!(digest.len(), 71, "sha256: + 64 caractères");
+    assert_eq!(digest.len(), 71, "sha256: plus 64 characters");
     println!("✓ postgres:17-alpine → {digest}");
 }
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn resolves_a_digest_on_ghcr() {
-    // ghcr.io a une négociation de jeton légèrement différente de Docker Hub.
+    // ghcr.io negotiates tokens slightly differently from Docker Hub.
     let c = RegistryClient::new();
     let image = ImageRef::parse("ghcr.io/pocket-id/pocket-id:v1");
 
-    let digest = c.resolve_digest(&image).await.expect("résolution");
+    let digest = c.resolve_digest(&image).await.expect("resolution");
     assert!(digest.starts_with("sha256:"));
     println!("✓ pocket-id:v1 → {digest}");
 }
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn the_digest_is_stable_across_calls() {
-    // Sans ça, on redéploierait à chaque cycle de réconciliation.
+    // Without this we would redeploy on every reconciliation cycle.
     let c = RegistryClient::new();
     let image = ImageRef::parse("alpine:3");
 
     let a = c.resolve_digest(&image).await.expect("premier appel");
     let b = c.resolve_digest(&image).await.expect("second appel");
 
-    assert_eq!(a, b, "un même tag doit donner un digest stable");
+    assert_eq!(a, b, "the same tag must give a stable digest");
     println!("✓ digest stable : {a}");
 }
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn a_missing_tag_gives_a_clear_error() {
     let c = RegistryClient::new();
     let image = ImageRef::parse("alpine:cette-version-nexiste-pas");
@@ -65,11 +65,11 @@ async fn a_missing_tag_gives_a_clear_error() {
         matches!(err, hlb_registry::Error::TagNotFound { .. }),
         "erreur inattendue : {err}"
     );
-    println!("✓ erreur typée : {err}");
+    println!("✓ typed error: {err}");
 }
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn listing_tags_feeds_the_update_policy() {
     let c = RegistryClient::new();
     let image = ImageRef::parse("postgres:17-alpine");
@@ -78,34 +78,34 @@ async fn listing_tags_feeds_the_update_policy() {
     assert!(tags.len() > 50, "{} tags seulement ?", tags.len());
     assert!(tags.iter().any(|t| t == "17-alpine"));
 
-    // La politique s'applique sur des tags réels, pas fabriqués.
-    // `15-alpine` est un tag roulant : il ne doit jamais être épinglé (§7).
+    // The policy applies to real tags, not made-up ones.
+    // `15-alpine` is a rolling tag: it must never be pinned.
     assert_eq!(
         best_upgrade("15-alpine", &tags, UpdateChannel::Minor),
         None,
-        "un tag roulant se met à jour par son digest, pas par son nom"
+        "a rolling tag updates through its digest, not its name"
     );
 
-    // Un tag précis, en revanche, monte dans sa majeure.
+    // A precise tag, on the other hand, moves up within its major.
     let within = best_upgrade("17.0-alpine", &tags, UpdateChannel::Minor);
     println!("✓ {} tags ; 17.0-alpine → {within:?}", tags.len());
     assert!(within.is_some(), "17.x devrait exister");
 
-    // Mais jamais au-delà.
+    // But never beyond.
     assert_eq!(
         best_upgrade("17.0-alpine", &tags, UpdateChannel::Patch)
             .and_then(|t| hlb_registry::Version::parse(&t))
             .map(|v| v.major),
         None,
-        "en canal patch, 17.0 → 17.x change la mineure : refusé"
+        "on the patch channel, 17.0 → 17.x changes the minor: refused"
     );
 }
 
 #[tokio::test]
-#[ignore = "nécessite un accès réseau"]
+#[ignore = "needs network access"]
 async fn every_catalog_image_resolves() {
-    // Un manifest du catalogue qui pointe vers une image inexistante doit être
-    // détecté ici, pas au moment du déploiement.
+    // A catalog manifest pointing at a non-existent image must be caught here, not at
+    // deploy time.
     let c = RegistryClient::new();
 
     for name in [
