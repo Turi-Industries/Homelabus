@@ -1,11 +1,11 @@
-//! Veille sur les registres OCI (§7 du plan).
+//! Watching OCI registries.
 //!
-//! Deux responsabilités :
-//!   1. résoudre un tag en digest, **sans télécharger l'image** ;
-//!   2. décider quelle mise à jour le canal du manifest autorise.
+//! Two responsibilities:
+//!   1. resolve a tag to a digest, **without downloading the image**;
+//!   2. decide which update the manifest's channel allows.
 //!
-//! Un tag est mutable, un digest ne l'est pas. C'est pour ça que le catalogue déclare
-//! une intention (`tag` + `channel`) et que le déploiement, lui, est toujours épinglé.
+//! A tag is mutable, a digest is not. That is why the catalog declares an intent
+//! (`tag` + `channel`) while a deployment is always pinned.
 
 pub mod client;
 pub mod reference;
@@ -24,13 +24,13 @@ pub enum Error {
         context: String,
     },
 
-    #[error("le registre a répondu {status} — {detail}")]
+    #[error("the registry answered {status} - {detail}")]
     Registry { status: u16, detail: String },
 
     #[error("tag introuvable : {image}")]
     TagNotFound { image: String },
 
-    #[error("le registre n'a pas renvoyé de digest pour {image}")]
+    #[error("the registry returned no digest for {image}")]
     NoDigest { image: String },
 
     #[error("authentification au registre : {detail}")]

@@ -1,21 +1,19 @@
-//! Client de registre OCI (API Distribution v2).
+//! OCI registry client (Distribution API v2).
 //!
-//! Le besoin du §7 : répondre à « ce tag pointe-t-il vers un nouveau digest ? »
-//! **sans télécharger l'image**. Tirer 500 Mo toutes les heures sur un nœud à 4 Go
-//! n'est pas une option.
+//! The need: answer "does this tag point at a new digest?" **without downloading the
+//! image**. Pulling 500 MB every hour onto a 4 GB node is not an option.
 //!
-//! Deux subtilités du protocole valent la peine d'être connues :
+//! Two protocol subtleties are worth knowing:
 //!
-//! 1. **Une requête `HEAD` suffit.** Le digest arrive dans l'en-tête
-//!    `Docker-Content-Digest` ; on n'a jamais besoin du corps du manifest.
-//! 2. **L'authentification se découvre.** Un `401` porte un en-tête
-//!    `WWW-Authenticate` qui indique où récupérer un jeton. On ne code donc en dur
-//!    aucune URL de service de jetons.
+//! 1. **A `HEAD` request is enough.** The digest arrives in the
+//!    `Docker-Content-Digest` header; the manifest body is never needed.
+//! 2. **Authentication is discovered.** A `401` carries a `WWW-Authenticate` header
+//!    saying where to fetch a token, so no token-service URL is hard-coded.
 
 use crate::reference::ImageRef;
 use crate::{Error, Result};
 
-/// Types de manifest acceptés, index multi-architecture inclus.
+/// Accepted manifest types, multi-architecture index included.
 const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, \
                       application/vnd.oci.image.manifest.v1+json, \
                       application/vnd.docker.distribution.manifest.list.v2+json, \
@@ -42,7 +40,7 @@ impl RegistryClient {
         }
     }
 
-    /// Résout un tag en digest, sans télécharger l'image.
+    /// Resolves a tag to a digest, without downloading the image.
     pub async fn resolve_digest(&self, image: &ImageRef) -> Result<String> {
         let url = image.manifest_url(&image.tag);
         let resp = self.get_authorized(&url, image, true).await?;
@@ -56,7 +54,7 @@ impl RegistryClient {
         if !status.is_success() {
             return Err(Error::Registry {
                 status: status.as_u16(),
-                detail: format!("résolution de {image}"),
+                detail: format!("resolving {image}"),
             });
         }
 
@@ -69,7 +67,7 @@ impl RegistryClient {
             })
     }
 
-    /// Liste les tags publiés. Sert à choisir la prochaine version (§7).
+    /// Lists published tags. Used to choose the next version.
     pub async fn list_tags(&self, image: &ImageRef) -> Result<Vec<String>> {
         let resp = self.get_authorized(&image.tags_url(), image, false).await?;
 
@@ -88,13 +86,13 @@ impl RegistryClient {
 
         let list: TagList = resp.json().await.map_err(|e| Error::Http {
             source: e,
-            context: format!("réponse tags de {image}"),
+            context: format!("tag listing for {image}"),
         })?;
 
         Ok(list.tags)
     }
 
-    /// Effectue la requête, en négociant un jeton si le registre en demande un.
+    /// Performs the request, negotiating a token if the registry asks for one.
     async fn get_authorized(
         &self,
         url: &str,
@@ -123,7 +121,7 @@ impl RegistryClient {
             return Ok(first);
         }
 
-        // Le registre nous dit lui-même où chercher un jeton.
+        // The registry itself says where to look for a token.
         let challenge = first
             .headers()
             .get("www-authenticate")
@@ -139,10 +137,10 @@ impl RegistryClient {
         })
     }
 
-    /// Négocie un jeton anonyme à partir de l'en-tête `WWW-Authenticate`.
+    /// Negotiates an anonymous token from the `WWW-Authenticate` header.
     async fn fetch_token(&self, challenge: &str, image: &ImageRef) -> Result<String> {
         let realm = extract_param(challenge, "realm").ok_or_else(|| Error::Auth {
-            detail: format!("en-tête WWW-Authenticate inexploitable : « {challenge} »"),
+            detail: format!("unusable WWW-Authenticate header: \"{challenge}\""),
         })?;
 
         let service = extract_param(challenge, "service");
@@ -155,7 +153,7 @@ impl RegistryClient {
 
         #[derive(serde::Deserialize)]
         struct TokenResp {
-            /// Docker Hub renvoie `token`, d'autres `access_token`.
+            /// Docker Hub returns `token`, others `access_token`.
             token: Option<String>,
             access_token: Option<String>,
         }
@@ -173,22 +171,22 @@ impl RegistryClient {
 
         if !resp.status().is_success() {
             return Err(Error::Auth {
-                detail: format!("le serveur de jetons a répondu {}", resp.status()),
+                detail: format!("the token server answered {}", resp.status()),
             });
         }
 
         let t: TokenResp = resp.json().await.map_err(|e| Error::Http {
             source: e,
-            context: "réponse du serveur de jetons".into(),
+            context: "token server response".into(),
         })?;
 
         t.token.or(t.access_token).ok_or_else(|| Error::Auth {
-            detail: "réponse sans jeton".into(),
+            detail: "response carried no token".into(),
         })
     }
 }
 
-/// Extrait `clé="valeur"` d'un en-tête `WWW-Authenticate`.
+/// Extracts `key="value"` from a `WWW-Authenticate` header.
 fn extract_param(header: &str, key: &str) -> Option<String> {
     let needle = format!("{key}=\"");
     let start = header.find(&needle)? + needle.len();
@@ -221,7 +219,7 @@ mod tests {
 
     #[test]
     fn a_challenge_without_scope_is_tolerated() {
-        // ghcr.io n'inclut pas toujours la portée : on retombe sur celle de l'image.
+        // ghcr.io does not always include the scope: fall back to the image's own.
         let c = r#"Bearer realm="https://ghcr.io/token",service="ghcr.io""#;
         assert!(extract_param(c, "scope").is_none());
         assert_eq!(

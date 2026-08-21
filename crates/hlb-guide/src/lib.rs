@@ -1,20 +1,20 @@
-//! Le moteur de vérification des guides (§4.6).
+//! The guide verification engine.
 //!
-//! Sans lui, `verify:` n'est qu'une déclaration d'intention et `hlb ack` une simple
-//! attestation. C'est ce module qui permet de **constater** qu'une action manuelle a
-//! réellement été faite.
+//! Without it, `verify:` is only a statement of intent and `hlb ack` a plain
+//! attestation. This module is what makes it possible to **establish** that a manual
+//! action was really carried out.
 //!
-//! ## Ce que chaque vérification prouve, et ce qu'elle ne prouve pas
+//! ## What each check proves, and what it does not
 //!
-//! | Type | Prouve | Ne prouve pas |
+//! | Kind | Proves | Does not prove |
 //! |---|---|---|
-//! | `dns` | le nom résout | qu'il pointe au bon endroit (voir `expectContains`) |
-//! | `http` | l'URL répond avec le bon code | que le contenu est correct |
-//! | `tcp` | le port accepte une connexion | que le service derrière est sain |
-//! | `attest` | **rien** | tout |
+//! | `dns` | the name resolves | that it points at the right place (see `expectContains`) |
+//! | `http` | the URL answers with the right code | that the content is correct |
+//! | `tcp` | the port accepts a connection | that the service behind it is healthy |
+//! | `attest` | **nothing** | everything |
 //!
-//! Cette honnêteté est le point : une vérification qui prétendrait plus que ce
-//! qu'elle établit serait pire qu'une attestation assumée.
+//! That honesty is the point: a check claiming more than it establishes would be
+//! worse than an attestation openly labelled as one.
 
 pub mod automate;
 
@@ -26,13 +26,13 @@ use hlb_types::{GuideStep, Verify};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Constaté automatiquement.
+    /// Established automatically.
     Verified { detail: String },
-    /// Constaté comme NON fait.
+    /// Established as NOT done.
     Failed { detail: String },
-    /// 🔴 Aucune vérification possible : seul l'utilisateur peut attester.
+    /// 🔴 No check is possible: only the user can attest.
     NotVerifiable,
-    /// Le type existe mais demande un contexte absent (conteneur, API de l'app).
+    /// The kind exists but needs context we do not have (a container, the app's API).
     Unsupported { reason: String },
 }
 
@@ -41,10 +41,10 @@ impl Outcome {
         matches!(self, Self::Verified { .. })
     }
 
-    /// L'utilisateur peut-il légitimement passer outre avec `hlb ack` ?
+    /// May the user legitimately override this with `hlb ack`?
     ///
-    /// Oui pour ce qu'on ne sait pas constater ; non pour ce qu'on a constaté comme
-    /// faux — attester d'un fait qu'on vient de démentir n'a aucun sens.
+    /// Yes for what we cannot establish; no for what we established as false -
+    /// attesting to a fact just disproved makes no sense.
     pub fn may_attest(&self) -> bool {
         matches!(self, Self::NotVerifiable | Self::Unsupported { .. })
     }
@@ -53,8 +53,8 @@ impl Outcome {
         match self {
             Self::Verified { detail } => format!("✓ {detail}"),
             Self::Failed { detail } => format!("✗ {detail}"),
-            Self::NotVerifiable => "⚪ non vérifiable — attestation seulement".into(),
-            Self::Unsupported { reason } => format!("⚪ non vérifié : {reason}"),
+            Self::NotVerifiable => "⚪ not verifiable - attestation only".into(),
+            Self::Unsupported { reason } => format!("⚪ not verified: {reason}"),
         }
     }
 }
@@ -75,8 +75,8 @@ impl Verifier {
         Self {
             http: reqwest::Client::builder()
                 .timeout(timeout)
-                // Un certificat auto-signé pendant la mise en place ne doit pas faire
-                // échouer la vérification du DNS ou du routage.
+                // A self-signed certificate during setup must not make the DNS or
+                // routing check fail.
                 .danger_accept_invalid_certs(true)
                 .build()
                 .unwrap_or_default(),
@@ -84,7 +84,7 @@ impl Verifier {
         }
     }
 
-    /// Vérifie une étape, gabarits résolus au préalable.
+    /// Verifies a step, with templates already resolved.
     pub async fn check(&self, step: &GuideStep, vars: &[(&str, &str)]) -> Outcome {
         match &step.verify {
             Verify::Attest => Outcome::NotVerifiable,
@@ -107,41 +107,42 @@ impl Verifier {
                 self.check_tcp(&t).await
             }
 
-            // Demande d'entrer dans le conteneur : c'est l'exécuteur qui sait le
-            // faire, pas ce module. Rapporté comme non vérifié, jamais comme réussi.
+            // This one needs to enter the container, which the executor knows how to
+            // do and this module does not. Reported as not verified, never as passed.
             Verify::Exec { .. } => Outcome::Unsupported {
-                reason: "vérification par commande dans le conteneur non branchée".into(),
+                reason: "in-container command checks are not wired up".into(),
             },
         }
     }
 
-    /// Résolution DNS.
+    /// DNS resolution.
     ///
-    /// ⚠️ Établit que le nom **résout**, pas qu'il pointe au bon endroit. Pour ça,
-    /// `expectContains` compare l'adresse obtenue à ce qu'on attend.
+    /// ⚠️ Establishes that the name **resolves**, not that it points at the right
+    /// place. For that, `expectContains` compares the resolved address to what is
+    /// expected.
     async fn check_dns(&self, name: &str, expect: Option<&str>) -> Outcome {
-        // `lookup_host` exige un port ; il n'a aucune importance ici.
+        // `lookup_host` requires a port; it is irrelevant here.
         let cible = format!("{name}:80");
 
         match tokio::time::timeout(self.timeout, tokio::net::lookup_host(cible)).await {
             Err(_) => Outcome::Failed {
-                detail: format!("{name} : résolution DNS expirée"),
+                detail: format!("{name}: DNS resolution timed out"),
             },
             Ok(Err(e)) => Outcome::Failed {
-                detail: format!("{name} ne résout pas ({e})"),
+                detail: format!("{name} does not resolve ({e})"),
             },
             Ok(Ok(addrs)) => {
                 let ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
                 if ips.is_empty() {
                     return Outcome::Failed {
-                        detail: format!("{name} ne résout vers aucune adresse"),
+                        detail: format!("{name} resolves to no address"),
                     };
                 }
                 match expect {
-                    Some(attendu) if !ips.iter().any(|ip| ip.contains(attendu)) => {
+                    Some(expected) if !ips.iter().any(|ip| ip.contains(expected)) => {
                         Outcome::Failed {
                             detail: format!(
-                                "{name} résout vers {} — attendu {attendu}",
+                                "{name} resolves to {} - expected {expected}",
                                 ips.join(", ")
                             ),
                         }
@@ -157,7 +158,7 @@ impl Verifier {
     async fn check_http(&self, url: &str, expect: &[u16]) -> Outcome {
         match self.http.get(url).send().await {
             Err(e) => Outcome::Failed {
-                detail: format!("{url} injoignable ({})", cause_courte(&e)),
+                detail: format!("{url} unreachable ({})", short_cause(&e)),
             },
             Ok(r) => {
                 let code = r.status().as_u16();
@@ -167,7 +168,7 @@ impl Verifier {
                     }
                 } else {
                     Outcome::Failed {
-                        detail: format!("{url} → {code}, attendu {expect:?}"),
+                        detail: format!("{url} → {code}, expected {expect:?}"),
                     }
                 }
             }
@@ -177,24 +178,24 @@ impl Verifier {
     async fn check_tcp(&self, target: &str) -> Outcome {
         match tokio::time::timeout(self.timeout, tokio::net::TcpStream::connect(target)).await {
             Err(_) => Outcome::Failed {
-                detail: format!("{target} : délai dépassé"),
+                detail: format!("{target}: timed out"),
             },
             Ok(Err(e)) => Outcome::Failed {
-                detail: format!("{target} injoignable ({e})"),
+                detail: format!("{target} unreachable ({e})"),
             },
             Ok(Ok(_)) => Outcome::Verified {
-                detail: format!("{target} accepte les connexions"),
+                detail: format!("{target} accepts connections"),
             },
         }
     }
 }
 
-/// Message d'erreur reqwest lisible : la chaîne complète est verbeuse.
-fn cause_courte(e: &reqwest::Error) -> String {
+/// A readable reqwest error message: the full chain is verbose.
+fn short_cause(e: &reqwest::Error) -> String {
     if e.is_timeout() {
-        "délai dépassé".into()
+        "timed out".into()
     } else if e.is_connect() {
-        "connexion refusée".into()
+        "connection refused".into()
     } else {
         e.to_string()
     }
@@ -221,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn attest_is_never_automatically_verified() {
-        // 🔴 Le point le plus important : on ne prétend jamais avoir constaté.
+        // 🔴 The most important point: we never claim to have established anything.
         let o = Verifier::default().check(&step(Verify::Attest), &[]).await;
         assert_eq!(o, Outcome::NotVerifiable);
         assert!(!o.is_verified());
@@ -230,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_check_cannot_be_attested_away() {
-        // On a constaté que ce n'est PAS fait : attester le contraire n'a aucun sens.
+        // We established it is NOT done: attesting the opposite makes no sense.
         let o = Outcome::Failed { detail: "x".into() };
         assert!(!o.may_attest());
     }
@@ -246,7 +247,7 @@ mod tests {
                 &[],
             )
             .await;
-        assert!(!o.is_verified(), "ne jamais compter comme vérifié");
+        assert!(!o.is_verified(), "must never count as verified");
         assert!(matches!(o, Outcome::Unsupported { .. }));
     }
 
@@ -263,7 +264,7 @@ mod tests {
             )
             .await;
         assert!(!o.is_verified(), "{}", o.describe());
-        assert!(!o.may_attest(), "un échec constaté n'est pas attestable");
+        assert!(!o.may_attest(), "an established failure is not attestable");
     }
 
     #[tokio::test]
@@ -296,7 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wrong_address_is_detected() {
-        // Résoudre ne suffit pas : encore faut-il pointer au bon endroit.
+        // Resolving is not enough: it must also point at the right place.
         let o = Verifier::default()
             .check(
                 &step(Verify::Dns {
@@ -307,12 +308,12 @@ mod tests {
             )
             .await;
         assert!(!o.is_verified());
-        assert!(o.describe().contains("attendu"), "{}", o.describe());
+        assert!(o.describe().contains("expected"), "{}", o.describe());
     }
 
     #[tokio::test]
     async fn a_closed_port_fails() {
-        // 9 est réservé (discard) et n'écoute pas en local.
+        // Port 9 is reserved (discard) and nothing listens on it locally.
         let o = Verifier::new(Duration::from_secs(2))
             .check(
                 &step(Verify::Tcp {

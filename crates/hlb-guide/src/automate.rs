@@ -1,34 +1,34 @@
-//! L'échelle d'automatisation des guides (§4.6bis).
+//! The guide automation ladder.
 //!
-//! La plupart des étapes « dans l'application » se scriptent. Les traiter comme
-//! manuelles par défaut est l'erreur habituelle : on documente une manipulation
-//! alors qu'une commande suffirait.
+//! Most "inside the application" steps can be scripted. Treating them as manual by
+//! default is the usual mistake: you end up documenting a click-through where a
+//! command would do.
 //!
-//! ## L'échelle n'est pas purement séquentielle
+//! ## The ladder is not purely sequential
 //!
-//! | Niveau | Quand il s'applique |
+//! | Level | When it applies |
 //! |---|---|
-//! | `env` | **au plan** — Swarm recrée la tâche, donc c'est un choix de déploiement |
-//! | `exec` | après déploiement, sur un service sain |
-//! | `api` | après déploiement, sur un service sain |
+//! | `env` | **at plan time** - Swarm recreates the task, so it is a deploy choice |
+//! | `exec` | after deployment, on a healthy service |
+//! | `api` | after deployment, on a healthy service |
 //!
-//! Ce module ne traite donc que `exec` et `api`. Les variables d'environnement sont
-//! résolues par le résolveur, parce qu'elles ne peuvent pas être appliquées après
-//! coup : changer l'environnement d'un service impose de le redéployer.
+//! This module therefore handles only `exec` and `api`. Environment variables are
+//! resolved by the resolver, because they cannot be applied after the fact: changing
+//! a service's environment requires redeploying it.
 
 use hlb_orchestrator::Orchestrator;
 use hlb_types::{Automation, GuideStep};
 
-/// Ce qu'une tentative d'automatisation a produit.
+/// What an automation attempt produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutomationOutcome {
-    /// Appliqué avec succès.
+    /// Applied successfully.
     Applied { method: &'static str },
-    /// La sonde dit que c'était déjà fait : on ne rejoue pas.
+    /// The probe says it was already done, so nothing is replayed.
     AlreadyDone { method: &'static str },
-    /// Aucune tentative n'a abouti — l'étape reste manuelle.
+    /// No attempt succeeded - the step stays manual.
     FellBackToManual { reasons: Vec<String> },
-    /// Rien de déclaré : l'étape a toujours été manuelle.
+    /// Nothing was declared: the step was always manual.
     NothingDeclared,
 }
 
@@ -39,21 +39,21 @@ impl AutomationOutcome {
 
     pub fn describe(&self) -> String {
         match self {
-            Self::Applied { method } => format!("automatisée via {method}"),
-            Self::AlreadyDone { method } => format!("déjà faite (détectée via {method})"),
+            Self::Applied { method } => format!("automated through {method}"),
+            Self::AlreadyDone { method } => format!("already done (detected through {method})"),
             Self::FellBackToManual { reasons } => {
-                format!("reste manuelle : {}", reasons.join(" ; "))
+                format!("stays manual: {}", reasons.join("; "))
             }
-            Self::NothingDeclared => "manuelle (aucune automatisation déclarée)".into(),
+            Self::NothingDeclared => "manual (no automation declared)".into(),
         }
     }
 }
 
-/// Tente d'exécuter une étape sans intervention humaine.
+/// Attempts to carry out a step without human intervention.
 ///
-/// 🔴 On ne bascule en manuel qu'**après avoir essayé**, et l'échec de chaque
-/// tentative est conservé : sans ça, l'utilisateur ne saurait pas pourquoi le
-/// système lui demande de faire quelque chose qu'il prétendait automatiser.
+/// 🔴 Falling back to manual only happens **after trying**, and every attempt's
+/// failure is kept: without that, the user would not know why the system is asking
+/// them to do something it claimed it would automate.
 pub async fn try_automate<O: Orchestrator>(
     orch: &O,
     service: &str,
@@ -64,12 +64,12 @@ pub async fn try_automate<O: Orchestrator>(
         return AutomationOutcome::NothingDeclared;
     }
 
-    let mut raisons = Vec::new();
+    let mut reasons = Vec::new();
 
     for a in &step.automate {
         match a {
-            // Résolu au plan : recréer le service ici serait destructeur et
-            // dupliquerait la logique du résolveur.
+            // Resolved at plan time: recreating the service here would be
+            // destructive and would duplicate the resolver's logic.
             Automation::Env { .. } => continue,
 
             Automation::Exec {
@@ -77,53 +77,53 @@ pub async fn try_automate<O: Orchestrator>(
                 probe,
                 probe_matches,
             } => {
-                // Sonde d'idempotence : ne pas rejouer une commande déjà appliquée.
-                // Beaucoup de CLI d'apps échouent si l'objet existe déjà.
+                // Idempotency probe: do not replay a command already applied. Many
+                // app CLIs fail outright if the object already exists.
                 if let Some(p) = probe {
-                    let rendu: Vec<String> = p
+                    let rendered: Vec<String> = p
                         .iter()
                         .map(|c| hlb_types::guide::render(c, vars))
                         .collect();
-                    if let Ok(out) = orch.exec_in_service(service, &rendu).await {
-                        let attendu = probe_matches.as_deref().unwrap_or("");
-                        if out.ok() && (attendu.is_empty() || out.stdout.contains(attendu)) {
+                    if let Ok(out) = orch.exec_in_service(service, &rendered).await {
+                        let expected = probe_matches.as_deref().unwrap_or("");
+                        if out.ok() && (expected.is_empty() || out.stdout.contains(expected)) {
                             return AutomationOutcome::AlreadyDone { method: "exec" };
                         }
                     }
                 }
 
-                let rendu: Vec<String> = command
+                let rendered: Vec<String> = command
                     .iter()
                     .map(|c| hlb_types::guide::render(c, vars))
                     .collect();
 
-                match orch.exec_in_service(service, &rendu).await {
+                match orch.exec_in_service(service, &rendered).await {
                     Ok(out) if out.ok() => {
-                        tracing::info!(step = %step.id, "étape automatisée par exec");
+                        tracing::info!(step = %step.id, "step automated through exec");
                         return AutomationOutcome::Applied { method: "exec" };
                     }
-                    Ok(out) => raisons.push(format!(
-                        "exec code {} : {}",
+                    Ok(out) => reasons.push(format!(
+                        "exec exited {}: {}",
                         out.exit_code,
                         out.stderr.trim().lines().next().unwrap_or("").trim()
                     )),
-                    Err(e) => raisons.push(format!("exec impossible : {e}")),
+                    Err(e) => reasons.push(format!("exec failed: {e}")),
                 }
             }
 
-            // Demande un jeton d'API propre à l'app, qu'on n'a pas encore.
+            // Needs an app-specific API token, which we do not have yet.
             Automation::Api { .. } => {
-                raisons.push("automatisation par API non branchée".into());
+                reasons.push("API automation is not wired up".into());
             }
         }
     }
 
-    if raisons.is_empty() {
-        // Seules des automatisations `env` étaient déclarées : elles ont été
-        // appliquées au déploiement, il n'y a rien à faire ici.
+    if reasons.is_empty() {
+        // Only `env` automations were declared: they were applied at deploy time,
+        // so there is nothing to do here.
         return AutomationOutcome::Applied { method: "env" };
     }
-    AutomationOutcome::FellBackToManual { reasons: raisons }
+    AutomationOutcome::FellBackToManual { reasons: reasons }
 }
 
 #[cfg(test)]
@@ -136,7 +136,7 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         appels: Mutex<Vec<Vec<String>>>,
-        /// Réponses successives ; la dernière est répétée.
+        /// Successive answers; the last one repeats.
         sorties: Mutex<Vec<ExecOutput>>,
     }
 
@@ -246,7 +246,7 @@ mod tests {
             &self,
             _: Option<&str>,
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-            // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+            // A fake orchestrator has no tasks: empty is the honest answer.
             Ok(Vec::new())
         }
 
@@ -261,7 +261,7 @@ mod tests {
 
     fn step(yaml: &str) -> GuideStep {
         let g: hlb_types::Guide = serde_yaml_ng::from_str(yaml).expect("guide de test");
-        g.steps.into_iter().next().expect("une étape")
+        g.steps.into_iter().next().expect("one step")
     }
 
     const AVEC_EXEC: &str = r#"
@@ -285,14 +285,14 @@ steps:
 
     #[tokio::test]
     async fn a_failing_command_falls_back_to_manual_with_its_reason() {
-        // 🔴 Sans la raison, l'utilisateur ne saurait pas pourquoi on lui demande de
-        // faire à la main ce qu'on annonçait automatique.
-        let o = Fake::with(vec![Fake::ko("permission refusée")]);
+        // 🔴 Without the reason, the user would not know why they are being asked to
+        // do by hand what was announced as automatic.
+        let o = Fake::with(vec![Fake::ko("permission denied")]);
         let r = try_automate(&o, "gitea", &step(AVEC_EXEC), &[]).await;
 
         assert!(!r.handled());
         assert!(
-            r.describe().contains("permission refusée"),
+            r.describe().contains("permission denied"),
             "{}",
             r.describe()
         );
@@ -300,7 +300,7 @@ steps:
 
     #[tokio::test]
     async fn a_probe_prevents_replaying_what_is_done() {
-        // Beaucoup de CLI échouent si l'objet existe déjà : la sonde évite ça.
+        // Many CLIs fail if the object already exists: the probe avoids that.
         let y = r#"
 steps:
   - id: sso
@@ -343,8 +343,8 @@ steps:
 
     #[tokio::test]
     async fn env_only_steps_are_already_handled_at_plan_time() {
-        // Les variables sont appliquées au déploiement : rien à faire ici, et
-        // surtout pas recréer le service.
+        // Variables are applied at deploy time: nothing to do here, and above all
+        // not to recreate the service.
         let y = r#"
 steps:
   - id: fermer
@@ -365,7 +365,7 @@ steps:
 
     #[tokio::test]
     async fn a_step_without_automation_stays_manual() {
-        let y = "steps:\n  - id: dns\n    title: Créer le DNS\n";
+        let y = "steps:\n  - id: dns\n    title: Create the DNS record\n";
         let r = try_automate(&Fake::default(), "app", &step(y), &[]).await;
         assert_eq!(r, AutomationOutcome::NothingDeclared);
         assert!(!r.handled());

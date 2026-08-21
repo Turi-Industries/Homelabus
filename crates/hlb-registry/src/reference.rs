@@ -1,9 +1,9 @@
-//! Analyse des références d'image OCI.
+//! Parsing OCI image references.
 //!
-//! `postgres:17-alpine` et `ghcr.io/pocket-id/pocket-id:v1` désignent des choses très
-//! différentes une fois normalisées. Les règles implicites de Docker (registre par
-//! défaut, préfixe `library/`) sont une source classique d'erreurs — d'où un type
-//! dédié plutôt que de la manipulation de chaînes éparpillée.
+//! `postgres:17-alpine` and `ghcr.io/pocket-id/pocket-id:v1` mean very different
+//! things once normalised. Docker's implicit rules (default registry, `library/`
+//! prefix) are a classic source of mistakes - hence a dedicated type rather than
+//! string handling scattered around.
 
 use std::fmt;
 
@@ -11,26 +11,26 @@ pub const DOCKER_HUB: &str = "registry-1.docker.io";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRef {
-    /// Hôte du registre, déjà normalisé.
+    /// Registry host, already normalised.
     pub registry: String,
-    /// Chemin complet, préfixe `library/` inclus pour les images officielles.
+    /// Full path, `library/` prefix included for official images.
     pub repository: String,
     pub tag: String,
-    /// Présent si la référence était déjà épinglée.
+    /// Present when the reference was already pinned.
     pub digest: Option<String>,
 }
 
 impl ImageRef {
-    /// Analyse une référence, en appliquant les règles implicites de Docker.
+    /// Parses a reference, applying Docker's implicit rules.
     pub fn parse(s: &str) -> Self {
-        // Le digest se sépare en premier : il peut suivre un tag.
+        // The digest is split off first: it can follow a tag.
         let (rest, digest) = match s.split_once('@') {
             Some((r, d)) => (r, Some(d.to_string())),
             None => (s, None),
         };
 
-        // Un « / » avant le premier segment, avec un point, un « : » ou « localhost »,
-        // désigne un registre. Sinon c'est un chemin de dépôt sur le Hub.
+        // A "/" before the first segment, together with a dot, a ":" or "localhost",
+        // marks a registry. Otherwise it is a repository path on the Hub.
         let (registry, remainder) = match rest.split_once('/') {
             Some((head, tail))
                 if head.contains('.') || head.contains(':') || head == "localhost" =>
@@ -40,14 +40,14 @@ impl ImageRef {
             _ => (DOCKER_HUB.to_string(), rest.to_string()),
         };
 
-        // ⚠️ Le « : » du tag ne doit pas être confondu avec celui d'un port : on ne
-        // cherche donc le tag qu'après le dernier « / ».
+        // ⚠️ The tag's ":" must not be confused with a port's, so the tag is only
+        // looked for after the last "/".
         let (repo, tag) = match remainder.rsplit_once(':') {
             Some((r, t)) if !t.contains('/') => (r.to_string(), t.to_string()),
             _ => (remainder.clone(), "latest".to_string()),
         };
 
-        // Les images officielles du Hub vivent sous `library/`.
+        // The Hub's official images live under `library/`.
         let repository = if registry == DOCKER_HUB && !repo.contains('/') {
             format!("library/{repo}")
         } else {
@@ -62,7 +62,7 @@ impl ImageRef {
         }
     }
 
-    /// URL de l'API v2 pour un manifest.
+    /// The v2 API URL for a manifest.
     pub fn manifest_url(&self, reference: &str) -> String {
         format!(
             "https://{}/v2/{}/manifests/{reference}",
@@ -77,7 +77,7 @@ impl ImageRef {
         )
     }
 
-    /// La portée à demander au serveur de jetons.
+    /// The scope to request from the token server.
     pub fn scope(&self) -> String {
         format!("repository:{}:pull", self.repository)
     }
@@ -86,12 +86,12 @@ impl ImageRef {
         self.digest.is_some()
     }
 
-    /// La même image, épinglée sur un digest.
+    /// The same image, pinned to a digest.
     pub fn pinned(&self, digest: &str) -> String {
         format!("{}:{}@{digest}", self.name(), self.tag)
     }
 
-    /// Le nom tel qu'un humain l'écrirait, sans tag.
+    /// The name as a human would write it, without a tag.
     pub fn name(&self) -> String {
         if self.registry == DOCKER_HUB {
             self.repository
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_registry_port_is_not_a_tag() {
-        // Le piège classique : « : » sert au port ET au tag.
+        // The classic trap: ":" serves both the port AND the tag.
         let r = ImageRef::parse("registre.local:5000/mon/app:2.1");
         assert_eq!(r.registry, "registre.local:5000");
         assert_eq!(r.repository, "mon/app");
