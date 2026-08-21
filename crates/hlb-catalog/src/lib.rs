@@ -1,7 +1,7 @@
-//! Chargement et validation du catalogue.
+//! Catalog loading and validation.
 //!
-//! Un catalogue = un dossier de dossiers, un par app, chacun avec son `manifest.yaml`.
-//! **Ajouter une app = ajouter un dossier. Aucune recompilation** (§1).
+//! A catalog is a folder of folders, one per app, each with its `manifest.yaml`.
+//! **Adding an app means adding a folder. No recompilation.**
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,31 +10,31 @@ use hlb_types::Manifest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("catalogue introuvable : {0}")]
+    #[error("catalog not found: {0}")]
     NotFound(PathBuf),
 
-    #[error("lecture de {path} : {source}")]
+    #[error("reading {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("{path} : {source}")]
+    #[error("{path}: {source}")]
     Parse {
         path: PathBuf,
         #[source]
         source: hlb_types::Error,
     },
 
-    #[error("{path} : le nom déclaré « {declared} » ne correspond pas au dossier « {dir} »")]
+    #[error("{path}: declared name \"{declared}\" does not match folder \"{dir}\"")]
     NameMismatch {
         path: PathBuf,
         declared: String,
         dir: String,
     },
 
-    #[error("app « {0} » absente du catalogue")]
+    #[error("app \"{0}\" is not in the catalog")]
     UnknownApp(String),
 }
 
@@ -49,16 +49,16 @@ pub struct Catalog {
 pub struct Entry {
     pub manifest: Manifest,
     pub path: PathBuf,
-    /// Le `guide.yaml` voisin, s'il existe (§4.6). Une app sans guide n'en a
-    /// simplement aucun — ce n'est pas une erreur.
+    /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
+    /// has none; that is not an error.
     pub guide: hlb_types::Guide,
 }
 
 impl Catalog {
-    /// Charge récursivement tous les `manifest.yaml` sous `root`.
+    /// Recursively loads every `manifest.yaml` under `root`.
     ///
-    /// Les dossiers commençant par `_` (comme `_platform`) sont parcourus mais ne sont
-    /// pas des apps eux-mêmes — ils regroupent, ils ne déclarent pas.
+    /// Folders starting with `_` (such as `_platform`) are walked but are not apps
+    /// themselves: they group, they do not declare.
     pub fn load(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref();
         if !root.is_dir() {
@@ -96,8 +96,8 @@ impl Catalog {
         self.entries.is_empty()
     }
 
-    /// Valide chaque manifest et renvoie **toutes** les erreurs, pas seulement la
-    /// première : quand on répare un catalogue, on veut la liste complète.
+    /// Validates every manifest and returns **all** the errors, not just the first:
+    /// when repairing a catalog you want the whole list.
     pub fn validate_all(&self) -> Vec<(String, hlb_types::Error)> {
         self.entries
             .iter()
@@ -147,8 +147,8 @@ fn load_one(path: &Path) -> Result<Entry> {
         source: hlb_types::Error::Parse(e),
     })?;
 
-    // Le nom du dossier fait foi : sans ça, deux apps peuvent se marcher dessus
-    // silencieusement en déclarant le même `metadata.name`.
+    // The folder name is authoritative. Without this, two apps declaring the same
+    // `metadata.name` would silently overwrite each other.
     let dir = path
         .parent()
         .and_then(|p| p.file_name())
@@ -163,7 +163,7 @@ fn load_one(path: &Path) -> Result<Entry> {
         });
     }
 
-    // Le guide vit à côté du manifest. Absent = pas d'étape déclarée.
+    // The guide lives next to the manifest. Absent means no declared step.
     let guide_path = path.with_file_name("guide.yaml");
     let guide = if guide_path.exists() {
         let raw = std::fs::read_to_string(&guide_path).map_err(|source| Error::Io {
@@ -198,8 +198,8 @@ mod tests {
 
     #[test]
     fn loads_the_bundled_catalog() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
-        assert!(c.len() >= 6, "{} entrées trouvées", c.len());
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        assert!(c.len() >= 6, "{} entries found", c.len());
         for expected in [
             "postgres",
             "valkey",
@@ -208,34 +208,35 @@ mod tests {
             "vikunja",
             "vaultwarden",
         ] {
-            assert!(c.get(expected).is_ok(), "{expected} manquant");
+            assert!(c.get(expected).is_ok(), "{expected} missing");
         }
     }
 
     #[test]
     fn bundled_catalog_is_valid() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
         let errs = c.validate_all();
-        assert!(errs.is_empty(), "manifests invalides : {errs:?}");
+        assert!(errs.is_empty(), "invalid manifests: {errs:?}");
     }
 
     #[test]
     fn bundled_catalog_has_no_dependency_cycle() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
         let g = hlb_resolver::DependencyGraph::from_manifests(&c.manifests());
-        let order = g.deployment_order().expect("ordre calculable");
+        let order = g.deployment_order().expect("order should be computable");
 
-        let pos = |n: &str| order.iter().position(|x| x == n).expect("présent");
-        // Les services de plateforme doivent précéder leurs consommateurs.
+        let pos = |n: &str| order.iter().position(|x| x == n).expect("present");
+        // Platform services must come before their consumers.
         assert!(pos("postgres") < pos("gitea"));
         assert!(pos("pocket-id") < pos("vaultwarden"));
     }
 
     #[test]
     fn vaultwarden_is_never_auto_updated() {
-        // §5.7bis — c'est l'accès de secours à tout le reste.
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
-        let vw = c.get("vaultwarden").expect("vaultwarden présent");
+        // Vaultwarden is the emergency access to everything else: an automatic update
+        // that broke it would lock you out of your own recovery path.
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        let vw = c.get("vaultwarden").expect("vaultwarden present");
         assert_eq!(
             vw.manifest.spec.update.channel,
             hlb_types::UpdateChannel::Pin
@@ -244,31 +245,31 @@ mod tests {
 
     #[test]
     fn guides_are_loaded_alongside_manifests() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
-        let gitea = c.get("gitea").expect("gitea présent");
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        let gitea = c.get("gitea").expect("gitea present");
         assert!(
             !gitea.guide.steps.is_empty(),
-            "gitea devrait déclarer ses étapes manuelles"
+            "gitea should declare its manual steps"
         );
     }
 
     #[test]
     fn an_app_without_a_guide_is_fine() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
-        // valkey n'a rien à faire faire à la main.
-        assert!(c.get("valkey").expect("présent").guide.steps.is_empty());
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        // valkey has nothing that must be done by hand.
+        assert!(c.get("valkey").expect("present").guide.steps.is_empty());
     }
 
     #[test]
     fn every_guide_step_has_a_unique_id() {
-        // Deux étapes de même identifiant s'écraseraient dans la file (§4.6).
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        // Two steps sharing an id would overwrite each other in the pending queue.
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
         for e in c.entries() {
-            let mut vus = std::collections::BTreeSet::new();
+            let mut seen = std::collections::BTreeSet::new();
             for s in &e.guide.steps {
                 assert!(
-                    vus.insert(&s.id),
-                    "{} : identifiant « {} » en double",
+                    seen.insert(&s.id),
+                    "{}: duplicate step id \"{}\"",
                     e.manifest.metadata.name,
                     s.id
                 );
@@ -278,7 +279,7 @@ mod tests {
 
     #[test]
     fn guide_dependencies_point_to_existing_steps() {
-        let c = Catalog::load(repo_catalog()).expect("catalogue chargeable");
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
         for e in c.entries() {
             let ids: std::collections::BTreeSet<_> =
                 e.guide.steps.iter().map(|s| s.id.as_str()).collect();
@@ -286,7 +287,7 @@ mod tests {
                 for dep in &s.after {
                     assert!(
                         ids.contains(dep.as_str()),
-                        "{} : « {} » dépend de « {dep} », qui n'existe pas",
+                        "{}: \"{}\" depends on \"{dep}\", which does not exist",
                         e.manifest.metadata.name,
                         s.id
                     );
@@ -297,7 +298,7 @@ mod tests {
 
     #[test]
     fn missing_catalog_is_reported_clearly() {
-        let err = Catalog::load("/nexiste/pas").unwrap_err();
+        let err = Catalog::load("/does/not/exist").unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err}");
     }
 }

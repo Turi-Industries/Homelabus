@@ -1,8 +1,8 @@
-//! Client ntfy.
+//! ntfy client.
 //!
-//! ntfy est retenu parce qu'il s'auto-héberge, ne demande aucun compte, et qu'une
-//! notification est un simple `POST` — pas de SDK, pas de jeton à faire tourner.
-//! Il tient dans le catalogue comme n'importe quelle autre app.
+//! ntfy was chosen because it self-hosts, needs no account, and a notification is a
+//! plain `POST` - no SDK, no token to rotate. It sits in the catalog like any other
+//! app.
 
 use crate::{Error, Level, Notification, QuietHours, Result};
 
@@ -31,17 +31,17 @@ impl NtfyClient {
         self
     }
 
-    /// Envoie si le niveau et l'heure le permettent.
+    /// Sends if the level and the hour allow it.
     ///
-    /// Renvoie `Ok(false)` quand la notification a été **retenue** — ce n'est pas une
-    /// erreur, c'est le fonctionnement prévu. Les confondre ferait apparaître des
-    /// échecs dans les journaux à chaque notification nocturne non critique.
+    /// Returns `Ok(false)` when the notification was **held back** - that is not an
+    /// error, it is the intended behaviour. Confusing the two would surface failures
+    /// in the logs on every non-critical night-time notification.
     pub async fn send_at(&self, n: &Notification, hour: u32) -> Result<bool> {
         if !self.quiet.allows(n.level, hour) {
             tracing::debug!(
-                sujet = %n.subject,
-                niveau = ?n.level,
-                "notification retenue (heures calmes ou niveau non poussé)"
+                subject = %n.subject,
+                level = ?n.level,
+                "notification held back (quiet hours, or a level that is not pushed)"
             );
             return Ok(false);
         }
@@ -65,23 +65,23 @@ impl NtfyClient {
             return Err(Error::Rejected(resp.status().as_u16()));
         }
 
-        tracing::info!(sujet = %n.subject, "notification envoyée");
+        tracing::info!(subject = %n.subject, "notification sent");
         Ok(true)
     }
 
-    /// Envoie en utilisant l'heure locale courante.
+    /// Sends using the current local hour.
     pub async fn send(&self, n: &Notification) -> Result<bool> {
-        let hour = heure_locale();
+        let hour = local_hour();
         self.send_at(n, hour).await
     }
 }
 
-/// L'heure locale, sans dépendre d'une bibliothèque de dates.
+/// The local hour, without depending on a date library.
 ///
-/// Approximation volontaire : on ne cherche qu'à distinguer « nuit » de « journée ».
-/// Une erreur d'une heure sur un fuseau exotique n'a aucune conséquence ici, alors
-/// qu'une dépendance de plus en aurait une.
-fn heure_locale() -> u32 {
+/// Deliberately approximate: all we need is to tell "night" from "daytime". Being an
+/// hour off in an unusual timezone has no consequence here, whereas one more
+/// dependency would.
+fn local_hour() -> u32 {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -89,25 +89,25 @@ fn heure_locale() -> u32 {
     ((secs / 3600) % 24) as u32
 }
 
-/// Envoie une notification si un client est configuré.
+/// Sends a notification if a client is configured.
 ///
-/// Sans client, on journalise au lieu de perdre l'information : une alerte non
-/// envoyée doit rester visible quelque part.
+/// Without one it logs instead of losing the information: an alert that was not sent
+/// must stay visible somewhere.
 pub async fn notify_or_log(client: Option<&NtfyClient>, n: &Notification) {
     match client {
         Some(c) => {
             if let Err(e) = c.send(n).await {
-                tracing::error!(sujet = %n.subject, "notification impossible : {e}");
+                tracing::error!(subject = %n.subject, "could not notify: {e}");
                 tracing::warn!("{} — {}", n.title, n.body);
             }
         }
         None => {
-            let niveau = if n.level >= Level::Critical {
+            let mark = if n.level >= Level::Critical {
                 "🔴"
             } else {
                 "🟠"
             };
-            tracing::warn!("{niveau} {} — {} (aucun ntfy configuré)", n.title, n.body);
+            tracing::warn!("{mark} {} - {} (no ntfy configured)", n.title, n.body);
         }
     }
 }
@@ -117,52 +117,52 @@ mod tests {
     use super::*;
 
     fn client() -> NtfyClient {
-        NtfyClient::new("https://ntfy.example.fr/", "homelab")
+        NtfyClient::new("https://ntfy.example.org/", "homelab")
     }
 
     #[test]
     fn the_base_url_is_normalised() {
         let c = client();
-        assert_eq!(c.base_url, "https://ntfy.example.fr");
+        assert_eq!(c.base_url, "https://ntfy.example.org");
     }
 
     #[tokio::test]
     async fn a_held_notification_is_not_an_error() {
-        // 🔴 Retenir n'est pas échouer. Les confondre ferait apparaître des erreurs
-        // dans les journaux à chaque notification nocturne non critique.
+        // 🔴 Holding back is not failing. Confusing the two would surface errors in
+        // the logs on every non-critical night-time notification.
         let c = client();
-        let n = Notification::important("maj", "Mise à jour", "gitea 1.25");
+        let n = Notification::important("update", "Update available", "gitea 1.25");
 
-        // 3 h du matin, niveau important : retenu, sans appel réseau.
-        assert!(!c.send_at(&n, 3).await.expect("pas d'erreur"));
+        // 3 a.m., important level: held back, with no network call.
+        assert!(!c.send_at(&n, 3).await.expect("no error"));
     }
 
     #[tokio::test]
     async fn an_info_is_never_sent() {
         let c = client();
-        let n = Notification::new(Level::Info, "x", "Info", "…");
-        assert!(!c.send_at(&n, 14).await.expect("pas d'erreur"));
+        let n = Notification::new(Level::Info, "x", "Info", "...");
+        assert!(!c.send_at(&n, 14).await.expect("no error"));
     }
 
     #[tokio::test]
     async fn a_critical_notification_attempts_delivery_at_night() {
-        // Le domaine n'existe pas : on doit obtenir une erreur RÉSEAU, ce qui prouve
-        // que l'envoi a bien été tenté malgré l'heure.
+        // The domain does not exist, so we must get a NETWORK error - which proves
+        // delivery was attempted despite the hour.
         let c = client();
-        let n = Notification::critical("disque", "Disque plein", "node2 à 97 %");
+        let n = Notification::critical("disk", "Disk full", "node2 at 97 %");
         let r = c.send_at(&n, 3).await;
         assert!(matches!(r, Err(Error::Http { .. })), "{r:?}");
     }
 
     #[tokio::test]
     async fn without_a_client_nothing_panics() {
-        // L'information doit rester visible dans les journaux plutôt que disparaître.
-        notify_or_log(None, &Notification::critical("x", "Titre", "Corps")).await;
+        // The information must stay visible in the logs rather than vanish.
+        notify_or_log(None, &Notification::critical("x", "Title", "Body")).await;
     }
 
     #[test]
     fn the_local_hour_is_within_range() {
-        let h = heure_locale();
-        assert!(h < 24, "heure aberrante : {h}");
+        let h = local_hour();
+        assert!(h < 24, "impossible hour: {h}");
     }
 }

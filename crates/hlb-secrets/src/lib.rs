@@ -1,19 +1,17 @@
-//! Le coffre de secrets (§9 et §9quater du plan).
+//! The secret vault.
 //!
-//! Deux principes qui gouvernent tout ce module :
+//! Two principles govern this module:
 //!
-//! 1. **Aucun mot de passe n'est jamais saisi par un humain.** Ils sont générés
-//!    aléatoirement, stockés chiffrés, et injectés dans les services. Personne n'a
-//!    besoin de les connaître, donc personne ne les réutilise ailleurs.
+//! 1. **No password is ever typed by a human.** They are randomly generated, stored
+//!    encrypted, and injected into services. Nobody needs to know them, so nobody
+//!    reuses them elsewhere.
 //!
-//! 2. **La clé maîtresse est le seul secret dont la perte est définitive.** Sans elle,
-//!    aucune sauvegarde n'est déchiffrable. Elle doit exister en deux copies hors
-//!    ligne (§9quater).
+//! 2. **The master key is the only secret whose loss is final.** Without it no backup
+//!    can be decrypted. It must exist as two offline copies.
 //!
-//! Le chiffrement au repos repose sur `age` (X25519 + ChaCha20-Poly1305). Le fichier
-//! de clé est protégé par les permissions POSIX ; la vraie défense contre le vol de
-//! machine est le chiffrement du disque (LUKS), pas ce fichier — voir §9quater pour
-//! le raisonnement.
+//! Encryption at rest uses `age` (X25519 + ChaCha20-Poly1305). The key file is
+//! protected by POSIX permissions; the real defence against a stolen machine is disk
+//! encryption (LUKS), not this file.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,7 +22,7 @@ use rand::Rng;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("lecture/écriture de {path} : {source}")]
+    #[error("reading/writing {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
@@ -32,51 +30,51 @@ pub enum Error {
     },
 
     #[error(
-        "clé maîtresse absente : {0}\n  → `hlb secrets init` la crée, \
-             mais toute donnée déjà chiffrée serait alors irrécupérable"
+        "master key missing: {0}\n  -> `hlb secrets init` creates one, \
+             but anything already encrypted would then be unrecoverable"
     )]
     MissingKey(PathBuf),
 
-    #[error("clé maîtresse illisible : {0}")]
+    #[error("master key is unreadable: {0}")]
     MalformedKey(String),
 
-    #[error("chiffrement : {0}")]
+    #[error("encryption: {0}")]
     Encrypt(String),
 
-    #[error("déchiffrement impossible — mauvaise clé maîtresse ? ({0})")]
+    #[error("cannot decrypt - wrong master key? ({0})")]
     Decrypt(String),
 
-    #[error("le secret « {0} » n'est pas de l'UTF-8 valide")]
+    #[error("secret \"{0}\" is not valid UTF-8")]
     NotUtf8(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Le coffre : une identité `age` chargée en mémoire.
+/// The vault: an `age` identity held in memory.
 pub struct Vault {
     identity: Identity,
     recipient: Recipient,
 }
 
-/// `Debug` rédigé, à dessein.
+/// `Debug` is redacted, deliberately.
 ///
-/// Un `#[derive(Debug)]` ferait fuiter la clé maîtresse dans le premier `dbg!`, la
-/// première trace ou le premier message de panique venu. Seule la clé **publique**
-/// est affichée : elle est sûre à partager.
+/// A `#[derive(Debug)]` would leak the master key into the first `dbg!`, the first
+/// trace or the first panic message. Only the **public** key is shown: that one is
+/// safe to share.
 impl std::fmt::Debug for Vault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Vault")
             .field("public_key", &self.recipient.to_string())
-            .field("identity", &"<rédigé>")
+            .field("identity", &"<redacted>")
             .finish()
     }
 }
 
 impl Vault {
-    /// Crée une nouvelle clé maîtresse et l'écrit sur disque en 0600.
+    /// Creates a new master key and writes it to disk as 0600.
     ///
-    /// Refuse d'écraser une clé existante : le faire rendrait irrécupérable tout ce
-    /// qui a déjà été chiffré, y compris les sauvegardes.
+    /// Refuses to overwrite an existing key: doing so would make everything already
+    /// encrypted unrecoverable, backups included.
     pub fn init(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
 
@@ -85,8 +83,8 @@ impl Vault {
                 path: path.to_path_buf(),
                 source: std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
-                    "une clé maîtresse existe déjà — l'écraser rendrait tous les \
-                     secrets et sauvegardes existants irrécupérables",
+                    "a master key already exists - overwriting it would make every \
+                     existing secret and backup unrecoverable",
                 ),
             });
         }
@@ -108,7 +106,7 @@ impl Vault {
         })
     }
 
-    /// Charge une clé maîtresse existante.
+    /// Loads an existing master key.
     pub fn open(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
         if !path.exists() {
@@ -120,12 +118,12 @@ impl Vault {
             source,
         })?;
 
-        // On ignore les commentaires : les fichiers `age` en contiennent souvent.
+        // Comments are skipped: `age` key files often carry them.
         let line = raw
             .lines()
             .map(str::trim)
             .find(|l| !l.is_empty() && !l.starts_with('#'))
-            .ok_or_else(|| Error::MalformedKey("fichier vide".into()))?;
+            .ok_or_else(|| Error::MalformedKey("empty file".into()))?;
 
         let identity: Identity = line
             .parse()
@@ -138,7 +136,7 @@ impl Vault {
         })
     }
 
-    /// Ouvre la clé si elle existe, la crée sinon.
+    /// Opens the key if it exists, creates it otherwise.
     pub fn open_or_init(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
         if path.exists() {
@@ -180,23 +178,23 @@ impl Vault {
         String::from_utf8(buf).map_err(|_| Error::NotUtf8("<secret>".into()))
     }
 
-    /// La clé publique, sûre à afficher et à sauvegarder.
+    /// The public key: safe to display and to back up.
     pub fn public_key(&self) -> String {
         self.recipient.to_string()
     }
 }
 
-/// Alphabet volontairement sans caractères spéciaux.
+/// Alphabet deliberately free of special characters.
 ///
-/// Ces mots de passe finissent dans des URL de connexion (`postgres://user:pass@…`),
-/// des fichiers de configuration et des variables d'environnement. Un `@`, un `:` ou
-/// un `/` y casse le parsing de façon subtile. La longueur compense largement :
-/// 32 caractères sur cet alphabet valent ~190 bits d'entropie.
+/// These passwords end up in connection URLs (`postgres://user:pass@...`), config
+/// files and environment variables. An `@`, a `:` or a `/` breaks parsing there in
+/// subtle ways. Length more than compensates: 32 characters over this alphabet is
+/// about 190 bits of entropy.
 const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 pub const DEFAULT_PASSWORD_LEN: usize = 32;
 
-/// Génère un mot de passe avec le générateur cryptographique du système.
+/// Generates a password using the system's cryptographic generator.
 pub fn generate_password(len: usize) -> String {
     let mut rng = rand::rng();
     (0..len)
@@ -204,11 +202,11 @@ pub fn generate_password(len: usize) -> String {
         .collect()
 }
 
-/// Remplit un tampon avec le générateur cryptographique du système.
+/// Fills a buffer using the system's cryptographic generator.
 ///
-/// 🔴 `rand::rng()` et non un générateur ensemencé sur l'horloge : un jeton d'accès
-/// prédictible serait le maillon le plus court de toute la chaîne, et l'erreur ne se
-/// verrait jamais — les valeurs paraissent aléatoires dans les deux cas.
+/// 🔴 `rand::rng()` rather than a clock-seeded generator: a predictable access token
+/// would be the shortest link in the whole chain, and the mistake would never show -
+/// the values look random either way.
 pub fn fill_random(buf: &mut [u8]) {
     use rand::RngCore as _;
     rand::rng().fill_bytes(buf);
@@ -216,9 +214,9 @@ pub fn fill_random(buf: &mut [u8]) {
 
 fn write_private(path: &Path, contents: &str) -> Result<()> {
     let body = format!(
-        "# Clé maîtresse Homelabus — NE PAS PARTAGER, NE PAS COMMITER.\n\
-         # Sa perte rend TOUS les secrets et TOUTES les sauvegardes irrécupérables.\n\
-         # Garde deux copies hors ligne (§9quater du plan).\n\
+        "# Homelabus master key - DO NOT SHARE, DO NOT COMMIT.\n\
+         # Losing it makes EVERY secret and EVERY backup unrecoverable.\n\
+         # Keep two offline copies.\n\
          {contents}\n"
     );
 
@@ -246,22 +244,22 @@ mod tests {
     use super::*;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("dossier temporaire")
+        tempfile::tempdir().expect("temp dir")
     }
 
     #[test]
     fn roundtrip() {
         let d = tmp();
         let v = Vault::init(d.path().join("master.key")).expect("init");
-        let secret = "mot-de-passe-très-secret";
-        let ct = v.encrypt(secret).expect("chiffrement");
+        let secret = "a-very-secret-password";
+        let ct = v.encrypt(secret).expect("encryption");
 
         assert!(!ct.is_empty());
         assert!(
             !ct.windows(secret.len()).any(|w| w == secret.as_bytes()),
-            "le clair ne doit pas apparaître dans le chiffré"
+            "plaintext must not appear in the ciphertext"
         );
-        assert_eq!(v.decrypt(&ct).expect("déchiffrement"), secret);
+        assert_eq!(v.decrypt(&ct).expect("decryption"), secret);
     }
 
     #[test]
@@ -271,11 +269,11 @@ mod tests {
 
         let ct = Vault::init(&path)
             .expect("init")
-            .encrypt("valeur")
-            .expect("chiffrement");
-        let reopened = Vault::open(&path).expect("réouverture");
+            .encrypt("value")
+            .expect("encryption");
+        let reopened = Vault::open(&path).expect("reopen");
 
-        assert_eq!(reopened.decrypt(&ct).expect("déchiffrement"), "valeur");
+        assert_eq!(reopened.decrypt(&ct).expect("decryption"), "value");
     }
 
     #[test]
@@ -284,26 +282,26 @@ mod tests {
         let a = Vault::init(d.path().join("a.key")).expect("init a");
         let b = Vault::init(d.path().join("b.key")).expect("init b");
 
-        let ct = a.encrypt("secret").expect("chiffrement");
+        let ct = a.encrypt("secret").expect("encryption");
         let err = b.decrypt(&ct).unwrap_err();
         assert!(matches!(err, Error::Decrypt(_)), "{err}");
     }
 
     #[test]
     fn init_refuses_to_overwrite() {
-        // Écraser une clé maîtresse rendrait les sauvegardes irrécupérables.
+        // Overwriting a master key would make the backups unrecoverable.
         let d = tmp();
         let path = d.path().join("master.key");
-        Vault::init(&path).expect("première init");
+        Vault::init(&path).expect("first init");
 
         let err = Vault::init(&path).unwrap_err();
-        assert!(err.to_string().contains("existe déjà"), "{err}");
+        assert!(err.to_string().contains("already exists"), "{err}");
     }
 
     #[test]
     fn open_reports_a_missing_key_clearly() {
         let d = tmp();
-        let err = Vault::open(d.path().join("absente.key")).unwrap_err();
+        let err = Vault::open(d.path().join("missing.key")).unwrap_err();
         assert!(matches!(err, Error::MissingKey(_)), "{err}");
     }
 
@@ -312,12 +310,10 @@ mod tests {
         let d = tmp();
         let path = d.path().join("master.key");
 
-        let first = Vault::open_or_init(&path).expect("création").public_key();
-        let second = Vault::open_or_init(&path)
-            .expect("réouverture")
-            .public_key();
+        let first = Vault::open_or_init(&path).expect("creation").public_key();
+        let second = Vault::open_or_init(&path).expect("reopen").public_key();
 
-        assert_eq!(first, second, "la clé ne doit pas être régénérée");
+        assert_eq!(first, second, "the key must not be regenerated");
     }
 
     #[cfg(unix)]
@@ -332,7 +328,7 @@ mod tests {
             .expect("metadata")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o077, 0, "aucun accès pour le groupe ni les autres");
+        assert_eq!(mode & 0o077, 0, "no access for group or others");
     }
 
     #[test]
@@ -342,28 +338,27 @@ mod tests {
         let v = Vault::init(&path).expect("init");
 
         let private = std::fs::read_to_string(&path)
-            .expect("lecture")
+            .expect("read")
             .lines()
             .find(|l| l.starts_with("AGE-SECRET-KEY"))
-            .expect("clé privée présente")
+            .expect("private key present")
             .to_string();
 
         let debug = format!("{v:?}");
-        assert!(!debug.contains(&private), "la clé privée a fuité : {debug}");
-        assert!(debug.contains("<rédigé>"));
+        assert!(!debug.contains(&private), "the private key leaked: {debug}");
+        assert!(debug.contains("<redacted>"));
         assert!(debug.contains(&v.public_key()));
     }
 
     #[test]
     fn passwords_are_url_safe() {
-        // Ces mots de passe finissent dans des URL de connexion : un `@` ou un `/`
-        // y casserait le parsing.
+        // These end up in connection URLs, where an `@` or a `/` would break parsing.
         for _ in 0..100 {
             let p = generate_password(DEFAULT_PASSWORD_LEN);
             assert_eq!(p.len(), DEFAULT_PASSWORD_LEN);
             assert!(
                 p.chars().all(|c| c.is_ascii_alphanumeric()),
-                "caractère inattendu dans {p}"
+                "unexpected character in {p}"
             );
         }
     }
@@ -380,7 +375,7 @@ mod tests {
         let d = tmp();
         let v = Vault::init(d.path().join("master.key")).expect("init");
         let pk = v.public_key();
-        assert!(pk.starts_with("age1"), "clé publique inattendue : {pk}");
+        assert!(pk.starts_with("age1"), "unexpected public key: {pk}");
         assert_eq!(pk, v.public_key());
     }
 }

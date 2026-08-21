@@ -1,15 +1,15 @@
-//! Notifications (§8bis).
+//! Notifications.
 //!
-//! 🔴 **Un système d'alerte mal réglé est pire que pas d'alerte du tout.** Au bout de
-//! trois semaines de faux positifs, plus personne ne les lit — et la vraie panne
-//! passe inaperçue au milieu du bruit.
+//! 🔴 **A badly tuned alerting system is worse than no alerting at all.** After three
+//! weeks of false positives nobody reads them any more, and the real outage goes
+//! unnoticed in the noise.
 //!
-//! Deux règles en découlent :
+//! Two rules follow:
 //!
-//! 1. **On alerte sur les symptômes, pas sur les causes.** « CPU à 85 % » n'appelle
-//!    aucune action ; « gitea répond en plus de 5 s depuis 10 min » si.
-//! 2. **Les heures calmes.** Ce qui n'est pas critique attend le matin. Réveiller
-//!    quelqu'un pour une mise à jour disponible garantit qu'il coupera les alertes.
+//! 1. **Alert on symptoms, not on causes.** "CPU at 85 %" calls for no action;
+//!    "gitea has been answering in over 5 s for 10 min" does.
+//! 2. **Quiet hours.** Anything not critical waits for the morning. Waking someone for
+//!    an available update guarantees they will turn alerts off.
 
 pub mod ntfy;
 
@@ -19,48 +19,48 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("notification impossible ({url}) : {source}")]
+    #[error("could not notify ({url}): {source}")]
     Http {
         url: String,
         #[source]
         source: reqwest::Error,
     },
 
-    #[error("le service de notification a répondu {0}")]
+    #[error("the notification service answered {0}")]
     Rejected(u16),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Les quatre niveaux du §8bis.
+/// The four alert levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
-    /// Journaux seulement.
+    /// Logs only.
     Debug,
-    /// Tableau de bord seulement — jamais poussé.
+    /// Dashboard only - never pushed.
     Info,
-    /// Groupé, une fois par jour.
+    /// Batched, once a day.
     Important,
-    /// 🔴 Poussé immédiatement, y compris la nuit.
+    /// 🔴 Pushed immediately, at night included.
     Critical,
 }
 
 impl Level {
-    /// Doit-on pousser cette alerte vers le téléphone ?
+    /// Should this alert be pushed to the phone?
     pub fn is_pushed(&self) -> bool {
         *self >= Self::Important
     }
 
-    /// Traverse-t-elle les heures calmes ?
+    /// Does it cross quiet hours?
     ///
-    /// Seul le critique. Tout le reste attend : une mise à jour disponible à 3 h du
-    /// matin ne justifie pas de réveiller quelqu'un.
+    /// Only critical does. Everything else waits: an update available at 3 a.m. does
+    /// not justify waking anyone.
     pub fn ignores_quiet_hours(&self) -> bool {
         *self == Self::Critical
     }
 
-    /// Priorité ntfy (1 = min, 5 = urgent).
+    /// ntfy priority (1 = min, 5 = urgent).
     pub fn ntfy_priority(&self) -> u8 {
         match self {
             Self::Debug => 1,
@@ -80,13 +80,13 @@ impl Level {
     }
 }
 
-/// Une notification prête à partir.
+/// A notification ready to go out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
     pub level: Level,
     pub title: String,
     pub body: String,
-    /// De quoi ça parle : sert à regrouper et à ne pas répéter.
+    /// What it is about: used to group and to avoid repeating.
     pub subject: String,
 }
 
@@ -109,7 +109,7 @@ impl Notification {
     }
 }
 
-/// Fenêtre pendant laquelle on n'envoie que le critique.
+/// Window during which only critical alerts are sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuietHours {
     pub from_hour: u32,
@@ -126,10 +126,10 @@ impl Default for QuietHours {
 }
 
 impl QuietHours {
-    /// Est-on dans les heures calmes ?
+    /// Are we inside quiet hours?
     ///
-    /// La fenêtre franchit minuit dans le cas courant (22 h → 8 h), ce qui demande
-    /// un test différent d'un simple encadrement.
+    /// The window crosses midnight in the common case (22:00 -> 08:00), which needs a
+    /// different test from a plain range check.
     pub fn contains(&self, hour: u32) -> bool {
         if self.from_hour <= self.to_hour {
             hour >= self.from_hour && hour < self.to_hour
@@ -138,7 +138,7 @@ impl QuietHours {
         }
     }
 
-    /// Cette notification doit-elle partir maintenant ?
+    /// Should this notification go out now?
     pub fn allows(&self, level: Level, hour: u32) -> bool {
         if !level.is_pushed() {
             return false;
@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn only_important_and_above_are_pushed() {
-        // Une info qui vibre dans la poche est exactement ce qui fait couper les
-        // notifications au bout de trois semaines.
+        // An info-level buzz in the pocket is exactly what makes people turn
+        // notifications off after three weeks.
         assert!(!Level::Debug.is_pushed());
         assert!(!Level::Info.is_pushed());
         assert!(Level::Important.is_pushed());
@@ -169,14 +169,14 @@ mod tests {
 
     #[test]
     fn quiet_hours_cross_midnight() {
-        // 🔴 22 h → 8 h franchit minuit : un simple encadrement ne marcherait pas.
+        // 🔴 22:00 -> 08:00 crosses midnight: a plain range check would not work.
         let q = QuietHours::default();
         assert!(q.contains(23));
         assert!(q.contains(3));
         assert!(q.contains(7));
-        assert!(!q.contains(8), "la borne de fin est exclue");
+        assert!(!q.contains(8), "the end bound is exclusive");
         assert!(!q.contains(12));
-        assert!(q.contains(22), "la borne de début est incluse");
+        assert!(q.contains(22), "the start bound is inclusive");
     }
 
     #[test]
@@ -199,8 +199,8 @@ mod tests {
 
     #[test]
     fn a_critical_alert_goes_through_at_night() {
-        // 🔴 Disque plein, quorum perdu, sauvegarde échouée deux fois : ça ne peut
-        // pas attendre le matin.
+        // 🔴 Full disk, lost quorum, a backup that failed twice: none of it can wait
+        // for the morning.
         let q = QuietHours::default();
         assert!(q.allows(Level::Critical, 3));
         assert!(q.allows(Level::Critical, 14));
@@ -208,8 +208,8 @@ mod tests {
 
     #[test]
     fn info_never_goes_out_even_in_daytime() {
-        // Le tableau de bord suffit : pousser une info transformerait le téléphone
-        // en journal d'événements.
+        // The dashboard is enough: pushing info would turn the phone into an event
+        // log.
         let q = QuietHours::default();
         assert!(!q.allows(Level::Info, 14));
         assert!(!q.allows(Level::Debug, 14));
@@ -232,11 +232,11 @@ mod tests {
     #[test]
     fn the_shorthand_constructors_set_the_right_level() {
         assert_eq!(
-            Notification::critical("disque", "Disque plein", "…").level,
+            Notification::critical("disk", "Disk full", "...").level,
             Level::Critical
         );
         assert_eq!(
-            Notification::important("maj", "Mise à jour", "…").level,
+            Notification::important("update", "Update available", "...").level,
             Level::Important
         );
     }
