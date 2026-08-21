@@ -1,18 +1,17 @@
-//! Miroir Git de l'état désiré (§2.3).
+//! Git mirror of the desired state.
 //!
-//! Chaque changement est rendu en YAML et commité. Ça donne gratuitement :
+//! Every change is rendered as YAML and committed. That gives three things for free:
 //!
-//! - un **historique lisible** de toute la configuration, avec des diffs ;
-//! - un **rollback** (`git revert`, puis réapplication) ;
-//! - une **sauvegarde de la config indépendante du système lui-même** — si la base
-//!   d'état est perdue, le dépôt suffit à reconstruire (§9quater).
+//! - a **readable history** of the whole configuration, with diffs;
+//! - a **rollback** (`git revert`, then reapply);
+//! - a **configuration backup independent of the system itself** - if the state
+//!   database is lost, the repository is enough to rebuild from.
 //!
-//! 🔴 **La base reste la source de vérité, le Git en est un miroir.**
+//! 🔴 **The database stays the source of truth; Git is a mirror of it.**
 //!
-//! L'inverse — lire le Git comme source — obligerait à gérer les conflits, les
-//! pushs concurrents, la réconciliation à trois voies… autrement dit à
-//! réimplémenter ArgoCD. Le plan est explicite là-dessus : on veut l'historique,
-//! pas le modèle GitOps complet.
+//! The reverse - reading Git as the source - would mean handling conflicts,
+//! concurrent pushes, three-way reconciliation: reimplementing ArgoCD. What is wanted
+//! here is the history, not the full GitOps model.
 
 use std::path::{Path, PathBuf};
 
@@ -20,17 +19,17 @@ use git2::{Repository, Signature};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("dépôt git : {0}")]
+    #[error("git repository: {0}")]
     Git(#[from] git2::Error),
 
-    #[error("écriture de {path} : {source}")]
+    #[error("writing {path}: {source}")]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("sérialisation du manifest de « {app} » : {source}")]
+    #[error("serialising the manifest of \"{app}\": {source}")]
     Serialize {
         app: String,
         #[source]
@@ -40,10 +39,10 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Ce qu'un export a produit.
+/// What an export produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportReport {
-    /// `None` si rien n'avait changé — on ne crée pas de commit vide.
+    /// `None` when nothing had changed: no empty commit is created.
     pub commit: Option<String>,
     pub written: Vec<String>,
     pub removed: Vec<String>,
@@ -61,7 +60,7 @@ pub struct GitMirror {
 }
 
 impl GitMirror {
-    /// Ouvre le dépôt, ou l'initialise s'il n'existe pas.
+    /// Opens the repository, or initialises it if there is none.
     pub fn open_or_init(path: impl AsRef<Path>) -> Result<Self> {
         let root = path.as_ref().to_path_buf();
         let repo = match Repository::open(&root) {
@@ -81,64 +80,64 @@ impl GitMirror {
         &self.root
     }
 
-    /// Écrit l'état désiré et commite ce qui a changé.
+    /// Writes the desired state and commits what changed.
     ///
-    /// `apps` porte, pour chaque app, son manifest **figé au déploiement** (§4.8) et
-    /// son statut. C'est bien l'état déployé qu'on archive, pas le catalogue courant.
+    /// For each app, `apps` carries the manifest **frozen at deploy time** and its
+    /// status. What gets archived is the deployed state, not today's catalog.
     pub fn export(
         &self,
         apps: &[(String, String, hlb_types::Manifest)],
         message: &str,
     ) -> Result<ExportReport> {
-        let dossier = self.root.join("apps");
-        std::fs::create_dir_all(&dossier).map_err(|source| Error::Io {
-            path: dossier.clone(),
+        let dir = self.root.join("apps");
+        std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+            path: dir.clone(),
             source,
         })?;
 
         let mut written = Vec::new();
-        let mut attendus = std::collections::BTreeSet::new();
+        let mut expected = std::collections::BTreeSet::new();
 
         for (name, status, manifest) in apps {
-            let fichier = dossier.join(format!("{name}.yaml"));
-            attendus.insert(format!("{name}.yaml"));
+            let file = dir.join(format!("{name}.yaml"));
+            expected.insert(format!("{name}.yaml"));
 
             let yaml = serde_yaml_ng::to_string(manifest).map_err(|source| Error::Serialize {
                 app: name.clone(),
                 source,
             })?;
 
-            // L'en-tête porte ce qui ne tient pas dans le manifest : le statut, et le
-            // rappel que ce fichier est généré.
-            let contenu = format!(
-                "# Généré par Homelabus — état déployé, ne pas éditer à la main.\n\
-                 # app: {name}\n# statut: {status}\n\n{yaml}"
+            // The header carries what does not fit in the manifest: the status, and
+            // the reminder that this file is generated.
+            let content = format!(
+                "# Generated by Homelabus - deployed state, do not edit by hand.\n\
+                 # app: {name}\n# status: {status}\n\n{yaml}"
             );
 
-            // Ne réécrire que si le contenu change : sinon chaque export produirait
-            // un commit, et l'historique deviendrait illisible.
-            let identique = std::fs::read_to_string(&fichier)
-                .map(|ancien| ancien == contenu)
+            // Only rewrite when the content actually changes: otherwise every export
+            // would produce a commit and the history would become unreadable.
+            let same = std::fs::read_to_string(&file)
+                .map(|previous| previous == content)
                 .unwrap_or(false);
 
-            if !identique {
-                std::fs::write(&fichier, &contenu).map_err(|source| Error::Io {
-                    path: fichier.clone(),
+            if !same {
+                std::fs::write(&file, &content).map_err(|source| Error::Io {
+                    path: file.clone(),
                     source,
                 })?;
                 written.push(name.clone());
             }
         }
 
-        // Les apps désinstallées disparaissent du miroir — mais restent dans
-        // l'historique, ce qui est précisément l'intérêt.
+        // Uninstalled apps leave the mirror but stay in the history, which is
+        // precisely the point.
         let mut removed = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&dossier) {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
-                let nom = e.file_name().to_string_lossy().to_string();
-                if nom.ends_with(".yaml") && !attendus.contains(&nom) {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.ends_with(".yaml") && !expected.contains(&name) {
                     let _ = std::fs::remove_file(e.path());
-                    removed.push(nom.trim_end_matches(".yaml").to_string());
+                    removed.push(name.trim_end_matches(".yaml").to_string());
                 }
             }
         }
@@ -151,11 +150,11 @@ impl GitMirror {
         })
     }
 
-    /// Indexe tout et commite, ou ne fait rien s'il n'y a aucun changement.
+    /// Stages everything and commits, or does nothing when nothing changed.
     fn commit_all(&self, message: &str) -> Result<Option<String>> {
         let mut index = self.repo.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
-        // `add_all` n'enlève pas les fichiers supprimés : il faut le demander.
+        // `add_all` does not stage deletions: they have to be asked for.
         index.update_all(["*"].iter(), None)?;
         index.write()?;
 
@@ -169,7 +168,7 @@ impl GitMirror {
             .and_then(|h| h.target())
             .and_then(|oid| self.repo.find_commit(oid).ok());
 
-        // Rien n'a bougé : pas de commit vide, l'historique doit rester lisible.
+        // Nothing moved: no empty commit, the history must stay readable.
         if let Some(p) = &parent {
             if p.tree_id() == tree_id {
                 return Ok(None);
@@ -185,18 +184,18 @@ impl GitMirror {
         Ok(Some(oid.to_string()))
     }
 
-    /// Les versions successives du manifest d'une app, du plus récent au plus ancien.
+    /// The successive versions of an app's manifest, newest first.
     ///
-    /// ## 🔴 Pourquoi ça se lit ICI et nulle part ailleurs
+    /// ## 🔴 Why this is read HERE and nowhere else
     ///
-    /// `apps.manifest` est ÉCRASÉ à chaque mise à jour : l'état ne garde que la
-    /// version courante. Répondre à « qu'est-ce qui a changé quand l'app a cessé de
-    /// marcher ? » exigerait donc de stocker un historique de plus — alors que le
-    /// miroir Git en tient déjà un, complet et daté.
+    /// `apps.manifest` is OVERWRITTEN on every update: the state keeps only the
+    /// current version. Answering "what changed when the app stopped working?" would
+    /// therefore need yet another history to be stored - while the Git mirror already
+    /// holds one, complete and dated.
     ///
-    /// Rend `(commit court, résumé, contenu YAML)`. Une version qui ne se relit pas est
-    /// **sautée** plutôt que rendue vide : un YAML vide se lit comme « le manifest ne
-    /// contenait rien », soit un changement énorme qui n'a jamais eu lieu.
+    /// Returns `(short commit, summary, YAML content)`. A version that cannot be read
+    /// back is **skipped** rather than returned empty: empty YAML reads as "the
+    /// manifest contained nothing", an enormous change that never happened.
     pub fn versions(&self, app: &str, limite: usize) -> Result<Vec<(String, String, String)>> {
         let chemin = format!("apps/{app}.yaml");
         let mut walk = self.repo.revwalk()?;
@@ -205,7 +204,7 @@ impl GitMirror {
         }
 
         let mut out = Vec::new();
-        let mut precedent: Option<String> = None;
+        let mut previous_content: Option<String> = None;
 
         for oid in walk {
             if out.len() >= limite {
@@ -222,32 +221,32 @@ impl GitMirror {
             let Some(blob) = objet.as_blob() else {
                 continue;
             };
-            let Ok(contenu) = std::str::from_utf8(blob.content()) else {
+            let Ok(content) = std::str::from_utf8(blob.content()) else {
                 continue;
             };
 
-            // ⚠️ Un commit qui ne touche PAS cette app porte quand même son fichier,
-            // inchangé. Les rendre tous donnerait vingt « versions » identiques, et le
-            // vrai changement se perdrait au milieu.
-            if precedent.as_deref() == Some(contenu) {
+            // ⚠️ A commit that does NOT touch this app still carries its file,
+            // unchanged. Returning them all would give twenty identical "versions",
+            // and the one real change would be lost among them.
+            if previous_content.as_deref() == Some(content) {
                 continue;
             }
-            precedent = Some(contenu.to_string());
+            previous_content = Some(content.to_string());
 
             out.push((
                 commit.id().to_string()[..8].to_string(),
                 commit.summary().unwrap_or("").to_string(),
-                contenu.to_string(),
+                content.to_string(),
             ));
         }
         Ok(out)
     }
 
-    /// L'historique récent, pour `hlb history`.
+    /// The recent history, for `hlb history`.
     pub fn history(&self, limit: usize) -> Result<Vec<(String, String)>> {
         let mut walk = self.repo.revwalk()?;
         if walk.push_head().is_err() {
-            // Dépôt vide : pas d'historique, ce n'est pas une erreur.
+            // Empty repository: no history, and that is not an error.
             return Ok(Vec::new());
         }
 
@@ -267,25 +266,25 @@ impl GitMirror {
 mod tests {
     #[test]
     fn only_the_versions_that_actually_changed_are_returned() {
-        // 🔴 Le piège : un commit qui ne touche pas cette app porte QUAND MÊME son
-        // fichier, inchangé. Rendre tous les commits donnerait vingt « versions »
-        // identiques, et le seul vrai changement se perdrait au milieu.
-        let tmp = tempfile::tempdir().expect("dossier");
-        let m = GitMirror::open_or_init(tmp.path()).expect("miroir");
+        // 🔴 The trap: a commit that does not touch this app STILL carries its file,
+        // unchanged. Returning every commit would give twenty identical "versions",
+        // and the single real change would be lost among them.
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let m = GitMirror::open_or_init(tmp.path()).expect("mirror");
 
         m.export(
             &[("gitea".into(), "running".into(), manifest("gitea", "1.23"))],
-            "installation",
+            "install",
         )
         .expect("export 1");
 
-        // Un commit qui ne concerne QUE l'autre app.
+        // A commit that concerns ONLY the other app.
         m.export(
             &[
                 ("gitea".into(), "running".into(), manifest("gitea", "1.23")),
                 ("immich".into(), "running".into(), manifest("immich", "1.0")),
             ],
-            "ajout d'immich",
+            "add immich",
         )
         .expect("export 2");
 
@@ -294,7 +293,7 @@ mod tests {
                 ("gitea".into(), "running".into(), manifest("gitea", "1.24")),
                 ("immich".into(), "running".into(), manifest("immich", "1.0")),
             ],
-            "mise à jour de gitea",
+            "update gitea",
         )
         .expect("export 3");
 
@@ -302,30 +301,33 @@ mod tests {
         assert_eq!(
             v.len(),
             2,
-            "deux contenus distincts, pas trois commits : {v:#?}"
+            "two distinct contents, not three commits: {v:#?}"
         );
-        assert!(v[0].2.contains("1.24"), "le plus récent d'abord");
+        assert!(v[0].2.contains("1.24"), "newest first");
         assert!(v[1].2.contains("1.23"));
     }
 
     #[test]
     fn an_app_that_was_never_exported_has_no_history_and_no_error() {
-        // Une app absente n'est pas une erreur : elle n'a simplement pas d'historique.
-        let tmp = tempfile::tempdir().expect("dossier");
-        let m = GitMirror::open_or_init(tmp.path()).expect("miroir");
+        // A missing app is not an error: it simply has no history.
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let m = GitMirror::open_or_init(tmp.path()).expect("mirror");
         m.export(
             &[("gitea".into(), "running".into(), manifest("gitea", "1"))],
-            "installation",
+            "install",
         )
         .expect("export");
 
-        assert!(m.versions("inexistante", 10).expect("versions").is_empty());
+        assert!(m
+            .versions("does-not-exist", 10)
+            .expect("versions")
+            .is_empty());
     }
 
     #[test]
     fn an_empty_mirror_is_not_an_error_either() {
-        let tmp = tempfile::tempdir().expect("dossier");
-        let m = GitMirror::open_or_init(tmp.path()).expect("miroir");
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let m = GitMirror::open_or_init(tmp.path()).expect("mirror");
         assert!(m.versions("gitea", 10).expect("versions").is_empty());
     }
 
@@ -336,12 +338,12 @@ mod tests {
             "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: {name} }}\n\
              spec:\n  image: {{ repo: a/b, tag: \"{tag}\" }}\n"
         );
-        serde_yaml_ng::from_str(&y).expect("manifest de test")
+        serde_yaml_ng::from_str(&y).expect("test manifest")
     }
 
     fn mirror() -> (tempfile::TempDir, GitMirror) {
-        let d = tempfile::tempdir().expect("dossier temporaire");
-        let m = GitMirror::open_or_init(d.path()).expect("dépôt");
+        let d = tempfile::tempdir().expect("dir temporaire");
+        let m = GitMirror::open_or_init(d.path()).expect("repository");
         (d, m)
     }
 
@@ -358,15 +360,15 @@ mod tests {
 
     #[test]
     fn nothing_changed_means_no_commit() {
-        // 🔴 Sinon chaque passage de la boucle de réconciliation produirait un
-        // commit, et l'historique deviendrait inexploitable.
+        // 🔴 Otherwise every pass of the reconciliation loop would produce a commit,
+        // and the history would become unusable.
         let (_d, m) = mirror();
         let apps = vec![("gitea".into(), "running".into(), manifest("gitea", "1.24"))];
 
         m.export(&apps, "premier").expect("export");
         let second = m.export(&apps, "second").expect("export");
 
-        assert!(!second.changed(), "aucun commit ne devait être créé");
+        assert!(!second.changed(), "no commit should have been created");
         assert_eq!(m.history(10).expect("historique").len(), 1);
     }
 
@@ -382,14 +384,14 @@ mod tests {
         let r = m
             .export(
                 &[("gitea".into(), "running".into(), manifest("gitea", "1.25"))],
-                "montée en 1.25",
+                "bump to 1.25",
             )
             .expect("export");
 
         assert!(r.changed());
-        let h = m.history(10).expect("historique");
+        let h = m.history(10).expect("history");
         assert_eq!(h.len(), 2);
-        assert_eq!(h[0].1, "montée en 1.25", "le plus récent d'abord");
+        assert_eq!(h[0].1, "bump to 1.25", "newest first");
     }
 
     #[test]
@@ -404,21 +406,21 @@ mod tests {
                     manifest("vikunja", "0.24"),
                 ),
             ],
-            "deux apps",
+            "two apps",
         )
         .expect("export");
 
         let r = m
             .export(
                 &[("gitea".into(), "running".into(), manifest("gitea", "1.24"))],
-                "désinstallation de vikunja",
+                "uninstall vikunja",
             )
             .expect("export");
 
         assert_eq!(r.removed, vec!["vikunja"]);
         assert!(!m.root().join("apps/vikunja.yaml").exists());
-        // Mais l'historique la conserve : c'est tout l'intérêt du miroir.
-        assert_eq!(m.history(10).expect("historique").len(), 2);
+        // The history keeps it, which is the whole point of the mirror.
+        assert_eq!(m.history(10).expect("history").len(), 2);
     }
 
     #[test]
@@ -430,12 +432,12 @@ mod tests {
         )
         .expect("export");
 
-        let c = std::fs::read_to_string(m.root().join("apps/gitea.yaml")).expect("lecture");
-        assert!(c.contains("ne pas éditer à la main"));
-        assert!(c.contains("statut: running"));
-        // Et le manifest doit rester relisible malgré l'en-tête.
-        let relu: hlb_types::Manifest = serde_yaml_ng::from_str(&c).expect("relisible");
-        assert_eq!(relu.metadata.name, "gitea");
+        let c = std::fs::read_to_string(m.root().join("apps/gitea.yaml")).expect("read");
+        assert!(c.contains("do not edit by hand"));
+        assert!(c.contains("status: running"));
+        // And the manifest must stay readable despite the header.
+        let reread: hlb_types::Manifest = serde_yaml_ng::from_str(&c).expect("readable");
+        assert_eq!(reread.metadata.name, "gitea");
     }
 
     #[test]
@@ -446,16 +448,16 @@ mod tests {
 
     #[test]
     fn opening_an_existing_repository_keeps_its_history() {
-        let d = tempfile::tempdir().expect("dossier");
+        let d = tempfile::tempdir().expect("temp dir");
         {
-            let m = GitMirror::open_or_init(d.path()).expect("dépôt");
+            let m = GitMirror::open_or_init(d.path()).expect("repository");
             m.export(
                 &[("gitea".into(), "running".into(), manifest("gitea", "1.24"))],
                 "premier",
             )
             .expect("export");
         }
-        let m = GitMirror::open_or_init(d.path()).expect("réouverture");
+        let m = GitMirror::open_or_init(d.path()).expect("reopen");
         assert_eq!(m.history(10).expect("historique").len(), 1);
     }
 }

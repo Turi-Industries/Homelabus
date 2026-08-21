@@ -1,16 +1,16 @@
-//! Génération des clés WireGuard.
+//! WireGuard key generation.
 //!
-//! WireGuard utilise Curve25519. On génère les clés **en Rust** plutôt qu'en
-//! appelant `wg genkey` : le binaire n'est pas garanti présent sur la machine qui
-//! prépare la configuration (le controller peut tourner ailleurs que sur un nœud),
-//! et une clé privée qui transite par la sortie standard d'un sous-processus est une
-//! fuite de plus à surveiller.
+//! WireGuard uses Curve25519. Keys are generated **in Rust** rather than by calling
+//! `wg genkey`: the binary is not guaranteed to be present on the machine preparing
+//! the configuration (the controller can run somewhere other than a node), and a
+//! private key travelling through a subprocess's standard output is one more leak to
+//! watch.
 
 use rand::RngCore;
 
 use crate::{Error, Result};
 
-/// Une paire de clés WireGuard, encodée en base64 comme l'attend `wg`.
+/// A WireGuard key pair, base64-encoded the way `wg` expects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyPair {
     pub private: String,
@@ -22,10 +22,9 @@ impl KeyPair {
         let mut secret = [0u8; 32];
         rand::rng().fill_bytes(&mut secret);
 
-        // Le « clamping » de Curve25519 : impose les bits requis par la courbe.
-        // WireGuard le fait aussi de son côté, mais une clé non clampée serait
-        // acceptée puis silencieusement modifiée — la clé publique dérivée ne
-        // correspondrait alors plus.
+        // Curve25519 "clamping": forces the bits the curve requires. WireGuard does
+        // it too on its side, but an unclamped key would be accepted and then
+        // silently modified - and the derived public key would no longer match.
         secret[0] &= 248;
         secret[31] &= 127;
         secret[31] |= 64;
@@ -38,7 +37,7 @@ impl KeyPair {
         }
     }
 
-    /// Reconstruit la paire à partir d'une clé privée conservée au coffre.
+    /// Rebuilds the pair from a private key kept in the vault.
     pub fn from_private(private_b64: &str) -> Result<Self> {
         let bytes =
             unb64(private_b64).ok_or_else(|| Error::InvalidKey("base64 illisible".into()))?;
@@ -112,7 +111,7 @@ mod tests {
     #[test]
     fn a_generated_pair_has_the_expected_shape() {
         let k = KeyPair::generate();
-        // 32 octets en base64 → 44 caractères avec le remplissage.
+        // 32 bytes in base64 is 44 characters with padding.
         assert_eq!(k.private.len(), 44, "{}", k.private);
         assert_eq!(k.public.len(), 44, "{}", k.public);
         assert!(k.private.ends_with('='));
@@ -126,8 +125,8 @@ mod tests {
 
     #[test]
     fn the_public_key_is_derived_deterministically() {
-        // 🔴 C'est ce qui permet de ne stocker QUE la clé privée au coffre : la
-        // publique se recalcule, et ne peut donc pas désynchroniser.
+        // 🔴 This is what allows storing ONLY the private key in the vault: the
+        // public one is recomputed, so the two cannot drift apart.
         let k = KeyPair::generate();
         let relu = KeyPair::from_private(&k.private).expect("reconstruction");
         assert_eq!(relu.public, k.public);
@@ -136,14 +135,14 @@ mod tests {
 
     #[test]
     fn clamping_is_applied() {
-        // Sans clamping, WireGuard modifierait la clé en interne et la publique
-        // dérivée ne correspondrait plus à celle qu'il utilise réellement.
+        // Without clamping, WireGuard would modify the key internally and the
+        // derived public key would no longer match the one it actually uses.
         for _ in 0..20 {
             let k = KeyPair::generate();
-            let b = unb64(&k.private).expect("décodable");
+            let b = unb64(&k.private).expect("decodable");
             assert_eq!(b[0] & 7, 0, "trois bits de poids faible non nuls");
             assert_eq!(b[31] & 128, 0, "bit de poids fort non nul");
-            assert_eq!(b[31] & 64, 64, "bit 254 non posé");
+            assert_eq!(b[31] & 64, 64, "bit 254 not set");
         }
     }
 

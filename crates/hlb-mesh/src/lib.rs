@@ -1,21 +1,21 @@
-//! Mesh WireGuard entre nœuds (§2ter, §6.3, §9).
+//! WireGuard mesh between nodes.
 //!
-//! 🔴 **Les ports de Swarm ne doivent JAMAIS être exposés publiquement.**
+//! 🔴 **Swarm's ports must NEVER be exposed publicly.**
 //!
-//! Swarm a besoin de 2377 (API cluster), 7946 (découverte) et 4789 (overlay VXLAN).
-//! Les ouvrir sur Internet expose l'API de contrôle du cluster ; le port 4789 en
-//! particulier n'a **aucune authentification** — quiconque peut y envoyer des paquets
-//! peut injecter du trafic dans les réseaux overlay.
+//! Swarm needs 2377 (cluster API), 7946 (discovery) and 4789 (VXLAN overlay). Opening
+//! them to the internet exposes the cluster's control API; port 4789 in particular has
+//! **no authentication at all** - anyone who can send it packets can inject traffic
+//! into the overlay networks.
 //!
-//! Le mesh résout ça : Swarm n'écoute que sur l'interface WireGuard, et le trafic
-//! entre nœuds est chiffré indépendamment de l'overlay.
+//! The mesh solves that: Swarm listens only on the WireGuard interface, and node to
+//! node traffic is encrypted independently of the overlay.
 //!
-//! ## Ce que ce crate fait, et ne fait pas
+//! ## What this crate does, and does not
 //!
-//! Il **génère** les clés et les configurations. Il ne les **applique** pas : poser
-//! une interface réseau demande les droits root sur chaque machine, ce qui est le
-//! rôle du bootstrap. Cette séparation permet de tester toute la logique
-//! d'attribution d'adresses et de génération de configuration sans toucher au réseau.
+//! It **generates** keys and configurations. It does not **apply** them: bringing up a
+//! network interface needs root on each machine, which is bootstrap's job. That split
+//! is what makes the whole address-allocation and config-generation logic testable
+//! without touching the network.
 
 pub mod config;
 pub mod keys;
@@ -25,13 +25,13 @@ pub use keys::KeyPair;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("adresse mesh épuisée : {0} nœuds au maximum dans {1}")]
+    #[error("mesh addresses exhausted: at most {0} nodes in {1}")]
     AddressPoolExhausted(usize, String),
 
-    #[error("nœud « {0} » déjà présent dans le mesh")]
+    #[error("node \"{0}\" is already in the mesh")]
     DuplicateNode(String),
 
-    #[error("clé invalide : {0}")]
+    #[error("invalid key: {0}")]
     InvalidKey(String),
 }
 

@@ -1,39 +1,38 @@
-//! Client d'administration Garage : compartiments et clés isolées (§3.5).
+//! Garage admin client: buckets and isolated keys.
 //!
-//! ## Pourquoi Garage plutôt que MinIO
+//! ## Why Garage rather than MinIO
 //!
-//! Les deux parlent S3. Garage est conçu pour exactement notre cas : des nœuds
-//! hétérogènes, chez soi, reliés par un réseau ordinaire. Il réplique entre nœuds sans
-//! exiger de disques identiques, tient dans quelques dizaines de mégaoctets de RAM, et
-//! n'a pas de console web à protéger — l'administration passe par cette API.
+//! Both speak S3. Garage is built for exactly this case: heterogeneous nodes, at
+//! home, on an ordinary network. It replicates between nodes without requiring
+//! identical disks, fits in a few tens of megabytes of RAM, and has no web console to
+//! protect - administration goes through this API.
 //!
-//! ⚠️ **Sa compatibilité S3 n'est pas totale.** Les points d'attention connus : pas de
-//! versionnement d'objets, et quelques cas limites du téléversement par parties. Pour
-//! restic, Outline et Matrix c'est sans conséquence. Une app qui exigerait le
-//! versionnement devrait être signalée à l'ajout du manifest, pas découverte en panne.
+//! ⚠️ **Its S3 compatibility is not total.** The known gaps: no object versioning, and
+//! a few multipart-upload edge cases. For restic, Outline and Matrix that has no
+//! consequence. An app that required versioning should be flagged when its manifest is
+//! added, not discovered during an outage.
 //!
-//! ## 🔴 Le piège central : la clé secrète n'est donnée QU'UNE FOIS
+//! ## 🔴 The central trap: the secret key is given ONCE
 //!
-//! `CreateKey` renvoie `secretAccessKey`. Toute lecture ultérieure via `GetKeyInfo` la
-//! rend **nulle** : Garage ne la conserve pas en clair et ne peut donc pas la
-//! redonner. Une clé dont on a perdu le secret n'est pas récupérable, elle est à
-//! remplacer.
+//! `CreateKey` returns `secretAccessKey`. Any later read through `GetKeyInfo` returns
+//! it as **null**: Garage does not keep it in clear and therefore cannot hand it back.
+//! A key whose secret was lost is not recoverable, it is to be replaced.
 //!
-//! Conséquences directes sur la conception :
+//! Two direct consequences for the design:
 //!
-//! 1. Le secret part au coffre **dans la foulée immédiate** de la création.
-//! 2. L'idempotence ne peut PAS reposer sur « la clé existe-t-elle chez Garage ? ».
-//!    Une seconde exécution y répondrait oui, et repartirait sans secret — l'app
-//!    recevrait alors une clé vide et échouerait à l'authentification, sur un message
-//!    S3 qui parle de signature invalide. C'est le coffre qui fait autorité :
-//!    [`Garage::ensure_key`] prend le secret déjà connu quand il y en a un.
+//! 1. The secret goes to the vault **immediately** after creation.
+//! 2. Idempotency can NOT rest on "does the key exist in Garage?". A second run would
+//!    answer yes and carry on without a secret - the app would then receive an empty
+//!    key and fail authentication, on an S3 message about an invalid signature. The
+//!    vault is authoritative: [`Garage::ensure_key`] takes the already-known secret
+//!    when there is one.
 //!
-//! ## 🔴 Une app n'est jamais propriétaire de son compartiment
+//! ## 🔴 An app never owns its bucket
 //!
-//! Les permissions accordées sont `read` + `write`, jamais `owner`. Propriétaire, une
-//! app compromise pourrait supprimer son propre compartiment — donc effacer d'un coup
-//! ce que les sauvegardes protégeaient — ou s'accorder l'accès à d'autres. C'est le
-//! même raisonnement que le rôle PostgreSQL isolé (§3.1).
+//! The permissions granted are `read` + `write`, never `owner`. As owner, a
+//! compromised app could delete its own bucket - erasing in one go what the backups
+//! protected - or grant itself access to others. Same reasoning as the isolated
+//! PostgreSQL role: the app can work, not run wild.
 
 use serde::Deserialize;
 
@@ -42,34 +41,34 @@ pub enum Error {
     #[error("Garage injoignable : {0}")]
     Unreachable(String),
 
-    #[error("Garage a refusé {operation} : {status} — {body}")]
+    #[error("Garage refused {operation}: {status} - {body}")]
     Rejected {
         operation: &'static str,
         status: u16,
         body: String,
     },
 
-    #[error("réponse Garage illisible pour {operation} : {reason}")]
+    #[error("unreadable Garage response for {operation}: {reason}")]
     Malformed {
         operation: &'static str,
         reason: String,
     },
 
     #[error(
-        "🔴 la clé « {0} » existe chez Garage mais son secret est inconnu. \
-             Garage ne redonne JAMAIS une clé secrète après sa création : \
-             supprime cette clé et relance pour en obtenir une neuve"
+        "🔴 key \"{0}\" exists in Garage but its secret is unknown. Garage NEVER \
+             hands a secret key back after creation: delete this key and run again \
+             to get a fresh one"
     )]
     LostSecret(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Les identifiants remis à une app.
+/// The credentials handed to an app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessKey {
     pub access_key_id: String,
-    /// 🔴 Ne transite jamais par un plan ni par un journal.
+    /// 🔴 Never travels through a plan or a log.
     pub secret_access_key: String,
 }
 
@@ -86,9 +85,9 @@ struct BucketCree {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CleCreee {
+struct CreatedKey {
     access_key_id: String,
-    /// Nulle sur toute lecture ultérieure — voir la note en tête de module.
+    /// Null on every later read - see the note at the top of this module.
     secret_access_key: Option<String>,
 }
 
@@ -101,10 +100,10 @@ struct BucketListe {
 }
 
 impl Garage {
-    /// `base` est l'URL de l'API d'administration, ex. `http://garage:3903`.
+    /// `base` is the admin API URL, e.g. `http://garage:3903`.
     ///
-    /// ⚠️ Ce n'est PAS le point d'entrée S3 (port 3900) : les deux écoutent sur des
-    /// ports différents et le jeton d'administration ne vaut rien sur le second.
+    /// ⚠️ This is NOT the S3 endpoint (port 3900): the two listen on different ports
+    /// and the admin token is worthless on the second.
     pub fn new(base: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
             base: base.into().trim_end_matches('/').to_string(),
@@ -118,14 +117,14 @@ impl Garage {
         operation: &'static str,
         methode: reqwest::Method,
         chemin: &str,
-        corps: Option<serde_json::Value>,
+        body: Option<serde_json::Value>,
     ) -> Result<String> {
         let mut req = self
             .http
             .request(methode, format!("{}{chemin}", self.base))
             .bearer_auth(&self.token);
 
-        if let Some(c) = corps {
+        if let Some(c) = body {
             req = req.json(&c);
         }
 
@@ -147,21 +146,21 @@ impl Garage {
         Ok(body)
     }
 
-    /// Garage répond-il ?
+    /// Is Garage answering?
     pub async fn health(&self) -> Result<()> {
         self.appel("health", reqwest::Method::GET, "/health", None)
             .await?;
         Ok(())
     }
 
-    /// L'identifiant du compartiment portant cet alias, s'il existe.
+    /// The id of the bucket carrying this alias, if there is one.
     pub async fn bucket_id(&self, alias: &str) -> Result<Option<String>> {
-        let corps = self
+        let body = self
             .appel("ListBuckets", reqwest::Method::GET, "/v2/ListBuckets", None)
             .await?;
 
         let liste: Vec<BucketListe> =
-            serde_json::from_str(&corps).map_err(|e| Error::Malformed {
+            serde_json::from_str(&body).map_err(|e| Error::Malformed {
                 operation: "ListBuckets",
                 reason: e.to_string(),
             })?;
@@ -172,17 +171,17 @@ impl Garage {
             .map(|b| b.id))
     }
 
-    /// Crée le compartiment, ou rend l'existant.
+    /// Creates the bucket, or returns the existing one.
     ///
-    /// ⚠️ Idempotent par le nom : recréer un alias déjà pris échouerait, et l'échec
-    /// ferait passer une installation reprise pour une panne.
+    /// ⚠️ Idempotent by name: recreating an alias already taken would fail, and that
+    /// failure would make a resumed install look like an outage.
     pub async fn ensure_bucket(&self, alias: &str) -> Result<String> {
         if let Some(id) = self.bucket_id(alias).await? {
-            tracing::debug!(alias, "compartiment déjà présent");
+            tracing::debug!(alias, "bucket already present");
             return Ok(id);
         }
 
-        let corps = self
+        let body = self
             .appel(
                 "CreateBucket",
                 reqwest::Method::POST,
@@ -191,80 +190,80 @@ impl Garage {
             )
             .await?;
 
-        let b: BucketCree = serde_json::from_str(&corps).map_err(|e| Error::Malformed {
+        let b: BucketCree = serde_json::from_str(&body).map_err(|e| Error::Malformed {
             operation: "CreateBucket",
             reason: e.to_string(),
         })?;
 
-        tracing::info!(alias, id = %b.id, "compartiment créé");
+        tracing::info!(alias, id = %b.id, "bucket created");
         Ok(b.id)
     }
 
-    /// Crée la clé d'accès, ou reprend celle dont on connaît déjà le secret.
+    /// Creates the access key, or reuses the one whose secret is already known.
     ///
-    /// 🔴 `secret_connu` vient du coffre. C'est LUI qui fait autorité, pas Garage :
-    /// une clé présente chez Garage dont on a perdu le secret est inutilisable, et
-    /// repartir sans lui donnerait à l'app une clé vide — l'échec apparaîtrait comme
-    /// une signature S3 invalide, ce qui n'oriente vers rien.
-    pub async fn ensure_key(&self, nom: &str, secret_connu: Option<&str>) -> Result<AccessKey> {
-        if let Some(s) = secret_connu {
-            if let Some(id) = self.key_id(nom).await? {
+    /// 🔴 `known_secret` comes from the vault, and the VAULT is authoritative, not
+    /// Garage: a key that exists in Garage but whose secret was lost is unusable, and
+    /// carrying on without it would hand the app an empty key - the failure would
+    /// surface as an invalid S3 signature, which points at nothing.
+    pub async fn ensure_key(&self, name: &str, known_secret: Option<&str>) -> Result<AccessKey> {
+        if let Some(s) = known_secret {
+            if let Some(id) = self.key_id(name).await? {
                 return Ok(AccessKey {
                     access_key_id: id,
                     secret_access_key: s.to_string(),
                 });
             }
-            // Le coffre connaît un secret pour une clé que Garage n'a plus : on en
-            // recrée une, et le nouveau secret remplacera l'ancien au coffre.
-            tracing::warn!(nom, "clé absente chez Garage malgré un secret au coffre");
-        } else if self.key_id(nom).await?.is_some() {
-            // Le cas irrattrapable : elle existe, et personne ne connaît son secret.
-            return Err(Error::LostSecret(nom.to_string()));
+            // The vault holds a secret for a key Garage no longer has: create a new
+            // one, and its secret replaces the old one in the vault.
+            tracing::warn!(name, "key missing in Garage despite a secret in the vault");
+        } else if self.key_id(name).await?.is_some() {
+            // The unrecoverable case: it exists, and nobody knows its secret.
+            return Err(Error::LostSecret(name.to_string()));
         }
 
-        let corps = self
+        let body = self
             .appel(
                 "CreateKey",
                 reqwest::Method::POST,
                 "/v2/CreateKey",
-                Some(serde_json::json!({ "name": nom, "neverExpires": true })),
+                Some(serde_json::json!({ "name": name, "neverExpires": true })),
             )
             .await?;
 
-        let k: CleCreee = serde_json::from_str(&corps).map_err(|e| Error::Malformed {
+        let k: CreatedKey = serde_json::from_str(&body).map_err(|e| Error::Malformed {
             operation: "CreateKey",
             reason: e.to_string(),
         })?;
 
         let secret = k.secret_access_key.ok_or_else(|| Error::Malformed {
             operation: "CreateKey",
-            reason: "aucune clé secrète dans la réponse de création — \
-                     elle n'est donnée qu'à ce moment-là et n'est plus récupérable"
+            reason: "no secret key in the creation response - it is given only at \
+                     that moment and cannot be retrieved afterwards"
                 .into(),
         })?;
 
-        tracing::info!(nom, "clé d'accès créée");
+        tracing::info!(name, "access key created");
         Ok(AccessKey {
             access_key_id: k.access_key_id,
             secret_access_key: secret,
         })
     }
 
-    /// L'identifiant d'une clé portant ce nom, s'il existe.
-    pub async fn key_id(&self, nom: &str) -> Result<Option<String>> {
-        let corps = self
+    /// The id of a key with this name, if there is one.
+    pub async fn key_id(&self, name: &str) -> Result<Option<String>> {
+        let body = self
             .appel("ListKeys", reqwest::Method::GET, "/v2/ListKeys", None)
             .await?;
 
         let liste: Vec<serde_json::Value> =
-            serde_json::from_str(&corps).map_err(|e| Error::Malformed {
+            serde_json::from_str(&body).map_err(|e| Error::Malformed {
                 operation: "ListKeys",
                 reason: e.to_string(),
             })?;
 
         Ok(liste
             .into_iter()
-            .find(|k| k.get("name").and_then(|n| n.as_str()) == Some(nom))
+            .find(|k| k.get("name").and_then(|n| n.as_str()) == Some(name))
             .and_then(|k| {
                 k.get("id")
                     .or_else(|| k.get("accessKeyId"))
@@ -273,13 +272,12 @@ impl Garage {
             }))
     }
 
-    /// Donne à la clé la lecture et l'écriture sur le compartiment — **jamais** la
-    /// propriété.
+    /// Grants the key read and write on the bucket - **never** ownership.
     ///
-    /// 🔴 `owner: false` n'est pas un détail. Propriétaire, une app compromise pourrait
-    /// supprimer son propre compartiment — effaçant d'un coup ce que les sauvegardes
-    /// protégeaient — ou s'accorder d'autres accès. Même raisonnement que le rôle
-    /// PostgreSQL isolé (§3.1) : l'app peut travailler, pas se déchaîner.
+    /// 🔴 `owner: false` is not a detail. As owner, a compromised app could delete its
+    /// own bucket - erasing in one go what the backups protected - or grant itself
+    /// other access. Same reasoning as the isolated PostgreSQL role: the app can work,
+    /// not run wild.
     pub async fn allow(&self, bucket_id: &str, access_key_id: &str) -> Result<()> {
         self.appel(
             "AllowBucketKey",
@@ -293,7 +291,7 @@ impl Garage {
         )
         .await?;
 
-        tracing::info!(bucket_id, access_key_id, "accès accordé (lecture/écriture)");
+        tracing::info!(bucket_id, access_key_id, "access granted (read/write)");
         Ok(())
     }
 }
@@ -304,38 +302,38 @@ mod tests {
 
     #[test]
     fn the_admin_port_is_not_the_s3_port() {
-        // ⚠️ 3903 (administration) et 3900 (S3) sont deux écoutes distinctes. Pointer
-        // le client vers le port S3 donnerait des 403 que rien ne rattache au port.
+        // ⚠️ 3903 (admin) and 3900 (S3) are two distinct listeners. Pointing the
+        // client at the S3 port would give 403s that nothing ties back to the port.
         let g = Garage::new("http://garage:3903/", "jeton");
         assert_eq!(
             g.base, "http://garage:3903",
-            "la barre finale doit être retirée"
+            "the trailing slash must be stripped"
         );
     }
 
     #[test]
     fn a_lost_secret_says_what_to_do() {
-        // 🔴 Garage ne redonne jamais une clé secrète. Le message doit dire quoi faire,
-        // parce que l'action n'a rien d'évident : il faut SUPPRIMER la clé.
+        // 🔴 Garage never hands a secret key back. The message must say what to do,
+        // because the action is not obvious: the key must be DELETED.
         let e = Error::LostSecret("immich".into()).to_string();
-        assert!(e.contains("JAMAIS"), "{e}");
-        assert!(e.contains("supprime cette clé"), "{e}");
+        assert!(e.contains("NEVER"), "{e}");
+        assert!(e.contains("delete this key"), "{e}");
     }
 
     #[test]
     fn a_creation_without_a_secret_is_an_error_not_an_empty_key() {
-        // 🔴 Si `secretAccessKey` manque à la création, on ÉCHOUE. Rendre une clé vide
-        // ferait échouer l'app à l'authentification, sur un message S3 qui parle de
-        // signature invalide — et qui n'oriente vers rien.
-        let sans_secret = r#"{"accessKeyId":"GK123","name":"immich"}"#;
-        let k: CleCreee = serde_json::from_str(sans_secret).expect("forme valide");
+        // 🔴 If `secretAccessKey` is missing at creation we FAIL. Returning an empty
+        // key would make the app fail authentication, on an S3 message about an
+        // invalid signature that points at nothing.
+        let without_secret = r#"{"accessKeyId":"GK123","name":"immich"}"#;
+        let k: CreatedKey = serde_json::from_str(without_secret).expect("forme valide");
         assert!(k.secret_access_key.is_none());
     }
 
     #[test]
     fn a_creation_response_is_parsed() {
         let json = r#"{"accessKeyId":"GK31c2f218","secretAccessKey":"b892c0","name":"immich"}"#;
-        let k: CleCreee = serde_json::from_str(json).expect("réponse valide");
+        let k: CreatedKey = serde_json::from_str(json).expect("valid response");
         assert_eq!(k.access_key_id, "GK31c2f218");
         assert_eq!(k.secret_access_key.as_deref(), Some("b892c0"));
     }
@@ -355,8 +353,8 @@ mod tests {
 
     #[test]
     fn a_bucket_without_alias_is_never_matched() {
-        // Un compartiment sans alias global existe (Garage le permet) : il ne doit
-        // jamais être pris pour celui qu'on cherche.
+        // A bucket with no global alias can exist (Garage allows it): it must never
+        // be mistaken for the one being looked for.
         let json = r#"[{"id":"aaa"}]"#;
         let l: Vec<BucketListe> = serde_json::from_str(json).expect("liste valide");
         assert!(l[0].global_aliases.is_empty());
