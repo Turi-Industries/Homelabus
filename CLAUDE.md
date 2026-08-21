@@ -1,39 +1,35 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-## Langue
+## Language
 
-**Tout ce projet est en français** : commentaires de code, messages d'erreur, sortie
-CLI, noms de tests, documentation, messages de commit. Le code lui-même (identifiants,
-types) est en anglais, comme il est d'usage en Rust. Garde cette convention.
+**Everything in this project is in English**: code, comments, error messages, CLI
+output, test names, documentation, commit messages.
 
-## PLAN.md est la source de vérité de l'architecture
+Comments explain *why*, not *what*. A comment restating the line below it is noise; one
+recording the trap a line avoids is why this codebase stays maintainable. Keep them
+short and anchored to the code they sit on. Do not reference an external design
+document — if a decision needs explaining, explain it here or next to the code.
 
-`PLAN.md` (~3500 lignes) contient l'architecture complète, les décisions et surtout
-**les raisons** de chaque décision. Le code y renvoie constamment par numéro de
-section (`§4.3`, `§2ter.5`…).
+> Historical note: this project was written in French until 2026-08-21 and translated.
+> Some lower-level comments may still be French — translate them as you touch them,
+> and keep meaning over literalness. The reasoning is the value, not the wording.
 
-**Avant de modifier un comportement, lis la section citée en commentaire.** Beaucoup
-de choix qui paraissent arbitraires sont des garde-fous contre un piège documenté :
-`start-first` + `failure_action: rollback`, l'interdiction de SQLite sur NFS, le refus
-d'exposer une app en `proxy-header`, l'exposition privée par défaut.
-
-Si tu changes une décision, mets à jour la section correspondante de PLAN.md.
-
-## Commandes
+## Commands
 
 ```sh
-cargo test                      # tests unitaires, aucune dépendance externe
-cargo test -p hlb-resolver      # un seul crate
-cargo test -p hlb-state -- completed_actions_survive_a_replan   # un seul test
-cargo clippy --all-targets      # doit rester à zéro avertissement
+cargo test                      # unit tests, no external dependency
+cargo test -p hlb-resolver      # a single crate
+cargo test -p hlb-state -- completed_actions_survive_a_replan   # a single test
+cargo clippy --all-targets      # must stay at zero warnings
+cargo fmt --all                 # enforced in CI
 cargo build
 ```
 
-### Tests d'intégration Swarm
+### Swarm integration tests
 
-Ils sont `#[ignore]` pour que `cargo test` reste rapide et utilisable sans Docker.
+`#[ignore]`d so `cargo test` stays fast and usable without Docker.
 
 ```sh
 docker swarm init
@@ -41,46 +37,45 @@ export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
 cargo test -p hlb-orchestrator -- --ignored --test-threads=1 --nocapture
 ```
 
-⚠️ **Sur macOS (colima / Docker Desktop), `DOCKER_HOST` est indispensable** : `bollard`
-cherche `/var/run/docker.sock`, qui n'existe pas. Sans cette variable, tous les tests
-d'intégration et `hlb ps` / `hlb install` échouent avec `SocketNotFoundError`.
+⚠️ **On macOS (colima / Docker Desktop), `DOCKER_HOST` is mandatory.** `bollard` looks
+for `/var/run/docker.sock`, which does not exist. Without it, every integration test
+and `hlb ps` / `hlb install` fails with `SocketNotFoundError`.
 
-### Essayer le CLI
+### Trying the CLI
 
 ```sh
 ./target/debug/hlb catalog validate
 ./target/debug/hlb order
-./target/debug/hlb plan gitea --domain git.example.fr
-./target/debug/hlb install valkey            # aperçu
-./target/debug/hlb install valkey --apply    # exécution réelle
+./target/debug/hlb plan gitea --domain git.example.org
+./target/debug/hlb install valkey            # preview
+./target/debug/hlb install valkey --apply    # real execution
 
-# Les commandes récentes, toutes en aperçu par défaut
 ./target/debug/hlb backup dest list
-./target/debug/hlb backup status             # fraîcheur PAR destination
+./target/debug/hlb backup status             # freshness PER destination
 ./target/debug/hlb metrics rules
-./target/debug/hlb metrics deadman --ntfy https://ntfy.sh/veilleur
+./target/debug/hlb metrics deadman --ntfy https://ntfy.sh/watchdog
 ./target/debug/hlb replication config nas-01
 ./target/debug/hlb user list
-./target/debug/hlb user alias sieve remy     # --apply pour poser chez Stalwart
-./target/debug/hlb user role remy admin      # --apply ; refuse de rétrograder le dernier
-./target/debug/hlb user sessions remy        # --close <réf>|toutes
-./target/debug/hlb audit --verify            # intégrité du chaînage
+./target/debug/hlb user alias sieve remy     # --apply to install in Stalwart
+./target/debug/hlb user role remy admin      # --apply; refuses to demote the last one
+./target/debug/hlb user sessions remy        # --close <ref>|all
+./target/debug/hlb audit --verify            # chain integrity
 
-# L'interface, sans cluster ni Docker : le moyen le plus rapide de la voir
+# The UI, with no cluster and no Docker — the fastest way to see it
 ./target/debug/hlb-controller --demo --listen 127.0.0.1:8420 &
 ./target/debug/hlb-ui --url http://127.0.0.1:8420 --route /apps
 ```
 
-⚠️ **Beaucoup de commandes ont besoin d'un état et d'un coffre.** Pour essayer sans
-toucher à une installation réelle :
+⚠️ **Most commands need state and a vault.** To try things without touching a real
+install:
 
 ```sh
-export HLB_STATE=/tmp/essai.db HLB_MASTER_KEY=/tmp/essai.key
+export HLB_STATE=/tmp/try.db HLB_MASTER_KEY=/tmp/try.key
 ```
 
-⚠️ Les tiers de nœuds sont de vraies contraintes de placement Swarm. `hlb node add` les
-pose ; sur un nœud rattaché à la main, il faut le faire soi-même, sinon rien ne se
-planifie et `wait_healthy` expire :
+⚠️ Node tiers are real Swarm placement constraints. `hlb node add` sets them; on a
+manually joined node you must do it yourself, or nothing schedules and `wait_healthy`
+times out:
 
 ```sh
 docker node update --label-add tier=heavy $(docker node ls -q)
@@ -88,10 +83,10 @@ docker node update --label-add tier=heavy $(docker node ls -q)
 
 ## Architecture
 
-### L'idée centrale : le résolveur de capacités
+### The central idea: the capability resolver
 
-C'est ce qui structure tout le reste. Un manifest ne dit **jamais** « connecte-toi à
-`postgres:5432` ». Il déclare un **besoin** :
+This structures everything else. A manifest **never** says "connect to
+`postgres:5432`". It declares a **need**:
 
 ```yaml
 requires:
@@ -102,1040 +97,714 @@ requires:
     redirectPaths: ["/user/oauth2/PocketID/callback"]
 ```
 
-`hlb-resolver` traduit ces besoins en actions concrètes (créer la base + le rôle
-isolé, générer le secret, créer le client OIDC avec les URI **calculées depuis le
-domaine choisi à l'installation**). Conséquence : le même manifest fonctionne quelle
-que soit la topologie réelle.
+`hlb-resolver` turns needs into concrete actions: create the database and an isolated
+role, generate the secret, register an OIDC client whose URIs are **computed from the
+domain chosen at install time**. Consequence: the same manifest works whatever the real
+topology is.
 
-`Capability` est un `enum` exhaustif. **Ajouter une variante fait échouer la
-compilation partout où un `match` doit être mis à jour** — c'est la raison principale
-du choix de Rust, ne la casse pas avec un bras `_ =>`.
+`Capability` is an exhaustive enum. **Adding a variant breaks compilation everywhere a
+`match` must be updated** — the main reason this is written in Rust. Do not break it
+with a `_ =>` arm.
 
-### Le flux complet
+### The flow
 
 ```
 catalog/*/manifest.yaml
-   ↓  hlb-catalog     charge, valide, vérifie nom-de-dossier == metadata.name
+   ↓  hlb-catalog     load, validate, check folder name == metadata.name
 Manifest (hlb-types)
-   ↓  hlb-resolver    résolution des capacités + graphe de dépendances
+   ↓  hlb-resolver    capability resolution + dependency graph
 Plan { actions: Vec<Action> }
-   ↓  hlb-engine      exécution : aperçu par défaut, idempotente, reprenable
+   ↓  hlb-engine      execution: preview by default, idempotent, resumable
 hlb-orchestrator      trait Orchestrator → bollard → Docker Swarm
-   ↕  hlb-state       manifest figé + journal de progression (SQLite)
+   ↕  hlb-state       frozen manifest + progress journal (SQLite)
 ```
 
-### Dépendances entre crates
+### Crate dependencies
 
-`hlb-types` est le socle : **la seule définition du schéma**, consommée par le code
-Rust et par `schemars` (JSON Schema pour l'autocomplétion YAML). Aucun autre crate ne
-redéfinit ces types.
+`hlb-types` is the foundation: **the only schema definition**, consumed by Rust code
+and by `schemars` (JSON Schema for YAML autocompletion). No other crate redefines these
+types.
 
-⚠️ L'OpenAPI n'existe pas et n'existera pas : depuis le choix d'egui, `hlb-api` définit
-les types de l'API **une seule fois** pour le serveur et l'interface, tous deux en
-Rust. Le §11bis prévoyait `utoipa` + génération TypeScript ; c'est sans objet.
+⚠️ There is no OpenAPI and there will not be one: since choosing egui, `hlb-api`
+defines the API types **once** for both the server and the interface, both in Rust.
 
 ```
 hlb-types  ←  hlb-resolver  ←  hlb-engine  →  hlb-orchestrator
      ↑              ↑              ↓
 hlb-catalog    hlb-state    ←──────┘
      ↑              ↑
-hlb-users      hlb-cli (assemble tout)   hlb-api  →  hlb-ui
+hlb-users      hlb-cli (assembles everything)   hlb-api  →  hlb-ui
 ```
 
-Les crates « métier » ne dépendent que de `hlb-types` et ne parlent jamais réseau :
-`hlb-users` (comptes, aliases, quotas, Sieve), `hlb-metrics` (règles, deadman). Les
-clients réseau sont à côté — `hlb-mail`, `hlb-identity`, `hlb-objstore` — ce qui rend
-la logique testable sans serveur.
+Domain crates depend only on `hlb-types` and never touch the network: `hlb-users`
+(accounts, aliases, quotas, Sieve), `hlb-metrics` (rules, deadman). Network clients sit
+beside them — `hlb-mail`, `hlb-identity`, `hlb-objstore` — which keeps the logic
+testable without a server.
 
-### Ordonnancement des dépendances
+### Dependency ordering
 
-**Docker Swarm n'a pas de `depends_on`.** Il démarre tout en parallèle, et une app qui
-démarre avant PostgreSQL boucle en crash. `hlb-resolver::graph` déduit le graphe des
-`requires` (via `Capability::platform_service()`) et produit un ordre par tri
-topologique. L'arrêt se fait dans l'ordre inverse.
+**Docker Swarm has no `depends_on`.** It starts everything in parallel, and an app
+starting before PostgreSQL crash-loops. `hlb-resolver::graph` derives the graph from
+`requires` (via `Capability::platform_service()`) and produces a topological order.
+Shutdown runs in reverse.
 
-Ajouter un service de plateforme au catalogue met le graphe à jour automatiquement —
-il n'y a **aucune liste à maintenir à la main**. En revanche, une capacité qui pointe
-vers un service absent du catalogue fait échouer `hlb catalog validate`.
+Adding a platform service to the catalog updates the graph automatically — there is
+**no hand-maintained list**. A capability pointing at a service absent from the catalog
+fails `hlb catalog validate`.
 
-## Invariants à ne pas casser
+## Invariants not to break
 
-Ces règles sont encodées dans des tests. Si un test échoue, c'est probablement le code
-qui a tort, pas le test.
+These are encoded in tests. If a test fails, the code is usually wrong, not the test.
 
-- **Aperçu par défaut.** `Executor` ne modifie rien sans `.apply(true)`. Le mode par
-  défaut doit rester non destructif.
-- **`Unimplemented` n'est jamais `Done`.** Une action que l'exécuteur ne sait pas
-  encore faire est enregistrée comme non implémentée et rapportée telle quelle. Ne
-  jamais faire semblant d'avoir provisionné une base.
-- **Idempotence et reprise.** `record_plan` n'écrase pas une action `done` ; l'exécuteur
-  saute ce qui est déjà fait et s'arrête au premier échec plutôt que de cascader.
-- **La réconciliation ne supprime jamais un orphelin, ne ressuscite jamais une
-  installation en échec, et ne force jamais une convergence en cours.** Un système qui
-  corrige trop est plus dangereux qu'un système qui ne corrige rien. Distinction clé :
-  la *consigne* Swarm (`desired_replicas`) vient d'une décision et se corrige ;
-  l'*avancement* (`running_replicas`) est transitoire et se laisse tranquille.
-- **Les guides bloquants arrêtent avant toute modification.** Inutile de déployer une
-  app dont le DNS n'existe pas ou dont le compte admin n'est pas créé.
-- **Politique de mise à jour non négociable.** `start-first` + `failure_action:
-  rollback` + `monitor` sont codés en dur dans `hlb-orchestrator`, pas configurables
-  par app. Une app qui ne le supporte pas doit être en `channel: pin`.
-- **Sécurité par défaut.** `read_only_rootfs`, `cap_drop: [ALL]`, `no_new_privileges`,
-  aucun port publié, exposition `private`. Les défauts vont dans le sens sûr.
-- **`deny_unknown_fields` partout.** Une faute de frappe dans un manifest doit être
-  rejetée avec son numéro de ligne, jamais ignorée silencieusement.
+- **Preview by default.** `Executor` changes nothing without `.apply(true)`. Over HTTP
+  the same rule is `?apply=true` — visiting a screen must never execute anything. A
+  test walks the list used to build the router and checks no route acts without it.
+- **`Unimplemented` is never `Done`.** An action the executor cannot perform yet is
+  recorded as unimplemented and reported as such. Never pretend a database was
+  provisioned.
+- **Idempotent and resumable.** `record_plan` does not overwrite a `done` action; the
+  executor skips finished work and stops at the first failure rather than cascading.
+- **Reconciliation never deletes an orphan, never resurrects a failed install, and
+  never forces a convergence in flight.** A system that over-corrects is more dangerous
+  than one that corrects nothing. Key distinction: the Swarm *instruction*
+  (`desired_replicas`) comes from a decision and gets corrected; *progress*
+  (`running_replicas`) is transient and gets left alone.
+- **Blocking guides stop before any modification.** No point deploying an app whose DNS
+  does not exist or whose admin account was never created.
+- **The update policy is not negotiable.** `start-first` + `failure_action: rollback` +
+  `monitor` are hard-coded in `hlb-orchestrator`, not configurable per app. An app that
+  cannot cope belongs on `channel: pin`.
+- **Secure by default.** `read_only_rootfs`, `cap_drop: [ALL]`, `no_new_privileges`, no
+  published ports, `private` exposure. Defaults go the safe way.
+- **`deny_unknown_fields` everywhere.** A typo in a manifest is rejected with its line
+  number, never silently ignored.
+- **Configuration routes have no preview, and that is a declared choice.** Writing a
+  brand name is idempotent and reversible; forcing a round trip would train people to
+  click twice, which drains the protection where it matters. The `preview: false` field
+  is explicit and a test locks the short exemption list.
 
 ## Conventions
 
-- **`unwrap` / `expect` interdits en production** (lint `warn` dans le workspace). Ils
-  sont autorisés dans les tests via `clippy.toml` — là, `expect("message")` *est*
-  l'assertion, et le message porte le diagnostic.
-- **Erreurs typées par crate** (`thiserror`), jamais de `String` nue. Le CLI déroule la
-  chaîne de causes.
-- **Les plans doivent être reproductibles.** Le tri topologique départage par ordre
-  alphabétique — un plan qui varie d'une exécution à l'autre rend les futurs tests
-  d'instantané inutilisables.
-- **Tests en français, nommés comme des affirmations** :
-  `postgres_comes_before_its_consumers`, `unimplemented_is_never_reported_as_done`.
+- **No `unwrap` / `expect` in production** (`warn` lint in the workspace). Allowed in
+  tests via `clippy.toml` — there, `expect("message")` *is* the assertion.
+- **Typed errors per crate** (`thiserror`), never a bare `String`. The CLI unwinds the
+  cause chain.
+- **Plans must be reproducible.** The topological sort breaks ties alphabetically; a
+  plan that varies between runs makes snapshot tests worthless.
+- **Tests named as assertions**: `postgres_comes_before_its_consumers`,
+  `unimplemented_is_never_reported_as_done`.
 
-## Pièges connus
+## Known pitfalls
 
-- **Continuation de ligne Rust dans les YAML de test.** Un `\` en fin de ligne mange la
-  newline *et l'indentation* de la ligne suivante, ce qui casse le YAML de façon
-  déroutante. Utilise des chaînes brutes `r#"..."#` pour tout manifest de test.
-- **`sqlx` en requêtes runtime**, pas les macros compile-time : celles-ci exigent
-  `DATABASE_URL` au build ou un `cargo sqlx prepare`. À basculer une fois le schéma
-  stabilisé. La vérification SQL à la compilation n'est donc **pas** encore en place.
-- **SQLite en mémoire** : `max_connections(1)` est obligatoire, sinon chaque connexion
-  voit une base différente.
-- **Compter les tâches Swarm** : filtrer sur `desired-state` **et** l'état réel. Swarm
-  conserve l'historique des tâches mortes, qu'on compterait sinon comme vivantes.
-- **Une métrique absente vaut mieux qu'un zéro.** `hlb_backup_age_seconds` n'est pas
-  émise quand aucune sauvegarde n'a réussi : un `0` signifierait « sauvegardée à
-  l'instant », et l'alerte ne partirait jamais pour les apps les plus à risque.
-- **CrowdSec ne va que sur le Caddy frontal.** Le backend ne voit que l'IP du frontal :
-  y poser le videur ferait bannir son propre frontal au premier attaquant.
-- **Un `archive_command` WAL qui échoue ne perd pas les journaux, il les garde.**
-  `pg_wal` grossit jusqu'à saturer le disque. Archiver vers une destination cassée est
-  plus dangereux que ne pas archiver.
-- **Le dossier temporaire de l'hôte n'est PAS partagé avec la VM Docker sur macOS.**
-  Tout espace jetable monté dans un conteneur doit être un *volume Docker* (ou un
-  chemin sous `/Users`), et son contenu lu depuis un conteneur. Un
-  `tempfile::tempdir()` y apparaît vide, ce qui fait conclure à une sauvegarde vide sur
-  une sauvegarde saine. **Ce piège s'est présenté trois fois** : vérification restic,
-  dumps SQL, exercices de reprise.
-- **Stalwart n'a pas d'API REST pour les comptes.** Tout passe par JMAP (`POST /jmap/`,
-  capacité `urn:stalwart:jmap`, méthodes `x:Account/set` et `x:Domain/query`), à partir
-  de la **v0.16** seulement. Le discriminant est `@type`, `emailAddress` est calculé par
-  le serveur, et un `/set` qui échoue renvoie quand même HTTP 200 — l'échec vit dans
-  `notCreated`. **Une condition de filtre ne porte qu'UNE propriété** : chaque clé
-  écrase la précédente, il faut un `AND` de conditions séparées. `accountId` n'est en
-  revanche pas requis pour `Account`/`Domain` (ils n'ont pas `OBJ_FILTER_ACCOUNT`).
-- **`pg_basebackup` passe par le protocole de réplication**, que `pg_hba.conf` traite
-  comme une base à part. Un utilisateur qui se connecte parfaitement en `psql` est
-  refusé. L'image officielle n'autorise la réplication que depuis `127.0.0.1` : il faut
+Each of these cost real debugging time. They are recorded so they are not rediscovered
+during an outage.
+
+### Rust and tooling
+
+- **Line continuations in test YAML.** A trailing `\` eats the newline *and* the next
+  line's indentation, breaking YAML confusingly. Use raw strings `r#"..."#` for any
+  test manifest.
+- **A *forgotten* line continuation is the twin trap.** Without the trailing `\` the
+  text renders with a gap in the middle ("server side,        not in this browser").
+  Invisible while reading, obvious on screen — hence a test refusing two consecutive
+  spaces in any displayed string.
+- **A regex-based source scanner misses strings with line continuations.** They are not
+  closed on their own line. Scanners read *strings* (a state-machine extractor), not
+  lines — and scanning raw code shouts at `Some(s) => f(s)`, a perfectly legitimate
+  pattern.
+- **A source-scanning test must assemble its patterns.** The test forbidding "action(s)"
+  fired on its own source three times. Use `format!("({})", "s")` rather than the
+  literal.
+- **`..` in a pattern has the same effect as a `_ =>` arm.** Seen on
+  `Capability::Sso { redirect_paths, .. }`: `mode` was ignored, so an app in
+  `mode: none` got an OIDC client with EMPTY URIs. The compiler cannot tell you — which
+  is exactly what exhaustiveness was supposed to prevent.
+- **`sqlx` uses runtime queries**, not compile-time macros: those need `DATABASE_URL` at
+  build time. Compile-time SQL checking is therefore **not** in place.
+- **In-memory SQLite** requires `max_connections(1)`, or each connection sees a
+  different database.
+- **`SystemTime::now()` has no nanosecond resolution on macOS.** A unique id built on it
+  alone produces duplicates between two close calls.
+- **`std::time::Instant::now()` PANICS in WebAssembly**, and there is no thread and no
+  `sleep`. All freshness goes through egui's clock, and polling is driven by the render
+  loop — one code path for native and web.
+- **The host temp directory is NOT shared with the Docker VM on macOS.** Any scratch
+  space mounted into a container must be a *Docker volume* (or a path under `/Users`),
+  and its content read from a container. A `tempfile::tempdir()` appears empty there,
+  which makes a healthy backup look empty. **This trap appeared three times**: restic
+  verification, SQL dumps, recovery drills.
+
+### Databases
+
+- **A PostgreSQL extension cannot be installed from SQL.** It must be in the server
+  IMAGE, or `CREATE EXTENSION` fails with "is not available", which looks like a
+  permissions problem. And it is **per-database**: installed on `postgres`, it succeeds
+  and the app never sees it.
+- **Changing the PostgreSQL image's libc breaks text indexes.** musl (alpine) and glibc
+  (debian) do not sort alike. B-trees built under one become incoherent under the other:
+  incomplete searches, unique constraints letting duplicates through. PostgreSQL only
+  warns about a "collation version mismatch". Hence `REINDEX DATABASE` +
+  `REFRESH COLLATION VERSION`.
+- **The role belongs to the APP, not to the database.** Seafile wants three databases
+  and connects to them with a single account. Naming the role after the database would
+  produce three accounts for one credential set, and the app would fail on two of them.
+- **`pg_basebackup` goes through the replication protocol**, which `pg_hba.conf` treats
+  as a separate database. A user who connects fine with `psql` is refused. The official
+  image only allows replication from `127.0.0.1`: you need
   `host replication all all scram-sha-256`.
-- **`pg_basebackup -R` écrase `postgresql.auto.conf`**, qui est lu APRÈS
-  `postgresql.conf` et l'emporte donc. Le `primary_conninfo` qu'il écrit n'a pas
-  d'`application_name` : des réglages posés AVANT sont silencieusement perdus, et tous
-  les standbys s'annoncent `walreceiver`. On voit alors qu'un nœud décroche sans savoir
-  lequel — d'où l'avertissement d'ambiguïté dans `hlb replication status`.
-- **Un slot de réplication neuf ne retient rien** tant qu'aucun standby ne s'y connecte
-  (sauf `immediately_reserve`). Le cas dangereux n'est pas le slot jamais utilisé, c'est
-  celui *qui a servi* et dont le consommateur a disparu : lui seul fait grossir `pg_wal`.
-- **Un dump MariaDB n'inclut PAS les routines, déclencheurs ni événements** sans
-  `--routines --triggers --events`. Le dump réussit, restaure sans erreur, et l'app est
-  subtilement cassée — un déclencheur manquant ne se voit qu'à la première écriture
-  concernée.
-- **`--single-transaction` ne protège que les tables transactionnelles.** Sur MyISAM ou
-  Aria, l'option est acceptée SANS avertissement et n'apporte aucune cohérence. D'où la
-  lecture des moteurs avant chaque dump — et une liste illisible vaut `VerrouillageRequis`,
-  jamais « c'est sûrement de l'InnoDB ».
-- **Un dump MariaDB tronqué reste du SQL valide.** C'est du texte écrit au fil de l'eau :
-  interrompu, il restaure une base à qui il manque des tables, sans une seule erreur. La
-  ligne `-- Dump completed` est la seule preuve de complétude — d'où l'interdiction de
-  `--skip-comments`, qui la supprimerait.
-- **Un battement de cœur périodique ne prouve rien.** Il atteste qu'un fil d'exécution
-  vit, pas que le système marche : le controller peut avoir sa base illisible et son
-  Docker mort, et battre imperturbablement. Le veilleur reste alors au vert sur un
-  système inutilisable — **pire que pas de deadman, puisqu'on s'y fie**. Le battement
-  est conditionné à une vérification réussie, et le silence est le signal.
-- **Le veilleur ne tourne pas sur ce qu'il surveille**, et n'alerte pas à travers lui.
-  Un deadman hébergé par le controller meurt avec lui ; une alerte relayée par le
-  controller ne part pas quand c'est lui qui est mort. Et si `curl` échoue, l'échec est
-  avalé par `>/dev/null 2>&1` : d'où le repli sur stderr, que cron envoie par courriel.
-- **Un `..` dans un motif a le même effet qu'un bras `_ =>`.** Constaté sur
-  `Capability::Sso { redirect_paths, .. }` : le `mode` était ignoré, donc une app en
-  `mode: none` (exclusion volontaire) recevait un client OIDC aux URI VIDES, et une app
-  derrière portail un client pointant vers elle au lieu d'oauth2-proxy. Le compilateur
-  ne pouvait pas le dire — c'est exactement ce que l'exhaustivité devait empêcher.
-- **Provisionner n'est pas connecter.** Le résolveur créait la base, le rôle isolé et le
-  mot de passe, puis déployait l'app sans rien lui dire : elle retombait sur son SQLite
-  interne. Service sain, sonde verte, tableau de bord au vert — et les données dans un
-  fichier que personne ne sauvegardait, pendant qu'une base vide était fidèlement dumpée
-  chaque nuit. D'où `spec.env` et les jetons de liaison.
-- **Un secret ne doit jamais entrer dans un plan.** Le plan traverse `hlb plan`
-  (affichage), l'état SQLite (enregistrement) et le miroir Git (export avec historique).
-  La substitution des jetons de secret a donc lieu dans l'exécuteur, au déploiement.
-  `{{ db.url }}` compte comme un secret malgré son air d'adresse : elle contient le mot
-  de passe.
-- **Un jeton irrésolu reste littéral, jamais vide.** Une variable vide ressemble à une
-  configuration absente : l'app se plaint d'un mot de passe incorrect et l'on cherche du
-  côté du mot de passe. `{{ db.password }}` dans les journaux désigne le vrai problème.
-- **Une extension PostgreSQL ne s'installe pas depuis SQL.** Elle doit être dans
-  l'IMAGE du serveur, sinon `CREATE EXTENSION` échoue sur « n'est pas disponible », ce
-  qui ressemble à un problème de droits. Et elle est **locale à une base** : posée sur
-  `postgres`, elle réussit et l'app ne la voit jamais.
-- **Changer la libc de l'image PostgreSQL casse les index texte.** musl (alpine) et
-  glibc (debian) ne trient pas pareil. Les B-tree construits sous l'une deviennent
-  incohérents sous l'autre : recherches incomplètes, contraintes d'unicité qui laissent
-  passer des doublons. PostgreSQL ne le signale que par un avertissement de « collation
-  version mismatch ». D'où `REINDEX DATABASE` + `REFRESH COLLATION VERSION`.
-- **Le rôle appartient à l'APP, pas à la base.** Seafile veut trois bases et s'y
-  connecte avec un seul compte. Nommer le rôle d'après la base produirait trois comptes
-  pour un jeu d'identifiants, et l'app échouerait sur deux d'entre elles.
-- **Garage ne redonne JAMAIS une clé secrète.** `CreateKey` la donne une fois ;
-  `GetKeyInfo` la rend nulle ensuite. L'idempotence ne peut donc pas reposer sur « la
-  clé existe-t-elle ? » — c'est le coffre qui fait autorité, sinon une reprise repart
-  sans secret et l'app échoue sur une « signature invalide » qui n'oriente vers rien.
-- **Une app n'est jamais propriétaire de son compartiment S3.** `read` + `write`, jamais
-  `owner` : propriétaire, une app compromise pourrait supprimer son propre
-  compartiment — effaçant ce que les sauvegardes protégeaient.
-- **Un compagnon absent ne se voit pas.** Immich sans son service d'apprentissage
-  importe et affiche les photos parfaitement, et ne reconnaît jamais personne. D'où le
-  déploiement du compagnon AVANT l'app, avec attente de sa mise en santé, et une étape
-  de guide qui fait vérifier que ça marche vraiment.
-- **Une destination de sauvegarde fraîche en masque une périmée.** `MAX(finished_at)`
-  sur toutes les destinations faisait passer un hors-site mort depuis trois semaines
-  pour une sauvegarde de 2 h, parce que le NAS, lui, tournait. On croyait le 3-2-1 tenu
-  alors qu'il ne restait qu'une copie, sur les mêmes machines. La fraîcheur se mesure
-  PAR destination, et le résumé affiche le pire cas — sinon il contredit le détail
-  juste en dessous, et c'est le résumé qu'on lit.
-- **Configuré n'est pas protégé.** Le nombre de destinations déclarées ne dit rien du
-  nombre de copies : une destination en échec est une destination qui ne protège de
-  rien. D'où `copies_a_jour()` et la règle d'alerte `copie-unique`.
-- **Un dépôt restic S3 ne se MONTE pas.** Le monter crée un répertoire vide, et restic
-  répond « repository does not exist » en désignant un chemin local sans rapport avec la
-  vraie destination. Et il faut un `--network` pour joindre un Garage interne.
-- **Un échec sur une destination ne doit jamais priver les autres.** Un hors-site
-  injoignable qui interromprait la boucle supprimerait aussi la sauvegarde locale : on
-  perdrait les deux copies pour la panne d'une seule.
-- **L'échéance se juge PAR destination.** La juger globalement fait sauter le hors-site
-  dès que le NAS vient d'être servi — il ne recevrait alors jamais rien, pendant que le
-  statut global paraîtrait frais.
-- **Un échec RÉPÉTÉ doit se voir avant le seuil de péremption.** Une destination qui
-  échoue à chaque tentative reste « fraîche » douze heures avec l'intervalle par défaut.
-  D'où le compteur d'échecs consécutifs, affiché immédiatement.
-- **`datetime('now')` a une résolution d'une SECONDE.** Une réussite et l'échec qui la
-  suit dans la même seconde portent le même horodatage, et une comparaison stricte les
-  exclut — le compteur reste à zéro alors que tout échoue. Ordonner par `id`, qui est
-  monotone.
-- **`credentials_secret` est le NOM du secret, pas sa valeur.** Le passer tel quel
-  enverrait « backup-dest-offsite » comme clé d'accès S3, et le serveur répondrait
-  « signature invalide » — une erreur qui n'oriente vers rien.
-- **Un serveur de messagerie ne sait PAS expirer un alias.** La liste `aliases` d'un
-  compte Stalwart n'a pas de date : ce qui y est écrit y reste. Un alias « temporaire »
-  ne l'est que si une purge vient réellement le supprimer — sinon l'adresse qu'on croit
-  fermée reçoit pour toujours. D'où **trois** états et non deux : valide, expiré-et-
-  supprimé, et 🔴 expiré-mais-TOUJOURS-ACTIF.
-- **Un alias devinable annule le compartimentage.** Si celui d'Amazon est
-  `amazon@example.fr`, alors `paypal@`, `banque@` et `impots@` existent probablement
-  aussi, et un expéditeur de masse les essaie toutes pour le prix d'une. L'indice ne
-  fait jamais l'adresse : il est suivi d'un suffixe aléatoire.
-- **L'intérêt d'un alias jetable n'est pas de le jeter, c'est l'attribution.** Une
-  adresse par destinataire dit *qui* a laissé fuiter. D'où l'indice lisible conservé :
-  cinquante adresses purement aléatoires font perdre le seul vrai bénéfice.
-- **Désactiver vaut mieux que supprimer.** Un alias supprimé rejette le courrier et
-  n'apprend rien ; désactivé, il le rejette aussi mais laisse compter ce qui frappe
-  encore — donc combien de temps un marchand a continué de vendre l'adresse.
-- **Un compte à moitié créé paraît fonctionnel.** Identité sans boîte : la personne se
-  connecte partout et son adresse ne reçoit rien. Ça ne se voit qu'au premier courriel
-  perdu, souvent une réinitialisation de mot de passe. L'état est nommé, et la création
-  est reprenable.
-- **PocketID n'a pas de mot de passe** : authentification par clé d'accès. On ne
-  transmet donc pas un secret initial mais un **jeton à usage unique**, affiché une
-  fois et jamais enregistré.
-- **JMAP `update` REMPLACE la propriété entière.** Il n'y a pas d'opération « ajouter
-  un alias » : écrire un seul alias effacerait tous les autres, sans lever d'erreur.
-  D'où lecture-modification-écriture — et deux modifications simultanées feraient
-  perdre la première.
-- **Marquer un alias « purgé » sans l'avoir retiré du serveur est pire que ne rien
-  faire.** L'adresse recevrait encore ET plus rien ne le signalerait : le silence
-  entretiendrait la croyance que la porte est fermée. L'état n'est marqué qu'APRÈS le
-  retrait effectif, et la purge sans Stalwart refuse au lieu de mentir.
-- **Ce qui compte dans une purge, c'est ce qui reste OUVERT, pas le nombre d'erreurs.**
-  Une purge sans erreur qui n'a rien retiré laisse autant de portes ouvertes qu'une
-  purge qui a échoué bruyamment.
-- **Un script Sieve est un fichier UNIQUE par compte.** Le réécrire entièrement
-  effacerait les règles écrites à la main — des heures de réglages, perdues sans un
-  avertissement, pour une simple création d'alias. D'où un bloc délimité par des
-  marqueurs : Homelabus n'écrit qu'entre eux, et le bloc va en FIN de script (en tête,
-  il capterait les messages avant les règles de l'utilisateur).
-- **Un guillemet non échappé dans un nom de dossier casse TOUT le script**, y compris
-  les règles de l'utilisateur, que Stalwart refuse alors en bloc. Le nom vient de
-  l'utilisateur : il s'échappe.
-- **`NULL` ≠ chaîne vide pour un dossier de tri.** `NULL` = « rien n'a été décidé », on
-  propose un défaut ; `""` = « je ne veux PAS de tri », et c'est un choix explicite.
-  Les confondre réimpose un dossier à chaque régénération.
-- **🔴 idmail et `hlb-mail` ne peuvent pas coexister.** idmail ne parle pas à Stalwart :
-  il REMPLACE son annuaire (`directory` externe de type sqlite). Les deux ensemble
-  donneraient un alias créé en JMAP dans un annuaire que Stalwart ne consulte plus —
-  l'adresse ne recevrait rien, sans que rien ne le signale. D'où l'API compatible
-  addy.io côté Homelabus plutôt que l'intégration d'idmail.
-- **Le contrat de l'API addy.io est imposé par BITWARDEN**, pas par nous. Relevé dans
-  son code (`libs/tools/generator/core/src/integration/addy-io.ts`) : la réponse doit
-  être `{data:{email}}` — à la racine, le client lit `undefined` et l'alias existe côté
-  serveur sans que personne ne le sache.
-- **Un jeton d'API porte un RÔLE, pas une identité.** Suffisant pour lire l'état, faux
-  dès qu'une requête agit POUR quelqu'un : sans rattachement, un jeton volé créerait des
-  aliases sur la boîte de n'importe qui. Un jeton `admin` non rattaché est donc refusé
-  là où un `operator` rattaché passe.
-- **Un script Sieve ne voyage pas dans l'appel JMAP.** `SieveScript` ne porte qu'un
-  `blobId` : il faut téléverser le contenu, puis le référencer. Et **sans
-  `onSuccessActivateScript`, le script existe et ne trie RIEN** — panne totalement
-  silencieuse, les règles sont visibles dans Roundcube et sans effet.
-- **Le protocole addy.io n'a aucun champ pour choisir la boîte.** Bitwarden n'envoie
-  que `domain` et `description`. La destination vit donc sur le JETON — un jeton par
-  boîte — et un jeton qui vise une boîte disparue ÉCHOUE au lieu de retomber sur celle
-  par défaut : l'utilisateur croirait ses aliases rangés là où ils ne sont pas.
-- **Comparer les tailles ne détecte pas la corruption.** Un bit retourné laisse le
-  fichier à la même taille. D'où `restic check --read-data-subset` en plus du décompte.
-- **`SystemTime::now()` n'a pas la résolution nanoseconde sur macOS.** Un identifiant
-  unique bâti dessus seul produit des doublons entre deux appels rapprochés.
-- **Un fichier SQLite ne se copie pas à chaud.** En mode WAL c'est trois fichiers que
-  restic copie l'un après l'autre ; entre-temps l'app écrit. `VACUUM INTO` produit un
-  instantané cohérent, et la panne ne se voit qu'à la restauration.
-- **`sshd` ignore SILENCIEUSEMENT `authorized_keys`** s'il est lisible par le groupe,
-  ou si `~/.ssh` l'est. La clé paraît installée et rien ne marche.
-- **Un utilisateur MariaDB est `'nom'@'hôte'`.** Sans partie hôte explicite, l'app est
-  refusée depuis un autre conteneur avec un message parlant de mot de passe incorrect.
-  Et `_`/`%` sont des JOKERS dans un `GRANT`.
-- **`*.example.fr` ne couvre pas `example.fr`.** Les deux noms doivent être demandés.
-- **Le matcher `status` de Caddy n'existe que dans un bloc `forward_auth`.** Au niveau
-  du site, Caddy refuse de démarrer sur « module not registered ».
-- **Un outil de scan absent n'est pas un feu vert.** `NotChecked` est distinct de
-  `Clean` : traiter « trivy absent » comme « rien trouvé » désactive le contrôle en
-  donnant l'impression de l'avoir fait.
-- **Le forward-auth doit effacer les en-têtes d'identité entrants.** Sinon
-  `curl -H "X-Auth-Request-User: admin"` suffit à usurper un compte.
-- **egui n'embarque pas tous les glyphes.** « ● », le sélecteur de variante de « ⚠️ »
-  et « ⚑ » s'affichent en carré vide, et un « tofu » ressemble assez à une icône pour
-  passer inaperçu en relecture. Les formes d'état sont **peintes**, pas écrites, et un
-  test scanne tous les littéraux du fichier (commentaires exclus).
-- **`std::time::Instant::now()` PANIQUE en WebAssembly**, et il n'y a ni thread ni
-  `sleep`. Toute la fraîcheur passe par l'horloge d'egui, et le sondage est piloté par
-  la boucle de rendu — un seul chemin de code pour le natif et le web.
-- **Servir du wasm exige `Content-Type: application/wasm`.**
-  `WebAssembly.instantiateStreaming` refuse un `application/octet-stream` avec un
-  message qui ne dit pas ce qu'il attendait.
-- **Le binaire `wasm-bindgen` doit avoir EXACTEMENT la version du crate.** Une
-  divergence donne un bundle qui se charge et plante à la première fonction.
-- **Une donnée périmée ne doit jamais ressembler à une donnée fraîche.** Si le
-  controller tombe, l'UI garderait son dernier état connu : toutes les apps vertes
-  pendant que le cluster brûle. D'où `Freshness`, que le type oblige à regarder — avec
-  `NeverSucceeded` distinct de `Stale`, sans quoi un échec de la PREMIÈRE requête
-  laisse l'écran sur « connexion en cours… » indéfiniment.
-- **Un jeton d'API n'est jamais stocké en clair**, même dans le coffre : on garde une
-  empreinte SHA-256. Une fuite révèle qu'un jeton existe, pas sa valeur.
-- **Le jeton web passe par le FRAGMENT d'URL**, jamais la chaîne de requête : un
-  `?token=` part dans les journaux d'accès, les en-têtes `Referer` et tout proxy.
-- **Un rôle authentifié n'est pas un rôle autorisé.** `Role::allows` a existé sans
-  aucun appelant en production : tous les gestionnaires prenaient `_auth: Authentifie`
-  et ignoraient le rôle. L'autorisation vit maintenant dans le TYPE de l'argument
-  (`Autorise<PeutOperer>`) — le compilateur l'exige dans la signature, donc on ne peut
-  pas l'oublier.
-- **Un `403` nu fait douter de tout.** Il ne dit pas si on s'est trompé d'écran, si le
-  système est cassé, ou s'il manque un droit. `Role::refus` nomme l'action, le rôle
-  requis, le rôle détenu et **qui peut l'accorder** — et rend `None` quand c'est permis,
-  pour qu'on ne puisse pas afficher un refus par erreur.
-- **Le rôle d'une personne se relit à CHAQUE requête**, jamais figé dans la session.
-  Figé, retirer les droits d'admin à quelqu'un n'aurait aucun effet pendant douze
-  heures — or on les retire précisément quand on est pressé.
-- **`SameSite=Lax` ne suffit pas contre le CSRF.** Toute requête mutante portée par un
-  cookie exige l'en-tête `X-HLB-UI`. Les appels par jeton en sont dispensés : sans
-  cookie, il n'y a pas d'autorité ambiante à détourner.
-- **Un cookie `Secure` n'est PAS posé du tout sur `http://`.** L'attribut suit l'URL
-  publique et n'est jamais codé en dur, sinon le développement local boucle sur l'écran
-  de connexion **sans le moindre message d'erreur**.
-- **La signature d'un `id_token` n'est pas vérifiée** — et c'est correct : il est
-  récupéré par le controller lui-même sur TLS, jamais reçu du navigateur (OIDC Core
-  §3.1.3.7). ⚠️ Ce raisonnement ne tiendrait PAS pour un flux implicite.
-- **Croire `X-Forwarded-For` sans proxy de confiance annule la limitation de débit** :
-  chaque attaquant se donne un compteur neuf à chaque requête, et la protection donne
-  l'impression de fonctionner. D'où `--trusted-proxy`, explicite.
-- **Une réponse réseau tardive doit être JETÉE, pas adoptée.** Une requête abandonnée
-  pour dépassement de délai peut arriver ensuite : sans numéro de tour, elle serait
-  consommée comme fraîche et l'écran daterait de maintenant des données vieilles de
-  plusieurs minutes. C'est exactement le mensonge que `Freshness` existe pour empêcher.
-- **Une palette n'a pas le droit de rendre les états indistincts.** Le vert « feu
-  tricolore » et le rouge se rejoignent en vision deutéranope (distance 35, il en faut
-  60) : les deux voyants les plus importants du tableau de bord étaient indiscernables
-  pour 8 % des hommes. Le vert est décalé vers le cyan, et l'accent est **froid** —
-  le cuivre initial se confondait avec « critique ». Ce n'est pas un goût, c'est une
-  contrainte, et `Palette::valider` la fait respecter.
-- **Sans `set_width`, chaque carte egui prend la largeur de son CONTENU.** Une liste de
-  cartes devient un escalier dont le bord droit suit la longueur du texte. Invisible
-  dans le code, évident à l'écran — d'où un test qui scanne les conteneurs.
-- **Un écran écrit et absent de la navigation est du travail perdu.** L'écran des
-  secrets existait et ne s'atteignait qu'en tapant l'URL. Un test croise désormais les
-  écrans implémentés et les entrées de navigation.
-- **Ne jamais proposer un écran qui n'existe pas.** Une entrée qui mène à « à venir »
-  promet, on clique, on n'a rien, et on doute de tout le reste. `Route::implemente()`
-  filtre la navigation ET les suggestions du message d'erreur.
-- **Une tâche Swarm morte n'est pas une tâche arrêtée.** `desired_state` ET `state`
-  décident si elle vit ; mais une tâche volontairement arrêtée (mise à jour, réduction
-  d'échelle) n'est pas une panne — la compter comme telle ferait clignoter le tableau
-  de bord à chaque déploiement normal, et on cesserait de le regarder.
-- **Le taux CPU exige DEUX relevés.** `/proc/stat` est cumulé depuis le démarrage : au
-  premier passage, la valeur est `None` et jamais `0.0` — un « 0 % » se lit « machine
-  au repos », soit l'exact contraire de « je ne sais pas ». Idem après un redémarrage,
-  où les compteurs reculent : la soustraction est vérifiée, pas enveloppée.
-- **La charge n'est comparable que divisée par les cœurs.** 4 est dramatique sur un
-  cœur et confortable sur seize ; un homelab est fait de machines hétérogènes, et la
-  valeur brute côte à côte ne veut rien dire.
-- **La mémoire se mesure sur la DISPONIBLE, pas sur la libre.** Linux met en cache tout
-  ce qu'il peut : « libre » est presque toujours proche de zéro sur une machine saine.
-  S'y fier ferait crier au manque de mémoire en permanence.
-- **Un swap qui commence à servir est un signal AVANT la panne.** La machine ralentit
-  sans être encore tombée. Le seuil est bas (5 %) pour cette raison — attendre la
-  saturation, c'est attendre trop tard.
-- **Le protocole de l'agent monte, la compatibilité reste dans les deux sens.** Tous
-  les champs ajoutés sont `Option` + `serde(default)`, et rien n'est en
-  `deny_unknown_fields` : on peut mettre à jour le controller avant les agents ou
-  l'inverse. Sans ça, la première mise à jour rendrait tout le parc « injoignable » —
-  précisément quand on a besoin de le voir.
-- **Un relais PromQL ouvert est une exfiltration.** `{__name__=~".+"}` rend toute la
-  base : noms d'hôtes, chemins, noms d'apps — la cartographie de l'installation, à qui
-  a un jeton `viewer`. D'où une liste **blanche** de préfixes : on ne peut pas énumérer
-  ce qui est dangereux, on peut énumérer ce qui est utile.
-- **Les valeurs Prometheus sont des CHAÎNES, pas des nombres.** Les lire en `as_f64()`
-  rend `None` sur toutes, et la courbe est vide sans la moindre erreur.
-- **Une série vide n'est pas une série à zéro.** Une ligne plate se lit « tout est
-  calme » ; `Serie::Indisponible` est une variante distincte, que le type oblige à
-  traiter.
-- **Une alerte en sourdine reste AFFICHÉE.** La sourdine coupe la notification, pas
-  l'écran : la faire disparaître donnerait un tableau de bord vert pour un problème
-  connu et non résolu. Elle porte une échéance, et revient entière ensuite.
-- **Une règle non évaluable n'est pas une règle satisfaite.** Si la collecte tombe,
-  `Evaluation::Inconnu` remonte au niveau `Important` — pas au niveau de la règle, qui
-  laisserait croire que le seuil est franchi alors qu'on ignore s'il l'est.
-- **`hlb_backup_copies` n'existait nulle part** alors que la règle `copie-unique`
-  l'interrogeait : la règle qui garde le 3-2-1 ne s'est donc jamais déclenchée.
-  `Couverture` n'était construite que dans le CLI — un calcul que le controller ne
-  pouvait pas refaire.
-- **Un cycle de dépendances révèle où le code doit vivre.** `hlb-state` ne peut pas
-  implémenter un trait de `hlb-backup` (qui dépend de `hlb-updater`, qui dépend de
-  `hlb-state`). L'adaptateur va donc dans le controller, qui dépend déjà des deux — et
-  la logique reste dans `hlb-backup`, testable en mémoire.
-- **Chaque grandeur a ses propres seuils de couleur.** Constaté à l'écran : avec
-  l'échelle du CPU, un swap à 71 % s'affichait en VERT — or une machine qui échange
-  déjà 70 % de son swap rame. Partager une fonction de teinte entre CPU, mémoire et
-  swap est une économie qui ment.
-- **« Aucune copie à jour » recouvre deux situations opposées.** Jamais sauvegardée
-  (rien n'existe) et sauvegardes périmées (des copies existent, elles datent) ne se
-  réparent pas pareil. Constaté à l'écran : « AUCUNE copie » à côté de deux
-  destinations affichant « 1 j » se lit comme une contradiction, et on doute de tout
-  l'écran.
-- **L'anti-affinité porte sur le FER, jamais sur `node.id`.** Deux VM du même serveur
-  sont deux nœuds Swarm et **un seul** point de panne : répartir deux réplicas « sur
-  deux nœuds » ne protège de rien, et Swarm rend une illusion de redondance. Le domaine
-  est déclaré à `hlb node add` (étiquette `hlb.failureDomain`) — ni Swarm ni l'agent ne
-  peuvent le deviner.
-- **Un domaine non déclaré n'est pas un domaine isolé.** Supposer l'isolement serait
-  exactement l'hypothèse optimiste qui crée l'illusion. Les nœuds sans domaine forment
-  un groupe « on ne sait pas », affiché comme tel.
-- **`?apply=true`, sinon aperçu.** La transposition HTTP de `Executor::apply(true)` :
-  une visite d'écran ne doit jamais devenir une exécution. Un test parcourt la liste qui
-  SERT à construire le routeur et vérifie qu'aucune route n'agit sans le paramètre.
-- **Les routes de CONFIGURATION n'ont pas d'aperçu, et c'est un choix déclaré.**
-  Écrire le nom de la marque est idempotent et réversible ; imposer un aller-retour
-  ferait prendre l'habitude de cliquer deux fois, ce qui viderait la protection de son
-  sens là où elle compte. Le champ `apercu: false` est explicite, et un test verrouille
-  la courte liste des exemptions.
-- **La confirmation vient de l'APERÇU, jamais fabriquée par l'interface.** C'est le
-  serveur qui dit quelle cible doit être confirmée ; l'interface se contente de la
-  répéter après que l'utilisateur a lu ce que ça détruit. Deux états à synchroniser
-  finiraient par diverger, et on appliquerait une action différente de celle
-  prévisualisée.
-- **Trois temps, pas deux.** Un bouton suivi d'un « Confirmer ? » générique ne dit rien
-  de ce qui va se passer : on clique par réflexe, et la protection ne protège plus. La
-  confirmation porte sur **le plan**, pas sur une question.
-- **Descendre à zéro réplica n'est pas un redimensionnement, c'est un arrêt.** Refusé
-  depuis un champ numérique, où ça n'arrive jamais volontairement.
-- **Une destination S3 sans identifiants échoue des heures plus tard**, sur une
-  « signature invalide » qui n'oriente vers rien. Refusée à la déclaration, avec le
-  message qui nomme l'erreur qu'on verrait sinon.
-- **Drainer le dernier nœud actif viderait le cluster.** Swarm l'accepte sans broncher —
-  c'est à nous de refuser.
-- **Une continuation de ligne OUBLIÉE laisse l'indentation dans la chaîne.** Le piège
-  documenté a un jumeau : sans le `\` final, le texte s'affiche avec un trou au milieu
-  (« côté serveur,        pas dans ce navigateur »). Invisible en lisant le code,
-  évident à l'écran — d'où un test qui refuse deux espaces consécutifs dans une chaîne
-  affichée.
-- **Le thème est un NOM, pas une palette.** Une palette stockée par personne survivrait
-  au retrait du thème dont elle vient, et l'on ne saurait plus la faire évoluer.
-- **« Celui de l'installation » est une option à part**, pas l'absence de choix : la
-  personne qui la sélectionne dit « suivez la marque », et son thème changera si
-  l'administrateur change le défaut.
-- **Un thème inconnu est REFUSÉ, pas accepté silencieusement.** Accepté, il serait
-  stocké, retomberait sur le défaut à l'affichage, et l'on croirait le choix perdu par
-  un défaut de l'interface.
-- **La liste des thèmes vit côté serveur.** Si l'interface et le controller avaient
-  chacun la leur, un thème retiré resterait proposé jusqu'au prochain déploiement du
-  wasm. Un test tient les deux alignées.
-- **Comparer deux calculs issus de la MÊME fonction ne peut jamais échouer.** L'écran
-  d'exposition comparait les manifests à `routes_from_manifest` appliqué aux mêmes
-  manifests : il aurait affiché « conforme » quoi qu'il arrive, en attestant d'une
-  vérification qui n'avait pas lieu. La comparaison porte sur ce qui a été RÉELLEMENT
-  posé (`ingress_publie`, écrit après le rechargement de Caddy), face à ce que les
-  manifests demandent aujourd'hui.
-- **Une route orpheline n'apparaît dans aucun parcours des apps installées.** Une app
-  retirée dont la route répond encore n'est dans aucun manifest, donc dans aucune
-  boucle : elle se cherche depuis les routes POSÉES, pas depuis les apps.
-- **Deux chiffres pour une sauvegarde, pas un.** Le RPO dit ce qu'on perdrait ; la
-  confiance dit ce qu'on sait de cette copie. Une sauvegarde fraîche jamais relue est
-  une hypothèse, et l'afficher en vert est le mensonge que le §8.3 existe pour empêcher.
-  Le RPO se mesure sur les destinations À JOUR seulement — sinon une copie périmée
-  fournit un chiffre rassurant.
-- **On simule la perte d'un DOMAINE, jamais d'une machine.** Sur deux VM d'un même
-  serveur, la simulation par nœud conclut « le service survit » là où la simulation par
-  domaine dit « il s'éteint entièrement ». Et le quorum exige la majorité STRICTE des
-  managers : sur quatre, deux survivants ne suffisent pas — un `>=` naïf conclurait que
-  le cluster tient.
-- **Une chaîne causale qu'on ne sait pas remonter s'arrête.** Sur « cause inconnue »,
-  jamais sur une supposition : un diagnostic plausible mais faux fait réparer la
-  mauvaise chose, puis douter de l'écran. Une alerte n'est rattachée que si le constat
-  du nœud la corrobore — l'accrocher parce qu'elle est active fabriquerait un lien.
-- **Les non-actions de la réconciliation étaient invisibles.** Rien ne distinguait « il
-  n'y a rien à faire » de « il y a quelque chose et j'ai délibérément choisi de ne pas y
-  toucher ». `Drift::refus()` nomme la raison, et un test exige que corrigible et refus
-  soient exactement complémentaires. Un refus est peint en VERT : c'est une décision,
-  pas une panne.
-- **`record_verification` déduisait l'échec de la présence d'un détail.** Décrire une
-  vérification réussie l'enregistrait donc comme un échec, et l'app restait
-  éternellement « jamais vérifiée ». `reussie: bool` est un argument à part entière —
-  le compilateur a exigé les cinq appels.
-- **Le budget de capacité ne s'additionne pas.** Un service ne se répartit pas entre
-  deux machines : deux nœuds à 400 Mo libres ne font pas 800 Mo utilisables, ils font
-  400. Et il n'existe AUCUN champ de mémoire dans les manifests — on annonce ce qui
-  reste sur le tier visé, jamais une marge qu'on n'a pas.
-- **Un nœud de tier inconnu n'appartient à aucun tier.** Le supposer ferait annoncer de
-  la place là où il n'y en a pas ; un tier sans nœud fait expirer `wait_healthy` sans
-  jamais dire pourquoi.
-- **« Rien avant » n'est pas « rien n'a changé ».** Dans l'historique des manifests, la
-  première version connue n'a pas un diff vide parce que rien n'a bougé : elle n'a rien
-  avant elle. Et un commit qui ne touche pas l'app porte quand même son fichier — sans
-  déduplication, vingt versions identiques noieraient le seul vrai changement.
-- **Une source de frise qu'on ne sait pas lire doit APPARAÎTRE.** La taire ferait
-  conclure « aucune action humaine n'a précédé la panne » alors qu'on ne sait rien — et
-  c'est en pleine panne qu'on lit cet écran.
-- **SQLite écrit ses horodatages sans fuseau ni « T ».** Les refuser comme du RFC 3339
-  rend `None` sur toutes les lignes, et la frise est vide sur des données saines.
-- **La règle du pluriel ne valait que d'un seul côté du contrat.** Le test qui interdit
-  « action(s) » ne couvrait que l'interface, alors que les phrases sont fabriquées dans
-  `hlb-api` et le controller. Il y en avait sept. Les tests couvrent maintenant les deux
-  côtés — et `pluriel` accorde le NOM, pas le verbe : « 5 services s'arrêterait » a été
-  constaté à l'écran.
-- **Un scan par expression régulière rate les chaînes à continuation de ligne.** Elles
-  ne sont pas closes sur leur propre ligne : le caractère fautif passe exactement là où
-  il s'est présenté. Les scanners lisent les CHAÎNES (extracteur à états), pas les
-  lignes — et scanner le code brut crie sur `Some(s) => f(s)`, un motif Rust
-  parfaitement légitime.
-- **Le coffre n'est PAS la source de vérité d'un mot de passe.** Le tourner là seul ne
-  change rien : PostgreSQL garde l'ancien, le conteneur garde l'ancien dans son
-  environnement, et tout continue — jusqu'au prochain redéploiement, où l'app échoue sur
-  « mot de passe incorrect » sans que personne ne fasse le lien avec une rotation d'il y
-  a trois semaines. Une rotation est une PROCÉDURE ORDONNÉE, et `Nature` dit laquelle.
-- **Les suffixes de secrets se lisent dans le résolveur, pas dans sa tête.** Deux
-  natures étaient déduites de conventions devinées (`-s3-key` au lieu de `-s3-secret`) :
-  la règle ne se déclenchait jamais, et l'écran restait muet sur exactement les secrets
-  qui comptent. Un test énumère les noms que le code produit réellement.
-- **Une démonstration qui invente ses propres noms enseigne une fausse convention.**
-  C'est elle qui a fait passer le défaut ci-dessus inaperçu.
-- **Homelabus ne peut vérifier AUCUN des garde-fous d'accès**, sauf l'exercice de
-  reprise : il ne sait pas combien de passkeys existent ni si les codes sont imprimés.
-  Il demande donc une attestation datée, qu'il fait expirer — et le seul point dont il a
-  la trace ne s'atteste PAS à la main, sinon on peindrait en vert le garde-fou le plus
-  important sans qu'aucun exercice n'ait eu lieu.
-- **Un âge en jours ne s'affiche pas en secondes.** « Vérifié il y a 0 s » pour un
-  exercice compté en jours entiers se lit « à l'instant », alors qu'il peut dater
-  d'hier soir. Le type porte sa résolution (`resolution_jour`), sinon l'affichage
-  invente une précision qui n'existe pas.
-- **Un runbook écrit à la main est faux le jour où l'on en a besoin.** Celui-ci est
-  engendré depuis l'état réel, porte sa date, et ne contient AUCUN secret — il est fait
-  pour être imprimé et rangé ailleurs. Quand l'ordre de redémarrage ne se calcule pas,
-  c'est la RAISON qui est imprimée : « il manque garage » se corrige, « l'ordre n'a pas
-  pu être calculé » ne se corrige pas.
-- **Le runbook engendré a révélé un manque réel de la démonstration** — ni `pocket-id`
-  ni `garage` n'y étaient installés, alors que gitea et immich les déclarent. Le graphe
-  refusait donc de produire un ordre, à juste titre.
-- **Un plan nommé se rejoue TEL QU'IL A ÉTÉ PRÉVISUALISÉ**, jamais recalculé : deux
-  calculs à deux instants peuvent diverger, et l'on exécuterait autre chose que ce qu'on
-  a relu. Rejouer relance l'aperçu, pas l'exécution. Et un plan visant une route inconnue
-  est refusé À L'ENREGISTREMENT — accepté, il échouerait des semaines plus tard sur un
-  404 qui n'oriente vers rien.
-- **Un gabarit de chemin se compare segment par segment.** Une comparaison par préfixe
-  laisserait passer `/api/apps/gitea/install/vraiment`, qui n'existe pas.
-- **Le piège de la continuation de ligne existe aussi côté serveur.** Constaté dans le
-  runbook engendré : un paragraphe partait à quinze espaces de la marge. Le test se
-  scanne LIGNE PAR LIGNE comme celui de l'interface — extraire les chaînes du fichier
-  entier échoue sur toutes les continuations légitimes, parce que l'extracteur mange la
-  newline mais pas l'indentation, là où rustc mange les deux.
-- **Un assistant qui n'est pas essayé de bout en bout livre du faux.** L'assistant
-  Bitwarden rattachait la BOÎTE et pas le COMPTE : son jeton était refusé par l'API
-  d'aliases (« cette requête n'agit au nom de personne »), avec six étapes rassurantes
-  qui envoyaient chercher du côté de Bitwarden. Constaté en appelant réellement
-  `/api/v1/aliases` avec le jeton produit.
-- **🔴 Le service worker ne met JAMAIS l'API en cache.** Un cache de données
-  ressusciterait exactement le mensonge que `Freshness` existe pour empêcher : des apps
-  vertes servies depuis le cache pendant que le cluster brûle. Un test scanne `sw.js` et
-  refuse `/api/`, `/auth/` et `/metrics` dans la liste de la coquille.
-- **Un QR se peint, il ne s'écrit pas.** Aucune police n'intervient, donc aucun tofu.
-  Le module doit faire un nombre ENTIER de pixels — fractionnaire, egui lisse les bords,
-  les carrés se mélangent et le code devient illisible pour un lecteur alors qu'il
-  paraît net à l'œil. Et la marge de 4 modules est obligatoire : c'est la cause la plus
-  fréquente d'un QR qui « ne marche que sur certains téléphones ».
-- **Le kiosque est une liste BLANCHE d'écrans, jamais une liste noire.** Un mur est
-  visible par quiconque passe dans la pièce ; on ne peut pas énumérer ce qui sera
-  sensible demain, on peut énumérer ce qui est anodin aujourd'hui. Un écran ajouté plus
-  tard est donc exclu par défaut, et un test refuse que la règle devienne une liste
-  noire.
-- **Un champ CSV non cité décale toutes les colonnes suivantes.** Le journal d'audit
-  contient des détails écrits par des humains : virgules et guillemets y sont la norme.
-  Et le fin de ligne est CRLF, sinon Excel fusionne les lignes.
-- **L'état de Homelabus n'était PAS sauvegardé.** Marque, thèmes, annonces, rôles,
-  invitations, attestations de secours, plans, routes réellement posées : tout vit dans
-  la base d'état, et rien ne la copiait. Une restauration rendait des apps qui tournent
-  dans une installation qui ne sait plus qui est administrateur.
-- **Un écran peut compiler et paniquer AU RENDU.** Un index hors bornes dans une
-  boucle d'affichage ne se voit qu'en ouvrant l'écran — et sur vingt écrans, celui qui
-  casse est rarement celui qu'on regarde. `Context::run` les rend tous hors écran, à
-  vide et en disposition étroite. En revanche, les défauts purement VISUELS de ce
-  chantier se sont tous trouvés en regardant une capture, jamais en comparant deux
-  images.
-- **Une route morte ne se voit pas.** `/api/apps/{name}` existait sans aucun appelant.
-  Un test croise les routes déclarées avec ce que l'interface demande vraiment ; les
-  routes servies à d'autres clients (Bitwarden, le veilleur, le CLI) sont listées
-  explicitement — c'est une décision, pas un oubli.
-- **La page de statut est PRIVÉE par défaut.** Publiée, elle révèle la liste de ce qui
-  tourne chez vous et le calendrier de vos pannes. Ouverte, elle ne montre que les
-  services **exposés** — jamais les nœuds, les sauvegardes ou les comptes.
-- **Une maintenance annoncée n'est pas une panne.** C'était prévu, et l'afficher comme
-  telle évite qu'on cherche ce qui ne va pas.
-- **La page de statut demande `LireSoi`, pas `Lire`.** Elle est faite pour les gens qui
-  subissent la panne, pas pour ceux qui l'exploitent : exiger un droit de console la
-  ferait disparaître du portail, c'est-à-dire de l'endroit où on la cherche.
-- **Une invitation ne se range PAS dans le stockage local**, contrairement au jeton
-  d'accès : elle sert une fois, et un navigateur partagé la proposerait à la personne
-  suivante — dont le compte porterait alors le rôle prévu pour quelqu'un d'autre.
-- **L'écran d'inscription n'a NI navigation NI en-tête de session.** Il s'adresse à
-  quelqu'un qui n'a pas de compte : lui proposer « Tableau de bord » l'enverrait sur un
-  refus, et afficher l'identité de celui qui a ouvert le lien serait au mieux
-  déroutant.
-- **Un écran écrit et volontairement hors navigation mérite son propre test.** Sinon la
-  règle « tout écran écrit est atteignable » finit par y ajouter une entrée, qui
-  s'afficherait à des gens ayant déjà un compte.
-- **Un avertissement n'est PAS un blocage.** « Ce lien laissera entrer cinq personnes »
-  rangé parmi les blocages rendait l'action impossible — alors que c'est un choix
-  légitime qu'on veut simplement voir avant de le faire. Deux champs distincts, deux
-  formes à l'écran.
-- **Une invitation à N usages qui fuite fait entrer N personnes.** Le défaut reste 1, le
-  nombre restant est affiché, et un lien largement ouvert se distingue visuellement —
-  c'est celui qu'on oublie de fermer.
-- **Révoquer une invitation l'ÉPUISE, ne la supprime pas.** L'effacer perdrait la trace
-  de qui l'a créée et de qui est déjà entré, au moment précis où on en a besoin.
-- **Un incident se SUIT, il ne se réécrit pas.** C'est la chronologie qu'on relit après
-  coup — à quelle heure on a su, compris, réglé. Et il reste ouvert tant que personne
-  ne le clôt : le silence ne doit pas passer pour une résolution.
-- **Une annonce qui ne concerne pas son lecteur est du bruit.** Inonder l'utilisateur du
-  portail de messages d'exploitation lui fait cesser de les lire — au moment précis où
-  l'un d'eux comptera. D'où l'audience par rôle.
-- **Homelabus ANNONCE les applications, il n'accorde pas l'accès.** Celui-ci vient de
-  PocketID et du forward-auth. Et un lien vers une app arrêtée envoie sur une page
-  d'erreur qu'on prend pour un problème de ses propres droits.
-- **Un texte partagé ne doit dépendre d'AUCUN de ses consommateurs.** Les messages de
-  `Coherence::describe()` portaient un 🔴 : très bien dans un terminal, remplacé par
-  « ¤ » dans egui, ce qui donnait « ¤ identité créée, AUCUNE boîte ». La gravité passe
-  par le contenu et par la couleur de l'appelant, jamais par un glyphe.
-- **Un test qui scanne du source doit ASSEMBLER ses motifs.** Le test qui interdit
-  « action(s) » s'est déclenché sur son propre code, trois fois de suite. Même astuce
-  que le test qui interdit `Instant::now()` : `format!("({})", "s")` plutôt que le
-  littéral.
-- **Une invitation refusée pour une faute de frappe ne doit PAS être consommée.** Le
-  nom est validé avant, sinon un lien à usage unique se gâche sur une majuscule.
-- **Le rôle et le profil sont fixés à l'INVITATION**, jamais choisis par l'invité :
-  sinon n'importe qui s'inscrirait administrateur.
-- **Le panneau d'action vit dans le dispatcher, pas dans un écran.** Il était dans le
-  détail d'app : un aperçu déclenché depuis l'écran des comptes partait sans que rien
-  ne s'affiche, et le clic paraissait sans effet.
-- **La requête à appliquer se reconstruit depuis l'APERÇU**, jamais depuis un état
-  gardé à côté : deux sources finiraient par diverger, et l'on appliquerait une action
-  différente de celle qu'on vient de lire. Une action non reconnue ne retombe sur
-  aucune autre — elle rend 404, ce qui se voit.
-- **« 0 réplica » prend le SINGULIER en français.** C'est la règle qui surprend, et
-  celle qu'un `if n > 1` naïf rate. `hlb_api::pluriel` la porte, et un test interdit
-  « action(s) » dans toute chaîne affichée — le tic qui trahit un texte fabriqué.
-- **Un aperçu est journalisé `preview`, pas `ok`.** Savoir que quelqu'un a regardé ce
-  qu'une purge ferait est une information ; la confondre avec une exécution rendrait le
-  journal inexploitable.
-- **Un nœud injoignable ne doit afficher AUCUNE jauge.** Il n'a pas de mauvais chiffres,
-  il n'en a aucun : des barres à zéro se liraient « machine au repos ». On affiche la
-  raison et on s'arrête là.
-- **Un tofu peut venir du CONTENU, pas seulement des littéraux.** Le test qui scanne le
-  source ne protège pas d'un emoji dans une annonce ou un nom de dossier Sieve.
-  `glyphes::sans_tofu` remplace par un caractère visible — le supprimer ferait
-  disparaître du texte en silence, ce qui est pire.
+- **`pg_basebackup -R` overwrites `postgresql.auto.conf`**, which is read AFTER
+  `postgresql.conf` and therefore wins. The `primary_conninfo` it writes has no
+  `application_name`: settings placed BEFORE are silently lost and every standby
+  announces itself as `walreceiver`. You then see a node falling behind without knowing
+  which one.
+- **A brand-new replication slot retains nothing** until a standby connects (absent
+  `immediately_reserve`). The dangerous case is not the never-used slot, it is the one
+  *that has been used* and whose consumer disappeared: only that one grows `pg_wal`.
+- **A failing WAL `archive_command` does not lose journals, it keeps them.** `pg_wal`
+  grows until the disk is full. Archiving to a broken destination is more dangerous than
+  not archiving.
+- **A MariaDB dump does NOT include routines, triggers or events** without
+  `--routines --triggers --events`. The dump succeeds, restores without error, and the
+  app is subtly broken — a missing trigger only shows on the first affected write.
+- **`--single-transaction` only protects transactional tables.** On MyISAM or Aria the
+  option is accepted with NO warning and provides no consistency. Hence reading engines
+  before each dump — and an unreadable list means `LockRequired`, never "it is probably
+  InnoDB".
+- **A truncated MariaDB dump is still valid SQL.** Interrupted, it restores a database
+  missing tables, without a single error. The `-- Dump completed` line is the only proof
+  of completeness — hence the ban on `--skip-comments`, which would remove it.
+- **A MariaDB user is `'name'@'host'`.** Without an explicit host part the app is
+  refused from another container, with a message about an incorrect password. And
+  `_`/`%` are WILDCARDS in a `GRANT`.
+- **A SQLite file cannot be copied hot.** In WAL mode restic copies three files one
+  after another while the app writes. `VACUUM INTO` produces a consistent snapshot, and
+  the failure only shows at restore time.
 
-## État d'avancement
+### Backups
 
-Fait : types + validation, orchestrateur Swarm (spike `bollard` validé, dont le
-rollback automatique), résolveur + graphe + plan, catalogue, état persistant,
-exécuteur, CLI.
+- **A metric that is absent beats a zero.** `hlb_backup_age_seconds` is not emitted when
+  no backup has succeeded: a `0` would mean "backed up just now", and the alert would
+  never fire for the most at-risk apps.
+- **A fresh destination masks a stale one.** `MAX(finished_at)` across all destinations
+  made an off-site dead for three weeks look like a two-hour-old backup, because the NAS
+  was running. Freshness is measured PER destination, and the summary shows the worst
+  case — otherwise it contradicts the detail right below it, and the summary is what
+  people read.
+- **Configured is not protected.** The number of declared destinations says nothing
+  about the number of copies: a failing destination protects nothing.
+- **A failure on one destination must never starve the others.** An unreachable off-site
+  that aborted the loop would also skip the local backup: both copies lost for one
+  failure.
+- **Deadlines are per destination.** Judged globally, the off-site is skipped whenever
+  the NAS was just served — it would then never receive anything while the global status
+  looked fresh.
+- **A REPEATED failure must be visible before the staleness threshold.** A destination
+  failing every attempt stays "fresh" for twelve hours at the default interval. Hence
+  the consecutive-failure counter, displayed immediately.
+- **`datetime('now')` has ONE SECOND resolution.** A success and the failure following
+  it within the same second carry the same timestamp, and a strict comparison excludes
+  them — the counter stays at zero while everything fails. Order by `id`, which is
+  monotonic.
+- **`credentials_secret` is the NAME of the secret, not its value.** Passing it through
+  would send "backup-dest-offsite" as the S3 access key, and the server would answer
+  "invalid signature" — an error that points nowhere.
+- **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
+  restic replies "repository does not exist", naming a local path unrelated to the real
+  destination. And joining an internal Garage needs a `--network`.
+- **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
+  size. Hence `restic check --read-data-subset` on top of the count.
+- **Two numbers for a backup, not one.** RPO says what you would lose; confidence says
+  what you know about that copy. A fresh backup never read back is a hypothesis, and
+  showing it green is the lie this system exists to prevent. RPO is measured on
+  up-to-date destinations only.
+- **"No up-to-date copy" covers two opposite situations.** Never backed up (nothing
+  exists) and stale backups (copies exist, they are old) are not repaired the same way.
+  Seen on screen: "NO copy" next to two destinations showing "1 d" reads as a
+  contradiction, and you then doubt the whole screen.
+- **Homelabus's own state was not backed up.** Brand, themes, announcements, roles,
+  invitations, recovery attestations, plans, actually-published routes: all of it lives
+  in the state database and nothing copied it. A restore returned running apps in an
+  installation that no longer knew who the administrator was.
 
-Fait aussi : coffre de secrets `age`, provisionnement PostgreSQL isolé (avec preuve
-d'isolation en test d'intégration), boucle de réconciliation, mesh WireGuard
-(`hlb-mesh`), autolock Swarm (`hlb cluster autolock`), observabilité (`hlb-notify` +
-`/metrics` sur le controller + CrowdSec au frontal), PITR PostgreSQL (`hlb backup
-pitr`).
+### Mail
 
-Fait également : client Stalwart (`hlb-mail`) et provisionnement des boîtes,
-`hlb backup verify` (restauration réelle + relecture de blocs), inventaire des
-segments WAL, `hlb backup pitr base` (pg_basebackup), `hlb crowdsec enroll`,
-`hlb mesh add/show/list`, `/metrics` protégé par jeton.
+- **Stalwart has no REST API for accounts.** Everything goes through JMAP (`POST /jmap/`,
+  capability `urn:stalwart:jmap`, methods `x:Account/set` and `x:Domain/query`), from
+  **v0.16** only. The discriminator is `@type`, `emailAddress` is computed by the
+  server, and a failing `/set` still returns HTTP 200 — the failure lives in
+  `notCreated`. **A filter condition carries only ONE property**: each key overwrites
+  the previous, so you need an `AND` of separate conditions.
+- **JMAP `update` REPLACES the whole property.** There is no "add an alias" operation:
+  writing a single alias would erase all the others, without raising an error. Hence
+  read-modify-write — and two simultaneous updates would lose the first.
+- **A Sieve script does not travel in the JMAP call.** `SieveScript` only carries a
+  `blobId`: upload the content, then reference it. And **without
+  `onSuccessActivateScript` the script exists and sorts NOTHING** — a completely silent
+  failure, the rules visible in Roundcube and having no effect.
+- **A Sieve script is a SINGLE file per account.** Rewriting it wholesale would erase
+  hand-written rules — hours of tuning, lost without warning, for a simple alias
+  creation. Hence a marker-delimited block: Homelabus writes only between the markers,
+  and the block goes at the END (at the top it would catch messages before the user's
+  own rules).
+- **An unescaped quote in a folder name breaks the WHOLE script**, including the user's
+  rules, which Stalwart then rejects wholesale. The name comes from the user: escape it.
+- **`NULL` ≠ empty string for a sorting folder.** `NULL` = "nothing was decided", offer
+  a default; `""` = "I do NOT want sorting", an explicit choice. Confusing them
+  re-imposes a folder on every regeneration.
+- **A mail server CANNOT expire an alias.** A Stalwart account's `aliases` list has no
+  dates: what is written stays. Hence **three** states, not two: valid,
+  expired-and-removed, and 🔴 expired-but-STILL-ACTIVE.
+- **A guessable alias defeats compartmentalisation.** If Amazon's is
+  `amazon@example.org`, then `paypal@`, `bank@` and `tax@` probably exist too, and a
+  bulk sender tries them all for the price of one. The hint never *is* the address: it
+  is followed by a random suffix.
+- **The point of a disposable alias is not disposal, it is attribution.** One address per
+  recipient tells you *who* leaked it. Hence keeping the readable hint: fifty purely
+  random addresses lose the only real benefit.
+- **Disabling beats deleting.** A deleted alias rejects mail and teaches nothing;
+  disabled, it also rejects but lets you count what still hits it — so you learn how long
+  a merchant kept selling the address.
+- **Marking an alias "purged" without removing it from the server is worse than doing
+  nothing.** The address would still receive AND nothing would say so: the silence would
+  sustain the belief that the door is closed. The state is only marked AFTER the actual
+  removal, and a purge without Stalwart refuses rather than lying.
+- **What matters in a purge is what stays OPEN, not the error count.** An error-free
+  purge that removed nothing leaves as many doors open as one that failed loudly.
+- **A half-created account looks functional.** Identity without a mailbox: the person
+  signs in everywhere and their address receives nothing. It only shows on the first lost
+  email, often a password reset. The state is named, and creation is resumable.
+- **PocketID has no password**: passkey authentication. So you do not hand over an
+  initial secret but a **single-use token**, shown once and never stored.
+- **🔴 idmail and `hlb-mail` cannot coexist.** idmail does not talk to Stalwart: it
+  REPLACES its directory (external sqlite `directory`). Together they would produce an
+  alias created over JMAP in a directory Stalwart no longer consults — the address would
+  receive nothing, with nothing to signal it. Hence the addy.io-compatible API on the
+  Homelabus side rather than integrating idmail.
+- **The addy.io API contract is imposed by BITWARDEN**, not by us. Read from its source
+  (`libs/tools/generator/core/src/integration/addy-io.ts`): the response must be
+  `{data:{email}}` — at the root the client reads `undefined` and the alias exists
+  server-side without anyone knowing.
+- **The addy.io protocol has no field for choosing the mailbox.** Bitwarden only sends
+  `domain` and `description`. The destination therefore lives on the TOKEN — one token
+  per mailbox — and a token pointing at a vanished mailbox FAILS rather than falling
+  back to the default: the user would believe their aliases are filed where they are not.
 
-Fait aussi : `hlb node add` (SSH, clé dédiée révocable, dépendances, join, tier),
-`hlb access grant/revoke/list`, dumps SQL dans l'ordonnanceur, mTLS agent ↔ controller
-(`hlb pki`), scan Trivy + cosign avant mise à jour, MariaDB, forward-auth pour les apps
-sans SSO natif, ACME DNS-01 wildcard, instantanés SQLite + Litestream, `hlb dr promote`.
+### Security and authorization
 
-Fait enfin : l'UI en **egui** (`hlb-ui`), avec `hlb-api` qui définit les types de
-l'API **une seule fois** pour le serveur et l'interface. L'OpenAPI `utoipa` + la
-génération TypeScript du plan §11bis sont donc sans objet.
+- **An API token carries a ROLE, not an identity.** Enough to read state, wrong as soon
+  as a request acts FOR someone: without a binding, a stolen token would create aliases
+  on anyone's mailbox. An unbound `admin` token is therefore refused where a bound
+  `operator` passes.
+- **An authenticated role is not an authorized role.** `Role::allows` existed with no
+  production caller: every handler took `_auth: Authenticated` and ignored the role.
+  Authorization now lives in the TYPE of the argument (`Authorized<CanOperate>`) — the
+  compiler demands it in the signature, so it cannot be forgotten.
+- **A bare `403` makes you doubt everything.** It does not say whether you are on the
+  wrong screen, the system is broken, or a right is missing. The refusal names the
+  action, the required role, the held role and **who can grant it** — and returns `None`
+  when allowed, so a refusal cannot be shown by mistake.
+- **A person's role is re-read on EVERY request**, never frozen into the session. Frozen,
+  removing someone's admin rights would have no effect for twelve hours — and you remove
+  them precisely when you are in a hurry.
+- **`SameSite=Lax` is not enough against CSRF.** Any mutating request carried by a cookie
+  requires the `X-HLB-UI` header. Token calls are exempt: with no cookie there is no
+  ambient authority to hijack.
+- **A `Secure` cookie is NOT set at all over `http://`.** The attribute follows the
+  public URL and is never hard-coded, or local development loops on the sign-in screen
+  **with no error message at all**.
+- **The web token goes through the URL FRAGMENT**, never the query string: a `?token=`
+  ends up in access logs, `Referer` headers and every proxy.
+- **An API token is never stored in clear**, not even in the vault: a SHA-256
+  fingerprint is kept. A leak reveals that a token exists, not its value.
+- **An `id_token` signature is not verified** — and that is correct: it is fetched by the
+  controller itself over TLS, never received from the browser. ⚠️ This reasoning would
+  NOT hold for an implicit flow.
+- **Trusting `X-Forwarded-For` without a trusted proxy defeats rate limiting**: each
+  attacker gets a fresh counter on every request, and the protection looks like it
+  works. Hence `--trusted-proxy`, explicit.
+- **Forward-auth must erase incoming identity headers.** Otherwise
+  `curl -H "X-Auth-Request-User: admin"` is enough to impersonate an account.
+- **An open PromQL relay is exfiltration.** `{__name__=~".+"}` returns the whole
+  database: hostnames, paths, app names — the map of the installation, to anyone holding
+  a `viewer` token. Hence an **allowlist** of prefixes: you cannot enumerate what is
+  dangerous, you can enumerate what is useful.
+- **A missing scanner is not a green light.** `NotChecked` is distinct from `Clean`:
+  treating "trivy absent" as "nothing found" disables the check while looking like it ran.
+- **`sshd` SILENTLY ignores `authorized_keys`** if it is group-readable, or if `~/.ssh`
+  is. The key looks installed and nothing works.
+- **CrowdSec only goes on the front Caddy.** The backend only sees the front's IP:
+  putting the bouncer there would ban its own front on the first attacker.
+- **A secret must never enter a plan.** The plan passes through `hlb plan` (display), the
+  SQLite state (recording) and the Git mirror (export with history). Secret token
+  substitution therefore happens in the executor, at deploy time. `{{ db.url }}` counts
+  as a secret despite looking like an address: it contains the password.
+- **An unresolved token stays literal, never empty.** An empty variable looks like
+  missing configuration: the app complains about a bad password and you go looking at the
+  password. `{{ db.password }}` in the logs points at the real problem.
+- **The vault is NOT the source of truth for a password.** Rotating it there alone
+  changes nothing: PostgreSQL keeps the old one, the container keeps the old one in its
+  environment, and everything keeps working — until the next redeploy, where the app
+  fails on "incorrect password" with nobody connecting it to a rotation three weeks
+  earlier. A rotation is an ORDERED PROCEDURE.
+- **An app never owns its S3 bucket.** `read` + `write`, never `owner`: as owner, a
+  compromised app could delete its own bucket — erasing what the backups protected.
+- **Garage NEVER returns a secret key twice.** `CreateKey` gives it once; `GetKeyInfo`
+  returns null afterwards. Idempotency therefore cannot rest on "does the key exist?" —
+  the vault is authoritative, or a resumed run starts without a secret and the app fails
+  on an "invalid signature" that points nowhere.
+- **Homelabus can verify NONE of the access safeguards**, except the recovery drill: it
+  does not know how many passkeys exist or whether the codes are printed. So it asks for
+  a dated attestation and expires it — and the one point it *can* prove is not
+  attestable by hand, or you would paint the most important safeguard green with no drill
+  having happened.
 
-Fait enfin : `hlb self` (compatibilité, migrations réversibles, rollback du schéma),
-`hlb snapshot` (ZFS/btrfs), et l'**authentification de l'API par jetons** avec rôles
-(`hlb token`). Le controller REFUSE de démarrer sans jeton, sauf `--insecure-no-auth`.
+### Operations and correctness
 
-🔴 **mailcow est abandonné** (décision du 17/08/2026). Stalwart le remplace, et le
-runtime `compose` qui n'existait que pour lui n'a plus de raison d'être. Les mentions
-de mailcow dans PLAN.md sont historiques : elles expliquent le choix de Stalwart.
+- **A periodic heartbeat proves nothing.** It attests that a thread is alive, not that
+  the system works: the controller can have an unreadable database and a dead Docker and
+  keep beating imperturbably. The watchdog then stays green over an unusable system —
+  **worse than no deadman, since you trust it**. The beat is conditional on a successful
+  check, and silence is the signal.
+- **The watchdog does not run on what it watches**, and does not alert through it. A
+  deadman hosted by the controller dies with it; an alert relayed by the controller does
+  not leave when the controller is what died. And if `curl` fails, the failure is
+  swallowed by `>/dev/null 2>&1`: hence the fallback to stderr, which cron mails out.
+- **Provisioning is not connecting.** The resolver created the database, the isolated
+  role and the password, then deployed the app without telling it anything: it fell back
+  to its internal SQLite. Healthy service, green probe, green dashboard — and the data in
+  a file nobody backed up, while an empty database was faithfully dumped every night.
+  Hence `spec.env` and binding tokens.
+- **A missing companion is invisible.** Immich without its machine-learning service
+  imports and displays photos perfectly, and never recognises anyone. Hence deploying the
+  companion BEFORE the app, waiting for it to become healthy, and a guide step that makes
+  you check it really works.
+- **Counting Swarm tasks**: filter on `desired-state` **and** the actual state. Swarm
+  keeps the history of dead tasks, which you would otherwise count as alive.
+- **A dead Swarm task is not a stopped task.** `desired_state` AND `state` decide whether
+  it lives; but a deliberately stopped task (update, scale-down) is not a failure —
+  counting it as one would make the dashboard blink on every normal deploy, and you would
+  stop looking at it.
+- **Anti-affinity is about HARDWARE, never `node.id`.** Two VMs on the same server are
+  two Swarm nodes and **one** point of failure: spreading two replicas "across two nodes"
+  protects nothing, and Swarm returns an illusion of redundancy. The domain is declared
+  at `hlb node add` (label `hlb.failureDomain`) — neither Swarm nor the agent can guess
+  it.
+- **An undeclared domain is not an isolated domain.** Assuming isolation would be exactly
+  the optimistic assumption that creates the illusion. Nodes without a domain form a
+  "we do not know" group, displayed as such.
+- **Simulate the loss of a DOMAIN, never of a machine.** On two VMs of one server,
+  per-node simulation concludes "the service survives" where per-domain says "it goes
+  down entirely". And quorum requires a STRICT majority of managers: out of four, two
+  survivors are not enough — a naive `>=` would conclude the cluster holds.
+- **Draining the last active node would empty the cluster.** Swarm accepts it without
+  complaint — it is on us to refuse.
+- **A causal chain you cannot follow stops.** On "unknown cause", never on a guess: a
+  plausible but wrong diagnosis makes you repair the wrong thing, then doubt the screen.
+  An alert is only attached if the node's own reading corroborates it.
+- **Reconciliation's non-actions were invisible.** Nothing distinguished "there is
+  nothing to do" from "there is something and I deliberately chose not to touch it". The
+  refusal names the reason, and a test requires correctable and refused to be exactly
+  complementary. A refusal is painted GREEN: it is a decision, not a failure.
+- **`record_verification` inferred failure from the presence of a detail.** Describing a
+  successful verification therefore recorded it as a failure, and the app stayed
+  "never verified" forever. `succeeded: bool` is a first-class argument.
+- **The capacity budget does not add up.** A service is not split across two machines:
+  two nodes with 400 MB free do not make 800 MB usable, they make 400. And there is NO
+  memory field in manifests — announce what is left on the targeted tier, never a margin
+  you do not have.
+- **A node of unknown tier belongs to no tier.** Assuming otherwise announces space where
+  there is none; a tier with no node makes `wait_healthy` expire without ever saying why.
+- **The CPU rate needs TWO readings.** `/proc/stat` is cumulative since boot: on the
+  first pass the value is `None` and never `0.0` — a "0 %" reads as "idle machine", the
+  exact opposite of "I do not know". Same after a reboot, where counters go backwards:
+  the subtraction is checked, not wrapped.
+- **Load is only comparable divided by cores.** 4 is dramatic on one core and comfortable
+  on sixteen; a homelab is made of heterogeneous machines.
+- **Memory is measured on AVAILABLE, not free.** Linux caches everything it can: "free"
+  is almost always near zero on a healthy machine. Trusting it would cry out-of-memory
+  permanently.
+- **Swap starting to be used is a signal BEFORE the failure.** The machine slows without
+  having fallen over yet. The threshold is low (5 %) for that reason.
+- **The agent protocol goes up, compatibility stays both ways.** Every added field is
+  `Option` + `serde(default)`, and nothing is `deny_unknown_fields`: you can update the
+  controller before the agents or the reverse. Without that, the first update would make
+  the whole fleet "unreachable" — precisely when you need to see it.
+- **Prometheus values are STRINGS, not numbers.** Reading them with `as_f64()` returns
+  `None` on all of them, and the curve is empty with no error at all.
+- **An empty series is not a zero series.** A flat line reads as "all calm";
+  `Series::Unavailable` is a distinct variant the type forces you to handle.
+- **A muted alert stays DISPLAYED.** Muting silences the notification, not the screen:
+  hiding it would give a green dashboard for a known, unresolved problem. It carries a
+  deadline and comes back whole afterwards.
+- **A non-evaluable rule is not a satisfied rule.** If collection fails, the unknown
+  state surfaces at `Important` level — not at the rule's level, which would suggest the
+  threshold is breached when you do not know whether it is.
+- **`hlb_backup_copies` existed nowhere** while the `single-copy` rule queried it: the
+  rule guarding 3-2-1 therefore never fired once.
+- **A dependency cycle reveals where code should live.** `hlb-state` cannot implement a
+  trait from `hlb-backup` (which depends on `hlb-updater`, which depends on `hlb-state`).
+  The adapter therefore goes in the controller, which already depends on both — and the
+  logic stays in `hlb-backup`, testable in memory.
+- **"Nothing before" is not "nothing changed".** In manifest history, the first known
+  version does not have an empty diff because nothing moved: it has nothing before it.
+  And a commit not touching the app still carries its file — without deduplication,
+  twenty identical versions would drown the one real change.
+- **A timeline source you cannot read must APPEAR.** Hiding it would suggest "no human
+  action preceded the outage" when you know nothing — and this screen is read mid-outage.
+- **SQLite writes timestamps without a timezone or a "T".** Rejecting them as RFC 3339
+  returns `None` on every row, and the timeline is empty on healthy data.
+- **A named plan is replayed AS PREVIEWED**, never recomputed: two computations at two
+  moments can diverge, and you would execute something other than what you read.
+  Replaying reruns the preview, not the execution. A plan targeting an unknown route is
+  refused AT SAVE TIME — accepted, it would fail weeks later on a 404 pointing nowhere.
+- **A path template is compared segment by segment.** A prefix comparison would let
+  `/api/apps/gitea/install/really` through, which does not exist.
+- **A runbook written by hand is wrong the day you need it.** This one is generated from
+  real state, carries its date, and contains NO secret — it is meant to be printed and
+  stored elsewhere. When the restart order cannot be computed, the REASON is printed:
+  "garage is missing" can be fixed, "the order could not be computed" cannot.
+- **Comparing two computations from the SAME function can never fail.** The exposure
+  screen compared manifests to `routes_from_manifest` applied to those same manifests: it
+  would have shown "compliant" whatever happened. The comparison is against what was
+  ACTUALLY published, versus what the manifests ask for today.
+- **An orphan route appears in no walk over installed apps.** A removed app whose route
+  still answers is in no manifest, therefore in no loop: look for it from the PUBLISHED
+  routes, not from the apps.
+- **A CSV field that is not quoted shifts every following column.** The audit log
+  contains details written by humans: commas and quotes are the norm. And the line ending
+  is CRLF, or Excel merges rows.
+- **`*.example.org` does not cover `example.org`.** Both names must be requested.
+- **Caddy's `status` matcher only exists inside a `forward_auth` block.** At site level,
+  Caddy refuses to start with "module not registered".
 
-Fait aussi : `hlb dr exercise` — la restauration répétée pour de vrai dans un
-conteneur jetable (§8.3), avec un compteur de péremption dans `dr status`.
+### Interface
 
-Fait enfin : la **réplication streaming PostgreSQL** (`hlb replication config/status`),
-vérifiée contre un vrai couple primaire/standby — copie initiale, rattrapage après une
-coupure, alerte de slot orphelin avec son remède, et détection des standbys qu'on ne
-sait pas distinguer. Asynchrone par décision : en synchrone, la panne du standby
-bloquerait les écritures de la primaire.
+- **egui does not embed every glyph.** "●", the variation selector of "⚠️" and "⚑"
+  render as an empty box, and a tofu looks enough like an icon to pass review. Status
+  shapes are **painted**, not written, and a test scans every literal in the file
+  (comments excluded).
+- **A tofu can come from CONTENT, not only from literals.** The source scanner does not
+  protect against an emoji in an announcement or a Sieve folder name. The sanitiser
+  replaces with a visible character — removing it would make text silently disappear,
+  which is worse.
+- **Shared text must depend on NONE of its consumers.** Coherence messages carried a 🔴:
+  fine in a terminal, replaced by "¤" in egui. Severity travels through content and
+  through the caller's colour, never through a glyph.
+- **Serving wasm requires `Content-Type: application/wasm`.**
+  `WebAssembly.instantiateStreaming` refuses `application/octet-stream` with a message
+  that does not say what it expected.
+- **The `wasm-bindgen` binary must match the crate version EXACTLY.** A mismatch produces
+  a bundle that loads and panics on the first function.
+- **A stale response must be DISCARDED, not adopted.** A request abandoned on timeout can
+  arrive afterwards: without a turn number it would be consumed as fresh and the screen
+  would date minutes-old data as now.
+- **A palette may not make states indistinguishable.** Traffic-light green and red
+  converge under deuteranopia (distance 35, 60 needed): the two most important indicators
+  were indistinguishable for 8 % of men. Green is shifted toward cyan and the accent is
+  **cool** — the initial copper read as "critical". Not taste, a constraint, and the
+  palette validator enforces it.
+- **Each quantity has its own colour thresholds.** Seen on screen: with the CPU scale, a
+  swap at 71 % showed GREEN — a machine already swapping 70 % is crawling. Sharing one
+  hue function across CPU, memory and swap is an economy that lies.
+- **Without `set_width`, each egui card takes the width of its CONTENT.** A list of cards
+  becomes a staircase whose right edge follows text length. Invisible in the code,
+  obvious on screen — hence a test scanning containers.
+- **A written screen absent from navigation is wasted work.** The secrets screen existed
+  and was reachable only by typing the URL. A test now crosses implemented screens with
+  navigation entries.
+- **Never offer a screen that does not exist.** An entry leading to "coming soon"
+  promises, you click, you get nothing, and you doubt the rest.
+- **A written screen deliberately out of navigation deserves its own test.** Otherwise
+  the "every written screen is reachable" rule eventually adds an entry for it.
+- **A screen can compile and PANIC AT RENDER.** An out-of-bounds index in a display loop
+  only shows when you open the screen — and out of twenty screens, the broken one is
+  rarely the one you look at. `Context::run` renders them all offscreen, empty and
+  narrow. Purely VISUAL defects, on the other hand, were all found by looking at a
+  screenshot, never by comparing two images.
+- **A QR code is painted, not written.** No font is involved, therefore no tofu. The
+  module must be a WHOLE number of pixels — fractional, egui smooths the edges, squares
+  blend and the code becomes unreadable to a scanner while looking crisp to the eye. The
+  4-module quiet zone is mandatory: it is the most frequent cause of a QR that "only
+  works on some phones".
+- **Kiosk mode is an ALLOWLIST of screens, never a denylist.** A wall is visible to
+  anyone in the room; you cannot enumerate what will be sensitive tomorrow, you can
+  enumerate what is harmless today. A screen added later is excluded by default.
+- **🔴 The service worker NEVER caches the API.** A data cache would resurrect exactly
+  the lie freshness exists to prevent: green apps served from cache while the cluster
+  burns. A test scans `sw.js` and refuses `/api/`, `/auth/` and `/metrics`.
+- **Confirmation comes from the PREVIEW, never fabricated by the interface.** The server
+  says which target must be confirmed; the interface repeats it after the user has read
+  what it destroys. Two states to keep in sync would eventually diverge.
+- **Three beats, not two.** A button followed by a generic "Confirm?" says nothing about
+  what is going to happen: you click by reflex and the protection stops protecting. The
+  confirmation is about **the plan**.
+- **Scaling to zero replicas is not a resize, it is a shutdown.** Refused from a numeric
+  field, where it never happens on purpose.
+- **A warning is NOT a blocker.** "This link will let five people in" filed under blockers
+  made the action impossible — while it is a legitimate choice you simply want to see
+  first. Two distinct fields, two shapes on screen.
+- **An invitation is NOT kept in local storage**, unlike the access token: it is used once,
+  and a shared browser would offer it to the next person — whose account would then carry
+  the role meant for someone else.
+- **An invitation for N uses that leaks lets N people in.** The default stays 1, the
+  remaining count is displayed, and a widely open link stands out visually — that is the
+  one you forget to close.
+- **Revoking an invitation EXHAUSTS it, does not delete it.** Deleting it would lose the
+  trace of who created it and who already came in, at the exact moment you need it.
+- **An invitation refused for a typo must NOT be consumed.** The name is validated first,
+  or a single-use link is wasted on a capital letter.
+- **The role and the profile are fixed at INVITATION time**, never chosen by the invitee:
+  otherwise anyone would sign up as an administrator.
+- **The sign-up screen has NEITHER navigation NOR a session header.** It addresses
+  someone with no account: offering "Dashboard" would send them to a refusal, and showing
+  the identity of whoever opened the link would be confusing at best.
+- **An incident is FOLLOWED, not rewritten.** It is the chronology you re-read
+  afterwards. And it stays open until someone closes it: silence must not pass for a
+  resolution.
+- **An announced maintenance is not an outage.** It was planned, and showing it as an
+  outage sends people looking for what is wrong.
+- **An announcement that does not concern its reader is noise.** Flooding a portal user
+  with operational messages makes them stop reading — exactly when one will matter. Hence
+  audience by role.
+- **The status page is PRIVATE by default.** Published, it reveals the list of what runs
+  at your place and the calendar of your outages. Open, it shows only **exposed**
+  services — never nodes, backups or accounts.
+- **The status page requires ReadSelf, not Read.** It is made for the people suffering
+  the outage, not those operating it: requiring a console right would remove it from the
+  portal, which is where people look for it.
+- **Homelabus ANNOUNCES applications, it does not grant access.** That comes from
+  PocketID and forward-auth. And a link to a stopped app leads to an error page people
+  read as a permissions problem.
+- **A preview is logged as `preview`, not `ok`.** Knowing someone looked at what a purge
+  would do is information; confusing it with an execution would make the log useless.
+- **An unreachable node must show NO gauge.** It does not have bad numbers, it has none:
+  bars at zero would read as "idle machine". Show the reason and stop there.
+- **The theme is a NAME, not a palette.** A palette stored per person would survive the
+  removal of the theme it came from, and you could no longer evolve it.
+- **"The installation's own" is a distinct option**, not the absence of a choice: whoever
+  picks it says "follow the brand", and their theme changes if the administrator changes
+  the default.
+- **An unknown theme is REFUSED, not silently accepted.** Accepted, it would be stored,
+  fall back to the default on display, and you would think the choice was lost to a bug.
+- **The theme list lives on the server.** With one on each side, a removed theme would
+  keep being offered until the next wasm deploy. A test keeps them aligned.
+- **The action panel lives in the dispatcher, not in a screen.** It used to be in the app
+  detail: a preview triggered from the accounts screen fired with nothing displayed, and
+  the click looked inert.
+- **The request to apply is rebuilt from the PREVIEW**, never from state kept alongside:
+  two sources would eventually diverge and you would apply something other than what you
+  just read. An unrecognised action falls back to nothing — it returns 404, which shows.
+- **A dead route is invisible.** `/api/apps/{name}` existed with no caller. A test crosses
+  declared routes with what the interface actually requests; routes served to other
+  clients (Bitwarden, the watchdog, the CLI) are listed explicitly — a decision, not an
+  oversight.
+- **A wizard not tried end to end ships something false.** The Bitwarden wizard bound the
+  MAILBOX and not the ACCOUNT: its token was refused by the alias API, with six
+  reassuring steps sending you to look at Bitwarden. Found by actually calling
+  `/api/v1/aliases` with the token it produced.
+- **A demo that invents its own names teaches a false convention.** That is what let a
+  secret-naming defect go unnoticed.
+- **Secret name suffixes are read from the resolver, not from memory.** Two kinds were
+  inferred from guessed conventions (`-s3-key` instead of `-s3-secret`): the rule never
+  fired, and the screen stayed silent about exactly the secrets that matter.
+- **An age in days is not displayed in seconds.** "Verified 0 s ago" for a drill counted
+  in whole days reads as "just now" when it may date from last night. The type carries
+  its resolution, or the display invents a precision that does not exist.
 
-Catalogue : Gitea, Vikunja, Vaultwarden, plus **n8n, Jellyfin, LibreSpeed et Termix**.
-Les ajouter a révélé trois défauts du résolveur (client OIDC créé pour une exclusion
-volontaire, callback de portail pointant vers l'app, `native` sans `redirectPaths`
-accepté), tous corrigés — c'est bien l'ajout d'apps aux combinaisons différentes qui
-fait sortir ces trous, pas le volume.
+## Repository hygiene
 
-Fait : **les liaisons** (`spec.env` + `hlb-types::binding`), la moitié qui manquait au
-résolveur. Une app déclare comment elle veut recevoir ce qui a été provisionné, par des
-jetons (`{{ db.host }}`, `{{ db.password }}`, `{{ oidc.client_secret }}`…). 🔴 Les
-jetons de secret sont résolus **dans l'exécuteur**, jamais dans le plan : celui-ci est
-affiché, enregistré dans l'état et exporté vers le miroir Git.
+🔴 **`hlb-master.key` was tracked by git from 2026-08-16 to 2026-08-21**, although the
+file carries "DO NOT COMMIT" in its own header. Fixed on 2026-08-21, before publication:
+removed from the index and added to `.gitignore`, history purged with `git-filter-repo`
+(no blob in the repository contains `AGE-SECRET-KEY-1` any more), and the key rotated.
+The old key had never been pushed — the remote only ever held the shell prototype — so
+it was never public.
 
-Fait aussi : les **dumps MariaDB** (`hlb-backup::mariadump`), qui manquaient — une app
-MariaDB était provisionnée mais n'avait aucune sauvegarde logique.
+⚠️ **There is no `hlb secrets rekey`.** The vault was empty, so rotation reduced to
+generating a key. With a populated vault you would have to decrypt each entry with the
+old key and rewrite it with the new one — to be written the day it comes up, and treated
+as an ordered procedure, not a file write.
 
-Fait enfin : l'**observabilité complète** (`hlb-metrics`) — VictoriaMetrics et Grafana
-au catalogue, règles d'alerte évaluées par Homelabus et routées vers `hlb-notify`
-(plutôt qu'Alertmanager, qui dupliquerait les niveaux et les heures calmes), et le
-**deadman switch** du §8bis avec son veilleur pour le NAS. `hlb metrics rules / scrape /
-check / deadman`.
+⚠️ **`PLAN.md` is local only and not committed.** It holds the long-form architecture
+notes. Do not add cross-references to it from code or documentation: a reader of the
+public repository cannot follow them.
 
-Fait : le **multi-conteneur** (`spec.companions`, §4.7bis) — un compagnon est déployé
-avant l'app et attendu sain, n'a jamais d'ingress ni de capacités propres, et se joint
-par `{{ companion.<nom>.host }}`. Et le **stockage objet** (`Capability::ObjectStorage`
-+ `hlb-objstore` + Garage au catalogue), avec compartiment et clé isolés par app.
+## What is left
 
-Catalogue : Gitea, Vikunja, Vaultwarden, n8n, Jellyfin, LibreSpeed, Termix, **Immich**
-(avec son compagnon d'apprentissage automatique) et **Seafile CE** (trois bases, un
-rôle). Voir `catalog/CATALOGUE.md` pour les candidats suivants.
+Verified on 2026-08-21: `cargo test --workspace` passes (**1370 unit tests, 66
+integration `#[ignore]`d**) and `cargo clippy --all-targets` is at zero warnings.
 
-⚠️ L'image du service `postgres` est passée à `ghcr.io/immich-app/postgres:17-…`, qui
-porte `pgvector` et `vchord`. Même version majeure, mais **libc différente** : lire le
-guide `reindex-collation` d'Immich avant de basculer une installation existante.
+### 1. Finish translating the codebase to English
 
-Fait : les **destinations de sauvegarde multiples** (`hlb backup dest` / `route`) — le
-3-2-1 du §8.1 rendu réel. restic sait désormais écrire en S3 (identifiants par
-l'environnement, jamais dans l'URL ni la ligne de commande), et le routage se fait par
-**classe de volume** : `critique` (dumps, état, secrets — quelques Go, ça part hors
-site) et `volumineux` (photos, fichiers — des centaines de Go, ça reste où la connexion
-le permet), avec un réglage par app. `hlb backup run` sert chaque destination
-séparément — un échec sur l'une n'empêche pas les autres, et chacune a sa propre
-échéance.
+Comments and displayed strings were French until 2026-08-21. Documentation and
+repository files are translated; **the code is not finished**. Roughly 13 900 comment
+lines and 2 500 lines carrying accented display strings across 174 files.
 
-Fait : les **comptes humains** (`hlb-users`, `hlb user`). Jusque-là Homelabus ne
-connaissait que des applications — `hlb-identity` créait des clients OIDC, jamais des
-personnes. Un compte se crée maintenant en une commande : identité PocketID + boîte
-mail, avec un lien d'inscription à usage unique. Les aliases couvrent **trois axes
-indépendants** — permanent ou temporaire, généré ou choisi, avec ou sans indice de
-site — et `hlb user alias purge` est ce qui rend l'expiration vraie, Stalwart n'en
-ayant aucune notion — et le controller la fait tourner toutes les heures, sinon la
-promesse ne tiendrait que si quelqu'un pensait à lancer la commande.
+Two parts are not a translation but a redesign:
 
-Fait aussi : les deux **webmails** du §5bis.2ter — **Bulwark** (JMAP natif pour
-Stalwart, `channel: pin` : aucune release Git ni licence déclarée, seules les images
-existent) et **Roundcube** comme filet de sécurité, délibérément SANS SSO pour rester
-joignable quand PocketID tombe. Et la **génération des règles Sieve** de tri par alias,
-avec dossier configurable par l'utilisateur. Et l'**API compatible addy.io /
-Bitwarden** (`POST /api/v1/aliases`) : Vaultwarden génère l'alias au moment de créer un
-compte sur un site, comme avec idmail — qu'on n'intègre PAS, puisqu'il remplacerait
-l'annuaire de Stalwart.
+- **`hlb_api::plural`** encodes "0 replica" as singular, a French rule. In English zero
+  takes the plural, so the function and its tests invert.
+- **The tests that scan displayed strings** (the "action(s)" ban, the two-consecutive-
+  spaces check, the tofu scanner) assert on French text and must follow.
 
-Fait (18/08/2026) : le **lot 1 de la refonte UI** — RBAC réellement appliqué (quatre
-rôles, `Autorise<Peut*>` dans la signature des routes), **connexion par OIDC PocketID**
-(`hlb-identity::oidc`, PKCE, cookie dont seule l'empreinte est stockée), **journal
-d'audit chaîné** (`hlb audit --verify`), limitation de débit, `hlb user role/sessions`.
-Trois défauts réels corrigés au passage : l'API d'aliases n'appliquait **aucun quota**
-malgré un commentaire affirmant le contraire, `Capability::MailAccount { .., }` avalait
-`quota_bytes` par un `..`, et le CLI suggérait un rôle `metrics` inexistant.
+Do it crate by crate, keeping the reasoning rather than the wording, and run the suite
+after each one. A half-translated codebase is worse than either language.
 
-Fait aussi : le **lot 2** — système de design (`hlb-ui::design`), marque *Turi
-Industries* servie par le controller et éditable, **routage par fragment d'URL**
-(`#/apps/gitea/sauvegardes`), coquille responsive (barre latérale / barre basse),
-`Ressource<T>` qui porte **sa propre `Freshness`**, et le **mode démonstration**
-(`hlb-controller --demo`) — base en mémoire peuplée des cas qu'on n'a jamais sous la
-main : app jamais sauvegardée, hors-site mort, alias expiré qui reçoit encore, compte à
-moitié créé dans les deux sens.
+### 2. Real executors for four action routes
 
-Fait aussi : le **lot 3** — la télémétrie. Les tâches Swarm ne sont plus un compteur
-(`Orchestrator::tasks` rend le placement, l'état réel et l'ERREUR), les journaux de
-service sont lisibles (`Orchestrator::logs`), l'agent passe en **protocole 2** (charge,
-occupation CPU, swap, interfaces, noyau/distro, uptime — tous `Option`, compatibles dans
-les deux sens), un **relais PromQL** à liste blanche alimente les graphes, et une
-**boucle d'alertes** évalue enfin les règles en continu — elles n'étaient évaluées que
-par le CLI, donc uniquement quand quelqu'un tapait `hlb metrics check`.
+Four routes build a correct preview, then return `Unimplemented` with the reason instead
+of acting. Honest, but these are the four gestures you want from the interface.
 
-Fait aussi : le **début du lot 4** — les écrans de lecture branchés sur la télémétrie.
-Nœuds (jauges, disques, tâches hébergées, agent injoignable ou en vieux protocole),
-Alertes (les quatre cas d'affichage, sourdine comprise) et Sauvegardes (couverture par
-destination, historique avec ses échecs). Trois défauts d'affichage trouvés **en
-regardant l'écran**, pas en lisant le code : swap peint en vert à 71 %, « AUCUNE copie »
-contredisant le détail juste en dessous, et cartes en escalier faute de `set_width`.
-
-Fait aussi : la **vue topologie** (§11bis) — regroupement par domaine de panne,
-détection des violations d'anti-affinité, et distinction entre « domaine non déclaré »
-et « nœud isolé ». C'est l'écran que le plan désigne comme justifiant à lui seul
-l'existence de l'interface : l'information existait dans les étiquettes Swarm et
-n'était lisible nulle part.
-
-Fait enfin : le **début du lot 5** — les routes qui agissent, sous les trois règles qui
-remplacent l'ancienne interdiction « lecture seule » : aperçu par défaut (`?apply=true`),
-autorisation dans la signature (`Autorise<PeutOperer>`), journal d'audit systématique.
-Plus la **confirmation nommée** pour ce qui détruit. Les exécuteurs réels ne sont pas
-encore branchés : les actions rendent `NonImplementee` plutôt qu'un faux succès.
-
-Fait : le **lot 5 complet** — huit routes d'action (installer, sauvegarder, mettre à
-l'échelle, attester un guide, déclarer une destination, drainer un nœud, supprimer), le
-catalogue exposé, et le panneau d'action de l'interface avec son cycle **aperçu →
-décision → résultat**. L'aperçu d'installation montre le **plan réel** produit par le
-résolveur, guides bloquants compris. Un champ `apercu` sur `RouteMutante` distingue les
-actions (qui doivent être prévisualisées) des réglages (qui n'ont rien à prévisualiser),
-et un test verrouille la courte liste des exemptions.
-
-⚠️ Les exécuteurs réels ne sont branchés que pour ce qui ne demande ni coffre ni Docker :
-attester un guide et déclarer une destination agissent vraiment ; installer, sauvegarder
-et supprimer rendent `NonImplementee` avec la raison — jamais un faux succès.
-
-Fait : le **lot 6** — invitations à usage unique (consommation atomique en
-transaction), inscription libre-service, gestion des comptes et des rôles, et l'écran
-qui montre les **comptes à moitié créés** en tête de liste avec le geste qui répare.
-PocketID et Stalwart sont branchés sur le controller : l'inscription crée réellement
-l'identité et la boîte quand ils sont configurés, et le dit honnêtement sinon.
-
-Un second garde-fou déclaré sur `RouteMutante` : `publique: bool`. L'inscription est la
-**seule** route sans authentification — la personne n'a pas encore de compte, et
-l'invitation porte sa propre autorisation. Un test verrouille cette liste d'une entrée.
-
-Fait : les **invitations multi-usages** (durée et nombre de personnes choisis à la
-création, bornés des deux côtés) et le **lot 7** — portail utilisateur, annonces avec
-audience par rôle, et incidents **suivis** plutôt que réécrits.
-
-Un troisième champ sur `ResultatAction` : `avertissements`, distinct de `blocages`. Un
-avertissement informe sans empêcher ; les confondre rendait impossible une action
-parfaitement légitime.
-
-Fait aussi : l'**écran d'inscription**, atteint par `#invitation=` et seulement comme
-ça. Le nom se vérifie **sans consommer le lien** — une majuscule de trop gâcherait une
-invitation à usage unique — et le lien d'enrôlement PocketID s'affiche une fois, jamais
-stocké.
-
-Fait aussi : l'**écran d'annonces** (publier, suivre un incident, retirer) et la **page
-de statut** — privée par défaut, ouverte par `--statut-public`, et ne montrant alors que
-les services exposés.
-
-Fait : le **lot 8** — chaque personne choisit son thème, enregistré côté serveur et non
-dans le navigateur, donc il la suit sur tous ses appareils. Trois thèmes livrés, tous
-validés contre la vision deutéranope.
-
-Fait : le **lot 9** — la corrélation, ce qui distingue l'interface du CLI. Aucune
-donnée nouvelle : la somme de ce qui existait, dispersé sur quatre écrans.
-
-**Restaurabilité** (`hlb-backup::restaurabilite`) : « si je perds tout maintenant, je
-récupère quoi ? », en un verdict et des remèdes ordonnés. **Simulateur de panne**
-(`hlb-api::panne`) : la topologie cesse d'être un dessin et répond. **Chaîne causale**
-(`hlb-api::diagnostic`) : de la tâche en échec au disque plein, en s'arrêtant honnêtement
-quand elle ne sait plus. **Écran dérive** : les refus délibérés de la réconciliation,
-avec leur raison. **Frise unifiée** (`hlb-controller::frise`) : sauvegardes et actions
-dans une seule rivière datée. **Exposition déclarée contre réelle** : la table
-`ingress_publie` enregistre ce que `hlb ingress apply` a posé, et l'écart se voit —
-routes orphelines comprises. **Liste de contrôle** (`hlb-controller::sante`), **budget de
-capacité** avant installation, et **diff de manifest** lu dans le miroir Git.
-
-Trois défauts réels trouvés au passage : `record_verification` enregistrait en échec
-toute vérification qu'on décrivait, sept pluriels entre parenthèses dans du texte
-fabriqué côté serveur, et un `✓` illisible dans egui au milieu d'un message partagé.
-
-Fait : le **lot 10** — les opérations rares et dangereuses, celles que le §11bis
-désigne comme la troisième raison d'être de l'interface.
-
-**Rotation assistée** (`hlb-api::rotation`) : ce que tourner un secret IMPLIQUE, par
-nature, dans l'ordre — le coffre n'est pas la source de vérité. **Break-glass vivant**
-(`hlb-api::breakglass` + `hlb-controller::secours`) : quatre garde-fous, trois
-attestations datées qui expirent, et un seul point que Homelabus prouve lui-même.
-**Runbook imprimable** (`hlb-controller::runbook`) engendré depuis l'état réel, sans
-aucun secret. **Plans nommés** (migration `0022`) : préparer à froid, exécuter à l'heure
-creuse, en rejouant exactement ce qui a été prévisualisé.
-
-Fait : les **lots 11 et 12** — la finition et les garde-fous de fabrication.
-
-**Assistant Bitwarden** (`hlb-controller::bitwarden`) : crée le jeton `operator`
-rattaché au compte ET à la boîte, et dit exactement quoi coller. **QR code peint**
-(`hlb-ui::design::qr`) pour les liens à usage unique. **PWA installable** — dont le
-service worker ne met JAMAIS l'API en cache. **Mode kiosque** (`hlb-ui::kiosque`), avec
-liste blanche d'écrans. **Export CSV** du journal, des sauvegardes et des comptes. Et
-la **sauvegarde de l'état lui-même**, qui manquait.
-
-Côté fabrication : **tests de rendu** de tous les écrans (headless, sans dépendance
-ajoutée), test de **routes mortes**, test de **discipline `Freshness`**, et **budget de
-taille du wasm** dans `build-web.sh` (6 Mo ; le bundle en fait 3,4).
-
-⚠️ `egui_kittest` du §12.1 n'est PAS utilisé : la variante à instantanés d'images exige
-un rendu GPU, et la variante légère active la fonction `accesskit` d'egui, ce qui casse
-la compilation d'`egui-winit` 0.33.3 — un décalage de version en amont. `Context::run`
-tourne sans fenêtre et suffit à attraper ce qui compte : un écran qui panique au rendu.
-
-## Ce qui reste
-
-État vérifié le 21/08/2026 : `cargo test --workspace` passe (**1370 tests unitaires,
-66 d'intégration `#[ignore]`**), `cargo clippy --all-targets` est à zéro avertissement.
-La feuille de route du §12 est couverte.
-
-Ce qui suit est **la liste de reprise** : par ordre d'utilité, avec l'endroit exact où
-le travail attend. Elle est ici pour qu'aucun de ces points ne se redécouvre en panne.
-
-### 1. Les exécuteurs réels des routes d'action (§11bis, lot 5)
-
-C'est la moitié manquante du lot 5, et le premier chantier à reprendre. Quatre routes
-construisent un aperçu juste, puis rendent `EtatEtape::NonImplementee` avec la raison
-au lieu d'agir — c'est l'invariant « `Unimplemented` n'est jamais `Done` », tenu
-honnêtement, mais ce sont les quatre gestes qu'on veut faire depuis l'interface.
-
-| Action | Ce qui manque | Où |
+| Action | What is missing | Where |
 |---|---|---|
-| installer une app | coffre + orchestrateur + clients de plateforme dans l'état partagé | `hlb-controller/src/actions.rs:281` |
-| lancer une sauvegarde | le dépôt restic vit dans la boucle du controller, pas dans l'état de l'API | `hlb-controller/src/actions.rs:407` |
-| drainer un nœud | `Orchestrator` n'expose pas la disponibilité, seulement `label_node` | `hlb-controller/src/actions.rs:775` |
-| supprimer une app | orchestrateur + exécuteur | `hlb-controller/src/actions.rs:863` |
+| install an app | vault + orchestrator + platform clients in shared state | `hlb-controller/src/actions.rs` |
+| run a backup | the restic repository lives in the controller loop | `hlb-controller/src/actions.rs` |
+| drain a node | `Orchestrator` exposes labels, not availability | `hlb-controller/src/actions.rs` |
+| delete an app | orchestrator + executor | `hlb-controller/src/actions.rs` |
 
-**Le drainage est le plus facile** — une méthode à ajouter au trait `Orchestrator`, en
-face de `docker node update --availability`. **L'installation est la plus
-structurante** : elle demande de partager avec l'API le contexte que le CLI assemble
-déjà (coffre, bollard, `hlb-platform`, `hlb-identity`), et le reste suit.
+**Draining is the easiest** — one method on the `Orchestrator` trait, facing
+`docker node update --availability`. **Installing is the most structural**: it needs the
+API to share the context the CLI already assembles, and the rest follows.
 
-⚠️ Ne pas « brancher » en appelant le CLI en sous-processus : le plan serait recalculé
-au lieu d'être rejoué, et l'on exécuterait autre chose que ce qui a été prévisualisé.
+⚠️ Do not "wire" it by shelling out to the CLI: the plan would be recomputed instead of
+replayed, and you would execute something other than what was previewed.
 
-### 2. Trois écrans déclarés et non écrits
+### 3. Three declared, unwritten screens
 
-`Route::implemente()` les filtre de la navigation, donc rien ne ment à l'écran — c'est
-la règle « ne jamais proposer un écran qui n'existe pas ». Ils manquent quand même :
+`Route::implemented()` keeps them out of navigation, so nothing lies on screen. They are
+still missing: **`MyMailbox`** (self-service aliases — the API, quotas and roles are in
+place; this is what would make aliases usable by someone other than the administrator),
+**`MyAccount`**, and **`Catalog`** (already exposed by the API).
 
-- **`Route::MaBoite`** — les **aliases en libre-service**. L'API (`/api/v1/aliases`),
-  les quotas et les rôles sont en place ; c'est l'interface qui manque, et c'est ce qui
-  rendrait les aliases utilisables par quelqu'un d'autre que l'administrateur. Le plus
-  utile des trois.
-- **`Route::MonCompte`** — profil, thème, sessions, jetons Bitwarden vus par leur
-  propriétaire.
-- **`Route::Catalogue`** — pourtant déjà exposé par l'API depuis le lot 5.
+### 4. 🔴 Nothing in the mail path is verified against a real Stalwart
 
-Ajouter l'écran suffit : `Route::implemente()` le fait apparaître dans la navigation,
-et le test qui croise écrans et navigation le vérifie.
+`hlb-mail` was written from upstream source, never executed against an instance. To
+prove when one is available: the `/jmap/upload/{accountId}/` path, the shape of
+`onSuccessActivateScript`, the `/jmap/download/` format, and `x:Account/get` on
+`aliases`. **MariaDB dumps** are in the same state (simulated runner). This needs an
+instance, not code.
 
-### 3. 🔴 Rien de la partie mail n'est vérifié contre un vrai Stalwart
+### 5. The rest, in decreasing order of interest
 
-`hlb-mail` est écrit à partir du code source amont, jamais exécuté contre une
-instance : pas d'image en local. À éprouver le jour où on en aura une — le chemin
-`/jmap/upload/{accountId}/`, la forme d'`onSuccessActivateScript`, le format de
-`/jmap/download/`, et `x:Account/get` sur `aliases`. Les **dumps MariaDB** sont dans le
-même cas (runner simulé). C'est plus faible que la réplication PostgreSQL, elle
-vérifiée contre un vrai couple.
+- **`hlb db failover`**: assisted switchover. No occurrence of "failover" in the
+  workspace today. Replication works and is verified against a real pair; the command is
+  missing, and a second real `heavy` node to exercise it.
+- **`hlb secrets rekey`**, see above.
+- **`hlb user mailbox add` does not open the Stalwart account** — it only records it. And
+  IMAP ACLs (which Stalwart implements) would allow seeing several mailboxes under ONE
+  connection instead of configuring three.
+- **`hlb self update`** awaits a distribution URL. Ed25519 verification and the binary
+  swap are done and tested.
+- **The catalog**: 11 apps and 12 platform services today.
+- **Garage multi-node** goes through `garage layout`, not `replicas`.
+- **No TUI wizard** for `hlb cluster init`.
 
-Ça ne demande pas de code : ça demande une instance.
+### Ruled out, and not coming back
 
-### 4. Le reste, par ordre décroissant d'intérêt
-
-- **`hlb db failover`** : la bascule assistée du §3.2 phase 2. Aucune occurrence de
-  « failover » dans le workspace aujourd'hui. La réplication marche et est vérifiée
-  contre un vrai couple ; il manque la commande, et un second nœud `heavy` réel pour
-  l'éprouver.
-- **`hlb user mailbox add` n'ouvre pas le compte Stalwart** — il l'enregistre
-  seulement. Et les **ACL IMAP** (que Stalwart implémente) permettraient de voir
-  plusieurs boîtes sous UNE seule connexion, au lieu d'en configurer trois.
-- **`hlb secrets rekey` n'existe pas.** Tourner la clé maîtresse d'un coffre peuplé
-  demande de déchiffrer chaque entrée avec l'ancienne et de la ré-écrire avec la
-  nouvelle. Voir « Hygiène du dépôt » plus bas — le cas s'est présenté le 21/08/2026,
-  avec un coffre vide.
-- **`hlb self update`** attend une URL de distribution. La vérification Ed25519 et la
-  bascule du binaire sont faites et testées (`hlb-selfupdate`, 44 tests).
-- **Le catalogue** : 11 apps et 12 services de plateforme aujourd'hui, ~30 candidates
-  dans `catalog/CATALOGUE.md` — toutes réalisables sans nouveau mécanisme depuis le
-  multi-conteneur et le stockage objet.
-- **Le multi-nœuds de Garage** passe par `garage layout`, pas par `replicas` : une
-  seule instance tant qu'il n'y a qu'un nœud de stockage.
-- **Pas d'assistant TUI** pour `hlb cluster init` : la commande existe et est
-  idempotente, sans l'accompagnement `ratatui` prévu au §12.
-
-### Ce qui a été écarté, et ne revient pas
-
-- **mailcow** et le runtime `compose` (décision du 17/08/2026, §5.9). Stalwart le
-  remplace ; les mentions dans PLAN.md sont historiques.
-- **L'OpenAPI `utoipa` + génération TypeScript** du §11bis : sans objet depuis le choix
-  d'egui, `hlb-api` définit les types une seule fois pour les deux côtés.
-- **L'import `docker-compose.yml`** : écarté d'entrée, contexte greenfield (§12).
-- **`egui_kittest`** du §12.1 : la variante à instantanés exige un GPU, la variante
-  légère casse la compilation d'`egui-winit` 0.33.3. `Context::run` suffit.
-
-## Hygiène du dépôt
-
-🔴 **`hlb-master.key` a été suivi par git du 16/08/2026 au 21/08/2026**, alors que le
-fichier porte « NE PAS COMMITER » dans son propre en-tête. Réglé le 21/08/2026, avant
-toute publication :
-
-1. Retiré de l'index et ajouté à `.gitignore` (avec `*.key`).
-2. **Historique purgé** (`git-filter-repo --invert-paths`) : 65 commits réécrits, plus
-   aucun blob du dépôt ne contient `AGE-SECRET-KEY-1`. Les hashes ont changé — sans
-   conséquence, le dépôt n'avait pas encore de remote.
-3. **Clé tournée.** L'ancienne (`age1hqumt4a…`) est considérée compromise ; la nouvelle
-   est `age1tsfkkw5…`. Le coffre local était vide, donc rien à re-chiffrer.
-
-⚠️ **Si cette ancienne clé a servi ailleurs qu'ici** — une installation réelle, un dépôt
-restic — la rotation doit y être faite aussi : purger l'historique n'atteint pas ce qui
-est déjà déployé.
-
-⚠️ **Il n'existe pas de `hlb secrets rekey`.** Le coffre était vide, la rotation s'est
-donc réduite à engendrer une clé. Avec un coffre peuplé, il faudrait déchiffrer chaque
-entrée avec l'ancienne clé et la ré-écrire avec la nouvelle — à écrire le jour où ça se
-présente, et à traiter comme une procédure ordonnée (§ « une rotation est une PROCÉDURE
-ORDONNÉE »), pas comme une écriture de fichier.
-
-Rien d'autre de sensible n'est suivi : les seules autres occurrences de clés dans le
-source (`hlb-agent/src/pki.rs`, `hlb-agent/src/tls.rs`) sont des données de test.
+- **mailcow** and the `compose` runtime. Stalwart replaces it entirely.
+- **OpenAPI `utoipa` + TypeScript generation**: moot since choosing egui.
+- **`docker-compose.yml` import**: ruled out from the start, greenfield context.
+- **`egui_kittest`**: the image-snapshot variant needs a GPU, and the light variant
+  enables egui's `accesskit` feature, which breaks `egui-winit` 0.33.3 compilation.
+  `Context::run` runs windowless and catches what matters: a screen that panics at
+  render.

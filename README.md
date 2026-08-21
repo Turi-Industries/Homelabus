@@ -1,405 +1,422 @@
 # Homelabus
 
-Plateforme de gestion d'un cluster Docker Swarm auto-hébergé : déploiement d'apps,
-bases mutualisées, SSO, reverse proxy, sauvegardes et mises à jour automatiques.
+[![CI](https://github.com/Turi-Industries/Homelabus/actions/workflows/ci.yml/badge.svg)](https://github.com/Turi-Industries/Homelabus/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-📄 **L'architecture complète est dans [PLAN.md](PLAN.md).**
+Self-hosting platform for a Docker Swarm cluster: app deployment, shared databases,
+SSO, reverse proxy, backups and automatic updates — with one rule running through all
+of it.
+
+> **An absence must never look like a success.**
+
+That is the whole design. A missing backup does not report zero, it reports nothing. A
+provisioning step the executor cannot perform is recorded as *unimplemented*, never as
+done. A stale dashboard says so instead of showing yesterday's green. Most of this
+codebase is the difference between "nothing is wrong" and "I cannot tell".
 
 ---
 
-## État d'avancement
+## The central idea: a capability resolver
 
-| Composant | État |
-|---|---|
-| Spike `bollard`/Swarm (risque n°1) | ✅ **validé** — voir ci-dessous |
-| `hlb-types` — manifests, capacités, **liaisons**, validation | ✅ 69 tests |
-| `hlb-orchestrator` — trait + implémentation Swarm | ✅ 24 tests + 11 d'intégration |
-| `hlb-resolver` — résolution + graphe + plan | ✅ 26 tests |
-| `hlb-catalog` — chargement et validation | ✅ 9 tests |
-| `hlb-state` — état persistant, reprise, secrets, **comptes** (sqlx/SQLite) | ✅ 87 tests |
-| `hlb-secrets` — coffre `age`, génération de mots de passe | ✅ 11 tests |
-| `hlb-platform` — provisionnement isolé **PostgreSQL + MariaDB** | ✅ 14 tests + 11 d'intégration |
-| `hlb-engine` — exécuteur + **réconciliation** (§2.1) | ✅ 28 tests |
-| `hlb-ingress` — Caddyfile, CrowdSec, **forward-auth**, **ACME wildcard** | ✅ 40 tests + 7 d'intégration |
-| `hlb-registry` — résolution de digest, politique de version | ✅ 28 tests + 6 d'intégration |
-| `hlb-updater` — veille, fenêtres, rollback, **Trivy + cosign** | ✅ 30 tests |
-| `hlb-backup` — restic, PITR, SQLite, DR, réplication, MariaDB, **destinations**, **restaurabilité** | ✅ 207 tests + 17 d'intégration |
-| `hlb-identity` — client PocketID : OIDC, **connexion des personnes** (PKCE) | ✅ 17 tests + 4 d'intégration |
-| `hlb-mail` — client Stalwart (JMAP) : boîtes, aliases, **Sieve** | ✅ 16 tests |
-| `hlb-guide` — vérification + automatisation des guides | ✅ 16 tests |
-| `hlb-gitops` — miroir Git de l'état désiré | ✅ 10 tests |
-| `hlb-bootstrap` — distributions, préchecks, **accès SSH gérés** | ✅ 78 tests + 4 d'intégration |
-| `hlb-agent` — état du nœud, **protocole 2** (charge, CPU, swap), PKI + mTLS | ✅ 61 tests |
-| `hlb-controller` — daemon : API, RBAC, audit chaîné, boucles, **mode démo** | ✅ 185 tests + 3 d'intégration |
-| `hlb-mesh` — clés WireGuard, adressage, configurations | ✅ 23 tests |
-| `hlb-notify` — ntfy : niveaux, heures calmes | ✅ 16 tests |
-| `hlb-cli` — 28 commandes : `install`, `backup`, `user`, `metrics`, `replication`… | ✅ utilisable |
-| `hlb-api` — types de l'API, **partagés serveur et UI** | ✅ 97 tests |
-| `hlb-selfupdate` — compatibilité N/N+1, séquence, retour arrière | ✅ 44 tests |
-| `hlb-ui` — **20 écrans egui** : natif, web, téléphone, PWA, kiosque | ✅ 146 tests + 3 d'intégration |
-| `hlb-metrics` — règles d'alerte, collecte, **deadman switch** | ✅ 31 tests |
-| `hlb-objstore` — client Garage : compartiments et clés isolées | ✅ 6 tests |
-| `hlb-users` — comptes, boîtes, **aliases**, quotas, **Sieve**, **API addy.io** | ✅ 51 tests |
+A manifest never says "connect to `postgres:5432`". It declares a **need**:
 
-**1370 tests unitaires + 66 tests d'intégration** (ces derniers `#[ignore]` : ils exigent
-Docker, un réseau, ou un vrai controller). `cargo clippy --all-targets` reste à zéro
-avertissement.
-
-### Tests d'intégration PostgreSQL
-
-Ils prouvent la promesse d'isolation du §3.1 — *un Gitea compromis ne peut pas lire
-la base de Vaultwarden*. Une revendication de sécurité se prouve, elle ne se suppose pas.
-
-```sh
-docker run -d --name hlb-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine
-export HLB_TEST_PG=postgres://postgres:test@localhost:55432/postgres
-cargo test -p hlb-platform -- --ignored --test-threads=1 --nocapture
-docker rm -f hlb-test-pg
+```yaml
+requires:
+  - kind: database
+    engine: postgres
+  - kind: sso
+    mode: native
+    redirectPaths: ["/user/oauth2/PocketID/callback"]
 ```
 
-### Tests contre les vrais registres
+The resolver turns needs into concrete actions: create the database and an isolated
+role, generate the password, register an OIDC client whose redirect URIs are computed
+from the domain chosen at install time. The same manifest works whatever the real
+topology is.
 
-La danse d'authentification OCI (401 → `WWW-Authenticate` → jeton → réessai) ne se
-teste pas contre un bouchon : chaque registre a ses particularités.
+`Capability` is an exhaustive enum. Adding a variant breaks compilation everywhere a
+`match` must be updated — that is the main reason this is written in Rust.
 
-```sh
-cargo test -p hlb-registry -- --ignored --nocapture   # accès réseau requis
+### The flow
+
+```
+catalog/*/manifest.yaml
+   ↓  hlb-catalog       load, validate, check folder name == metadata.name
+Manifest (hlb-types)
+   ↓  hlb-resolver      capability resolution + dependency graph
+Plan { actions: Vec<Action> }
+   ↓  hlb-engine        execution: preview by default, idempotent, resumable
+hlb-orchestrator        trait Orchestrator → bollard → Docker Swarm
+   ↕  hlb-state         frozen manifest + progress journal (SQLite)
 ```
 
-### Tests multi-distribution
+Swarm has no `depends_on`: it starts everything in parallel, and an app that comes up
+before PostgreSQL crash-loops. The resolver derives the dependency graph from the
+declared `requires` and emits a topological order. Adding a platform service to the
+catalog updates the graph automatically — there is no hand-maintained list.
 
-⚠️ Ces tests **ne téléchargent jamais d'image** : une distribution dont l'image
-n'est pas déjà présente localement est ignorée, et le test le dit. `docker pull`
-reste à ta main.
+---
 
-```sh
-export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
-cargo test -p hlb-bootstrap -- --ignored --test-threads=1 --nocapture
-```
+## Status
 
-### Tests PocketID
+Everything below is implemented and tested: **1370 unit tests, 66 integration tests**
+(the latter `#[ignore]`d — they need Docker, a network, or a live controller), and
+`cargo clippy --all-targets` stays at zero warnings.
 
-PocketID ne publie pas de spécification OpenAPI : la forme de son API a été
-établie en la sondant. Ces tests sont la seule garantie que le client reste juste.
+| Crate | What it does | Tests |
+|---|---|---|
+| `hlb-types` | Manifests, capabilities, bindings — the single schema definition | 69 |
+| `hlb-catalog` | Loading and validation | 9 |
+| `hlb-resolver` | Capability resolution, dependency graph, plan | 26 |
+| `hlb-engine` | Executor and reconciliation | 28 |
+| `hlb-orchestrator` | `Orchestrator` trait and its Swarm implementation | 24 + 11 |
+| `hlb-state` | Persistent state, resume, secrets, accounts (sqlx/SQLite) | 87 |
+| `hlb-secrets` | `age` vault, password generation | 11 |
+| `hlb-platform` | Isolated PostgreSQL and MariaDB provisioning | 14 + 11 |
+| `hlb-ingress` | Caddyfile, CrowdSec, forward-auth, ACME wildcard | 40 + 7 |
+| `hlb-registry` | Digest resolution, version policy | 28 + 6 |
+| `hlb-updater` | Release watch, windows, rollback, Trivy + cosign | 30 |
+| `hlb-backup` | restic, PITR, SQLite, DR drills, replication, destinations | 207 + 17 |
+| `hlb-identity` | PocketID: OIDC provisioning and human sign-in (PKCE) | 17 + 4 |
+| `hlb-mail` | Stalwart client (JMAP): mailboxes, aliases, Sieve | 16 |
+| `hlb-users` | Accounts, mailboxes, aliases, quotas, Sieve, addy.io API | 51 |
+| `hlb-guide` | Verification and automation of manual steps | 16 |
+| `hlb-gitops` | Git mirror of the desired state | 10 |
+| `hlb-bootstrap` | Distributions, prechecks, managed SSH access | 78 + 4 |
+| `hlb-agent` | Node telemetry, disk thresholds, PKI + mTLS | 61 |
+| `hlb-mesh` | WireGuard keys, addressing, configuration | 23 |
+| `hlb-metrics` | Alert rules, scraping, deadman switch | 31 |
+| `hlb-notify` | ntfy: levels, quiet hours | 16 |
+| `hlb-objstore` | Garage client: isolated buckets and keys | 6 |
+| `hlb-selfupdate` | N/N+1 compatibility, sequencing, rollback | 44 |
+| `hlb-api` | API types, defined once for both server and UI | 97 |
+| `hlb-controller` | Daemon: API, RBAC, chained audit log, background loops | 185 + 3 |
+| `hlb-ui` | 20 egui screens: native, web, phone, PWA, kiosk | 146 + 3 |
+| `hlb-cli` | 28 commands | — |
 
-```sh
-cargo test -p hlb-identity -- --ignored --test-threads=1 --nocapture
-```
+---
 
-### Tests de sauvegarde et restauration
-
-§8.3 — « un backup non testé n'est pas un backup ». Ces tests détruisent
-réellement les données et vérifient qu'elles reviennent à l'identique.
-
-```sh
-export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
-cargo test -p hlb-backup -- --ignored --test-threads=1 --nocapture
-```
-
-Dont le cas décisif du §8.1 : un `pg_dump` pris **pendant** des écritures
-concurrentes, restauré, et dont on vérifie que l'invariant transactionnel tient.
-C'est précisément ce qu'une sauvegarde de fichiers ne sait pas faire.
-
-## Essayer
+## Quick start
 
 ```sh
 cargo build
+
 ./target/debug/hlb catalog list
-./target/debug/hlb catalog validate
-./target/debug/hlb order
-./target/debug/hlb plan gitea --domain git.example.fr
+./target/debug/hlb order                          # deployment order
+./target/debug/hlb plan gitea --domain git.example.org
 
-# Installation — aperçu par défaut, rien n'est modifié
-./target/debug/hlb install valkey
-./target/debug/hlb install valkey --apply    # exécute réellement
-./target/debug/hlb todo                      # actions manuelles en attente
-./target/debug/hlb todo --verify             # les vérifie et retire ce qui est fait
-./target/debug/hlb ack gitea/gitea-first-admin
-./target/debug/hlb secrets                   # inventaire, jamais les valeurs
-
-# Réconciliation : détection seule, puis correction
-./target/debug/hlb reconcile
-./target/debug/hlb reconcile --apply
-
-# Configuration Caddy générée depuis les manifests figés
-./target/debug/hlb ingress
-./target/debug/hlb ingress --apply --front-admin http://caddy-front:2019
+./target/debug/hlb install valkey                 # preview — changes nothing
+./target/debug/hlb install valkey --apply         # actually runs
 ```
 
-Pour le provisionnement réel des bases :
+Most commands need state and a vault. To try things without touching a real install:
 
 ```sh
-export HLB_POSTGRES_ADMIN=postgres://postgres:motdepasse@hote:5432/postgres
+export HLB_STATE=/tmp/try.db HLB_MASTER_KEY=/tmp/try.key
 ```
 
-🔴 La clé maîtresse (`hlb-master.key`) est créée au premier usage. **Sa perte rend
-tous les secrets et toutes les sauvegardes irrécupérables** — garde deux copies
-hors ligne. Elle est dans `.gitignore` : elle ne doit jamais entrer dans un dépôt, et
-sa fuite vaut la fuite de tout le coffre.
+> 🔴 **The master key is created on first use.** Losing it makes every secret and every
+> backup unrecoverable — keep two offline copies. It is in `.gitignore`; it must never
+> enter a repository.
 
-⚠️ Les tiers de nœuds sont des contraintes de placement Swarm. `hlb node add` les
-pose ; sur un nœud rattaché à la main, il faut le faire soi-même — sinon rien ne se
-planifie et `wait_healthy` expire :
+> ⚠️ **On macOS (colima or Docker Desktop), `DOCKER_HOST` is mandatory.** `bollard`
+> looks for `/var/run/docker.sock`, which does not exist there, and every Docker-facing
+> command fails with `SocketNotFoundError`.
+>
+> ```sh
+> export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
+> ```
 
-```sh
-docker node update --label-add tier=heavy $(docker node ls -q)
-```
+---
 
-## L'interface
+## The web UI
 
-20 écrans en **egui** : le même code tourne en natif, dans le navigateur (wasm) et sur
-un téléphone (PWA installable). `hlb-api` définit les types **une seule fois** pour le
-serveur et pour l'interface — il n'y a pas d'OpenAPI, et il n'y en aura pas.
+20 screens in [egui](https://github.com/emilk/egui): the same code runs natively, in a
+browser through WebAssembly, and on a phone as an installable PWA. `hlb-api` defines the
+API types **once** for both the server and the interface — there is no OpenAPI, and
+there will not be one.
 
-Le moyen le plus rapide de la voir, sans cluster ni Docker : le **mode démonstration**,
-qui peuple une base en mémoire des cas qu'on n'a jamais sous la main — app jamais
-sauvegardée, hors-site mort depuis trois semaines, alias expiré qui reçoit encore,
-compte à moitié créé dans les deux sens.
+The fastest way to see it, with no cluster and no Docker, is **demo mode**. It fills an
+in-memory database with the cases you never have on hand: an app that was never backed
+up, an off-site destination dead for three weeks, an expired alias still receiving mail,
+a half-created account in both directions.
 
 ```sh
 ./target/debug/hlb-controller --demo --listen 127.0.0.1:8420 &
 ./target/debug/hlb-ui --url http://127.0.0.1:8420 --route /apps
 ```
 
-Pour la version web :
+For the browser build:
 
 ```sh
-crates/hlb-ui/build-web.sh          # budget de taille vérifié : 6 Mo max
+crates/hlb-ui/build-web.sh          # size budget enforced: 6 MB
 ./target/debug/hlb-controller --demo --ui-dir crates/hlb-ui/web
 ```
 
-Ce que l'interface fait et que le CLI ne fait pas — c'est ce qui justifie son
-existence :
+What the UI does that the CLI cannot:
 
-- **La topologie** : les nœuds regroupés par **domaine de panne**, et les violations
-  d'anti-affinité. L'information vivait dans les étiquettes Swarm et n'était lisible
-  nulle part. « Domaine non déclaré » y est distinct de « nœud isolé ».
-- **La corrélation** : restaurabilité (« si je perds tout maintenant, je récupère
-  quoi ? »), simulateur de panne, chaîne causale de la tâche en échec au disque plein,
-  frise unifiée des sauvegardes et des actions, exposition **déclarée** contre
-  **réellement posée**.
-- **Les opérations rares et dangereuses** : rotation assistée d'un secret (le coffre
-  n'est pas la source de vérité), break-glass avec attestations datées qui expirent,
-  runbook imprimable engendré depuis l'état réel et sans aucun secret, plans nommés
-  préparés à froid puis rejoués **tels qu'ils ont été prévisualisés**.
+- **Topology.** Nodes grouped by **failure domain**, and anti-affinity violations. Two
+  VMs on one server are two Swarm nodes and a single point of failure — spreading two
+  replicas "across two nodes" protects nothing, and Swarm returns an illusion of
+  redundancy. The information lived in Swarm labels and was readable nowhere.
+- **Correlation.** Recoverability ("if I lose everything right now, what comes back?"),
+  a failure simulator, a causal chain from the failing task down to the full disk, a
+  unified timeline of backups and actions, and **declared versus actually published**
+  ingress routes.
+- **Rare, dangerous operations.** Guided secret rotation (the vault is *not* the source
+  of truth for a password), break-glass with dated attestations that expire, a printable
+  runbook generated from real state and containing no secrets, and named plans prepared
+  cold then replayed **exactly as previewed**.
 
-🔴 **Une donnée périmée ne ressemble jamais à une donnée fraîche.** Si le controller
-tombe, l'interface garderait son dernier état connu : toutes les apps vertes pendant
-que le cluster brûle. `Ressource<T>` porte sa `Freshness`, que le type oblige à
-regarder — et le service worker de la PWA ne met **jamais** l'API en cache.
+> 🔴 **Stale data must never look fresh.** If the controller dies, the UI would happily
+> keep its last known state: every app green while the cluster burns. `Resource<T>`
+> carries its own freshness and the type forces you to handle it — and the PWA service
+> worker never caches the API.
 
-## Sauvegardes — le 3-2-1 du §8.1
+---
 
-Le routage se fait par **classe de volume**, pas par importance : tout est important,
-mais tout ne passe pas dans une connexion domestique.
+## Backups: the 3-2-1 rule, made real
+
+Routing is by **volume class**, not by importance: everything is important, but not
+everything fits through a home connection.
 
 ```sh
-hlb backup dest add nas     --location /mnt/nas/restic --classes critique,volumineux
-hlb backup dest add garage  --location s3:http://garage:3900/hlb --classes critique
-hlb backup dest add offsite --location s3:https://s3.exemple.com/depot \
-  --classes critique,volumineux --access-key <clé>   # le secret est lu sur STDIN
+hlb backup dest add nas     --location /mnt/nas/restic --classes critical,bulk
+hlb backup dest add garage  --location s3:http://garage:3900/hlb --classes critical
+hlb backup dest add offsite --location s3:https://s3.example.com/repo \
+  --classes critical,bulk --access-key <key>   # the secret is read from STDIN
 
-# Les bases partout, les photos seulement où la connexion suit
-hlb backup route immich  --critique nas,garage,offsite --volumineux nas,offsite
-hlb backup route seafile --critique nas,garage,offsite --volumineux nas
-
-hlb backup status        # par destination, jamais agrégé
+hlb backup route immich  --critical nas,garage,offsite --bulk nas,offsite
+hlb backup status        # per destination, never aggregated
 hlb backup run --force
 ```
 
-🔴 `backup status` mesure la fraîcheur **par destination**. Une agrégation ferait
-passer un hors-site mort depuis trois semaines pour une sauvegarde de 2 h, parce que le
-NAS, lui, tourne — et l'on croirait le 3-2-1 tenu alors qu'il ne reste qu'une copie.
+> 🔴 **Freshness is measured per destination.** Aggregating made an off-site copy dead
+> for three weeks look like a two-hour-old backup, because the NAS was still running.
+> You would believe 3-2-1 held while a single copy remained, on the same machines.
 
-## Comptes et aliases (§5bis.3)
+A failure on one destination never starves the others, each has its own deadline, and
+consecutive failures are counted — a destination that fails every time would otherwise
+look "fresh" for twelve hours.
 
-```sh
-hlb user add remy --email remy@exemple.fr    # identité PocketID + boîte, en une fois
-hlb user mailbox add remy photo              # une boîte de plus (quota par profil)
+---
 
-# Trois axes INDÉPENDANTS : durée, nom généré ou choisi, indice de site
-hlb user alias add remy                            # aléatoire, permanent
-hlb user alias add remy --pour amazon              # aléatoire lié à un site
-hlb user alias add remy --pour fnac --pendant 30j  # jetable et attribuable
-hlb user alias add remy --nom-alias contact        # choisi, permanent
-
-hlb user alias list remy --problemes   # les expirés TOUJOURS actifs
-hlb user alias purge --apply           # ce qui rend l'expiration vraie
-hlb user alias sieve remy --apply      # pose les règles de tri chez Stalwart
-```
-
-🔴 Stalwart n'a **aucune notion d'expiration** : sa liste d'aliases n'a pas de date. Un
-alias « temporaire » ne l'est que si la purge le supprime réellement — le controller la
-fait tourner toutes les heures. D'où trois états et non deux : valide, expiré-et-
-supprimé, et **expiré-mais-toujours-actif**.
-
-### Génération depuis Vaultwarden
-
-Homelabus parle le protocole d'addy.io, celui que Bitwarden sait appeler :
+## Accounts and aliases
 
 ```sh
-hlb token create bw-perso --user remy                  # → boîte par défaut
-hlb token create bw-photo --user remy --mailbox photo  # → boîte « photo »
+hlb user add remy --email remy@example.org   # PocketID identity + mailbox, in one go
+
+# Three independent axes: lifetime, generated or chosen name, site hint
+hlb user alias add remy                            # random, permanent
+hlb user alias add remy --for amazon               # random, tied to a site
+hlb user alias add remy --for fnac --for-days 30   # disposable and attributable
+hlb user alias add remy --alias-name contact       # chosen, permanent
+
+hlb user alias list remy --problems   # expired but STILL ACTIVE
+hlb user alias purge --apply          # what makes expiry real
+hlb user alias sieve remy --apply     # install sorting rules in Stalwart
 ```
 
-Le jeton se colle dans les réglages du générateur de Bitwarden. Le protocole n'ayant
-aucun champ pour choisir la boîte, c'est le **jeton** qui la porte : un jeton par boîte.
+> 🔴 **A mail server cannot expire an alias.** A Stalwart account's alias list carries
+> no dates: what is written there stays. A "temporary" alias is only temporary if a
+> purge actually removes it — so there are **three** states, not two: valid,
+> expired-and-removed, and expired-but-still-receiving. The controller runs the purge
+> hourly, because a promise that depends on someone remembering a command is not one.
 
-⚠️ Un jeton sans `--user` est un jeton de **service** : il ne peut pas créer d'alias au
-nom de quelqu'un, même en rôle `admin`. Le privilège ne remplace pas l'identité.
+The point of a disposable alias is not disposal, it is **attribution**: one address per
+recipient tells you *who* leaked it. So the readable hint is kept — fifty purely random
+addresses would lose the only real benefit — and always followed by a random suffix,
+because a guessable alias undoes the whole compartmentalisation.
 
-## Le daemon
+### Generating aliases from Bitwarden
+
+Homelabus speaks the addy.io protocol, which Bitwarden knows how to call:
+
+```sh
+hlb token create bw-personal --user remy                  # → default mailbox
+hlb token create bw-photo    --user remy --mailbox photo  # → "photo" mailbox
+```
+
+The protocol has no field for choosing a mailbox, so the **token** carries it: one
+token per mailbox.
+
+> ⚠️ A token without `--user` is a **service** token: it cannot create aliases on
+> anyone's behalf, even with the `admin` role. Privilege does not substitute for
+> identity.
+
+---
+
+## The daemon
 
 ```sh
 ./target/debug/hlb-controller \
   --listen 127.0.0.1:8420 \
   --agent-service hlb-agent --agent-poll-secs 60 \
   --reconcile-secs 60 --reconcile-apply \
-  --backup-repo hlb-depot --backup-check-secs 600 \
+  --backup-repo hlb-repo --backup-check-secs 600 \
   --heartbeat /mnt/nas/hlb-heartbeat
 ```
 
-Le battement de cœur va **hors du cluster** (§8bis) : c'est le controller qui
-envoie les alertes, donc rien ne préviendrait s'il mourait.
+The heartbeat goes **outside the cluster**: the controller is what sends alerts, so
+nothing would warn you if it died.
 
-🔴 **Le battement est conditionnel, pas périodique.** Il ne part que si la base
-d'état répond et que Docker répond. Un battement de simple minuteur ne prouverait
-que la survie d'un fil d'exécution : le controller pourrait avoir sa base illisible
-et son orchestrateur mort, et laisser le veilleur au vert sur un système
-inutilisable — pire que pas de deadman, puisqu'on s'y fie.
+> 🔴 **The heartbeat is conditional, not periodic.** It only fires if the state database
+> answers and Docker answers. A plain timer would prove a thread is alive, nothing more
+> — the controller could have an unreadable database and a dead orchestrator and keep
+> beating, leaving the watchdog green over an unusable system. That is worse than no
+> deadman at all, because you trust it.
 
-Le script du veilleur se génère, et se pose **sur le NAS** :
-
-```sh
-hlb metrics deadman --ntfy https://ntfy.sh/mon-veilleur > veilleur.sh
-# puis, en cron toutes les 5 minutes, SUR LE NAS :
-#   */5 * * * * /srv/hlb/veilleur.sh
-```
-
-Son sujet ntfy doit être **distinct** de celui de Homelabus : si le controller est
-mort, c'est le veilleur seul qui doit pouvoir parler.
-
-## Observabilité
+The watchdog script is generated and installed **on the NAS**, on a ntfy topic distinct
+from the cluster's — if the controller is dead, the watchdog alone must be able to
+speak:
 
 ```sh
-hlb metrics rules                      # les règles livrées et leurs seuils
-hlb metrics scrape --token <jeton>     # config de collecte VictoriaMetrics
-hlb metrics check                      # évalue tout maintenant
-```
-
-🔴 `hlb metrics check` distingue **« aveugle »** de **« vert »** : une règle sans
-donnée n'est pas une règle satisfaite, et le code de sortie le reflète.
-
-## Développement
-
-```sh
-cargo test                  # tests unitaires, sans Docker (rapide)
-cargo clippy --all-targets
-```
-
-### Tests d'intégration Swarm
-
-Ils sont `#[ignore]` par défaut pour que `cargo test` reste utilisable sans Docker.
-
-```sh
-docker swarm init
-
-# ⚠️ Sur macOS + colima/Docker Desktop, le socket n'est pas /var/run/docker.sock :
-export DOCKER_HOST=$(docker context inspect -f '{{.Endpoints.docker.Host}}')
-
-cargo test -p hlb-orchestrator -- --ignored --test-threads=1 --nocapture
+hlb metrics deadman --ntfy https://ntfy.sh/my-watchdog > watchdog.sh
+#   */5 * * * * /srv/hlb/watchdog.sh
 ```
 
 ---
 
-## Résultat du spike `bollard` (§13 du plan)
+## Development
 
-Le plan identifiait `bollard` comme **le risque principal** : moins éprouvé que le SDK
-Go sur la partie Swarm. Sept questions devaient être tranchées avant d'écrire le reste.
+```sh
+cargo test                      # unit tests, no Docker
+cargo clippy --all-targets      # must stay at zero warnings
+cargo fmt --all
+```
 
-| # | Question | Résultat |
-|---|---|---|
-| 1 | Daemon et Swarm joignables | ✅ |
-| 2 | Création de service + convergence des réplicas | ✅ 2/2 tâches |
-| 3 | Contraintes de placement (socle du §2bis) | ✅ satisfiable **et** non satisfiable gérées |
-| 4 | Mise à jour d'image avec contrôle de concurrence | ✅ |
-| 5 | 🔴 **Rollback automatique sur mise à jour ratée** | ✅ `RollbackStarted`, **service jamais tombé** |
-| 6 | Filtrage par label (ne jamais toucher au non-géré) | ✅ |
-| 7 | Erreurs typées plutôt que panics | ✅ `NotFound` |
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the invariants and the style rules. The
+integration suites are opt-in:
 
-**Conclusion : aucun repli vers l'API HTTP brute n'est nécessaire.** `bollard` couvre
-toute la surface Swarm dont Homelabus dépend. Le pari du §1 est validé.
+```sh
+# Swarm
+docker swarm init
+cargo test -p hlb-orchestrator -- --ignored --test-threads=1 --nocapture
 
-Le point 5 est le plus important : il prouve que `failure_action: rollback` +
-`order: start-first` fonctionnent réellement — c'est le socle du pipeline de mise à
-jour automatique (§7), et la seule chose qui rend acceptable de laisser un système
-mettre à jour tes services à 3 h du matin.
+# PostgreSQL isolation — proves a compromised Gitea cannot read Vaultwarden's data.
+# A security claim is proven, not assumed.
+docker run -d --name hlb-test-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:17-alpine
+export HLB_TEST_PG=postgres://postgres:test@localhost:55432/postgres
+cargo test -p hlb-platform -- --ignored --test-threads=1 --nocapture
 
-## Licence
+# Backup and restore: these really destroy data and check it comes back identical,
+# including a pg_dump taken *during* concurrent writes.
+cargo test -p hlb-backup -- --ignored --test-threads=1 --nocapture
 
-AGPL-3.0-or-later.
+# Real registries — the OCI auth dance differs per registry and cannot be stubbed
+cargo test -p hlb-registry -- --ignored --nocapture
 
-## Limites assumées
+# PocketID — its API shape was established by probing; these tests are the only
+# guarantee the client stays correct
+cargo test -p hlb-identity -- --ignored --test-threads=1 --nocapture
+```
 
-Ces manques sont **explicites dans le code**, jamais masqués. Une absence qui
-ressemblerait à un succès est traitée comme un défaut, pas comme un raccourci.
+---
 
-### Non vérifié contre un vrai serveur
+## Catalog
 
-- 🔴 **Toute la partie mail.** `hlb-mail` est écrit à partir du code source de
-  Stalwart, mais **jamais exécuté contre une instance réelle** : pas d'image en local.
-  Restent à éprouver le chemin `/jmap/upload/`, la forme d'`onSuccessActivateScript`,
-  le format de `/jmap/download/` et `x:Account/get` sur `aliases`. C'est plus faible
-  que la réplication PostgreSQL, elle vérifiée contre un vrai couple.
-- **Les dumps MariaDB** passent par un runner simulé, pour la même raison.
+11 applications and 12 platform services.
 
-### Actions de l'API qui ne sont pas encore branchées
+**Apps** — Gitea, Vikunja, Vaultwarden, n8n, Jellyfin, LibreSpeed, Termix, Immich (with
+its machine-learning companion), Seafile CE (three databases, one role), Bulwark and
+Roundcube.
 
-L'interface sait **prévisualiser** ces quatre actions — le plan affiché est le vrai,
-produit par le résolveur — mais l'exécution rend `NonImplementee` avec sa raison, et
-renvoie vers la commande à taper. Jamais un faux succès.
+**Platform** — PostgreSQL, MariaDB, Valkey, PocketID, Stalwart, Caddy, CrowdSec,
+oauth2-proxy, ntfy, VictoriaMetrics, Grafana, Garage.
 
-| Action | Ce qui manque |
+Two webmails is deliberate: Bulwark speaks JMAP natively to Stalwart, and Roundcube is
+the safety net — intentionally **without** SSO, so it stays reachable when PocketID is
+down.
+
+---
+
+## Known limitations
+
+These gaps are explicit in the code, never masked. An absence that would look like a
+success is treated as a defect, not a shortcut.
+
+### Not verified against a real server
+
+- 🔴 **The entire mail path.** `hlb-mail` was written from Stalwart's source but has
+  **never run against a live instance**. Still to be proven: the
+  `/jmap/upload/{accountId}/` path, the shape of `onSuccessActivateScript`, the
+  `/jmap/download/` format, and `x:Account/get` on `aliases`. This is weaker than
+  PostgreSQL replication, which *is* verified against a real primary/standby pair.
+- **MariaDB dumps** go through a simulated runner, for the same reason.
+
+### API actions not yet wired
+
+The UI previews these four correctly — the plan shown is the real one, produced by the
+resolver — but execution returns `Unimplemented` with its reason and points at the
+command to run. Never a false success.
+
+| Action | What is missing |
 |---|---|
-| installer une app | coffre + orchestrateur + clients de plateforme dans l'état de l'API |
-| lancer une sauvegarde | le dépôt restic vit dans la boucle du controller |
-| drainer un nœud | `Orchestrator` n'expose pas la disponibilité |
-| supprimer une app | orchestrateur + exécuteur |
+| Install an app | Vault, orchestrator and platform clients in the API's shared state |
+| Run a backup | The restic repository lives in the controller loop, not the API state |
+| Drain a node | `Orchestrator` does not expose availability, only labels |
+| Delete an app | Orchestrator and executor |
 
-Les autres routes du lot 5 agissent réellement : attester un guide, déclarer une
-destination, mettre à l'échelle, ainsi que tous les réglages et la gestion des comptes.
+Everything else in that batch acts for real: attesting a guide, declaring a destination,
+scaling, all settings, and account management.
 
-### Fonctionnalités absentes
+### Missing features
 
-- **Pas de libre-service pour les aliases.** Un utilisateur passe par la ligne de
-  commande ou par l'API addy.io ; l'écran `MaBoite` reste à écrire. Deux autres écrans
-  sont dans ce cas — `MonCompte` et `Catalogue`. Ils sont **absents de la navigation**
-  tant qu'ils n'existent pas : proposer un écran vide serait pire que ne rien proposer.
-- **`hlb user mailbox add` n'ouvre pas le compte Stalwart**, il l'enregistre seulement.
-  Les ACL IMAP — plusieurs boîtes sous une seule connexion — ne sont pas câblées.
-- **`hlb secrets rekey` n'existe pas** : tourner la clé maîtresse d'un coffre peuplé
-  demanderait de déchiffrer chaque entrée avec l'ancienne et de la ré-écrire avec la
-  nouvelle. Engendrer une clé neuve, en revanche, se fait au premier usage.
-- **`hlb db failover`** n'existe pas : la réplication fonctionne et est vérifiée, mais
-  la bascule reste manuelle. Elle demande un second nœud `heavy` réel.
-- **Le déploiement multi-nœuds de Garage** passe par `garage layout`, pas par
-  `replicas` : une seule instance tant qu'il n'y a qu'un nœud de stockage.
-- **Pas d'import `docker-compose.yml`** — écarté d'entrée, contexte greenfield (§12).
-- **Pas d'assistant TUI** pour `hlb cluster init` : la commande existe et est
-  idempotente, sans l'accompagnement `ratatui` prévu au §12.
+- **No self-service aliases.** Users go through the CLI or the addy.io API; the
+  `MyMailbox` screen is unwritten. Two other screens are in the same state, `MyAccount`
+  and `Catalog`. They are **absent from navigation** until they exist — offering a
+  screen that leads nowhere is worse than not offering it.
+- **`hlb secrets rekey` does not exist.** Rotating the master key of a populated vault
+  would mean decrypting every entry with the old key and rewriting it with the new one.
+  Generating a fresh key, on the other hand, happens on first use.
+- **`hlb user mailbox add` does not open the Stalwart account**, it only records it.
+  IMAP ACLs — several mailboxes under one connection — are not wired.
+- **`hlb db failover` does not exist.** Replication works and is verified; the
+  switchover is still manual and needs a second real `heavy` node to be exercised.
+- **Garage multi-node** goes through `garage layout`, not `replicas`: a single instance
+  as long as there is one storage node.
+- **No `docker-compose.yml` import** — ruled out from the start, greenfield context.
+- **No TUI wizard** for `hlb cluster init`: the command exists and is idempotent,
+  without the guided experience.
 
-### Choix assumés
+### Deliberate choices
 
-- **La réconciliation ne corrige pas par défaut** : `--reconcile-apply` doit être
-  demandé. Un système qui corrige trop est plus dangereux qu'un système qui ne corrige
-  rien.
-- **`Verify::Exec`** est rapporté comme non vérifié, jamais comme réussi.
-- **Sans dépôt configuré, toute mise à jour exigeant une sauvegarde est refusée.** De
-  même si l'app n'a aucun volume connu : « rien à sauvegarder » ne vaut jamais
-  « sauvegarde réussie ».
-- **`Unimplemented` n'est jamais `Done`.** Sans coffre, sans PostgreSQL ou sans
-  Stalwart, l'action est enregistrée non implémentée — jamais simulée.
-- **Bulwark est en `channel: pin`** : aucune release Git, aucune licence déclarée,
-  seules les images existent. Roundcube l'accompagne comme filet de sécurité.
-- `age` tire `proc-macro-error2`, signalé comme incompatible avec un futur Rust.
-  Dépendance transitive, sans action possible de notre côté.
+- **Reconciliation does not correct by default**: `--reconcile-apply` must be asked for.
+  A system that over-corrects is more dangerous than one that corrects nothing.
+- **`Verify::Exec`** is reported as unverified, never as successful.
+- **Without a configured repository, any update requiring a backup is refused.** Same if
+  the app has no known volume: "nothing to back up" never means "backup succeeded".
+- **`Unimplemented` is never `Done`.** Without a vault, without PostgreSQL, without
+  Stalwart, the action is recorded as unimplemented — never simulated.
+- **Bulwark is pinned** (`channel: pin`): no Git releases, no declared license, only
+  images exist.
+- `age` pulls in `proc-macro-error2`, flagged as incompatible with a future Rust. It is
+  a transitive dependency; nothing to do on our side.
+
+---
+
+## The bollard spike
+
+`bollard` was identified up front as the project's main risk — less battle-tested than
+the Go SDK on the Swarm surface. Seven questions had to be settled before writing
+anything else.
+
+| # | Question | Result |
+|---|---|---|
+| 1 | Daemon and Swarm reachable | ✅ |
+| 2 | Service creation and replica convergence | ✅ 2/2 tasks |
+| 3 | Placement constraints | ✅ satisfiable **and** unsatisfiable both handled |
+| 4 | Image update with concurrency control | ✅ |
+| 5 | 🔴 **Automatic rollback on a failed update** | ✅ `RollbackStarted`, service never went down |
+| 6 | Label filtering — never touch what we do not manage | ✅ |
+| 7 | Typed errors rather than panics | ✅ `NotFound` |
+
+**No fallback to the raw HTTP API is needed.** Point 5 is the important one: it proves
+`failure_action: rollback` + `order: start-first` genuinely work, which is the only
+thing that makes it acceptable to let a system update your services at 3 a.m.
+
+---
+
+## License
+
+[AGPL-3.0-or-later](LICENSE).

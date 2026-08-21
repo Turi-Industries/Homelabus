@@ -15,3 +15,6 @@ hlb-master.key
 
 # Artefacts de session Claude Code
 .claude/RESUME.md
+
+# Architecture notes — local only, not part of the published repository.
+PLAN.md

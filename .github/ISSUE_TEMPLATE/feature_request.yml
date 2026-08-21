@@ -1,0 +1,42 @@
+name: Feature request
+description: Something the system should be able to do and cannot
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: >
+        Describe the situation, not the solution. The most useful reports name a
+        moment where the system left you guessing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: How you work around it today
+      description: The manual steps, the command you run, or the thing you gave up on.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change is this?
+      options:
+        - A new application in the catalog
+        - A new capability the resolver would have to provision
+        - A CLI command
+        - Something in the web UI
+        - Something else
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **Adding an application to the catalog** is usually a manifest and nothing
+        else — see `catalog/` for the shape and the README for what the resolver can
+        already provision. If an app needs something the resolver does not have yet,
+        that is a capability, and it is real work rather than one YAML file.
