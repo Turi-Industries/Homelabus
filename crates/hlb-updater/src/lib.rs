@@ -1,20 +1,20 @@
-//! Le pipeline de mise à jour (§7 du plan).
+//! The update pipeline.
 //!
 //! ```text
-//! 1. Veille        nouveau digest ? nouvelle version ?
-//! 2. Politique     le canal autorise-t-il ce saut ?
-//! 3. Fenêtre       on est dans la fenêtre de maintenance ?
-//! 4. Sauvegarde    🔴 AVANT toute chose
-//! 5. Déploiement   start-first, parallelism 1
-//! 6. Vérification  healthcheck
-//! 7a. OK           on fige le nouveau digest
-//! 7b. KO           rollback automatique par Swarm
+//! 1. Watch        new digest? new version?
+//! 2. Policy       does the channel allow this jump?
+//! 3. Window       are we inside the maintenance window?
+//! 4. Backup       🔴 BEFORE anything else
+//! 5. Deploy       start-first, parallelism 1
+//! 6. Verify       healthcheck
+//! 7a. OK          freeze the new digest
+//! 7b. KO          automatic rollback by Swarm
 //! ```
 //!
-//! 🔴 **La règle la plus importante de ce module** : si le manifest promet une
-//! sauvegarde préalable et qu'aucun fournisseur de sauvegarde n'est branché, la mise à
-//! jour est **refusée**. Une migration de schéma n'est pas réversible par un rollback
-//! d'image — prétendre avoir sauvegardé serait le pire mensonge possible.
+//! 🔴 **This module's most important rule**: if the manifest promises a prior backup
+//! and no backup provider is wired in, the update is **refused**. A schema migration is
+//! not reversible by an image rollback - claiming to have backed up would be the worst
+//! possible lie.
 
 pub mod apply;
 pub mod scan;
@@ -46,20 +46,20 @@ pub enum Error {
     Orchestrator(#[from] hlb_orchestrator::Error),
 
     #[error(
-        "« {app} » exige une sauvegarde avant mise à jour, mais aucun \
-             fournisseur de sauvegarde n'est configuré — mise à jour refusée"
+        "\"{app}\" requires a backup before updating, but no \
+             backup provider is configured - update refused"
     )]
     BackupRequired { app: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Ce qui change entre la version déployée et celle qui est disponible.
+/// What differs between the deployed version and the available one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateKind {
-    /// Même tag, digest différent : l'éditeur a republié (cas des tags roulants).
+    /// Same tag, different digest: the publisher republished (rolling tags).
     DigestOnly,
-    /// Nouvelle version, autorisée par le canal.
+    /// A new version, allowed by the channel.
     NewVersion { to_tag: String },
 }
 
@@ -70,9 +70,9 @@ pub struct Candidate {
     pub from_tag: String,
     pub from_digest: Option<String>,
     pub to_digest: String,
-    /// La mise à jour est-elle applicable **maintenant** ?
+    /// Can the update be applied **now**?
     pub in_window: bool,
-    /// Le manifest exige-t-il une sauvegarde préalable ?
+    /// Does the manifest require a prior backup?
     pub needs_backup: bool,
 }
 
@@ -80,7 +80,7 @@ impl Candidate {
     pub fn describe(&self) -> String {
         match &self.kind {
             UpdateKind::DigestOnly => {
-                format!("{} : {} republié", self.app, self.from_tag)
+                format!("{}: {} republished", self.app, self.from_tag)
             }
             UpdateKind::NewVersion { to_tag } => {
                 format!("{} : {} → {to_tag}", self.app, self.from_tag)
@@ -89,9 +89,9 @@ impl Candidate {
     }
 }
 
-/// Interroge les registres pour toutes les apps installées.
+/// Queries the registries for every installed app.
 ///
-/// Purement en lecture : rien n'est modifié, rien n'est déployé.
+/// Read-only: nothing is modified, nothing is deployed.
 pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     state: &State,
     registry: &RegistryClient,
@@ -100,8 +100,8 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     let mut out = Vec::new();
 
     for (app, status) in state.installed_apps().await? {
-        // On ne propose rien pour une app en échec ou en cours d'installation :
-        // il y a un problème plus urgent à régler.
+        // Nothing is proposed for a failed or installing app: there is a more urgent
+        // problem to deal with.
         if status != "running" && status != "partial" {
             continue;
         }
@@ -111,8 +111,8 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
 
         let image = ImageRef::parse(&format!("{}:{}", m.spec.image.repo, m.spec.image.tag));
 
-        // Le canal `pin` ne coupe pas la veille : on veut être *informé* d'une
-        // nouveauté sur Vaultwarden, simplement pas l'appliquer tout seul.
+        // The `pin` channel does not stop the watch: we want to be *informed* about a
+        // new Vaultwarden release, just not to apply it automatically.
         let candidate_tag = if channel == UpdateChannel::Pin {
             None
         } else {
@@ -130,14 +130,14 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
 
         let to_digest = registry.resolve_digest(&target).await?;
 
-        // Rien de neuf : même tag, même digest.
+        // Nothing new: same tag, same digest.
         if kind == UpdateKind::DigestOnly && m.spec.image.digest.as_deref() == Some(&to_digest) {
             continue;
         }
 
         let in_window = match &m.spec.update.window {
             Some(w) => MaintenanceWindow::parse(w)?.is_open_at(now),
-            // Sans fenêtre déclarée, la mise à jour est applicable à tout moment.
+            // With no declared window, the update can be applied at any time.
             None => true,
         };
 
@@ -155,17 +155,17 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     Ok(out)
 }
 
-/// Ce que doit fournir un moteur de sauvegarde pour qu'une mise à jour exigeant une
-/// sauvegarde préalable soit autorisée (§7).
+/// What a backup engine must provide for an update requiring a prior backup to be
+/// allowed.
 #[async_trait::async_trait]
 pub trait BackupProvider: Send + Sync {
-    /// Prend un instantané de l'app et renvoie son identifiant.
+    /// Takes a snapshot of the app and returns its id.
     async fn snapshot(&self, app: &str) -> std::result::Result<String, String>;
 }
 
-/// Vérifie qu'une mise à jour a le droit d'être appliquée maintenant.
+/// Checks an update is allowed to be applied right now.
 ///
-/// Séparé de l'exécution pour être testable sans orchestrateur.
+/// Separate from execution so it is testable without an orchestrator.
 pub fn authorize(
     candidate: &Candidate,
     backup: Option<&dyn BackupProvider>,
@@ -177,8 +177,8 @@ pub fn authorize(
         });
     }
     if !candidate.in_window && !force_window {
-        // Pas une erreur : simplement pas maintenant. L'appelant filtre là-dessus.
-        tracing::debug!(app = %candidate.app, "hors fenêtre de maintenance");
+        // Not an error: simply not now. The caller filters on this.
+        tracing::debug!(app = %candidate.app, "outside the maintenance window");
     }
     Ok(())
 }
@@ -203,8 +203,8 @@ mod tests {
 
     #[test]
     fn an_update_requiring_backup_is_refused_without_a_provider() {
-        // 🔴 Le cœur du §7 : une migration de schéma n'est pas réversible par un
-        // rollback d'image. Sans sauvegarde, on ne joue pas.
+        // 🔴 The heart of it: a schema migration is not reversible by an image
+        // rollback. Without a backup, we do not play.
         let err = authorize(&candidate(true), None, false).unwrap_err();
         assert!(matches!(err, Error::BackupRequired { .. }), "{err}");
     }
@@ -220,6 +220,6 @@ mod tests {
 
         let mut c = candidate(false);
         c.kind = UpdateKind::DigestOnly;
-        assert_eq!(c.describe(), "gitea : 1.24 republié");
+        assert_eq!(c.describe(), "gitea: 1.24 republished");
     }
 }

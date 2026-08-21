@@ -1,8 +1,7 @@
-//! Tests du pipeline de mise à jour, avec un orchestrateur simulé.
+//! Update pipeline tests, against a scripted orchestrator.
 //!
-//! Le plan (§12bis) insiste : « la logique de rollback ne s'exercera jamais en
-//! conditions réelles avant le jour où tu en auras désespérément besoin — il faut donc
-//! la tester exprès ».
+//! Rollback logic never exercises itself in real conditions before the day you
+//! desperately need it, so it has to be tested deliberately.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -13,9 +12,9 @@ use hlb_orchestrator::{Orchestrator, ServiceSpec, ServiceStatus, UpdateState};
 use hlb_state::State;
 use hlb_updater::{apply, Candidate, UpdateKind, UpdateOutcome};
 
-/// Orchestrateur scriptable : on lui dicte la suite d'états que Swarm renverra.
+/// A scriptable orchestrator: it is told the sequence of states Swarm will return.
 struct Fake {
-    /// États successifs rendus par `status`, consommés un par un.
+    /// Successive states returned by `status`, consumed one at a time.
     script: Mutex<Vec<ServiceStatus>>,
     pushed: Mutex<Vec<(String, String)>>,
 }
@@ -117,7 +116,7 @@ impl Orchestrator for Fake {
         &self,
         _: Option<&str>,
     ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-        // Un faux orchestrateur n'a pas de tâches : le vide est la réponse honnête.
+        // A fake orchestrator has no tasks: empty is the honest answer.
         Ok(Vec::new())
     }
 
@@ -172,14 +171,14 @@ fn candidate() -> Candidate {
     }
 }
 
-/// Un service jamais mis à jour n'a pas d'`UpdateStatus` : le succès doit quand même
-/// être constaté, en regardant ce qui tourne réellement.
+/// A service never updated has no `UpdateStatus`: success must still be established,
+/// by looking at what is actually running.
 #[tokio::test]
 async fn success_is_detected_even_without_an_update_status() {
     let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:nouvelle", None, 1)]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 10).await.expect("update");
 
     assert!(outcome.is_success(), "{outcome:?}");
     assert_eq!(
@@ -188,8 +187,8 @@ async fn success_is_detected_even_without_an_update_status() {
     );
 }
 
-/// Après un rollback, le service est convergé — mais sur l'ancienne image. Se fier au
-/// seul « convergé » conclurait à tort au succès.
+/// After a rollback the service is converged - but on the old image. Trusting
+/// "converged" alone would wrongly conclude success.
 #[tokio::test]
 async fn a_converged_service_on_the_old_image_is_not_a_success() {
     let o = Fake::returning(vec![status(
@@ -199,7 +198,7 @@ async fn a_converged_service_on_the_old_image_is_not_a_success() {
     )]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 10).await.expect("update");
     assert!(
         matches!(outcome, UpdateOutcome::RolledBack { .. }),
         "{outcome:?}"
@@ -215,16 +214,16 @@ async fn a_successful_update_freezes_the_new_version() {
     )]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 10).await.expect("update");
 
     assert!(outcome.is_success(), "{outcome:?}");
 
-    // L'état reflète la nouvelle version.
+    // The state reflects the new version.
     let m = s.app_manifest("gitea").await.unwrap();
     assert_eq!(m.spec.image.tag, "1.25");
     assert_eq!(m.spec.image.digest.as_deref(), Some("sha256:nouvelle"));
 
-    // Et on a bien poussé le digest, pas le tag.
+    // And the digest was pushed, not the tag.
     assert_eq!(
         o.pushed.lock().unwrap()[0].1,
         "gitea/gitea:1.25@sha256:nouvelle"
@@ -233,11 +232,10 @@ async fn a_successful_update_freezes_the_new_version() {
 
 #[tokio::test]
 async fn a_rolled_back_update_leaves_the_state_untouched() {
-    // 🔴 Le test le plus important du module.
+    // 🔴 The most important test in this module.
     //
-    // Si on écrivait le nouveau digest ici, la réconciliation tenterait ensuite de
-    // « corriger » le cluster vers une image dont on sait qu'elle ne démarre pas —
-    // en boucle.
+    // If the new digest were written here, reconciliation would then try to "correct"
+    // the cluster towards an image known not to start - in a loop.
     let o = Fake::returning(vec![
         status(
             "gitea/gitea:1.24@sha256:ancienne",
@@ -257,7 +255,7 @@ async fn a_rolled_back_update_leaves_the_state_untouched() {
     ]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 30).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 30).await.expect("update");
 
     assert!(
         matches!(outcome, UpdateOutcome::RolledBack { .. }),
@@ -276,8 +274,8 @@ async fn a_rolled_back_update_leaves_the_state_untouched() {
 
 #[tokio::test]
 async fn the_service_never_goes_down_during_a_rollback() {
-    // C'est tout l'intérêt de start-first : les anciennes tâches restent debout
-    // pendant que les nouvelles échouent à démarrer.
+    // This is the whole point of start-first: the old tasks stay up while the new ones
+    // fail to start.
     let o = Fake::returning(vec![
         status(
             "gitea/gitea:1.24@sha256:ancienne",
@@ -292,9 +290,9 @@ async fn the_service_never_goes_down_during_a_rollback() {
     ]);
     let s = state_with_gitea().await;
 
-    apply(&o, &s, &candidate(), 30).await.expect("mise à jour");
+    apply(&o, &s, &candidate(), 30).await.expect("update");
 
-    // Le statut de l'app n'a pas basculé en échec : le service tourne toujours.
+    // The app's status did not flip to failed: the service is still running.
     let apps = s.installed_apps().await.unwrap();
     assert_eq!(apps[0].1, "running");
 }
@@ -308,10 +306,10 @@ async fn a_paused_update_needs_a_human() {
     )]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 10).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 10).await.expect("update");
     assert_eq!(outcome, UpdateOutcome::Paused);
 
-    // L'état reste sur l'ancienne version.
+    // The state stays on the old version.
     assert_eq!(
         s.app_manifest("gitea").await.unwrap().spec.image.tag,
         "1.24"
@@ -320,8 +318,8 @@ async fn a_paused_update_needs_a_human() {
 
 #[tokio::test]
 async fn an_inconclusive_update_is_never_reported_as_applied() {
-    // Bascule encore en cours sur l'ANCIENNE image quand le délai expire : Swarm n'a
-    // ni abouti ni annulé. On ne suppose rien.
+    // The switch is still in progress on the OLD image when the deadline expires:
+    // Swarm has neither completed nor rolled back. Nothing is assumed.
     let o = Fake::returning(vec![status(
         "gitea/gitea:1.24@sha256:ancienne",
         Some(UpdateState::Updating),
@@ -329,20 +327,20 @@ async fn an_inconclusive_update_is_never_reported_as_applied() {
     )]);
     let s = state_with_gitea().await;
 
-    let outcome = apply(&o, &s, &candidate(), 3).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &candidate(), 3).await.expect("update");
 
     assert_eq!(outcome, UpdateOutcome::Inconclusive);
     assert!(!outcome.is_success());
     assert_eq!(
         s.app_manifest("gitea").await.unwrap().spec.image.tag,
         "1.24",
-        "sans conclusion, l'état ne bouge pas"
+        "with no conclusion, the state does not move"
     );
 }
 
 #[tokio::test]
 async fn a_digest_only_update_keeps_the_tag() {
-    // Cas des tags roulants : `8-alpine` republié.
+    // The rolling tag case: `8-alpine` republished.
     let o = Fake::returning(vec![status(
         "gitea/gitea:1.24@sha256:nouvelle",
         Some(UpdateState::Completed),
@@ -353,7 +351,7 @@ async fn a_digest_only_update_keeps_the_tag() {
     let mut c = candidate();
     c.kind = UpdateKind::DigestOnly;
 
-    let outcome = apply(&o, &s, &c, 10).await.expect("mise à jour");
+    let outcome = apply(&o, &s, &c, 10).await.expect("update");
     assert!(outcome.is_success());
 
     let m = s.app_manifest("gitea").await.unwrap();

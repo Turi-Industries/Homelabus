@@ -1,86 +1,83 @@
-//! Analyse de vulnérabilités et vérification de signature (§7, phase 4).
+//! Vulnerability scanning and signature verification.
 //!
-//! ## Ce que chacun répond
+//! ## What each one answers
 //!
-//! Les deux outils sont souvent confondus alors qu'ils répondent à des questions
-//! opposées :
+//! The two tools are often confused although they answer opposite questions:
 //!
-//! | | Question | Ce qu'un échec veut dire |
+//! | | Question | What a failure means |
 //! |---|---|---|
-//! | **Trivy** | l'image contient-elle des failles connues ? | le contenu est risqué |
-//! | **cosign** | l'image vient-elle bien de qui elle prétend ? | l'image est peut-être substituée |
+//! | **Trivy** | does the image contain known flaws? | the content is risky |
+//! | **cosign** | does the image come from who it claims? | the image may be substituted |
 //!
-//! Une image signée peut être criblée de CVE ; une image saine peut avoir été
-//! remplacée. Il faut les deux, et un échec de signature est **toujours** plus grave
-//! qu'un échec de scan.
+//! A signed image can be riddled with CVEs; a clean image can have been replaced. Both
+//! are needed, and a signature failure is **always** more serious than a scan failure.
 //!
-//! ## 🔴 Un outil absent n'est pas un feu vert
+//! ## 🔴 A missing tool is not a green light
 //!
-//! Le piège central de ce module. Si `trivy` n'est pas installé et qu'on traite ça
-//! comme « aucune vulnérabilité trouvée », toutes les mises à jour passent en donnant
-//! l'impression d'être vérifiées. C'est pire que de ne pas scanner du tout, puisqu'on
-//! croit l'être.
+//! This module's central trap. If `trivy` is not installed and that is treated as "no
+//! vulnerability found", every update passes while appearing to have been checked. That
+//! is worse than not scanning at all, because you believe you are.
 //!
-//! Chaque résultat distingue donc explicitement **« vérifié et propre »** de
-//! **« pas vérifié »**, et l'appelant doit traiter les deux différemment.
+//! So each result explicitly separates **"checked and clean"** from **"not checked"**,
+//! and the caller must handle the two differently.
 
 use crate::Result;
 
-/// Le verdict d'un contrôle.
+/// A check's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// Contrôle effectué, rien à signaler.
+    /// Check performed, nothing to report.
     Clean,
-    /// Contrôle effectué, problèmes trouvés.
+    /// Check performed, problems found.
     Findings {
         critical: usize,
         high: usize,
         detail: String,
     },
-    /// 🔴 Contrôle **non effectué**. Ce n'est pas un succès.
+    /// 🔴 Check **not performed**. This is not a success.
     NotChecked { reason: String },
 }
 
 impl Verdict {
-    /// Le contrôle a-t-il réellement eu lieu ?
+    /// Did the check actually happen?
     pub fn was_checked(&self) -> bool {
         !matches!(self, Self::NotChecked { .. })
     }
 
-    /// Peut-on continuer sans décision humaine ?
+    /// Can we continue without a human decision?
     ///
-    /// 🔴 `NotChecked` ne bloque pas — sinon un homelab sans `trivy` ne pourrait plus
-    /// jamais se mettre à jour, et l'utilisateur désactiverait le contrôle en entier.
-    /// Mais ça ne vaut pas « propre » non plus : `was_checked()` permet de le dire.
+    /// 🔴 `NotChecked` does not block - otherwise a homelab without `trivy` could never
+    /// update again, and the user would disable the check entirely. But it does not
+    /// count as "clean" either: `was_checked()` is what says so.
     pub fn blocks(&self) -> bool {
         matches!(self, Self::Findings { critical, .. } if *critical > 0)
     }
 
     pub fn describe(&self) -> String {
         match self {
-            Self::Clean => "✓ aucune vulnérabilité critique".into(),
+            Self::Clean => "✓ no critical vulnerability".into(),
             Self::Findings {
                 critical,
                 high,
                 detail,
             } => {
-                format!("🔴 {critical} critique(s), {high} élevée(s) — {detail}")
+                format!("🔴 {critical} critical, {high} high - {detail}")
             }
             Self::NotChecked { reason } => {
-                format!("⚠️  NON VÉRIFIÉ ({reason}) — ce n'est pas la même chose que « propre »")
+                format!("⚠️  NOT CHECKED ({reason}) - which is not the same as \"clean\"")
             }
         }
     }
 }
 
-/// Scanne une image avec Trivy.
+/// Scans an image with Trivy.
 ///
-/// ⚠️ `--severity CRITICAL,HIGH` : sans filtre, une image Debian ordinaire remonte des
-/// centaines de vulnérabilités basses que personne ne lira. Un rapport qu'on ne lit
-/// pas ne protège de rien.
+/// ⚠️ `--severity CRITICAL,HIGH`: with no filter, an ordinary Debian image reports
+/// hundreds of low-severity vulnerabilities nobody will read. A report nobody reads
+/// protects nothing.
 ///
-/// `--ignore-unfixed` : une faille sans correctif disponible n'appelle aucune action.
-/// La signaler à chaque mise à jour entraîne à ignorer le rapport.
+/// `--ignore-unfixed`: a flaw with no available fix calls for no action. Reporting it
+/// on every update trains people to ignore the report.
 pub async fn scan_image(image: &str) -> Verdict {
     let out = tokio::process::Command::new("trivy")
         .args([
@@ -91,7 +88,7 @@ pub async fn scan_image(image: &str) -> Verdict {
             "--severity",
             "CRITICAL,HIGH",
             "--ignore-unfixed",
-            // Sans ça, un registre lent fait attendre indéfiniment le pipeline.
+            // Without this, a slow registry stalls the pipeline indefinitely.
             "--timeout",
             "5m",
             image,
@@ -111,7 +108,7 @@ pub async fn scan_image(image: &str) -> Verdict {
     if !out.status.success() {
         return Verdict::NotChecked {
             reason: format!(
-                "trivy a échoué : {}",
+                "trivy failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ),
         };
@@ -123,9 +120,9 @@ pub async fn scan_image(image: &str) -> Verdict {
 /// Analyse la sortie JSON de Trivy.
 pub fn parse_trivy(json: &str) -> Verdict {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        // 🔴 Une sortie illisible n'est PAS une image propre : le format a pu changer
-        // d'une version à l'autre, et l'interpréter comme un succès désactiverait le
-        // contrôle en silence.
+        // 🔴 Unreadable output is NOT a clean image: the format may have changed
+        // between versions, and reading it as a success would silently disable the
+        // check.
         return Verdict::NotChecked {
             reason: "sortie de trivy illisible".into(),
         };
@@ -176,23 +173,23 @@ pub fn parse_trivy(json: &str) -> Verdict {
     }
 }
 
-/// Vérifie la signature d'une image avec cosign.
+/// Verifies an image's signature with cosign.
 ///
-/// `identity` et `issuer` décrivent QUI a le droit d'avoir signé. Les omettre revient
-/// à accepter n'importe quelle signature valide — y compris celle d'un attaquant qui
-/// aurait signé son image avec son propre compte.
+/// `identity` and `issuer` describe WHO is allowed to have signed. Omitting them
+/// amounts to accepting any valid signature - including that of an attacker who signed
+/// their own image with their own account.
 pub async fn verify_signature(
     image: &str,
     identity_regexp: Option<&str>,
     issuer: Option<&str>,
 ) -> Verdict {
     let (Some(identity), Some(issuer)) = (identity_regexp, issuer) else {
-        // 🔴 Sans identité attendue, `cosign verify` accepte toute signature valide.
-        // Un attaquant signe son image avec son propre compte GitHub et passe.
-        // Refuser de vérifier est plus honnête que vérifier n'importe quoi.
+        // 🔴 With no expected identity, `cosign verify` accepts any valid signature.
+        // An attacker signs their image with their own GitHub account and passes.
+        // Refusing to verify is more honest than verifying anything.
         return Verdict::NotChecked {
-            reason: "aucune identité de signataire déclarée — une vérification sans \
-                     identité accepte n'importe quelle signature"
+            reason: "no signer identity declared - a verification without \
+                     one accepts any signature"
                 .into(),
         };
     };
@@ -216,12 +213,11 @@ pub async fn verify_signature(
         Ok(o) if o.status.success() => Verdict::Clean,
         Ok(o) => {
             let err = String::from_utf8_lossy(&o.stderr);
-            // Distinguer « pas de signature » de « signature invalide » : le premier
-            // est courant (beaucoup d'images ne sont pas signées), le second est une
-            // alerte de sécurité.
+            // Separating "no signature" from "invalid signature": the first is common
+            // (many images are unsigned), the second is a security alert.
             if err.contains("no matching signatures") || err.contains("no signatures found") {
                 Verdict::NotChecked {
-                    reason: "image non signée".into(),
+                    reason: "unsigned image".into(),
                 }
             } else {
                 Verdict::Findings {
@@ -234,7 +230,7 @@ pub async fn verify_signature(
     }
 }
 
-/// Le résultat combiné des deux contrôles.
+/// The combined result of both checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub image: String,
@@ -243,12 +239,12 @@ pub struct Report {
 }
 
 impl Report {
-    /// La mise à jour doit-elle être refusée sans intervention ?
+    /// Must the update be refused without intervention?
     pub fn blocks(&self) -> bool {
         self.vulnerabilities.blocks() || self.signature.blocks()
     }
 
-    /// Combien de contrôles n'ont pas eu lieu.
+    /// How many checks did not happen.
     pub fn unchecked(&self) -> usize {
         usize::from(!self.vulnerabilities.was_checked())
             + usize::from(!self.signature.was_checked())
@@ -256,7 +252,7 @@ impl Report {
 
     pub fn describe(&self) -> String {
         format!(
-            "{}\n  vulnérabilités : {}\n  signature      : {}",
+            "{}\n  vulnerabilities: {}\n  signature      : {}",
             self.image,
             self.vulnerabilities.describe(),
             self.signature.describe()
@@ -264,7 +260,7 @@ impl Report {
     }
 }
 
-/// Contrôle complet d'une image.
+/// Full check of an image.
 pub async fn audit(
     image: &str,
     identity_regexp: Option<&str>,
@@ -283,18 +279,18 @@ mod tests {
 
     #[test]
     fn a_missing_tool_is_never_a_pass() {
-        // 🔴 Le piège central. Traiter « trivy absent » comme « rien trouvé » ferait
-        // passer toutes les mises à jour en donnant l'impression d'être vérifiées —
-        // pire que de ne pas scanner du tout.
+        // 🔴 The central trap. Treating "trivy absent" as "nothing found" would let
+        // every update through while appearing to have been checked - worse than not
+        // scanning at all.
         let v = Verdict::NotChecked {
             reason: "trivy indisponible".into(),
         };
 
         assert!(!v.was_checked());
-        assert!(!v.blocks(), "mais ça ne doit pas bloquer non plus");
-        assert!(v.describe().contains("NON VÉRIFIÉ"), "{}", v.describe());
+        assert!(!v.blocks(), "but it must not block either");
+        assert!(v.describe().contains("NOT CHECKED"), "{}", v.describe());
         assert!(
-            v.describe().contains("pas la même chose"),
+            v.describe().contains("not the same as"),
             "le message doit dire que ce n'est pas « propre »"
         );
     }
@@ -308,9 +304,9 @@ mod tests {
 
     #[test]
     fn only_critical_findings_block() {
-        // Les failles élevées sont signalées, pas bloquantes : bloquer dessus
-        // arrêterait pratiquement toutes les mises à jour d'images Debian, et
-        // l'utilisateur finirait par désactiver le contrôle.
+        // High-severity flaws are reported, not blocking: blocking on them would stop
+        // practically every Debian image update, and the user would end up disabling
+        // the check.
         let haute = Verdict::Findings {
             critical: 0,
             high: 12,
@@ -350,25 +346,25 @@ mod tests {
     #[test]
     fn an_empty_result_is_clean() {
         assert_eq!(parse_trivy(r#"{"Results":[]}"#), Verdict::Clean);
-        // Trivy renvoie parfois `null` plutôt qu'un tableau vide.
+        // Trivy sometimes returns `null` rather than an empty array.
         assert_eq!(parse_trivy(r#"{"Results":null}"#), Verdict::Clean);
     }
 
     #[test]
     fn unreadable_output_is_not_clean() {
-        // 🔴 Le format de trivy change d'une version majeure à l'autre. L'interpréter
-        // comme un succès désactiverait le contrôle en silence.
+        // 🔴 Trivy's format changes between major versions. Reading it as a success
+        // would silently disable the check.
         assert!(!parse_trivy("pas du json").was_checked());
         assert!(!parse_trivy("").was_checked());
     }
 
     #[tokio::test]
     async fn verification_without_a_declared_signer_is_refused() {
-        // 🔴 `cosign verify` sans identité accepte TOUTE signature valide : un
-        // attaquant signe son image avec son propre compte et passe le contrôle.
+        // 🔴 `cosign verify` with no identity accepts ANY valid signature: an attacker
+        // signs their image with their own account and passes the check.
         let v = verify_signature("alpine:3", None, None).await;
         assert!(!v.was_checked());
-        assert!(v.describe().contains("identité"), "{}", v.describe());
+        assert!(v.describe().contains("identity"), "{}", v.describe());
     }
 
     #[test]
@@ -377,20 +373,20 @@ mod tests {
             image: "a/b:1".into(),
             vulnerabilities: Verdict::Clean,
             signature: Verdict::NotChecked {
-                reason: "image non signée".into(),
+                reason: "unsigned image".into(),
             },
         };
         assert_eq!(r.unchecked(), 1);
         assert!(
             !r.blocks(),
-            "une image non signée ne bloque pas, elle se signale"
+            "an unsigned image does not block, it is reported"
         );
     }
 
     #[test]
     fn an_invalid_signature_blocks() {
-        // Non signée ≠ mal signée. La seconde veut dire que quelqu'un a tenté
-        // quelque chose.
+        // Unsigned is not the same as badly signed. The second means someone tried
+        // something.
         let r = Report {
             image: "a/b:1".into(),
             vulnerabilities: Verdict::Clean,

@@ -1,28 +1,28 @@
-//! Fenêtres de maintenance (§7 du plan).
+//! Maintenance windows.
 //!
-//! Une mise à jour automatique se fait quand tu dors, pas au milieu d'une visio. La
-//! fenêtre est déclarée au manifest sous une forme lisible :
+//! An automatic update happens while you sleep, not in the middle of a video call. The
+//! window is declared in the manifest in a readable form:
 //!
 //! ```text
-//! window: "sun 03:00-05:00"      un jour précis
-//! window: "daily 03:00-05:00"    tous les jours
-//! window: "sat,sun 02:00-06:00"  plusieurs jours
+//! window: "sun 03:00-05:00"      one specific day
+//! window: "daily 03:00-05:00"    every day
+//! window: "sat,sun 02:00-06:00"  several days
 //! ```
 //!
-//! Le cas piégeux est la fenêtre qui **franchit minuit** (`23:00-02:00`) : elle est
-//! courante pour la maintenance nocturne et se traite à part.
+//! The treacherous case is a window that **crosses midnight** (`23:00-02:00`): common
+//! for night-time maintenance, and handled separately.
 
 use chrono::{Datelike, NaiveTime, Timelike, Weekday};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
-    #[error("fenêtre « {0} » : format attendu « <jours> HH:MM-HH:MM »")]
+    #[error("window \"{0}\": expected format \"<days> HH:MM-HH:MM\"")]
     Shape(String),
 
-    #[error("fenêtre « {input} » : jour « {day} » inconnu")]
+    #[error("window \"{input}\": unknown day \"{day}\"")]
     Day { input: String, day: String },
 
-    #[error("fenêtre « {input} » : heure « {time} » invalide")]
+    #[error("window \"{input}\": invalid time \"{time}\"")]
     Time { input: String, time: String },
 }
 
@@ -61,12 +61,12 @@ impl MaintenanceWindow {
         Ok(Self { days, start, end })
     }
 
-    /// La fenêtre franchit-elle minuit ?
+    /// Does the window cross midnight?
     fn wraps_midnight(&self) -> bool {
         self.end <= self.start
     }
 
-    /// `now` tombe-t-il dans la fenêtre ?
+    /// Does `now` fall inside the window?
     pub fn is_open_at<T: Datelike + Timelike>(&self, now: &T) -> bool {
         let t = NaiveTime::from_hms_opt(now.hour(), now.minute(), 0).unwrap_or_default();
         let today = weekday_of(now);
@@ -75,8 +75,8 @@ impl MaintenanceWindow {
             return self.day_matches(today) && t >= self.start && t < self.end;
         }
 
-        // Fenêtre à cheval sur minuit : la partie avant minuit appartient au jour
-        // déclaré, la partie après minuit appartient au **lendemain** de ce jour.
+        // A window straddling midnight: the part before midnight belongs to the
+        // declared day, the part after belongs to the **next** day.
         if self.day_matches(today) && t >= self.start {
             return true;
         }
@@ -101,7 +101,7 @@ fn parse_time(s: &str, input: &str) -> Result<NaiveTime, ParseError> {
 }
 
 fn parse_day(s: &str, input: &str) -> Result<Weekday, ParseError> {
-    // On accepte l'anglais court, usuel dans les crontabs, et le français court.
+    // Short English is accepted, as usual in crontabs, and short French too.
     let w = match s.to_lowercase().as_str() {
         "mon" | "lun" => Weekday::Mon,
         "tue" | "mar" => Weekday::Tue,
@@ -159,14 +159,14 @@ mod tests {
         for bad in ["", "sun", "sun 03:00", "sun 25:00-26:00", "xyz 03:00-05:00"] {
             assert!(
                 MaintenanceWindow::parse(bad).is_err(),
-                "« {bad} » devrait échouer"
+                "\"{bad}\" should fail"
             );
         }
     }
 
     #[test]
     fn opens_only_inside_the_range() {
-        // 9 août 2026 = dimanche.
+        // 9 August 2026 was a Sunday.
         let w = MaintenanceWindow::parse("sun 03:00-05:00").expect("analysable");
 
         assert!(!w.is_open_at(&at(9, 2, 59)));
@@ -174,29 +174,29 @@ mod tests {
         assert!(w.is_open_at(&at(9, 4, 30)));
         assert!(
             !w.is_open_at(&at(9, 5, 0)),
-            "la borne haute est exclue, sinon deux fenêtres se chevaucheraient"
+            "the upper bound is exclusive, or two windows would overlap"
         );
     }
 
     #[test]
     fn stays_closed_on_other_days() {
         let w = MaintenanceWindow::parse("sun 03:00-05:00").expect("analysable");
-        // 5 août = mercredi.
+        // 5 August was a Wednesday.
         assert!(!w.is_open_at(&at(5, 4, 0)));
     }
 
     #[test]
     fn a_window_crossing_midnight_spans_two_days() {
-        // Cas courant et piégeux : 23:00 dimanche → 02:00 lundi.
+        // The common, treacherous case: 23:00 Sunday → 02:00 Monday.
         let w = MaintenanceWindow::parse("sun 23:00-02:00").expect("analysable");
 
-        // Dimanche 9 août, après 23:00.
+        // Sunday 9 August, after 23:00.
         assert!(w.is_open_at(&at(9, 23, 30)));
-        // Lundi 10 août, avant 02:00 : toujours la fenêtre du dimanche.
+        // Monday 10 August, before 02:00: still Sunday's window.
         assert!(w.is_open_at(&at(10, 1, 0)));
-        // Lundi 10 août, après 02:00 : fermée.
+        // Monday 10 August, after 02:00: closed.
         assert!(!w.is_open_at(&at(10, 2, 30)));
-        // Dimanche 9 août, avant 23:00 : pas encore ouverte.
+        // Sunday 9 August, before 23:00: not open yet.
         assert!(!w.is_open_at(&at(9, 22, 0)));
     }
 

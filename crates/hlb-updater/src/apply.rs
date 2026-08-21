@@ -1,12 +1,12 @@
-//! Application d'une mise à jour, avec surveillance du rollback (§7).
+//! Applying an update, and watching the rollback.
 //!
-//! La politique Swarm (`start-first` + `failure_action: rollback`) est codée en dur
-//! dans `hlb-orchestrator` : le service ne tombe jamais pendant la bascule, et Swarm
-//! revient tout seul si les nouvelles tâches ne démarrent pas.
+//! The Swarm policy (`start-first` + `failure_action: rollback`) is hard-coded in
+//! `hlb-orchestrator`: the service never goes down during the switch, and Swarm rolls
+//! back on its own if the new tasks do not start.
 //!
-//! Le rôle de ce module est donc de **surveiller** cette bascule, pas de la piloter :
-//! on pousse la nouvelle image, on regarde ce que Swarm en fait, et on rapporte
-//! honnêtement le résultat — y compris quand il a annulé.
+//! This module's job is therefore to **watch** that switch, not to drive it: push the
+//! new image, see what Swarm does with it, and report the result honestly - including
+//! when it rolled back.
 
 use std::time::Duration;
 
@@ -15,16 +15,16 @@ use hlb_state::State;
 
 use crate::{Candidate, Error, Result, UpdateKind};
 
-/// Issue d'une tentative de mise à jour.
+/// The outcome of an update attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateOutcome {
     /// La nouvelle version tourne et est saine.
     Applied { digest: String },
-    /// Swarm a détecté l'échec et est revenu à l'ancienne version, sans coupure.
+    /// Swarm detected the failure and returned to the old version, with no downtime.
     RolledBack { reason: String },
-    /// Swarm a mis la bascule en pause : intervention humaine nécessaire.
+    /// Swarm paused the switch: human intervention needed.
     Paused,
-    /// Le délai est écoulé sans conclusion nette.
+    /// The deadline passed with no clear conclusion.
     Inconclusive,
 }
 
@@ -34,10 +34,10 @@ impl UpdateOutcome {
     }
 }
 
-/// Applique une mise à jour et attend son issue.
+/// Applies an update and waits for its outcome.
 ///
-/// `timeout_secs` borne l'observation : au-delà, on rapporte `Inconclusive` plutôt que
-/// d'attendre indéfiniment. Un état non conclu n'est **jamais** rapporté comme réussi.
+/// `timeout_secs` bounds the observation: beyond it, `Inconclusive` is reported rather
+/// than waiting forever. An unresolved state is **never** reported as successful.
 pub async fn apply<O: Orchestrator>(
     orch: &O,
     state: &State,
@@ -46,7 +46,7 @@ pub async fn apply<O: Orchestrator>(
 ) -> Result<UpdateOutcome> {
     let app = &candidate.app;
 
-    // On déploie toujours par digest : c'est lui qui détermine ce qui tourne (§7).
+    // Deployment is always by digest: that is what determines what runs.
     let m = state.app_manifest(app).await?;
     let target_tag = match &candidate.kind {
         UpdateKind::NewVersion { to_tag } => to_tag.clone(),
@@ -66,7 +66,7 @@ pub async fn apply<O: Orchestrator>(
 
     match &outcome {
         UpdateOutcome::Applied { digest } => {
-            // On ne fige la nouvelle version dans l'état qu'une fois qu'elle tourne.
+            // The new version is only frozen into the state once it is running.
             let mut m = state.app_manifest(app).await?;
             m.spec.image.tag = target_tag;
             m.spec.image.digest = Some(digest.clone());
@@ -75,30 +75,29 @@ pub async fn apply<O: Orchestrator>(
             state.set_app_status(app, "running").await?;
         }
         UpdateOutcome::RolledBack { .. } | UpdateOutcome::Paused => {
-            // 🔴 L'état n'est PAS modifié : la version déployée reste l'ancienne.
-            // Écrire le nouveau digest ici ferait croire à une mise à jour réussie,
-            // et la réconciliation tenterait ensuite de « corriger » vers une image
-            // dont on sait qu'elle ne démarre pas.
+            // 🔴 The state is NOT modified: the deployed version stays the old one.
+            // Writing the new digest here would suggest a successful update, and
+            // reconciliation would then try to "correct" towards an image known not to
+            // start.
             tracing::warn!(
                 app,
-                "mise à jour annulée, l'état reste sur l'ancienne version"
+                "update rolled back, the state stays on the old version"
             );
         }
         UpdateOutcome::Inconclusive => {
-            tracing::warn!(app, "issue indéterminée dans le délai imparti");
+            tracing::warn!(app, "outcome undetermined within the deadline");
         }
     }
 
     Ok(outcome)
 }
 
-/// Observe la bascule jusqu'à conclusion ou expiration.
+/// Watches the switch until it concludes or times out.
 ///
-/// ⚠️ On ne peut pas se fier au seul `UpdateStatus` de Swarm : un service qui n'a
-/// **jamais** été mis à jour n'en a pas du tout (`nil`), et une bascule sans
-/// changement effectif n'en produit pas non plus. On vérifie donc d'abord la
-/// **réalité** — le service tourne-t-il le digest visé ? — et on ne consulte
-/// `UpdateStatus` que pour détecter les échecs.
+/// ⚠️ Swarm's `UpdateStatus` alone cannot be trusted: a service that has **never** been
+/// updated has none at all (`nil`), and a switch with no effective change produces none
+/// either. So **reality** is checked first - is the service running the target digest? -
+/// and `UpdateStatus` is only consulted to detect failures.
 async fn watch<O: Orchestrator>(
     orch: &O,
     app: &str,
@@ -110,12 +109,12 @@ async fn watch<O: Orchestrator>(
     while std::time::Instant::now() < deadline {
         let st = orch.status(app).await.map_err(Error::from)?;
 
-        // Les échecs se lisent dans UpdateStatus, et priment : un service peut être
-        // converge *sur l'ancienne image* après un rollback.
+        // Failures are read from UpdateStatus, and they win: a service can be
+        // converged *on the old image* after a rollback.
         match st.update_state {
             Some(UpdateState::RollbackCompleted) => {
                 return Ok(UpdateOutcome::RolledBack {
-                    reason: "les nouvelles tâches n'ont pas démarré".into(),
+                    reason: "the new tasks did not start".into(),
                 });
             }
             Some(UpdateState::RollbackStarted) => {
@@ -128,7 +127,7 @@ async fn watch<O: Orchestrator>(
             _ => {}
         }
 
-        // Le succès se constate, il ne se déduit pas d'un champ de statut.
+        // Success is observed, not inferred from a status field.
         if st.is_converged() && st.image.contains(target_digest) {
             return Ok(UpdateOutcome::Applied {
                 digest: target_digest.to_string(),
@@ -150,7 +149,7 @@ mod tests {
         assert!(UpdateOutcome::Applied { digest: "x".into() }.is_success());
         assert!(!UpdateOutcome::RolledBack { reason: "y".into() }.is_success());
         assert!(!UpdateOutcome::Paused.is_success());
-        // 🔴 Le plus important : un résultat indéterminé n'est pas un succès.
+        // 🔴 The most important part: an undetermined result is not a success.
         assert!(!UpdateOutcome::Inconclusive.is_success());
     }
 }
