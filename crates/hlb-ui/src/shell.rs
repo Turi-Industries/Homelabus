@@ -486,13 +486,13 @@ fn entrees(droits: hlb_api::Droits) -> Vec<Route> {
 fn autorise(r: &Route, d: hlb_api::Droits) -> bool {
     use hlb_types::rbac::Action;
     match r.exige() {
-        Action::LireSoi => d.lire_soi,
-        Action::AgirSurSoi => d.agir_sur_soi,
-        Action::Lire => d.lire,
-        Action::Publier => d.publier,
-        Action::Operer => d.operer,
-        Action::GererComptes => d.gerer_comptes,
-        Action::Detruire => d.detruire,
+        Action::ReadSelf => d.lire_soi,
+        Action::ActOnSelf => d.agir_sur_soi,
+        Action::Read => d.lire,
+        Action::Publish => d.publier,
+        Action::Operate => d.operer,
+        Action::ManageAccounts => d.gerer_comptes,
+        Action::Destroy => d.detruire,
     }
 }
 
@@ -515,7 +515,7 @@ mod tests {
     fn a_plain_user_sees_the_portal_and_nothing_else() {
         // 🔴 Chaque entrée d'administration proposée à un simple utilisateur serait un
         // clic vers un 403.
-        let d = hlb_api::Droits::pour(hlb_types::Role::Utilisateur);
+        let d = hlb_api::Droits::pour(hlb_types::Role::User);
         let v = entrees(d);
         for r in &v {
             assert!(

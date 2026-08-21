@@ -1235,7 +1235,7 @@ mod tests {
         let now = crate::auth::maintenant();
 
         let portail = s
-            .annonces(hlb_types::Role::Utilisateur, now, false)
+            .annonces(hlb_types::Role::User, now, false)
             .await
             .expect("annonces");
         let admin = s

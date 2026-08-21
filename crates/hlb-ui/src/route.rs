@@ -170,12 +170,12 @@ impl Route {
             // les gens qui subissent la panne, pas pour ceux qui l'exploitent. Exiger
             // un droit de console la ferait disparaître du portail — c'est-à-dire de
             // l'endroit où on la cherche quand quelque chose ne marche pas.
-            Self::Portail | Self::Statut | Self::Inscription => Action::LireSoi,
-            Self::MaBoite | Self::MonCompte => Action::AgirSurSoi,
-            Self::Comptes => Action::GererComptes,
-            Self::Annonces => Action::Publier,
-            Self::Reglages => Action::Operer,
-            _ => Action::Lire,
+            Self::Portail | Self::Statut | Self::Inscription => Action::ReadSelf,
+            Self::MaBoite | Self::MonCompte => Action::ActOnSelf,
+            Self::Comptes => Action::ManageAccounts,
+            Self::Annonces => Action::Publish,
+            Self::Reglages => Action::Operate,
+            _ => Action::Read,
         }
     }
 }
@@ -543,11 +543,11 @@ mod tests {
         for r in Route::plan_portail() {
             let a = r.exige();
             assert!(
-                matches!(a, Action::LireSoi | Action::AgirSurSoi),
+                matches!(a, Action::ReadSelf | Action::ActOnSelf),
                 "{} exige {a:?}, que n'a pas un simple utilisateur",
                 r.libelle()
             );
-            assert!(hlb_types::Role::Utilisateur.allows(a));
+            assert!(hlb_types::Role::User.allows(a));
         }
     }
 
@@ -557,7 +557,7 @@ mod tests {
         // quelqu'un qui n'a qu'un compte, sinon chaque clic mène à un 403.
         for r in Route::plan_admin() {
             assert!(
-                !hlb_types::Role::Utilisateur.allows(r.exige()),
+                !hlb_types::Role::User.allows(r.exige()),
                 "« {} » serait visible depuis le portail",
                 r.libelle()
             );

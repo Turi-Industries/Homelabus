@@ -247,7 +247,7 @@ fn mute(m: &axum::http::Method) -> bool {
 /// Ce qu'une route exige.
 ///
 /// 🔴 Rust n'accepte pas une variante d'énumération comme paramètre const générique.
-/// D'où un marqueur par action plutôt qu'un `Autorise<{Action::Operer}>`. Le bénéfice
+/// D'où un marqueur par action plutôt qu'un `Autorise<{Action::Operate}>`. Le bénéfice
 /// est le même : l'exigence est **dans la signature du gestionnaire**, donc visible en
 /// relecture et impossible à oublier.
 pub trait Exige {
@@ -274,13 +274,13 @@ macro_rules! marqueur {
 }
 
 marqueur! {
-    PeutLireSoi => LireSoi, "Consulter ses propres données.";
-    PeutAgirSurSoi => AgirSurSoi, "Modifier ses propres données : aliases, tri, thème.";
-    PeutLire => Lire, "Consulter l'exploitation : cluster, nœuds, journaux, métriques.";
-    PeutPublier => Publier, "Publier une annonce, ouvrir ou clore un incident.";
-    PeutOperer => Operer, "Installer, mettre à jour, sauvegarder, drainer.";
-    PeutGererComptes => GererComptes, "Créer un compte, inviter, changer un rôle.";
-    PeutDetruire => Detruire, "🔴 Détruire, purger, restaurer en production.";
+    PeutLireSoi => ReadSelf, "Consulter ses propres données.";
+    PeutAgirSurSoi => ActOnSelf, "Modifier ses propres données : aliases, tri, thème.";
+    PeutLire => Read, "Consulter l'exploitation : cluster, nœuds, journaux, métriques.";
+    PeutPublier => Publish, "Publier une annonce, ouvrir ou clore un incident.";
+    PeutOperer => Operate, "Installer, mettre à jour, sauvegarder, drainer.";
+    PeutGererComptes => ManageAccounts, "Créer un compte, inviter, changer un rôle.";
+    PeutDetruire => Destroy, "🔴 Détruire, purger, restaurer en production.";
 }
 
 /// Une identité **dont le droit a été vérifié**.
@@ -356,23 +356,23 @@ mod tests {
         // ci-dessous fait échouer la compilation si une variante est ajoutée sans
         // marqueur correspondant.
         for a in [
-            Action::LireSoi,
-            Action::AgirSurSoi,
-            Action::Lire,
-            Action::Publier,
-            Action::Operer,
-            Action::GererComptes,
-            Action::Detruire,
+            Action::ReadSelf,
+            Action::ActOnSelf,
+            Action::Read,
+            Action::Publish,
+            Action::Operate,
+            Action::ManageAccounts,
+            Action::Destroy,
         ] {
             // Le match force la mise à jour de cette liste quand `Action` change.
             let _nom = match a {
-                Action::LireSoi => "LireSoi",
-                Action::AgirSurSoi => "AgirSurSoi",
-                Action::Lire => "Lire",
-                Action::Publier => "Publier",
-                Action::Operer => "Operer",
-                Action::GererComptes => "GererComptes",
-                Action::Detruire => "Detruire",
+                Action::ReadSelf => "LireSoi",
+                Action::ActOnSelf => "AgirSurSoi",
+                Action::Read => "Lire",
+                Action::Publish => "Publier",
+                Action::Operate => "Operer",
+                Action::ManageAccounts => "GererComptes",
+                Action::Destroy => "Detruire",
             };
             assert!(MARQUEURS.contains(&a), "{_nom} n'a pas de marqueur Peut*");
         }
@@ -381,10 +381,10 @@ mod tests {
 
     #[test]
     fn markers_demand_what_they_are_named_after() {
-        assert_eq!(PeutLire::ACTION, Action::Lire);
-        assert_eq!(PeutOperer::ACTION, Action::Operer);
-        assert_eq!(PeutDetruire::ACTION, Action::Detruire);
-        assert_eq!(PeutGererComptes::ACTION, Action::GererComptes);
+        assert_eq!(PeutLire::ACTION, Action::Read);
+        assert_eq!(PeutOperer::ACTION, Action::Operate);
+        assert_eq!(PeutDetruire::ACTION, Action::Destroy);
+        assert_eq!(PeutGererComptes::ACTION, Action::ManageAccounts);
     }
 
     #[test]
@@ -454,8 +454,8 @@ mod tests {
                 user: "remy".into(),
             },
         };
-        assert!(i.peut(Action::Lire));
-        let m = i.refus(Action::Operer).expect("un viewer n'opère pas");
+        assert!(i.peut(Action::Read));
+        let m = i.refus(Action::Operate).expect("un viewer n'opère pas");
         assert!(m.contains("operator"), "{m}");
         assert!(m.contains("viewer"), "{m}");
     }
@@ -463,13 +463,13 @@ mod tests {
     #[test]
     fn a_plain_user_is_not_a_viewer() {
         let i = Identite {
-            role: Role::Utilisateur,
+            role: Role::User,
             acteur: Acteur::Personne {
                 user: "invite".into(),
             },
         };
-        assert!(i.peut(Action::LireSoi));
-        assert!(i.peut(Action::AgirSurSoi));
-        assert!(!i.peut(Action::Lire), "le portail n'est pas la console");
+        assert!(i.peut(Action::ReadSelf));
+        assert!(i.peut(Action::ActOnSelf));
+        assert!(!i.peut(Action::Read), "le portail n'est pas la console");
     }
 }

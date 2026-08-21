@@ -207,7 +207,7 @@ pub async fn retour(
             .state
             .audit(
                 identite.nom_de_compte(),
-                hlb_types::Role::Utilisateur,
+                hlb_types::Role::User,
                 "connexion",
                 &identite.sub,
                 "refused",

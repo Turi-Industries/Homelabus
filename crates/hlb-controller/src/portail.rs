@@ -255,7 +255,7 @@ async fn construire_statut(s: &AppState) -> hlb_api::PageStatut {
     // réservée à l'exploitation ne doit fuiter sur une page potentiellement publique.
     let incidents: Vec<hlb_api::Annonce> = s
         .state
-        .annonces(hlb_types::Role::Utilisateur, maintenant, false)
+        .annonces(hlb_types::Role::User, maintenant, false)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -266,7 +266,7 @@ async fn construire_statut(s: &AppState) -> hlb_api::PageStatut {
     // qu'on cherche ce qui ne va pas.
     let en_maintenance: Vec<String> = s
         .state
-        .annonces(hlb_types::Role::Utilisateur, maintenant, false)
+        .annonces(hlb_types::Role::User, maintenant, false)
         .await
         .unwrap_or_default()
         .into_iter()

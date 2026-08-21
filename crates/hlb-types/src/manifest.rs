@@ -1,4 +1,4 @@
-//! Le manifest d'une application : la brique déclarative du catalogue (§4.2).
+//! An application manifest: the catalog's declarative building block.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,8 +23,8 @@ pub enum ApiVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Kind {
     App,
-    /// Les services mutualisés (postgres, caddy, pocket-id…), décrits par le même
-    /// format mais déployés avant tout le reste.
+    /// The shared services (postgres, caddy, pocket-id...), described in the same
+    /// format but deployed before everything else.
     PlatformService,
 }
 
@@ -45,7 +45,7 @@ pub struct Metadata {
 pub struct Spec {
     pub image: Image,
 
-    /// Là où tourne l'app. Tout n'est pas « swarmable » (§10.1).
+    /// Where the app runs. Not everything is swarmable.
     #[serde(default)]
     pub runtime: Runtime,
 
@@ -61,41 +61,40 @@ pub struct Spec {
     #[serde(default)]
     pub update: UpdatePolicy,
 
-    /// Conteneurs compagnons, déployés **avec** l'app et pour elle seule (§4.7bis).
+    /// Companion containers, deployed **with** the app and for it alone.
     ///
-    /// Certaines apps ne tiennent pas dans un conteneur : Immich a besoin d'un service
-    /// d'apprentissage automatique séparé, Seafile d'un cache mémoire. Ce ne sont pas
-    /// des services de plateforme — ils ne sont partagés avec personne, ils naissent et
-    /// meurent avec l'app.
+    /// Some apps do not fit in one container: Immich needs a separate machine-learning
+    /// service, Seafile an in-memory cache. These are not platform services - they are
+    /// shared with nobody, and they are born and die with the app.
     ///
-    /// 🔴 **Un compagnon n'a jamais d'`ingress`.** C'est une aide interne, pas un
-    /// service : lui ouvrir une route publierait un composant conçu pour ne parler
-    /// qu'à son app, souvent sans la moindre authentification. La règle est structurelle
-    /// — le type n'a simplement pas de champ pour ça.
+    /// 🔴 **A companion never has an `ingress`.** It is an internal helper, not a
+    /// service: opening a route to it would publish a component designed to talk only
+    /// to its app, often with no authentication whatsoever. The rule is structural -
+    /// the type simply has no field for it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companions: Vec<Companion>,
 
-    /// Comment l'app reçoit ce que le résolveur a provisionné (§4.3).
+    /// How the app receives what the resolver provisioned.
     ///
-    /// 🔴 **La moitié manquante du résolveur de capacités.** Déclarer
-    /// `kind: database` crée la base, le rôle et le mot de passe — et ne dit
-    /// toujours pas à l'app comment s'y connecter. Sans ce champ, une app démarre et
-    /// retombe en silence sur son SQLite interne : elle a l'air de marcher, et ses
-    /// données ne sont ni dans la base provisionnée, ni sauvegardées avec elle.
+    /// 🔴 **The missing half of the capability resolver.** Declaring `kind: database`
+    /// creates the database, the role and the password - and still does not tell the
+    /// app how to connect to it. Without this field an app starts and silently falls
+    /// back to its internal SQLite: it looks like it works, and its data is neither in
+    /// the provisioned database nor backed up with it.
     ///
-    /// Les valeurs peuvent porter des **jetons** résolus au déploiement :
+    /// Values may carry **tokens** resolved at deploy time:
     /// `{{ db.host }}`, `{{ db.name }}`, `{{ db.user }}`, `{{ db.password }}`,
     /// `{{ db.url }}`, `{{ cache.host }}`, `{{ oidc.issuer }}`,
     /// `{{ oidc.client_id }}`, `{{ oidc.client_secret }}`, `{{ smtp.host }}`,
     /// `{{ smtp.user }}`, `{{ smtp.password }}`, `{{ domain }}`.
     ///
-    /// 🔴 **Un jeton de secret n'est JAMAIS résolu ici.** Le plan est affiché par
-    /// `hlb plan`, enregistré dans l'état et exporté vers le miroir Git : y faire
-    /// entrer un mot de passe le publierait aux trois endroits. La substitution a
-    /// lieu dans l'exécuteur, au moment du déploiement, et seule Swarm voit la valeur.
+    /// 🔴 **A secret token is NEVER resolved here.** The plan is displayed by
+    /// `hlb plan`, recorded in the state and exported to the Git mirror: letting a
+    /// password in would publish it in all three places. Substitution happens in the
+    /// executor, at deploy time, and only Swarm ever sees the value.
     ///
-    /// ⚠️ `BTreeMap` et non `HashMap` : les plans doivent être reproductibles d'une
-    /// exécution à l'autre, sinon les tests d'instantané deviennent inutilisables.
+    /// ⚠️ `BTreeMap` and not `HashMap`: plans must be reproducible from one run to the
+    /// next, or snapshot tests become worthless.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub env: std::collections::BTreeMap<String, String>,
 
@@ -108,7 +107,7 @@ pub struct Spec {
 pub enum Runtime {
     #[default]
     Swarm,
-    /// `docker compose` sur un hôte dédié, piloté par SSH (cas mailcow).
+    /// `docker compose` on a dedicated host, driven over SSH.
     Compose,
 }
 
@@ -117,18 +116,18 @@ pub enum Runtime {
 pub struct Image {
     pub repo: String,
     pub tag: String,
-    /// Épinglage fort. `tag` seul ne suffit pas : un tag est mutable (§7).
+    /// Hard pinning. `tag` alone is not enough: a tag is mutable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
 }
 
 impl Image {
-    /// Référence à passer à Docker.
+    /// The reference handed to Docker.
     ///
-    /// Quand le digest est connu, on garde **aussi** le tag : `repo:tag@digest` est la
-    /// forme canonique complète, c'est celle que Swarm produit lui-même, et elle reste
-    /// lisible — sans le tag, personne ne sait de quelle version vient ce digest.
-    /// C'est le digest qui détermine ce qui tourne, le tag n'est plus qu'une étiquette.
+    /// When the digest is known the tag is kept **too**: `repo:tag@digest` is the full
+    /// canonical form, it is what Swarm produces itself, and it stays readable -
+    /// without the tag, nobody knows which version this digest came from. The digest
+    /// determines what runs; the tag is only a label.
     pub fn reference(&self) -> String {
         match &self.digest {
             Some(d) => format!("{}:{}@{}", self.repo, self.tag, d),
@@ -144,10 +143,10 @@ impl Image {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Ingress {
-    /// Gabarit du domaine, résolu à l'installation.
+    /// Domain template, resolved at install time.
     pub host: String,
     pub port: u16,
-    /// La chaîne d'entrée : caddy-front → anubis → caddy-back (§6.1).
+    /// The ingress chain: caddy-front → anubis → caddy-back.
     #[serde(default)]
     pub chain: Vec<String>,
     #[serde(default)]
@@ -157,11 +156,11 @@ pub struct Ingress {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExposePolicy {
-    /// Joignable uniquement depuis le VPN. Défaut volontaire (§9).
+    /// Reachable from the VPN only. A deliberate default.
     #[default]
     Private,
-    /// Exposition publique seulement une fois le guide validé — empêche la fenêtre
-    /// « premier inscrit = admin » exploitée par les scanners (§4.6bis).
+    /// Public exposure only once the guide is complete - closes the "first to sign up
+    /// becomes admin" window that scanners exploit.
     AfterGuide,
     Public,
 }
@@ -173,7 +172,7 @@ pub struct SwarmSpec {
     pub replicas: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<Healthcheck>,
-    /// `heavy` ou `light` — le placement découle des ressources du nœud (§2bis.2).
+    /// `heavy` or `light` - placement follows from the node's resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
 }
@@ -188,37 +187,37 @@ impl Default for SwarmSpec {
     }
 }
 
-/// Un conteneur compagnon (§4.7bis).
+/// A companion container.
 ///
-/// Déployé sous le nom `<app>-<name>`, sur le même réseau que l'app, qui le joint donc
-/// par ce nom. Il partage son cycle de vie : installé avec elle, arrêté avec elle.
+/// Deployed as `<app>-<name>`, on the same network as the app, which therefore reaches
+/// it by that name. It shares the app's lifecycle: installed with it, stopped with it.
 ///
-/// ## 🔴 Ce qu'un compagnon n'a PAS, et pourquoi
+/// ## 🔴 What a companion does NOT have, and why
 ///
-/// - **Pas d'`ingress`.** Une aide interne exposée publiquement, c'est un composant
-///   sans authentification face à Internet. La règle est dans le type, pas dans une
-///   consigne : il n'y a pas de champ à remplir.
-/// - **Pas de `requires`.** Un compagnon qui réclamerait sa propre base ou son propre
-///   client OIDC serait une app déguisée, et devrait en être une. Ses seuls besoins
-///   sont un volume et des variables.
-/// - **Pas de `replicas`.** Un seul exemplaire. Répartir un cache ou un modèle entre
-///   plusieurs instances demande une coordination que rien ici ne fournit, et l'app
-///   verrait ses requêtes atterrir tantôt sur l'une, tantôt sur l'autre.
+/// - **No `ingress`.** An internal helper exposed publicly is a component with no
+///   authentication facing the internet. The rule lives in the type, not in a piece of
+///   guidance: there is no field to fill in.
+/// - **No `requires`.** A companion asking for its own database or its own OIDC client
+///   would be an app in disguise, and should be one. Its only needs are a volume and
+///   some variables.
+/// - **No `replicas`.** Exactly one instance. Spreading a cache or a model across
+///   several would need coordination nothing here provides, and the app would see its
+///   requests land on one instance or the other at random.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Companion {
-    /// Suffixe du nom de service, et nom sous lequel l'app le joint.
+    /// Service name suffix, and the name the app reaches it by.
     ///
-    /// ⚠️ Minuscules, chiffres et tirets : c'est un nom DNS dans le réseau Swarm.
+    /// ⚠️ Lowercase, digits and hyphens: this is a DNS name on the Swarm network.
     pub name: String,
 
     pub image: Image,
 
-    /// Volumes propres au compagnon, `(nom, chemin)`.
+    /// The companion's own volumes, `(name, path)`.
     ///
-    /// ⚠️ Le nom est préfixé par `<app>-<compagnon>-`. Un cache de modèles n'a pas
-    /// besoin d'être sauvegardé : il se retélécharge. Le drapeau existe quand même,
-    /// parce que certains compagnons portent de l'état qui ne se reconstruit pas.
+    /// ⚠️ The name is prefixed with `<app>-<companion>-`. A model cache does not need
+    /// backing up: it re-downloads. The flag exists anyway, because some companions
+    /// carry state that cannot be rebuilt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub storage: Vec<CompanionVolume>,
 
@@ -228,10 +227,10 @@ pub struct Companion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<Healthcheck>,
 
-    /// Placement. Absent : celui de l'app.
+    /// Placement. Absent means the app's own.
     ///
-    /// ⚠️ Un compagnon qui fait du calcul (apprentissage automatique) mérite `heavy`
-    /// même si son app est `light`.
+    /// ⚠️ A companion doing real computation (machine learning) deserves `heavy` even
+    /// when its app is `light`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
 
@@ -245,13 +244,12 @@ pub struct Companion {
 pub struct CompanionVolume {
     pub name: String,
     pub path: String,
-    /// Faux par défaut, **à l'inverse des volumes d'app**.
+    /// False by default, **the opposite of app volumes**.
     ///
-    /// 🔴 L'asymétrie est délibérée. Un volume d'app contient des données
-    /// irremplaçables et le défaut sûr est de sauvegarder. Un volume de compagnon
-    /// contient presque toujours du dérivé — modèles téléchargés, cache — dont la
-    /// sauvegarde alourdirait le dépôt sans rien protéger. Le compagnon qui fait
-    /// exception le déclare.
+    /// 🔴 The asymmetry is deliberate. An app volume holds irreplaceable data and the
+    /// safe default is to back it up. A companion volume almost always holds derived
+    /// content - downloaded models, caches - whose backup would bloat the repository
+    /// while protecting nothing. The companion that is an exception says so.
     #[serde(default)]
     pub backup: bool,
 }
@@ -267,8 +265,8 @@ pub struct Healthcheck {
     pub timeout_secs: u64,
     #[serde(default = "default_retries")]
     pub retries: u64,
-    /// Délai de grâce au démarrage : une base de données met du temps à s'ouvrir,
-    /// et compter ses échecs pendant ce temps ferait boucler le déploiement.
+    /// Startup grace period: a database takes time to open, and counting its failures
+    /// during that window would make the deployment loop.
     #[serde(default = "default_start_period")]
     pub start_period_secs: u64,
 }
@@ -282,10 +280,10 @@ pub struct UpdatePolicy {
     pub backup_before: bool,
     #[serde(default = "default_true")]
     pub auto_rollback: bool,
-    /// Dépôt upstream à surveiller quand l'image déployée est un fork.
+    /// Upstream repository to watch when the deployed image is a fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_upstream: Option<String>,
-    /// Fenêtre de maintenance, ex. « sun 03:00-05:00 ». Absente = à tout moment.
+    /// Maintenance window, e.g. "sun 03:00-05:00". Absent means any time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<String>,
 }
@@ -305,12 +303,12 @@ impl Default for UpdatePolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
-    /// Jamais de mise à jour automatique. Pour Vaultwarden et tout ce qui est critique.
+    /// Never updated automatically. For Vaultwarden and anything critical.
     Pin,
     #[default]
     Patch,
     Minor,
-    /// ⚠️ Déconseillé : suit un tag mutable.
+    /// ⚠️ Discouraged: follows a mutable tag.
     Latest,
 }
 
@@ -323,13 +321,13 @@ pub struct SecuritySpec {
     pub no_new_privileges: bool,
     #[serde(default = "cap_drop_all")]
     pub cap_drop: Vec<String>,
-    /// Capacités réajoutées explicitement. Une app qui en a besoin doit le dire.
+    /// Capabilities added back explicitly. An app that needs one must say so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cap_add: Vec<String>,
-    /// `uid:gid`. Absent = ce que déclare l'image.
+    /// `uid:gid`. Absent means whatever the image declares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
-    /// Ports publiés sur l'hôte. Vide par défaut — et interdit en `proxy-header`.
+    /// Ports published on the host. Empty by default - and forbidden on `proxy-header`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub published_ports: Vec<u16>,
 }
@@ -436,7 +434,7 @@ spec:
         assert_eq!(m.spec.security.cap_drop, vec!["ALL"]);
         assert!(m.spec.security.published_ports.is_empty());
         assert_eq!(m.spec.ingress[0].expose, ExposePolicy::Private);
-        // Le défaut de canal ne doit jamais être `latest`.
+        // The default channel must never be `latest`.
         assert_eq!(m.spec.update.channel, UpdateChannel::Patch);
         assert!(m.spec.update.backup_before);
     }

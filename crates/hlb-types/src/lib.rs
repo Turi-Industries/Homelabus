@@ -1,13 +1,13 @@
-//! Types partagés de Homelabus.
+//! Homelabus shared types.
 //!
-//! Ce crate est volontairement le seul endroit où le schéma est défini. Il alimente :
-//!   - le controller et le CLI (Rust, directement) ;
-//!   - l'autocomplétion YAML dans l'éditeur (via `schemars` → JSON Schema).
+//! This crate is deliberately the only place the schema is defined. It feeds:
+//!   - the controller and the CLI (Rust, directly);
+//!   - YAML autocompletion in the editor (through `schemars` → JSON Schema).
 //!
-//! ⚠️ L'UI ne passe PAS par un client généré : depuis le choix d'egui, elle est en
-//! Rust et consomme `hlb-api` directement. L'OpenAPI `utoipa` + la génération
-//! TypeScript prévus au §11bis sont sans objet — c'est le principal bénéfice
-//! d'architecture de ce choix, et il vaut mieux qu'il soit dit ici.
+//! ⚠️ The UI does NOT go through a generated client: since egui was chosen it is in
+//! Rust and consumes `hlb-api` directly. An OpenAPI layer plus TypeScript generation
+//! would be moot - that is the main architectural benefit of the choice, and it is
+//! worth stating here.
 
 pub mod capability;
 pub mod guide;
@@ -32,20 +32,19 @@ pub enum Error {
     #[error("manifest invalide : {0}")]
     Parse(#[from] serde_yaml_ng::Error),
 
-    #[error("validation échouée : {0}")]
+    #[error("validation failed: {0}")]
     Validation(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Règles qui ne peuvent pas être exprimées par le typage seul.
+/// Rules that types alone cannot express.
 ///
-/// Chaque règle ici correspond à un moyen concret de se tirer une balle dans le pied,
-/// documenté dans le plan.
+/// Each rule here corresponds to a concrete way of shooting yourself in the foot.
 pub fn validate(m: &Manifest) -> Result<()> {
-    // §5.4 — une app en `proxy-header` fait confiance à un en-tête HTTP. Si elle est
-    // joignable sans passer par le proxy, `curl -H "Remote-User: admin"` suffit à
-    // usurper n'importe quel compte.
+    // An app on `proxy-header` trusts an HTTP header. If it is reachable without
+    // going through the proxy, `curl -H "Remote-User: admin"` is enough to impersonate
+    // any account.
     let header_auth =
         m.spec.requires.iter().any(
             |c| matches!(c, Capability::Sso { mode, .. } if mode.requires_network_isolation()),
@@ -53,19 +52,19 @@ pub fn validate(m: &Manifest) -> Result<()> {
 
     if header_auth && !m.spec.security.published_ports.is_empty() {
         return Err(Error::Validation(format!(
-            "{} utilise l'authentification par en-tête mais publie des ports {:?} : \
-             l'app doit être joignable uniquement via le proxy",
+            "{} uses header authentication but publishes ports {:?}: the app must be \
+             reachable only through the proxy",
             m.metadata.name, m.spec.security.published_ports
         )));
     }
 
-    // 🔴 §5.2 — `mode: native` sans `redirectPaths` produit un client OIDC SANS URI
-    // de redirection. PocketID n'a alors rien vers quoi renvoyer, et la panne ne se
-    // voit qu'au retour de la connexion, sur un message qui parle d'URI non
-    // enregistrée sans dire laquelle il attendait.
+    // 🔴 `mode: native` without `redirectPaths` produces an OIDC client with NO
+    // redirect URI. PocketID then has nothing to send the user back to, and the failure
+    // only shows on the return leg of the sign-in, as a message about an unregistered
+    // URI that never says which one it expected.
     //
-    // Le manifest est refusé ici plutôt que de laisser planifier un client inutile :
-    // c'est une faute de rédaction, elle se dit avec son numéro de ligne.
+    // The manifest is refused here rather than letting a useless client be planned:
+    // this is an authoring mistake, and it is reported with its line number.
     for c in &m.spec.requires {
         if let Capability::Sso {
             mode: SsoMode::Native,
@@ -74,42 +73,42 @@ pub fn validate(m: &Manifest) -> Result<()> {
         {
             if redirect_paths.is_empty() {
                 return Err(Error::Validation(format!(
-                    "{} déclare « sso: native » sans redirectPaths : le client OIDC \
-                     n'aurait aucune URI de redirection et la connexion échouerait au \
-                     retour. Donne le chemin de callback de l'app, ou passe en \
-                     « proxy-only » si elle ne parle pas OIDC",
+                    "{} declares \"sso: native\" with no redirectPaths: the OIDC \
+                     client would have no redirect URI and sign-in would fail on the \
+                     way back. Give the app's callback path, or switch to \
+                     \"proxy-only\" if it does not speak OIDC",
                     m.metadata.name
                 )));
             }
         }
     }
 
-    // 🔴 §4.3 — un jeton de liaison exige la capacité correspondante.
+    // 🔴 A binding token requires the matching capability.
     //
-    // Sans ce contrôle, un `{{ db.password }}` dans une app qui ne déclare aucune base
-    // partirait vers Swarm avec le TEXTE DU JETON pour valeur. L'app se plaindrait
-    // alors d'un mot de passe incorrect, et le diagnostic partirait du côté du mot de
-    // passe — jamais du côté du manifest.
+    // Without this check, a `{{ db.password }}` in an app that declares no database
+    // would go out to Swarm with the TOKEN TEXT as its value. The app would then
+    // complain about an incorrect password, and the investigation would start at the
+    // password - never at the manifest.
     for t in binding::tokens_used(&m.spec.env) {
-        let Some(besoin) = t.requires() else { continue };
+        let Some(needed) = t.requires() else { continue };
 
-        let declaree = m.spec.requires.iter().any(|c| c.id() == besoin);
-        if !declaree {
+        let declared = m.spec.requires.iter().any(|c| c.id() == needed);
+        if !declared {
             return Err(Error::Validation(format!(
-                "{} : « {} » est utilisé dans env mais l'app ne déclare aucune capacité \
-                 « {besoin} ». La variable partirait avec le texte du jeton pour valeur",
+                "{}: \"{}\" is used in env but the app declares no \"{needed}\" \
+                 capability. The variable would go out with the token text as its value",
                 m.metadata.name,
                 t.placeholder()
             )));
         }
     }
 
-    // §4.7bis — un compagnon devient un nom DNS dans le réseau Swarm.
+    // A companion becomes a DNS name on the Swarm network.
     //
-    // ⚠️ Une majuscule ou un point produit un service que Swarm crée sans broncher et
-    // que l'app ne résout pas : la panne apparaît à la première requête, sur un
-    // « connection refused » qui ne dit rien du nom.
-    let mut vus: Vec<&str> = Vec::new();
+    // ⚠️ An uppercase letter or a dot produces a service Swarm creates without
+    // complaint and the app cannot resolve: the failure shows on the first request, as
+    // a "connection refused" that says nothing about the name.
+    let mut seen: Vec<&str> = Vec::new();
     for c in &m.spec.companions {
         if c.name.is_empty()
             || !c
@@ -118,22 +117,22 @@ pub fn validate(m: &Manifest) -> Result<()> {
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
         {
             return Err(Error::Validation(format!(
-                "{} : compagnon « {} » — le nom devient une entrée DNS et n'accepte \
-                 que minuscules, chiffres et tirets",
+                "{}: companion \"{}\" - the name becomes a DNS entry and accepts \
+                 only lowercase letters, digits and hyphens",
                 m.metadata.name, c.name
             )));
         }
 
-        // Deux compagnons homonymes produiraient deux services de même nom : le
-        // second écraserait le premier, en silence.
-        if vus.contains(&c.name.as_str()) {
+        // Two companions sharing a name would produce two services with the same
+        // name: the second would overwrite the first, silently.
+        if seen.contains(&c.name.as_str()) {
             return Err(Error::Validation(format!(
-                "{} : compagnon « {} » déclaré deux fois — le second écraserait le \
-                 premier sans un mot",
+                "{}: companion \"{}\" declared twice - the second would overwrite \
+                 the first without a word",
                 m.metadata.name, c.name
             )));
         }
-        vus.push(&c.name);
+        seen.push(&c.name);
     }
 
     // §10.2 — une base sur NFS finit par se corrompre : le verrouillage de fichiers
@@ -145,14 +144,14 @@ pub fn validate(m: &Manifest) -> Result<()> {
         {
             if *sqlite && *tier == StorageTier::Nfs {
                 return Err(Error::Validation(format!(
-                    "volume « {name} » : une base SQLite ne doit jamais être sur NFS"
+                    "volume \"{name}\": a SQLite database must never sit on NFS"
                 )));
             }
         }
     }
 
-    // §7 — `latest` suit un tag mutable : on ne peut ni détecter un changement de
-    // façon fiable, ni revenir en arrière. C'est un accident programmé.
+    // `latest` follows a mutable tag: a change cannot be detected reliably and there
+    // is nothing to roll back to. It is an accident waiting to happen.
     if m.spec.update.channel == UpdateChannel::Latest {
         return Err(Error::Validation(format!(
             "{} : le canal « latest » est interdit — utilise patch, minor ou pin",
@@ -163,23 +162,23 @@ pub fn validate(m: &Manifest) -> Result<()> {
     Ok(())
 }
 
-/// Invariants qui ne valent qu'**au moment du déploiement**, pas dans le catalogue.
+/// Invariants that hold **at deploy time only**, not in the catalog.
 ///
-/// Un manifest de catalogue déclare une intention (`tag` + `channel`) ; le digest,
-/// lui, est résolu contre le registre à l'installation puis figé dans l'état. Exiger
-/// un digest dans le catalogue obligerait à le mettre à jour à chaque publication
-/// amont — c'est le rôle du veilleur, pas de l'auteur du manifest.
+/// A catalog manifest declares an intent (`tag` + `channel`); the digest is resolved
+/// against the registry at install time and then frozen into the state. Requiring a
+/// digest in the catalog would mean updating it on every upstream release - that is
+/// the watcher's job, not the manifest author's.
 pub fn validate_pinned(m: &Manifest) -> Result<()> {
     if !m.spec.image.is_pinned() {
         return Err(Error::Validation(format!(
-            "{} : déploiement refusé sans digest résolu",
+            "{}: deployment refused without a resolved digest",
             m.metadata.name
         )));
     }
     Ok(())
 }
 
-/// Le JSON Schema du manifest, pour l'autocomplétion dans l'éditeur.
+/// The manifest's JSON Schema, for editor autocompletion.
 pub fn manifest_json_schema() -> String {
     let schema = schemars::schema_for!(Manifest);
     serde_json::to_string_pretty(&schema).unwrap_or_default()
@@ -213,7 +212,7 @@ spec:
              security:\n    publishedPorts: [8080]\n"
         );
         let err = validate(&manifest(&y)).unwrap_err();
-        assert!(err.to_string().contains("uniquement via le proxy"));
+        assert!(err.to_string().contains("only through the proxy"));
     }
 
     #[test]
@@ -230,15 +229,15 @@ spec:
 
     #[test]
     fn rejects_a_binding_token_without_its_capability() {
-        // 🔴 Sans ce refus, la variable partirait vers Swarm avec « {{ db.password }} »
-        // pour valeur. L'app dirait « mot de passe incorrect », et l'on chercherait
-        // pendant longtemps du côté du mot de passe.
+        // 🔴 Without this refusal the variable would go out to Swarm with
+        // "{{ db.password }}" as its value. The app would say "incorrect password", and
+        // you would look at the password for a long time.
         let y = format!("{BASE}  env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n");
         let e = validate(&manifest(&y)).unwrap_err().to_string();
         assert!(e.contains("db.password"), "{e}");
         assert!(
             e.contains("database"),
-            "l'erreur doit nommer la capacité manquante : {e}"
+            "the error must name the missing capability: {e}"
         );
     }
 
@@ -248,13 +247,13 @@ spec:
             "{BASE}  requires:\n    - kind: database\n      engine: postgres\n  \
              env:\n    DB_PASSWORD: \"{{{{ db.password }}}}\"\n"
         );
-        validate(&manifest(&y)).expect("la capacité est déclarée");
+        validate(&manifest(&y)).expect("the capability is declared");
     }
 
     #[test]
     fn the_domain_token_needs_no_capability() {
-        // Le domaine vient des paramètres d'installation : l'exiger comme capacité
-        // serait un faux blocage sur toutes les apps.
+        // The domain comes from the install parameters: requiring it as a capability
+        // would be a false blocker on every app.
         let y = format!("{BASE}  env:\n    URL: \"https://{{{{ domain }}}}\"\n");
         validate(&manifest(&y)).expect("le domaine est toujours disponible");
     }
@@ -270,7 +269,7 @@ spec:
 
     #[test]
     fn catalog_manifest_may_omit_the_digest() {
-        // Le digest est résolu à l'installation, pas écrit à la main (§7).
+        // The digest is resolved at install time, not written by hand.
         let y = BASE.replace(", digest: \"sha256:abc\"", "");
         assert!(validate(&manifest(&y)).is_ok());
         assert!(validate_pinned(&manifest(&y)).is_err());

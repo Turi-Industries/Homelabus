@@ -1,19 +1,15 @@
-//! Actions manuelles et astuces, déclarées par app (§4.6, §4.6bis).
+//! Manual actions and hints, declared per app.
 //!
-//! Jusqu'ici les guides étaient codés en dur dans le résolveur : le format existait
-//! dans le plan mais pas dans le produit. Une app du catalogue ne pouvait donc pas
-//! décrire ses propres prérequis.
+//! ## The two families
 //!
-//! ## Les deux familles
-//!
-//! | Famille | Exemples | Traitement |
+//! | Family | Examples | Handling |
 //! |---|---|---|
-//! | **Hors du système** | DNS, redirection de port, rDNS | irréductiblement manuel |
-//! | **Dans l'application** | créer l'admin, fermer les inscriptions | **automatisable** |
+//! | **Outside the system** | DNS, port forwarding, rDNS | irreducibly manual |
+//! | **Inside the application** | create the admin, close sign-ups | **automatable** |
 //!
-//! La seconde est celle qu'on traite mal d'habitude : on la documente comme si elle
-//! était manuelle alors que la plupart de ces étapes se scriptent. D'où
-//! [`Automation`], essayé **avant** de basculer en manuel.
+//! The second is the one usually handled badly: it gets documented as if it were
+//! manual when most of those steps can be scripted. Hence [`Automation`], attempted
+//! **before** falling back to manual.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -35,23 +31,23 @@ pub struct GuideStep {
     pub phase: Phase,
     #[serde(default)]
     pub severity: Severity,
-    /// Texte affiché à l'utilisateur. Les gabarits `{{ domain }}` y sont résolus.
+    /// Text shown to the user. `{{ domain }}` templates are resolved in it.
     #[serde(default)]
     pub body: String,
-    /// Étapes qui doivent être traitées avant celle-ci.
+    /// Steps that must be handled before this one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
-    /// Tentatives d'automatisation, essayées dans l'ordre (§4.6bis).
+    /// Automation attempts, tried in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub automate: Vec<Automation>,
     /// Comment constater que c'est fait.
     #[serde(default)]
     pub verify: Verify,
-    /// Lien direct vers la page concernée — pas « va dans les paramètres ».
+    /// A direct link to the page in question - not "go into the settings".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deeplink: Option<String>,
-    /// Re-vérification périodique, ex. « 24h ». Attrape la dérive : un
-    /// enregistrement DNS supprimé, une box qui perd son NAT après une MAJ.
+    /// Periodic re-check, e.g. "24h". Catches drift: a deleted DNS record, a home
+    /// router that loses its NAT rule after a firmware update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recheck: Option<String>,
 }
@@ -71,13 +67,13 @@ impl GuideStep {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Phase {
-    /// Prérequis : inutile de déployer sans.
+    /// A prerequisite: no point deploying without it.
     PreInstall,
     #[default]
     PostInstall,
-    /// À la première ouverture de l'app.
+    /// On first opening the app.
     FirstLogin,
-    /// Récurrent.
+    /// Recurring.
     Maintenance,
     /// Uniquement au franchissement d'une version.
     PostUpgrade,
@@ -86,9 +82,9 @@ pub enum Phase {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Severity {
-    /// L'installation ne démarre pas tant que ce n'est pas fait.
+    /// The install does not start until this is done.
     Blocking,
-    /// L'app est déployée mais marquée incomplète.
+    /// The app is deployed but marked incomplete.
     #[default]
     Required,
     Recommended,
@@ -96,11 +92,10 @@ pub enum Severity {
     Tip,
 }
 
-/// Une façon de faire l'étape sans intervention humaine.
+/// A way of doing the step without human intervention.
 ///
-/// L'ordre compte : on descend l'échelle jusqu'à ce que quelque chose marche
-/// (§4.6bis). Variables d'environnement d'abord — déclaratif et vérifiable —,
-/// interface web en tout dernier.
+/// Order matters: the ladder is walked down until something works. Environment
+/// variables first - declarative and checkable - and the web interface dead last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "method",
@@ -116,17 +111,17 @@ pub enum Automation {
     /// Niveau 2 : commande dans le conteneur (`gitea admin`, `occ`…).
     Exec {
         command: Vec<String>,
-        /// Commande de détection, pour ne pas rejouer ce qui est déjà fait.
+        /// Detection command, so that what is already done is not replayed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         probe: Option<Vec<String>>,
-        /// Motif attendu dans la sortie de `probe` si c'est déjà fait.
+        /// Pattern expected in `probe`'s output when it is already done.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         probe_matches: Option<String>,
     },
-    /// Niveau 3 : appel à l'API de l'app.
+    /// Level 3: a call to the app's API.
     Api {
-        // `verb` et non `method` : l'étiquette serde qui distingue les variantes
-        // s'appelle déjà `method`, et un champ homonyme la masquerait.
+        // `verb` and not `method`: the serde tag distinguishing the variants is
+        // already called `method`, and a field of the same name would shadow it.
         verb: String,
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,7 +129,7 @@ pub enum Automation {
     },
 }
 
-/// Comment constater qu'une étape est faite.
+/// How to establish that a step is done.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "type",
@@ -143,19 +138,19 @@ pub enum Automation {
     deny_unknown_fields
 )]
 pub enum Verify {
-    /// 🔴 Aucune vérification possible : l'utilisateur atteste, et l'UI doit le dire.
+    /// 🔴 No check is possible: the user attests, and the UI must say so.
     ///
-    /// Défaut volontaire : une étape sans `verify` déclaré n'est **pas** considérée
-    /// comme vérifiable. Mieux vaut afficher « non vérifié » que laisser croire.
+    /// A deliberate default: a step with no declared `verify` is **not** treated as
+    /// verifiable. Better to display "not verified" than to let someone believe.
     #[default]
     Attest,
-    /// Un enregistrement DNS résout.
+    /// A DNS record resolves.
     Dns {
         record: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expect_contains: Option<String>,
     },
-    /// Une URL répond avec l'un des codes attendus.
+    /// A URL answers with one of the expected codes.
     Http {
         url: String,
         #[serde(default = "http_ok")]
@@ -172,7 +167,7 @@ pub enum Verify {
 }
 
 impl Verify {
-    /// Le système sait-il constater ça tout seul ?
+    /// Can the system establish this on its own?
     pub fn is_automatic(&self) -> bool {
         !matches!(self, Self::Attest)
     }
@@ -209,11 +204,11 @@ mod tests {
     const GITEA: &str = r#"
 steps:
   - id: dns-record
-    title: Créer l'enregistrement DNS
+    title: Create the DNS record
     phase: pre-install
     severity: blocking
     body: |
-      Ajoute chez ton registrar :
+      Add at your registrar:
         {{ domain }}  CNAME  {{ cluster_fqdn }}
     verify:
       type: dns
@@ -221,7 +216,7 @@ steps:
     recheck: 24h
 
   - id: close-registration
-    title: Fermer les inscriptions
+    title: Close sign-ups
     after: [create-admin]
     severity: blocking
     automate:
@@ -236,12 +231,12 @@ steps:
       expectStatus: [403, 404]
 
   - id: backup-codes
-    title: Imprimer les codes de récupération
+    title: Print the recovery codes
     severity: recommended
 "#;
 
     fn guide() -> Guide {
-        serde_yaml_ng::from_str(GITEA).expect("guide analysable")
+        serde_yaml_ng::from_str(GITEA).expect("guide should parse")
     }
 
     #[test]
@@ -264,8 +259,8 @@ steps:
 
     #[test]
     fn a_step_without_verify_is_only_attested() {
-        // 🔴 Défaut volontaire : mieux vaut afficher « non vérifié » que laisser
-        // croire qu'on a contrôlé quelque chose.
+        // 🔴 A deliberate default: better to display "not verified" than to suggest
+        // something was checked.
         let g = guide();
         assert_eq!(g.steps[2].verify, Verify::Attest);
         assert!(!g.steps[2].verify.is_automatic());
@@ -308,7 +303,7 @@ steps:
 
     #[test]
     fn an_unknown_field_is_rejected() {
-        // Une faute de frappe dans un guide ne doit pas être ignorée en silence.
+        // A typo in a guide must not be silently ignored.
         let y = "steps:\n  - id: x\n    title: y\n    severty: blocking\n";
         assert!(serde_yaml_ng::from_str::<Guide>(y).is_err());
     }

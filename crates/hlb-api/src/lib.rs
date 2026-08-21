@@ -219,13 +219,13 @@ impl Droits {
     pub fn pour(role: hlb_types::Role) -> Self {
         use hlb_types::rbac::Action;
         Self {
-            lire_soi: role.allows(Action::LireSoi),
-            agir_sur_soi: role.allows(Action::AgirSurSoi),
-            lire: role.allows(Action::Lire),
-            publier: role.allows(Action::Publier),
-            operer: role.allows(Action::Operer),
-            gerer_comptes: role.allows(Action::GererComptes),
-            detruire: role.allows(Action::Detruire),
+            lire_soi: role.allows(Action::ReadSelf),
+            agir_sur_soi: role.allows(Action::ActOnSelf),
+            lire: role.allows(Action::Read),
+            publier: role.allows(Action::Publish),
+            operer: role.allows(Action::Operate),
+            gerer_comptes: role.allows(Action::ManageAccounts),
+            detruire: role.allows(Action::Destroy),
         }
     }
 
@@ -1961,7 +1961,7 @@ mod tests {
         // 🔴 Redéduire les droits du nom du rôle côté interface ferait diverger deux
         // implémentations de la même matrice — et la divergence irait dans le sens
         // permissif, ce qui est une faille et pas un défaut d'affichage.
-        let u = Droits::pour(hlb_types::Role::Utilisateur);
+        let u = Droits::pour(hlb_types::Role::User);
         assert!(u.agir_sur_soi);
         assert!(!u.lire, "un simple utilisateur ne voit pas la console");
         assert!(!u.voit_la_console());

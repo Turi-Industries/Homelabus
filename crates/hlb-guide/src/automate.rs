@@ -123,7 +123,7 @@ pub async fn try_automate<O: Orchestrator>(
         // so there is nothing to do here.
         return AutomationOutcome::Applied { method: "env" };
     }
-    AutomationOutcome::FellBackToManual { reasons: reasons }
+    AutomationOutcome::FellBackToManual { reasons }
 }
 
 #[cfg(test)]

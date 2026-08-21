@@ -1,48 +1,46 @@
-//! Les jetons de liaison : comment une app reçoit ce qu'on a provisionné pour elle
-//! (§4.3).
+//! Binding tokens: how an app receives what was provisioned for it.
 //!
-//! ## 🔴 Ce que ça répare
+//! ## 🔴 What this fixes
 //!
-//! Le résolveur créait la base, le rôle isolé et le mot de passe — puis déployait
-//! l'app **sans rien lui dire**. Elle démarrait, ne trouvait aucune configuration de
-//! base de données, et retombait sur son SQLite interne. Tout paraissait sain : le
-//! service tourne, la sonde répond, le tableau de bord est vert. Mais les données
-//! vivaient dans un fichier que personne n'avait déclaré, donc que personne ne
-//! sauvegardait, pendant qu'une base PostgreSQL vide était fidèlement dumpée toutes
-//! les nuits.
+//! The resolver created the database, the isolated role and the password - then
+//! deployed the app **without telling it anything**. It started, found no database
+//! configuration, and fell back to its internal SQLite. Everything looked healthy: the
+//! service runs, the probe answers, the dashboard is green. But the data lived in a
+//! file nobody had declared, and therefore nobody backed up, while an empty PostgreSQL
+//! database was faithfully dumped every night.
 //!
-//! C'était la moitié manquante de l'idée centrale du projet : traduire un *besoin*
-//! en ressources ne sert à rien si l'app n'apprend jamais où elles sont.
+//! That was the missing half of the project's central idea: translating a *need* into
+//! resources is worthless if the app never learns where they are.
 //!
-//! ## 🔴 Pourquoi les secrets ne sont pas résolus dans le plan
+//! ## 🔴 Why secrets are not resolved in the plan
 //!
-//! Un plan n'est pas un objet privé. Il est **affiché** par `hlb plan`, **enregistré**
-//! dans l'état SQLite, et **exporté** vers le miroir Git de l'état désiré (§2.3). Y
-//! substituer un mot de passe le publierait aux trois endroits d'un coup, dont un
-//! dépôt Git qui garde l'historique.
+//! A plan is not a private object. It is **displayed** by `hlb plan`, **recorded** in
+//! the SQLite state, and **exported** to the Git mirror of the desired state.
+//! Substituting a password into it would publish it in all three places at once, one
+//! of which is a Git repository that keeps history.
 //!
-//! Le plan porte donc le jeton tel quel (`{{ db.password }}`), et la substitution a
-//! lieu dans l'exécuteur au moment du déploiement. [`Token::is_secret`] marque ceux
-//! qui ne doivent jamais fuiter, et [`redact`] sert partout où l'on affiche.
+//! So the plan carries the token as-is (`{{ db.password }}`), and substitution happens
+//! in the executor at deploy time. [`Token::is_secret`] marks the ones that must never
+//! leak, and [`redact`] is used everywhere something is displayed.
 
 use std::collections::BTreeMap;
 
 /// Un jeton substituable dans `spec.env`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Token {
-    /// Hôte du serveur de base de données — le nom de service de la plateforme.
+    /// The database server's host - the platform's service name.
     DbHost,
     DbPort,
     DbName,
     DbUser,
     /// 🔴 Secret.
     DbPassword,
-    /// URL complète, pour les apps qui n'acceptent qu'elle. 🔴 Contient le mot de passe.
+    /// Full URL, for apps that accept nothing else. 🔴 Contains the password.
     DbUrl,
 
     CacheHost,
     CachePort,
-    /// URL complète du cache.
+    /// The cache's full URL.
     CacheUrl,
 
     OidcIssuer,
@@ -56,12 +54,12 @@ pub enum Token {
     /// 🔴 Secret.
     SmtpPassword,
 
-    /// Domaine complet choisi à l'installation.
+    /// The full domain chosen at install time.
     Domain,
 }
 
 impl Token {
-    /// La forme écrite dans un manifest.
+    /// The written form used in a manifest.
     pub fn placeholder(&self) -> &'static str {
         match self {
             Self::DbHost => "{{ db.host }}",
@@ -84,7 +82,7 @@ impl Token {
         }
     }
 
-    /// Tous les jetons. Sert aux validations et aux tests d'exhaustivité.
+    /// Every token. Used by validation and by exhaustiveness tests.
     pub fn all() -> &'static [Token] {
         &[
             Self::DbHost,
@@ -107,10 +105,10 @@ impl Token {
         ]
     }
 
-    /// Ce jeton porte-t-il une valeur qui ne doit jamais être affichée ?
+    /// Does this token carry a value that must never be displayed?
     ///
-    /// 🔴 `DbUrl` en fait partie : elle contient le mot de passe. C'est le cas qu'on
-    /// oublie, précisément parce qu'elle ressemble à une adresse.
+    /// 🔴 `DbUrl` is one of them: it contains the password. That is the case people
+    /// forget, precisely because it looks like an address.
     pub fn is_secret(&self) -> bool {
         matches!(
             self,
@@ -118,12 +116,12 @@ impl Token {
         )
     }
 
-    /// La capacité que ce jeton exige dans le manifest.
+    /// The capability this token requires in the manifest.
     ///
-    /// 🔴 Sert à refuser un `{{ db.password }}` dans une app qui ne déclare aucune
-    /// base : sans ce contrôle, la variable partirait avec le texte du jeton pour
-    /// valeur, et l'app se plaindrait d'un mot de passe incorrect — en cherchant du
-    /// côté du mot de passe, pas du manifest.
+    /// 🔴 Used to refuse a `{{ db.password }}` in an app declaring no database:
+    /// without this check the variable would go out with the token text as its value,
+    /// and the app would complain about an incorrect password - sending you to look at
+    /// the password, not the manifest.
     pub fn requires(&self) -> Option<&'static str> {
         match self {
             Self::DbHost
@@ -135,13 +133,13 @@ impl Token {
             Self::CacheHost | Self::CachePort | Self::CacheUrl => Some("cache"),
             Self::OidcIssuer | Self::OidcClientId | Self::OidcClientSecret => Some("sso"),
             Self::SmtpHost | Self::SmtpPort | Self::SmtpUser | Self::SmtpPassword => Some("smtp"),
-            // Toujours disponible : le domaine vient des paramètres d'installation.
+            // Always available: the domain comes from the install parameters.
             Self::Domain => None,
         }
     }
 }
 
-/// Les jetons présents dans une valeur.
+/// The tokens present in a value.
 pub fn tokens_in(valeur: &str) -> Vec<Token> {
     Token::all()
         .iter()
@@ -150,7 +148,7 @@ pub fn tokens_in(valeur: &str) -> Vec<Token> {
         .collect()
 }
 
-/// Les jetons présents dans un ensemble de variables.
+/// The tokens present in a set of variables.
 pub fn tokens_used(env: &BTreeMap<String, String>) -> Vec<Token> {
     let mut v: Vec<Token> = env.values().flat_map(|s| tokens_in(s)).collect();
     v.sort_unstable();
@@ -158,11 +156,11 @@ pub fn tokens_used(env: &BTreeMap<String, String>) -> Vec<Token> {
     v
 }
 
-/// Remplace les jetons par leurs valeurs.
+/// Replaces tokens with their values.
 ///
-/// Un jeton sans valeur fournie est **laissé tel quel** plutôt que vidé : une variable
-/// vide ressemble à une configuration absente et se diagnostique mal, là où
-/// `{{ db.password }}` littéral dans les journaux du conteneur désigne le problème.
+/// A token with no value supplied is **left as-is** rather than emptied: an empty
+/// variable looks like missing configuration and diagnoses badly, where a literal
+/// `{{ db.password }}` in the container logs points straight at the problem.
 pub fn substitute(valeur: &str, valeurs: &BTreeMap<Token, String>) -> String {
     let mut out = valeur.to_string();
     for (t, v) in valeurs {
@@ -171,12 +169,11 @@ pub fn substitute(valeur: &str, valeurs: &BTreeMap<Token, String>) -> String {
     out
 }
 
-/// Masque les valeurs des variables dont le nom trahit un secret.
+/// Masks the values of variables whose name betrays a secret.
 ///
-/// 🔴 Utilisé partout où des variables d'environnement sont affichées ou
-/// journalisées. Le critère porte sur le NOM et non sur la valeur : au moment où l'on
-/// affiche, la substitution a déjà eu lieu et une valeur est une chaîne comme une
-/// autre — il est trop tard pour savoir d'où elle vient.
+/// 🔴 Used everywhere environment variables are displayed or logged. The criterion is
+/// the NAME, not the value: by display time the substitution has already happened and
+/// a value is just a string - too late to know where it came from.
 pub fn redact(nom: &str, valeur: &str) -> String {
     let n = nom.to_ascii_uppercase();
     let sensible = ["PASSWORD", "SECRET", "TOKEN", "KEY", "_URL", "URI", "DSN"]
@@ -196,9 +193,9 @@ mod tests {
 
     #[test]
     fn a_database_url_is_treated_as_a_secret() {
-        // 🔴 Le cas qu'on oublie : `db.url` ressemble à une adresse et contient le
-        // mot de passe. La marquer publique la ferait apparaître dans les plans, dans
-        // l'état et dans le miroir Git.
+        // 🔴 The case people forget: `db.url` looks like an address and contains the
+        // password. Marking it public would make it appear in plans, in the state and
+        // in the Git mirror.
         assert!(Token::DbUrl.is_secret());
         assert!(Token::DbPassword.is_secret());
         assert!(Token::OidcClientSecret.is_secret());
@@ -211,20 +208,20 @@ mod tests {
 
     #[test]
     fn every_token_has_a_distinct_placeholder() {
-        // Deux jetons partageant une forme écrite se substitueraient l'un l'autre au
-        // hasard de l'ordre d'itération.
+        // Two tokens sharing a written form would substitute for each other at the
+        // mercy of iteration order.
         let mut p: Vec<&str> = Token::all().iter().map(|t| t.placeholder()).collect();
-        let avant = p.len();
+        let before = p.len();
         p.sort_unstable();
         p.dedup();
-        assert_eq!(p.len(), avant, "formes écrites en double");
+        assert_eq!(p.len(), before, "duplicate written forms");
     }
 
     #[test]
     fn substitution_leaves_unknown_tokens_visible() {
-        // 🔴 Un jeton sans valeur reste littéral. Le vider produirait une variable
-        // vide, indiscernable d'une configuration absente : l'app se plaindrait d'un
-        // mot de passe incorrect et l'on chercherait du côté du mot de passe.
+        // 🔴 A token with no value stays literal. Emptying it would produce an empty
+        // variable, indistinguishable from missing configuration: the app would
+        // complain about an incorrect password and you would look at the password.
         let mut v = BTreeMap::new();
         v.insert(Token::DbHost, "postgres".into());
 
@@ -258,21 +255,21 @@ mod tests {
         assert_eq!(Token::CacheUrl.requires(), Some("cache"));
         assert_eq!(Token::OidcClientId.requires(), Some("sso"));
         assert_eq!(Token::SmtpUser.requires(), Some("smtp"));
-        // Le domaine vient des paramètres d'installation, pas d'une capacité.
+        // The domain comes from the install parameters, not from a capability.
         assert_eq!(Token::Domain.requires(), None);
     }
 
     #[test]
     fn redaction_looks_at_the_name_because_the_value_no_longer_tells() {
-        // Au moment de l'affichage, la substitution a eu lieu : la valeur est une
-        // chaîne comme une autre et ne dit plus d'où elle vient.
+        // By display time the substitution has happened: the value is just a string
+        // and no longer says where it came from.
         assert_eq!(redact("DB_POSTGRESDB_PASSWORD", "s3cr3t"), "••••••");
         assert_eq!(redact("DATABASE_URL", "postgres://u:p@h/d"), "••••••");
         assert_eq!(redact("N8N_ENCRYPTION_KEY", "abcd"), "••••••");
         assert_eq!(redact("OIDC_CLIENT_SECRET", "x"), "••••••");
 
-        // Ce qui n'est pas sensible reste lisible : masquer tout rendrait le
-        // diagnostic impossible et pousserait à contourner l'affichage.
+        // What is not sensitive stays readable: masking everything would make
+        // diagnosis impossible and push people to bypass the display.
         assert_eq!(redact("DB_POSTGRESDB_HOST", "postgres"), "postgres");
         assert_eq!(redact("DB_TYPE", "postgresdb"), "postgresdb");
     }
@@ -288,7 +285,7 @@ mod tests {
         let mut env = BTreeMap::new();
         env.insert("A".to_string(), "{{ db.host }}".to_string());
         env.insert("B".to_string(), "{{ db.host }}:{{ db.port }}".to_string());
-        env.insert("C".to_string(), "littéral".to_string());
+        env.insert("C".to_string(), "literal".to_string());
 
         assert_eq!(tokens_used(&env), vec![Token::DbHost, Token::DbPort]);
     }

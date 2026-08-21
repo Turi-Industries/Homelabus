@@ -1,15 +1,15 @@
-//! Les capacités qu'une app **déclare avoir besoin**, sans jamais nommer une instance.
+//! The capabilities an app **declares it needs**, without ever naming an instance.
 //!
-//! C'est le cœur du design (§4.3 du plan) : un manifest dit « j'ai besoin d'une base
-//! Postgres », jamais « connecte-toi à postgres:5432 ». Le résolveur fait le pont.
+//! This is the heart of the design: a manifest says "I need a Postgres database",
+//! never "connect to postgres:5432". The resolver bridges the two.
 //!
-//! Ajouter une variante ici fait échouer la compilation partout où le `match` doit
-//! être mis à jour — c'est la raison principale du choix de Rust.
+//! Adding a variant here breaks compilation everywhere a `match` must be updated -
+//! the main reason this is written in Rust.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Un besoin déclaré par une application.
+/// A need declared by an application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 // `rename_all` porte sur les noms de variantes, `rename_all_fields` sur les champs :
 // sans le second, on se retrouve avec `redirect_paths` en YAML alors que tout le reste
@@ -21,61 +21,60 @@ use serde::{Deserialize, Serialize};
     deny_unknown_fields
 )]
 pub enum Capability {
-    /// Une base de données dédiée sur un moteur mutualisé (§3.1).
+    /// A dedicated database on a shared engine.
     Database {
         engine: DbEngine,
-        /// Nom de la base. Par défaut, le nom de l'app.
+        /// Database name. Defaults to the app's name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
-        /// Extensions à activer dans la base (`vector`, `vchord`, `cube`…).
+        /// Extensions to enable in the database (`vector`, `vchord`, `cube`...).
         ///
-        /// 🔴 Une extension ne s'installe pas depuis SQL : elle doit être PRÉSENTE
-        /// dans l'image du serveur. `CREATE EXTENSION` échoue sinon sur « extension
-        /// n'est pas disponible », ce qui ressemble à un problème de droits.
+        /// 🔴 An extension cannot be installed from SQL: it must be PRESENT in the
+        /// server image. Otherwise `CREATE EXTENSION` fails on "extension is not
+        /// available", which looks like a permissions problem.
         ///
-        /// Les déclarer ici rend l'exigence visible dans le catalogue et permet à
-        /// l'exécuteur d'échouer avec le remède — quelle image poser — au lieu de
-        /// laisser l'app démarrer sur une base incomplète.
+        /// Declaring them here makes the requirement visible in the catalog and lets
+        /// the executor fail with the remedy - which image to use - instead of letting
+        /// the app start against an incomplete database.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extensions: Vec<String>,
     },
 
-    /// Un cache. Partagé par défaut, dédié si l'app ne supporte pas de voisins (§3.3).
+    /// A cache. Shared by default, dedicated when the app cannot tolerate neighbours.
     Cache {
         engine: CacheEngine,
         #[serde(default)]
         dedicated: bool,
     },
 
-    /// Authentification unique via le fournisseur d'identité (§5).
+    /// Single sign-on through the identity provider.
     Sso {
         mode: SsoMode,
-        /// Chemins de callback, relatifs au domaine choisi à l'installation.
-        /// Jamais d'URL en dur : le domaine n'est connu qu'au déploiement.
+        /// Callback paths, relative to the domain chosen at install time.
+        /// Never a hard-coded URL: the domain is only known at deploy time.
         #[serde(default)]
         redirect_paths: Vec<String>,
     },
 
-    /// Un compartiment S3 dédié, sur le stockage objet de la plateforme (§3.5).
+    /// A dedicated S3 bucket on the platform's object storage.
     ///
-    /// ## Pourquoi ce n'est pas un `Storage` de plus
+    /// ## Why this is not just another `Storage`
     ///
-    /// Un volume est monté dans un chemin ; un compartiment se parle en HTTP avec des
-    /// clés d'accès. L'app n'a pas besoin d'être placée près de sa donnée, et le
-    /// volume cesse d'être une contrainte de placement — c'est précisément l'intérêt
-    /// sur un cluster hétérogène.
+    /// A volume is mounted at a path; a bucket is spoken to over HTTP with access
+    /// keys. The app does not need to be placed near its data, and the volume stops
+    /// being a placement constraint - precisely the point on a heterogeneous cluster.
     ///
-    /// 🔴 **Isolation par compartiment ET par clé**, comme les bases (§3.1). Une clé
-    /// unique partagée donnerait à chaque app la lecture des compartiments de toutes
-    /// les autres : les photos d'Immich lisibles depuis le wiki, et réciproquement.
+    /// 🔴 **Isolation per bucket AND per key**, like databases. One shared key would
+    /// give every app read access to every other's buckets: Immich's photos readable
+    /// from the wiki, and the other way round.
     ObjectStorage {
-        /// Nom du compartiment. Par défaut, le nom de l'app.
+        /// Bucket name. Defaults to the app's name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bucket: Option<String>,
-        /// 🔴 Le contenu est-il irremplaçable ?
+        /// 🔴 Is the content irreplaceable?
         ///
-        /// Vrai par défaut, comme pour les volumes. Un compartiment de cache le
-        /// déclare faux — mais l'oubli doit pencher du côté qui sauvegarde.
+        /// True by default, as for volumes. A cache bucket declares it false - but
+        /// forgetting must err on the side that backs up.
         #[serde(default = "default_true")]
         backup: bool,
     },
@@ -99,14 +98,14 @@ pub enum Capability {
         tier: StorageTier,
         #[serde(default = "default_true")]
         backup: bool,
-        /// Base SQLite : impose une méthode de sauvegarde spécifique (§3.4).
+        /// A SQLite database: forces a specific backup method.
         #[serde(default)]
         sqlite: bool,
     },
 }
 
 impl Capability {
-    /// Identifiant stable, utilisé pour les logs et le graphe de dépendances.
+    /// Stable identifier, used for logs and the dependency graph.
     pub fn id(&self) -> &'static str {
         match self {
             Self::Database { .. } => "database",
@@ -119,14 +118,14 @@ impl Capability {
         }
     }
 
-    /// Ce que cette capacité a réellement provisionné, en une phrase.
+    /// What this capability actually provisioned, in one sentence.
     ///
-    /// Destiné à l'écran de détail d'une app : `id()` rend un identifiant technique
-    /// (`object-storage`), qui ne dit pas ce qui a été créé ni avec quel moteur.
+    /// Meant for an app's detail screen: `id()` returns a technical identifier
+    /// (`object-storage`) which says neither what was created nor with which engine.
     ///
-    /// 🔴 Le `match` est **exhaustif, sans `..` sur les champs qui portent du sens**.
-    /// Un `..` a le même effet qu'un bras `_ =>` — c'est ainsi que `mode` a été avalé
-    /// sur `Sso`, et `quota_bytes` sur `MailAccount`.
+    /// 🔴 The `match` is **exhaustive, with no `..` over fields that carry meaning**.
+    /// A `..` has the same effect as a `_ =>` arm - that is how `mode` was swallowed
+    /// on `Sso`, and `quota_bytes` on `MailAccount`.
     pub fn describe(&self) -> String {
         match self {
             Self::Database {
@@ -135,23 +134,23 @@ impl Capability {
                 extensions,
             } => {
                 let base = format!(
-                    "base {} « {} » isolée (rôle dédié)",
+                    "isolated {} database \"{}\" (dedicated role)",
                     engine.service_name(),
                     name.as_deref().unwrap_or("<nom de l'app>")
                 );
                 if extensions.is_empty() {
                     base
                 } else {
-                    // ⚠️ Les extensions doivent être dans l'IMAGE du serveur : les
-                    // nommer ici rend l'exigence visible avant qu'un CREATE EXTENSION
-                    // n'échoue sur ce qui ressemble à un problème de droits.
+                    // ⚠️ Extensions must be in the server IMAGE: naming them here
+                    // makes the requirement visible before a CREATE EXTENSION fails on
+                    // what looks like a permissions problem.
                     format!("{base}, extensions : {}", extensions.join(", "))
                 }
             }
             Self::Cache { engine, dedicated } => format!(
                 "cache {}{}",
                 engine.service_name(),
-                if *dedicated { " dédié" } else { " partagé" }
+                if *dedicated { " dedicated" } else { " shared" }
             ),
             Self::Sso {
                 mode,
@@ -168,15 +167,15 @@ impl Capability {
                 quota_bytes,
                 aliases,
             } => {
-                let mut d = "boîte mail".to_string();
+                let mut d = "mailbox".to_string();
                 if *aliases {
                     d.push_str(" avec aliases");
                 }
                 if let Some(q) = quota_bytes {
-                    // ⚠️ Dit tel quel : Stalwart n'expose pas les quotas en JMAP, donc
-                    // un quota déclaré n'est PAS appliqué. Le taire ferait croire à une
-                    // limite qui n'existe pas.
-                    d.push_str(&format!(" (quota {q} o DÉCLARÉ, non appliqué)"));
+                    // ⚠️ Said plainly: Stalwart does not expose quotas over JMAP, so a
+                    // declared quota is NOT enforced. Staying silent would suggest a
+                    // limit that does not exist.
+                    d.push_str(&format!(" (quota {q} B DECLARED, not enforced)"));
                 }
                 d
             }
@@ -189,27 +188,27 @@ impl Capability {
             } => {
                 let mut d = format!("volume « {name} » sur {path} (tier {tier:?})");
                 d.push_str(if *backup {
-                    ", sauvegardé"
+                    ", backed up"
                 } else {
-                    ", NON sauvegardé"
+                    ", NOT backed up"
                 });
                 if *sqlite {
-                    d.push_str(", instantané SQLite");
+                    d.push_str(", SQLite snapshot");
                 }
                 d
             }
             Self::ObjectStorage { bucket, backup } => format!(
-                "compartiment S3 « {} » avec clé isolée{}",
+                "S3 bucket \"{}\" with an isolated key{}",
                 bucket.as_deref().unwrap_or("<nom de l'app>"),
-                if *backup { "" } else { ", NON sauvegardé" }
+                if *backup { "" } else { ", NOT backed up" }
             ),
         }
     }
 
-    /// Le service de plateforme qui satisfait cette capacité, s'il y en a un.
+    /// The platform service that satisfies this capability, if there is one.
     ///
-    /// Sert à construire le graphe de dépendances (§4.7) : Swarm n'a pas de
-    /// `depends_on`, c'est donc à nous d'ordonner les déploiements.
+    /// Used to build the dependency graph: Swarm has no `depends_on`, so ordering the
+    /// deployments is on us.
     pub fn platform_service(&self) -> Option<&'static str> {
         match self {
             Self::Database { engine, .. } => Some(engine.service_name()),
@@ -254,24 +253,24 @@ impl CacheEngine {
     }
 }
 
-/// Les quatre modes d'intégration SSO (§5.0).
+/// The four SSO integration modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SsoMode {
     /// L'app parle OIDC nativement. Le meilleur cas.
     Native,
-    /// L'app lit un en-tête de confiance. ⚠️ Impose l'isolation réseau (§5.4).
+    /// The app reads a trusted header. ⚠️ Requires network isolation.
     ProxyHeader,
-    /// L'app n'a aucune notion d'identité : portail devant.
+    /// The app has no notion of identity: a portal sits in front.
     ProxyOnly,
     /// Exclusion volontaire ou protocole incompatible.
     None,
 }
 
 impl SsoMode {
-    /// `proxy-header` est dangereux si l'app est joignable hors du proxy :
-    /// un simple `curl -H "Remote-User: admin"` suffit à usurper un compte.
-    /// Le validateur s'appuie là-dessus pour refuser un port publié (§5.4).
+    /// `proxy-header` is dangerous when the app is reachable outside the proxy: a
+    /// plain `curl -H "Remote-User: admin"` is enough to impersonate an account. The
+    /// validator relies on this to refuse a published port.
     pub fn requires_network_isolation(&self) -> bool {
         matches!(self, Self::ProxyHeader)
     }
@@ -283,7 +282,7 @@ pub enum StorageTier {
     /// Volume local + contrainte de placement. Obligatoire pour les bases (§10.2).
     #[default]
     Local,
-    /// NFS depuis le NAS. ⚠️ Jamais pour une base de données.
+    /// NFS from the NAS. ⚠️ Never for a database.
     Nfs,
 }
 
@@ -297,8 +296,8 @@ mod tests {
 
     #[test]
     fn every_capability_describes_what_it_actually_provisioned() {
-        // `id()` rend « object-storage », qui ne dit ni ce qui a été créé ni avec quel
-        // moteur. L'écran de détail a besoin de la phrase.
+        // `id()` returns "object-storage", which says neither what was created nor
+        // with which engine. The detail screen needs the sentence.
         let toutes = [
             Capability::Database {
                 engine: DbEngine::Postgres,
@@ -340,8 +339,8 @@ mod tests {
 
     #[test]
     fn a_deliberate_sso_exclusion_says_so() {
-        // 🔴 `mode: none` est une EXCLUSION VOLONTAIRE, pas un oubli. La confondre avec
-        // les autres modes a déjà produit un client OIDC aux URI vides.
+        // 🔴 `mode: none` is a DELIBERATE EXCLUSION, not an oversight. Confusing it
+        // with the other modes already produced an OIDC client with empty URIs.
         let exclu = Capability::Sso {
             mode: SsoMode::None,
             redirect_paths: Vec::new(),
@@ -357,19 +356,19 @@ mod tests {
 
     #[test]
     fn a_declared_mail_quota_says_it_is_not_enforced() {
-        // ⚠️ Stalwart n'expose pas les quotas en JMAP. Taire ce fait ferait croire à
-        // une limite qui n'existe pas.
+        // ⚠️ Stalwart does not expose quotas over JMAP. Staying silent about that
+        // would suggest a limit that does not exist.
         let c = Capability::MailAccount {
             quota_bytes: Some(5_368_709_120),
             aliases: false,
         };
-        assert!(c.describe().contains("non appliqué"), "{}", c.describe());
+        assert!(c.describe().contains("not enforced"), "{}", c.describe());
     }
 
     #[test]
     fn an_unbacked_volume_says_so_loudly() {
-        // Un volume non sauvegardé est un choix ; il doit se voir, pas se deviner.
-        let sans = Capability::Storage {
+        // An unbacked-up volume is a choice; it must be visible, not guessed at.
+        let without = Capability::Storage {
             name: "cache".into(),
             path: "/cache".into(),
             tier: StorageTier::default(),
@@ -377,17 +376,17 @@ mod tests {
             sqlite: false,
         };
         assert!(
-            sans.describe().contains("NON sauvegardé"),
+            without.describe().contains("NOT backed up"),
             "{}",
-            sans.describe()
+            without.describe()
         );
     }
 
     #[test]
     fn a_sqlite_volume_is_flagged_because_it_cannot_be_copied_hot() {
-        // 🔴 Le fichier principal et son WAL seraient capturés à des instants
-        // différents, et la base restaurée serait corrompue — sans que rien ne le
-        // signale au moment de la sauvegarde.
+        // 🔴 The main file and its WAL would be captured at different instants, and
+        // the restored database would be corrupt - with nothing signalling it at
+        // backup time.
         let c = Capability::Storage {
             name: "db".into(),
             path: "/db".into(),
@@ -415,8 +414,8 @@ mod tests {
 
     #[test]
     fn unknown_field_is_rejected() {
-        // deny_unknown_fields : une faute de frappe dans un manifest doit
-        // échouer au parsing, pas être ignorée silencieusement (§1).
+        // deny_unknown_fields: a typo in a manifest must fail at parse time, not be
+        // silently ignored.
         let y = "kind: database\nengine: postgres\nnamme: vikunja\n";
         assert!(serde_yaml_ng::from_str::<Capability>(y).is_err());
     }
@@ -433,7 +432,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(tier, StorageTier::Local);
-                assert!(backup, "la sauvegarde doit être activée par défaut");
+                assert!(backup, "backup must be on by default");
                 assert!(!sqlite);
             }
             _ => panic!("mauvaise variante"),

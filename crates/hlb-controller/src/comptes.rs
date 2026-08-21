@@ -695,7 +695,7 @@ async fn refus_inscription(s: &AppState, nom: &str, blocages: Vec<String>) -> Re
         .state
         .audit(
             "inscription",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             "inscription",
             nom,
             "refused",
@@ -733,7 +733,7 @@ async fn terminer_inscription(
         .state
         .audit(
             "inscription",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             "inscription",
             nom,
             issue,

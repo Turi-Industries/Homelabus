@@ -504,7 +504,7 @@ async fn export_csv(
             if let Some(refus) = auth
                 .identite()
                 .role
-                .refus(hlb_types::rbac::Action::GererComptes)
+                .refus(hlb_types::rbac::Action::ManageAccounts)
             {
                 return (StatusCode::FORBIDDEN, refus).into_response();
             }
@@ -523,7 +523,7 @@ async fn export_csv(
             if let Some(refus) = auth
                 .identite()
                 .role
-                .refus(hlb_types::rbac::Action::GererComptes)
+                .refus(hlb_types::rbac::Action::ManageAccounts)
             {
                 return (StatusCode::FORBIDDEN, refus).into_response();
             }
@@ -1067,13 +1067,13 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             // Se déconnecter n'a rien à prévisualiser.
             apercu: false,
             publique: false,
-            action: hlb_types::rbac::Action::LireSoi,
+            action: hlb_types::rbac::Action::ReadSelf,
             routeur: axum::routing::post(crate::connexion::deconnexion),
         },
         RouteMutante {
             chemin: "/api/apparence",
             verbe: "PUT",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             // Configuration : idempotente, sans effet de bord, réversible d'un clic.
             apercu: false,
             publique: false,
@@ -1082,7 +1082,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
         RouteMutante {
             chemin: "/api/apparence/logo",
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             // Configuration : idempotente, sans effet de bord, réversible d'un clic.
             apercu: false,
             publique: false,
@@ -1096,7 +1096,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
         RouteMutante {
             chemin: "/api/bitwarden",
             verbe: "POST",
-            action: hlb_types::rbac::Action::GererComptes,
+            action: hlb_types::rbac::Action::ManageAccounts,
             // Crée un jeton et rend sa valeur UNE fois : il n'y a rien à prévisualiser,
             // et un aperçu devrait soit montrer la valeur (donc la révéler deux fois),
             // soit décrire une création qui n'a pas eu lieu.
@@ -1107,7 +1107,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
         RouteMutante {
             chemin: "/api/plans",
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             // Enregistrer un plan n'EXÉCUTE rien : prévisualiser l'enregistrement d'un
             // aperçu n'aurait aucun sens, et c'est réversible d'un « oublier ».
             apercu: false,
@@ -1117,7 +1117,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
         RouteMutante {
             chemin: "/api/secours/{id}",
             verbe: "POST",
-            action: hlb_types::rbac::Action::GererComptes,
+            action: hlb_types::rbac::Action::ManageAccounts,
             // Déclaration réversible d'un clic : rien à prévisualiser. Un aller-retour
             // ferait prendre l'habitude de confirmer deux fois.
             apercu: false,
@@ -1132,7 +1132,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: false,
             publique: false,
             verbe: "PUT",
-            action: hlb_types::rbac::Action::AgirSurSoi,
+            action: hlb_types::rbac::Action::ActOnSelf,
             routeur: axum::routing::put(crate::portail::changer_theme),
         },
         RouteMutante {
@@ -1140,7 +1140,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Publier,
+            action: hlb_types::rbac::Action::Publish,
             routeur: axum::routing::post(crate::portail::publier),
         },
         RouteMutante {
@@ -1148,7 +1148,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Publier,
+            action: hlb_types::rbac::Action::Publish,
             routeur: axum::routing::post(crate::portail::suivre),
         },
         RouteMutante {
@@ -1156,7 +1156,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "DELETE",
-            action: hlb_types::rbac::Action::Publier,
+            action: hlb_types::rbac::Action::Publish,
             routeur: axum::routing::delete(crate::portail::retirer),
         },
         RouteMutante {
@@ -1164,7 +1164,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: true,
             verbe: "POST",
-            action: hlb_types::rbac::Action::LireSoi,
+            action: hlb_types::rbac::Action::ReadSelf,
             routeur: axum::routing::post(crate::comptes::inscrire),
         },
         RouteMutante {
@@ -1172,7 +1172,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::GererComptes,
+            action: hlb_types::rbac::Action::ManageAccounts,
             routeur: axum::routing::post(crate::comptes::creer_invitation),
         },
         RouteMutante {
@@ -1180,7 +1180,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "DELETE",
-            action: hlb_types::rbac::Action::GererComptes,
+            action: hlb_types::rbac::Action::ManageAccounts,
             routeur: axum::routing::delete(crate::comptes::revoquer_invitation),
         },
         RouteMutante {
@@ -1188,7 +1188,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::GererComptes,
+            action: hlb_types::rbac::Action::ManageAccounts,
             routeur: axum::routing::post(crate::comptes::changer_role),
         },
         RouteMutante {
@@ -1196,7 +1196,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::post(crate::actions::installer_app),
         },
         RouteMutante {
@@ -1204,7 +1204,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::post(crate::actions::redimensionner),
         },
         RouteMutante {
@@ -1212,7 +1212,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "PUT",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::put(crate::actions::destination),
         },
         RouteMutante {
@@ -1220,7 +1220,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::post(crate::actions::noeud_disponibilite),
         },
         RouteMutante {
@@ -1228,7 +1228,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::post(crate::actions::backup_run),
         },
         RouteMutante {
@@ -1236,7 +1236,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "POST",
-            action: hlb_types::rbac::Action::Operer,
+            action: hlb_types::rbac::Action::Operate,
             routeur: axum::routing::post(crate::actions::verifier_guide),
         },
         RouteMutante {
@@ -1244,7 +1244,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             apercu: true,
             publique: false,
             verbe: "DELETE",
-            action: hlb_types::rbac::Action::Detruire,
+            action: hlb_types::rbac::Action::Destroy,
             routeur: axum::routing::delete(crate::actions::supprimer_app),
         },
         RouteMutante {
@@ -1253,7 +1253,7 @@ pub(crate) fn routes_mutantes() -> Vec<RouteMutante> {
             // Contrat addy.io imposé par Bitwarden : il n'a pas de notion d'aperçu.
             apercu: false,
             publique: false,
-            action: hlb_types::rbac::Action::AgirSurSoi,
+            action: hlb_types::rbac::Action::ActOnSelf,
             routeur: axum::routing::post(creer_alias),
         },
     ]
@@ -2727,7 +2727,7 @@ mod tests {
             "lien-test",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             crate::auth::maintenant(),
             3_600,
@@ -2789,7 +2789,7 @@ mod tests {
             "lien-test",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             crate::auth::maintenant(),
             3_600,
@@ -2831,7 +2831,7 @@ mod tests {
             "lien-test",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             crate::auth::maintenant(),
             3_600,
@@ -2880,7 +2880,7 @@ mod tests {
             "lien-test",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             crate::auth::maintenant(),
             3_600,
@@ -3283,7 +3283,7 @@ mod tests {
         ] {
             let st = State::in_memory().await.expect("base");
             let (valeur, stocke) =
-                hlb_types::generate_token("portail", hlb_types::Role::Utilisateur, [9u8; 32]);
+                hlb_types::generate_token("portail", hlb_types::Role::User, [9u8; 32]);
             st.store_token(&stocke).await.expect("jeton");
             let r = router(etat(st, false));
 
@@ -3302,7 +3302,7 @@ mod tests {
         // ou s'il manque un droit.
         let st = State::in_memory().await.expect("base");
         let (valeur, stocke) =
-            hlb_types::generate_token("portail", hlb_types::Role::Utilisateur, [9u8; 32]);
+            hlb_types::generate_token("portail", hlb_types::Role::User, [9u8; 32]);
         st.store_token(&stocke).await.expect("jeton");
         let r = router(etat(st, false));
 
@@ -3326,7 +3326,7 @@ mod tests {
             "le rôle requis doit être nommé : {texte}"
         );
         assert!(
-            texte.contains("utilisateur"),
+            texte.contains("user"),
             "le rôle détenu doit être nommé : {texte}"
         );
     }

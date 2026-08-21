@@ -441,7 +441,7 @@ mod tests {
         // C'est lui qui décidera ce que la requête a le droit de faire.
         let (_, s) = generate("ops", Role::Operator, alea(5));
         assert_eq!(s.role, Role::Operator);
-        assert!(s.role.allows(crate::rbac::Action::Operer));
-        assert!(!s.role.allows(crate::rbac::Action::Detruire));
+        assert!(s.role.allows(crate::rbac::Action::Operate));
+        assert!(!s.role.allows(crate::rbac::Action::Destroy));
     }
 }

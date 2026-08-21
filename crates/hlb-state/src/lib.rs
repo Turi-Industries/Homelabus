@@ -3549,7 +3549,7 @@ mod tests {
             .expect("suivi");
 
         let v = s
-            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .annonces(hlb_types::Role::User, 1_000, false)
             .await
             .expect("liste");
         assert_eq!(v.len(), 1);
@@ -3590,7 +3590,7 @@ mod tests {
         .expect("annonce");
 
         let portail = s
-            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .annonces(hlb_types::Role::User, 1_000, false)
             .await
             .expect("liste");
         assert_eq!(
@@ -3628,7 +3628,7 @@ mod tests {
             .expect("annonce");
         }
         let v = s
-            .annonces(hlb_types::Role::Utilisateur, 1_000, false)
+            .annonces(hlb_types::Role::User, 1_000, false)
             .await
             .expect("liste");
         assert_eq!(v[0].titre, "importante");
@@ -3672,7 +3672,7 @@ mod tests {
             "lien-secret-52-caracteres",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             604_800,
@@ -3701,7 +3701,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3731,7 +3731,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             60,
@@ -3752,7 +3752,7 @@ mod tests {
             "lien2",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             60,
@@ -3816,7 +3816,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3846,7 +3846,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3884,7 +3884,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3917,7 +3917,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3944,7 +3944,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -3989,7 +3989,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -4019,7 +4019,7 @@ mod tests {
             "lien",
             "remy",
             "standard",
-            hlb_types::Role::Utilisateur,
+            hlb_types::Role::User,
             None,
             1_000,
             3_600,
@@ -4265,7 +4265,7 @@ mod tests {
         let s = st().await;
         assert_eq!(
             s.user_role("jamais-vu").await.expect("rôle"),
-            hlb_types::Role::Utilisateur
+            hlb_types::Role::User
         );
     }
 
@@ -4280,7 +4280,7 @@ mod tests {
             .expect("rôle bidon");
         assert_eq!(
             s.user_role("remy").await.expect("rôle"),
-            hlb_types::Role::Utilisateur
+            hlb_types::Role::User
         );
     }
 
@@ -4298,7 +4298,7 @@ mod tests {
         let tous = s.users_with_roles().await.expect("liste");
         assert_eq!(tous.len(), 2);
         assert_eq!(tous[0].1, hlb_types::Role::Operator, "alice");
-        assert_eq!(tous[1].1, hlb_types::Role::Utilisateur, "bob, par défaut");
+        assert_eq!(tous[1].1, hlb_types::Role::User, "bob, par défaut");
     }
 
     #[tokio::test]

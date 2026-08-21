@@ -1,31 +1,27 @@
-//! Rôles et permissions (§9ter).
+//! Roles and permissions.
 //!
-//! **Quatre rôles, et pas un de plus.** Un modèle de permissions fin est une source de
-//! bugs de sécurité : chaque combinaison non testée est un trou potentiel, et personne
-//! ne relit une matrice de trente droits.
+//! **Four roles, and not one more.** A fine-grained permission model is a source of
+//! security bugs: every untested combination is a potential hole, and nobody re-reads
+//! a matrix of thirty rights.
 //!
-//! Le §9ter en prévoyait trois — `viewer`, `operator`, `admin` — tous des rôles
-//! d'**exploitation**. Il manquait celui de la personne qui a simplement un compte :
-//! une boîte, des aliases, un portail. Lui donner `viewer` lui ouvrirait l'état du
-//! cluster, les noms de secrets et le journal d'audit. D'où [`Role::Utilisateur`], en
-//! dessous de tout le reste.
+//! Three of them - `viewer`, `operator`, `admin` - are **operations** roles. The one
+//! that was missing is the person who simply has an account: a mailbox, some aliases,
+//! a portal. Giving them `viewer` would open the cluster state, the secret names and
+//! the audit log. Hence [`Role::User`], below everything else.
 //!
-//! ## Ce qui a changé par rapport au §9ter
+//! ## Identities in PocketID, roles here
 //!
-//! Le plan disait « rattachés aux **groupes PocketID**, pas gérés dans Homelabus ».
-//! **Décision amendée** : les *identités* restent dans PocketID — une seule source de
-//! vérité pour « qui est cette personne » — mais les *rôles* sont attribués ici. Gérer
-//! les droits d'accès à Homelabus depuis l'interface de PocketID, en éditant des
-//! groupes dont seul Homelabus connaît le sens, revenait à cacher la moitié du modèle
-//! dans un autre produit. [`Role::from_groups`] reste disponible pour qui préfère
-//! l'ancien schéma.
+//! *Identities* stay in PocketID - a single source of truth for "who is this person" -
+//! but *roles* are assigned here. Managing access to Homelabus from PocketID's
+//! interface, by editing groups only Homelabus knows the meaning of, would hide half
+//! the model inside another product. [`Role::from_groups`] remains available for
+//! anyone who prefers the group-driven scheme.
 //!
-//! ## Pourquoi [`Action`] est un enum exhaustif
+//! ## Why [`Action`] is an exhaustive enum
 //!
-//! Même raison que `Capability` : ajouter une variante doit **faire échouer la
-//! compilation** partout où une décision doit être prise. Un modèle à chaînes libres
-//! (`"backup.restore"`) accepterait silencieusement une permission mal orthographiée,
-//! qui ne serait jamais accordée — ou pire, jamais exigée.
+//! Same reason as `Capability`: adding a variant must **break compilation** everywhere
+//! a decision has to be made. A free-string model (`"backup.restore"`) would silently
+//! accept a misspelled permission that is never granted - or worse, never required.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -35,164 +31,173 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// Une personne qui a un compte, et rien d'autre : sa boîte, ses aliases, le
-    /// portail. Ce n'est **pas** un rôle d'exploitation.
+    /// Someone who has an account and nothing else: their mailbox, their aliases,
+    /// the portal. This is **not** an operations role.
     ///
-    /// C'est le défaut, donc ce qu'obtient un jeton dont le rôle est illisible et une
-    /// identité PocketID inconnue de Homelabus. Le défaut doit toujours être le moins
-    /// privilégié.
+    /// It is the default, so it is what an unreadable token role and a PocketID
+    /// identity unknown to Homelabus both get. The default must always be the least
+    /// privileged.
     #[default]
-    Utilisateur,
+    User,
     /// Tout voir de l'exploitation, ne rien modifier.
     Viewer,
-    /// Le travail courant : installer, mettre à jour, sauvegarder, publier.
+    /// Day-to-day work: install, update, back up, publish.
     Operator,
-    /// Tout, y compris ce qui détruit et ce qui accorde des droits.
+    /// Everything, including what destroys and what grants rights.
     Admin,
 }
 
-/// Ce qu'on cherche à faire.
+/// What someone is trying to do.
 ///
-/// 🔴 Exhaustif par construction : voir l'en-tête du module.
+/// 🔴 Exhaustive by construction: see the module header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
-    /// Lire ses propres données : son compte, ses boîtes, ses aliases, les annonces
-    /// qui lui sont destinées.
-    LireSoi,
-    /// Agir sur ses propres données : créer un alias, régler son tri Sieve, choisir
-    /// son thème, révoquer ses sessions.
-    AgirSurSoi,
-    /// Lire l'exploitation : état du cluster, nœuds, journaux, métriques, inventaire
-    /// des secrets (leurs noms), journal d'audit.
-    Lire,
-    /// Publier une annonce, ouvrir ou clore un incident, déclarer une maintenance.
-    Publier,
-    /// Installer, mettre à jour, redémarrer, sauvegarder, drainer un nœud.
-    Operer,
-    /// Créer un compte, inviter, changer le rôle de quelqu'un.
+    /// Read one's own data: account, mailboxes, aliases, and the announcements
+    /// addressed to them.
+    ReadSelf,
+    /// Act on one's own data: create an alias, set up Sieve sorting, pick a theme,
+    /// revoke sessions.
+    ActOnSelf,
+    /// Read operations data: cluster state, nodes, logs, metrics, the secret
+    /// inventory (their names), the audit log.
+    Read,
+    /// Publish an announcement, open or close an incident, declare a maintenance.
+    Publish,
+    /// Install, update, restart, back up, drain a node.
+    Operate,
+    /// Create an account, invite someone, change someone's role.
     ///
-    /// Séparé de [`Self::Detruire`] parce que ce n'est pas la même faute : détruire
-    /// perd des données, accorder un rôle perd le contrôle.
-    GererComptes,
-    /// 🔴 Détruire : `--purge`, restauration en production, suppression d'un nœud,
-    /// re-chiffrement, destruction du cluster.
-    Detruire,
+    /// Separate from [`Self::Destroy`] because it is not the same mistake: destroying
+    /// loses data, granting a role loses control.
+    ManageAccounts,
+    /// 🔴 Destroy: `--purge`, restoring into production, removing a node, rekeying,
+    /// tearing the cluster down.
+    Destroy,
 }
 
 impl Action {
-    /// Le rôle minimal qui autorise cette action.
+    /// The minimum role that allows this action.
     ///
-    /// 🔴 C'est **le seul endroit** où la matrice est écrite. Un `match` exhaustif,
-    /// donc une variante ajoutée à [`Action`] ne compile pas tant qu'on n'a pas décidé
-    /// qui a le droit de la faire — jamais un défaut permissif hérité par accident.
-    pub fn role_minimum(&self) -> Role {
+    /// 🔴 This is **the only place** the matrix is written. An exhaustive `match`, so a
+    /// variant added to [`Action`] will not compile until someone has decided who may
+    /// do it - never a permissive default inherited by accident.
+    pub fn minimum_role(&self) -> Role {
         match self {
-            Self::LireSoi | Self::AgirSurSoi => Role::Utilisateur,
-            Self::Lire => Role::Viewer,
-            Self::Operer | Self::Publier => Role::Operator,
-            Self::GererComptes | Self::Detruire => Role::Admin,
+            Self::ReadSelf | Self::ActOnSelf => Role::User,
+            Self::Read => Role::Viewer,
+            Self::Operate | Self::Publish => Role::Operator,
+            Self::ManageAccounts | Self::Destroy => Role::Admin,
         }
     }
 
-    /// Le nom de l'action, en français, tel qu'il apparaît dans un refus.
+    /// The action's name as it appears in a refusal.
     ///
-    /// Une phrase, pas un identifiant : le message doit se lire tel quel dans une
-    /// interface (« l'action *publier une annonce* demande… »).
-    /// L'identifiant court et stable, pour le journal d'audit.
+    /// A phrase, not an identifier: the message must read as-is in an interface
+    /// ("*publish an announcement* requires...").
+    /// The short, stable identifier, for the audit log.
     ///
-    /// ⚠️ Distinct de `describe`, qui est une phrase destinée à être lue. Un journal se
-    /// filtre : il lui faut un jeton stable, pas une tournure qu'on pourrait reformuler.
+    /// ⚠️ Distinct from `describe`, which is a phrase meant to be read. A log gets
+    /// filtered: it needs a stable token, not a wording someone might rephrase.
     pub fn nom(&self) -> &'static str {
         match self {
-            Self::LireSoi => "lire-soi",
-            Self::AgirSurSoi => "agir-sur-soi",
-            Self::Lire => "lire",
-            Self::Publier => "publier",
-            Self::Operer => "operer",
-            Self::GererComptes => "gerer-comptes",
-            Self::Detruire => "detruire",
+            Self::ReadSelf => "lire-soi",
+            Self::ActOnSelf => "agir-sur-soi",
+            Self::Read => "lire",
+            Self::Publish => "publier",
+            Self::Operate => "operer",
+            Self::ManageAccounts => "gerer-comptes",
+            Self::Destroy => "detruire",
         }
     }
 
     pub fn describe(&self) -> &'static str {
         match self {
-            Self::LireSoi => "consulter son propre compte",
-            Self::AgirSurSoi => "modifier son propre compte",
-            Self::Lire => "consulter l'état du système",
-            Self::Publier => "publier une annonce",
-            Self::Operer => "agir sur le système",
-            Self::GererComptes => "gérer les comptes et les droits",
-            Self::Detruire => "détruire ou restaurer en production",
+            Self::ReadSelf => "view your own account",
+            Self::ActOnSelf => "change your own account",
+            Self::Read => "view the state of the system",
+            Self::Publish => "publish an announcement",
+            Self::Operate => "act on the system",
+            Self::ManageAccounts => "manage accounts and rights",
+            Self::Destroy => "destroy, or restore into production",
         }
     }
 }
 
 impl Role {
+    /// ⚠️ The French spellings are **legacy aliases**, not decoration.
+    ///
+    /// `as_str` used to write "utilisateur" and "lecteur" into `api_tokens.role` and
+    /// `personnes.role`. Dropping them from `parse` would make every row written before
+    /// the translation unreadable, and an unreadable role silently falls back to the
+    /// least privileged one - so an administrator would quietly become a plain user.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
-            "utilisateur" | "user" => Some(Self::Utilisateur),
+            "user" | "utilisateur" => Some(Self::User),
             "viewer" | "lecteur" => Some(Self::Viewer),
-            "operator" | "operateur" | "opérateur" => Some(Self::Operator),
+            "operator" | "operateur" => Some(Self::Operator),
             "admin" | "administrateur" => Some(Self::Admin),
             _ => None,
         }
     }
 
+    /// The canonical form, and what gets written to the database from now on.
+    ///
+    /// Older rows may hold the French spelling; [`Role::parse`] still accepts it.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Utilisateur => "utilisateur",
+            Self::User => "user",
             Self::Viewer => "viewer",
             Self::Operator => "operator",
             Self::Admin => "admin",
         }
     }
 
-    /// Ce que ce rôle permet, en une ligne, pour un écran de gestion des droits.
+    /// What this role allows, in one line, for a rights-management screen.
     pub fn describe(&self) -> &'static str {
         match self {
-            Self::Utilisateur => "son compte, sa boîte, ses aliases",
+            Self::User => "their account, their mailbox, their aliases",
             Self::Viewer => "tout voir, ne rien modifier",
-            Self::Operator => "installer, mettre à jour, sauvegarder, publier",
-            Self::Admin => "tout, y compris détruire et accorder des droits",
+            Self::Operator => "install, update, back up, publish",
+            Self::Admin => "everything, including destroying and granting rights",
         }
     }
 
-    /// Ce rôle autorise-t-il cette action ?
+    /// Does this role allow this action?
     ///
-    /// L'ordre des rôles est croissant, donc la comparaison suffit une fois la matrice
-    /// posée par [`Action::role_minimum`] — et un rôle ajouté au milieu ne créerait pas
-    /// de trou silencieux.
+    /// Roles are ordered from least to most privileged, so a comparison is enough once
+    /// the matrix is set by [`Action::minimum_role`] - and a role inserted in the
+    /// middle would not create a silent hole.
     pub fn allows(&self, action: Action) -> bool {
-        *self >= action.role_minimum()
+        *self >= action.minimum_role()
     }
 
-    /// 🔴 Le message d'un refus : **jamais un simple « interdit »**.
+    /// 🔴 The wording of a refusal: **never a bare "forbidden"**.
     ///
-    /// Un bouton grisé sans explication, ou un `403` nu, laisse la personne deviner si
-    /// elle s'est trompée d'écran, si le système est cassé, ou s'il lui manque un
-    /// droit. Le refus nomme donc l'action, le rôle requis, le rôle détenu, et **qui
-    /// peut y remédier** — c'est la seule forme actionnable.
+    /// A greyed-out button with no explanation, or a naked `403`, leaves the person
+    /// guessing whether they are on the wrong screen, the system is broken, or a right
+    /// is missing. So the refusal names the action, the required role, the held role,
+    /// and **who can grant it** - the only actionable form.
     ///
-    /// Rend `None` quand l'action est autorisée : le type porte l'information, on ne
-    /// peut pas afficher un refus par erreur.
+    /// Returns `None` when the action is allowed: the type carries the information, so
+    /// a refusal cannot be displayed by mistake.
     pub fn refus(&self, action: Action) -> Option<String> {
         if self.allows(action) {
             return None;
         }
-        let requis = action.role_minimum();
+        let requis = action.minimum_role();
         Some(format!(
-            "{} demande le rôle « {} » ; le vôtre est « {} ». Un administrateur peut vous l'accorder.",
+            "{} requires the \"{}\" role; yours is \"{}\". An administrator can grant it to you.",
             action.describe(),
             requis.as_str(),
             self.as_str(),
         ))
     }
 
-    /// Le rôle déduit des groupes PocketID (§5.9).
+    /// The role inferred from PocketID groups.
     ///
-    /// Conservé pour qui préfère piloter les droits depuis PocketID plutôt que depuis
-    /// Homelabus (cf. l'en-tête du module). Le plus élevé gagne : appartenir à
-    /// `homelab-admins` et `homelab-users` donne `admin`, pas l'inverse.
+    /// Kept for anyone who prefers driving rights from PocketID rather than from
+    /// Homelabus (see the module header). The highest wins: belonging to both
+    /// `homelab-admins` and `homelab-users` gives `admin`, not the other way round.
     pub fn from_groups(groups: &[String], mapping: &[(String, Role)]) -> Self {
         groups
             .iter()
@@ -201,19 +206,19 @@ impl Role {
             .unwrap_or_default()
     }
 
-    /// Tous les rôles, du moins au plus privilégié.
+    /// Every role, from least to most privileged.
     ///
-    /// Pour peupler un menu de sélection sans qu'un rôle ajouté soit oublié.
+    /// For populating a selection menu without a newly added role being forgotten.
     pub fn tous() -> [Role; 4] {
-        [Self::Utilisateur, Self::Viewer, Self::Operator, Self::Admin]
+        [Self::User, Self::Viewer, Self::Operator, Self::Admin]
     }
 }
 
-/// 🔴 Les opérations qui exigent une confirmation nommant explicitement la cible.
+/// 🔴 The operations that require a confirmation naming the target explicitly.
 ///
-/// Le rôle ne suffit pas : un admin fatigué à 2 h du matin reste un admin. La
-/// confirmation doit **répéter le nom** de ce qu'on détruit, pour qu'un `--purge`
-/// tapé sur la mauvaise app ne passe pas.
+/// The role is not enough: a tired admin at 2 a.m. is still an admin. The confirmation
+/// must **repeat the name** of what is being destroyed, so that a `--purge` typed
+/// against the wrong app does not go through.
 pub fn needs_confirmation(action: &str) -> bool {
     matches!(
         action,
@@ -227,66 +232,65 @@ mod tests {
 
     #[test]
     fn a_plain_user_never_sees_the_cluster() {
-        // 🔴 Le rôle ajouté au §9ter : une personne qui a un compte n'est pas un
-        // opérateur en lecture seule. Lui donner `viewer` lui ouvrirait l'état du
-        // cluster, les noms de secrets et le journal d'audit.
-        let r = Role::Utilisateur;
-        assert!(r.allows(Action::LireSoi));
-        assert!(r.allows(Action::AgirSurSoi));
-        assert!(!r.allows(Action::Lire), "le portail n'est pas la console");
-        assert!(!r.allows(Action::Operer));
-        assert!(!r.allows(Action::Publier));
-        assert!(!r.allows(Action::Detruire));
+        // 🔴 Someone who has an account is not a read-only operator. Giving them
+        // `viewer` would open the cluster state, the secret names and the audit log.
+        let r = Role::User;
+        assert!(r.allows(Action::ReadSelf));
+        assert!(r.allows(Action::ActOnSelf));
+        assert!(!r.allows(Action::Read), "le portail n'est pas la console");
+        assert!(!r.allows(Action::Operate));
+        assert!(!r.allows(Action::Publish));
+        assert!(!r.allows(Action::Destroy));
     }
 
     #[test]
     fn a_viewer_can_only_read() {
         let r = Role::Viewer;
-        assert!(r.allows(Action::Lire));
+        assert!(r.allows(Action::Read));
         assert!(
-            r.allows(Action::LireSoi),
+            r.allows(Action::ReadSelf),
             "voir le cluster implique se voir soi"
         );
-        assert!(!r.allows(Action::Operer));
-        assert!(!r.allows(Action::Publier));
-        assert!(!r.allows(Action::Detruire));
+        assert!(!r.allows(Action::Operate));
+        assert!(!r.allows(Action::Publish));
+        assert!(!r.allows(Action::Destroy));
     }
 
     #[test]
     fn an_operator_works_but_never_destroys() {
-        // 🔴 La distinction qui compte : installer n'est pas détruire.
+        // 🔴 The distinction that matters: installing is not destroying.
         let r = Role::Operator;
-        assert!(r.allows(Action::Lire));
-        assert!(r.allows(Action::Operer));
+        assert!(r.allows(Action::Read));
+        assert!(r.allows(Action::Operate));
         assert!(
-            r.allows(Action::Publier),
+            r.allows(Action::Publish),
             "annoncer une maintenance est du travail courant"
         );
-        assert!(!r.allows(Action::Detruire), "un opérateur ne détruit pas");
-        assert!(!r.allows(Action::GererComptes), "ni n'accorde de droits");
+        assert!(!r.allows(Action::Destroy), "an operator does not destroy");
+        assert!(!r.allows(Action::ManageAccounts), "ni n'accorde de droits");
     }
 
     #[test]
     fn granting_rights_is_separate_from_destroying() {
-        // Détruire perd des données ; accorder un rôle perd le contrôle. Les deux sont
-        // réservés à l'admin, mais ce sont deux fautes différentes — et les nommer
-        // séparément permet de les journaliser séparément.
-        assert_eq!(Action::GererComptes.role_minimum(), Role::Admin);
-        assert_eq!(Action::Detruire.role_minimum(), Role::Admin);
-        assert_ne!(Action::GererComptes, Action::Detruire);
+        // Destroying loses data; granting a role loses control. Both are admin-only,
+        // but they are two different mistakes - and naming them separately allows
+        // logging them separately.
+        assert_eq!(Action::ManageAccounts.minimum_role(), Role::Admin);
+        assert_eq!(Action::Destroy.minimum_role(), Role::Admin);
+        assert_ne!(Action::ManageAccounts, Action::Destroy);
     }
 
     #[test]
     fn an_admin_may_do_everything() {
         let r = Role::Admin;
         for a in [
-            Action::LireSoi,
-            Action::AgirSurSoi,
-            Action::Lire,
-            Action::Publier,
-            Action::Operer,
-            Action::GererComptes,
-            Action::Detruire,
+            Action::ReadSelf,
+            Action::ActOnSelf,
+            Action::Read,
+            Action::Publish,
+            Action::Operate,
+            Action::ManageAccounts,
+            Action::Destroy,
         ] {
             assert!(r.allows(a), "admin devrait pouvoir {}", a.describe());
         }
@@ -294,9 +298,9 @@ mod tests {
 
     #[test]
     fn the_default_is_the_least_privileged() {
-        // Un rôle absent ou illisible ne doit jamais donner plus de droits. C'est ce
-        // que rend `State::find_token` quand la colonne `role` est corrompue.
-        assert_eq!(Role::default(), Role::Utilisateur);
+        // A missing or unreadable role must never grant more. This is what
+        // `State::find_token` returns when the `role` column is corrupt.
+        assert_eq!(Role::default(), Role::User);
         for r in Role::tous() {
             assert!(Role::default() <= r);
         }
@@ -304,46 +308,43 @@ mod tests {
 
     #[test]
     fn roles_are_ordered_by_privilege() {
-        assert!(Role::Utilisateur < Role::Viewer);
+        assert!(Role::User < Role::Viewer);
         assert!(Role::Viewer < Role::Operator);
         assert!(Role::Operator < Role::Admin);
     }
 
     #[test]
     fn a_refusal_says_what_is_missing_and_who_can_fix_it() {
-        // 🔴 Un « interdit » nu laisse deviner si on s'est trompé d'écran, si le
-        // système est cassé, ou s'il manque un droit.
+        // 🔴 A bare "forbidden" leaves you guessing whether you are on the wrong
+        // screen, the system is broken, or a right is missing.
         let m = Role::Viewer
-            .refus(Action::Detruire)
-            .expect("un viewer ne peut pas détruire");
-        assert!(m.contains("admin"), "le rôle requis doit être nommé : {m}");
-        assert!(m.contains("viewer"), "le rôle détenu doit être nommé : {m}");
-        assert!(
-            m.contains("administrateur"),
-            "le remède doit être nommé : {m}"
-        );
+            .refus(Action::Destroy)
+            .expect("a viewer cannot destroy");
+        assert!(m.contains("admin"), "the required role must be named: {m}");
+        assert!(m.contains("viewer"), "the held role must be named: {m}");
+        assert!(m.contains("administrator"), "the remedy must be named: {m}");
     }
 
     #[test]
     fn an_allowed_action_has_no_refusal_to_display() {
-        // La garantie est structurelle : on ne peut pas afficher un refus pour une
-        // action autorisée, `refus` ne rend rien.
-        assert_eq!(Role::Admin.refus(Action::Detruire), None);
-        assert_eq!(Role::Utilisateur.refus(Action::AgirSurSoi), None);
+        // The guarantee is structural: a refusal cannot be shown for an allowed
+        // action, because `refusal` returns nothing.
+        assert_eq!(Role::Admin.refus(Action::Destroy), None);
+        assert_eq!(Role::User.refus(Action::ActOnSelf), None);
     }
 
     #[test]
     fn every_action_names_itself_readably() {
-        // Le message de refus se lit tel quel dans une interface : pas d'identifiant
-        // technique, et jamais une chaîne vide.
+        // The refusal message reads as-is in an interface: no technical identifier,
+        // and never an empty string.
         for a in [
-            Action::LireSoi,
-            Action::AgirSurSoi,
-            Action::Lire,
-            Action::Publier,
-            Action::Operer,
-            Action::GererComptes,
-            Action::Detruire,
+            Action::ReadSelf,
+            Action::ActOnSelf,
+            Action::Read,
+            Action::Publish,
+            Action::Operate,
+            Action::ManageAccounts,
+            Action::Destroy,
         ] {
             assert!(!a.describe().is_empty());
             assert!(
@@ -368,12 +369,12 @@ mod tests {
     fn an_unmapped_group_gives_the_lowest_role() {
         let mapping = vec![("homelab-admins".to_string(), Role::Admin)];
         let groupes = vec!["quelque-autre-groupe".to_string()];
-        assert_eq!(Role::from_groups(&groupes, &mapping), Role::Utilisateur);
+        assert_eq!(Role::from_groups(&groupes, &mapping), Role::User);
     }
 
     #[test]
     fn no_group_at_all_gives_the_least_privileged() {
-        assert_eq!(Role::from_groups(&[], &[]), Role::Utilisateur);
+        assert_eq!(Role::from_groups(&[], &[]), Role::User);
     }
 
     #[test]
@@ -385,18 +386,22 @@ mod tests {
     }
 
     #[test]
-    fn roles_parse_from_both_languages() {
+    fn the_french_spellings_still_parse() {
+        // 🔴 Rows written before the translation hold "utilisateur" and "lecteur".
+        // Refusing them would make an unreadable role fall back to the least
+        // privileged one, quietly demoting an administrator.
         assert_eq!(Role::parse("admin"), Some(Role::Admin));
-        assert_eq!(Role::parse("Opérateur"), Some(Role::Operator));
+        assert_eq!(Role::parse("OPERATOR"), Some(Role::Operator));
         assert_eq!(Role::parse("lecteur"), Some(Role::Viewer));
-        assert_eq!(Role::parse("utilisateur"), Some(Role::Utilisateur));
+        assert_eq!(Role::parse("utilisateur"), Some(Role::User));
+        assert_eq!(Role::parse("administrateur"), Some(Role::Admin));
         assert_eq!(Role::parse("root"), None);
     }
 
     #[test]
     fn a_role_survives_a_round_trip_through_its_name() {
-        // `as_str` alimente la colonne `api_tokens.role` et `Role::parse` la relit :
-        // une divergence rendrait tous les jetons au rôle par défaut, silencieusement.
+        // `as_str` feeds the `api_tokens.role` column and `Role::parse` reads it
+        // back: a mismatch would silently return every token to the default role.
         for r in Role::tous() {
             assert_eq!(Role::parse(r.as_str()), Some(r), "{}", r.as_str());
         }
@@ -404,8 +409,8 @@ mod tests {
 
     #[test]
     fn every_role_is_listed_in_tous() {
-        // Si un rôle est ajouté sans être mis dans `tous()`, il manquera dans tous les
-        // menus de sélection — et personne ne pourra l'attribuer.
+        // If a role is added without being put in `all()`, it will be missing from
+        // every selection menu - and nobody will be able to assign it.
         assert_eq!(Role::tous().len(), 4);
         let mut vus = Role::tous().to_vec();
         vus.sort();
