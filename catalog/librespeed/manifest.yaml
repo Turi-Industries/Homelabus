@@ -6,7 +6,7 @@ metadata:
   category: network
   homepage: https://github.com/librespeed/speedtest
 spec:
-  image: { repo: ghcr.io/librespeed/speedtest, tag: "6.3.0-alpine", digest: "sha256:6ac033cd117bff1b0158cf702c6cafcff31a84d7e3dd812421306ed0c8fd8b5a" }
+  image: { repo: ghcr.io/librespeed/speedtest, tag: "6.3.1-alpine", digest: "sha256:2db012618515bfe8c8d825ce155e6a9122d78849e21535ecd1e74ef42884979a" }
   # No capability: no database, no cache, no storage, no SSO.
   #
   # That is a choice, not an oversight. LibreSpeed can record the results
