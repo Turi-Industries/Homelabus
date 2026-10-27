@@ -51,7 +51,7 @@ spec:
     # Unbound recurses from the root itself (no forwarder in this image's config), asked
     # by nobody else; Stalwart is pointed at it by Homelabus (`submission::own_resolver`).
     - name: resolver
-      image: { repo: klutchell/unbound, tag: "1.26.1", digest: "sha256:9a3939ca33d6d3b42b81a70391bb8e43f0a08d2bd7a3fdffb43d427493345c36" }
+      image: { repo: klutchell/unbound, tag: "1.26.2", digest: "sha256:50cbeb32b5838a829a7226b19cb151f9535bd7f9f3190f950780f452fe807478" }
       tier: light
       memory: { reserve: 32M, limit: 256M }
       security:
