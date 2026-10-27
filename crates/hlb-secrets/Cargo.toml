@@ -7,7 +7,9 @@ license.workspace = true
 description = "Secret vault, encrypted with age."
 
 [dependencies]
-age = "0.12"
+# Held at 0.11: 0.12 pulls p256 0.13 for its post-quantum recipients, whose
+# crypto-bigint 0.5 carries RUSTSEC-2026-0387 with no fixed release. The vault is x25519.
+age = "0.11"
 rand = "0.10"
 secrecy = "0.10"
 thiserror.workspace = true
