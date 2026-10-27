@@ -7,7 +7,7 @@ metadata:
   homepage: https://anubis.techaro.lol
 spec:
   # v1.27: the 1.28 line is days old.
-  image: { repo: ghcr.io/techarohq/anubis, tag: "v1.28.1", digest: "sha256:1744c03a918160a28b0d2e8c1656de6585f4071b30b4c3b0d51d02282c9b7c25" }
+  image: { repo: ghcr.io/techarohq/anubis, tag: "v1.28.2", digest: "sha256:5fcbce70ee6168be5b226d19bec90111d0acd0daf13028fa06b044cf3ebbbd5f" }
   # Nothing of its own: an app opts in by naming `anubis` in its ingress chain, and
   # Caddy then sends that app's visitors here before the app.
   env:
