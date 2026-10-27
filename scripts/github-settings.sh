@@ -141,4 +141,11 @@ else
     api -X POST "repos/$repo/rulesets" --input - <<<"$ruleset"
 fi
 
-step "done — immutable releases are set in Settings → General, which has no API yet"
+# A published release's files and tag can no longer change: a download verified today
+# is the one verified tomorrow. ⚠️ A broken release is fixed by a NEW version — its tag
+# stays taken even once the release is deleted. `gh release create` attaches the files
+# to a draft and publishes last, which immutability requires.
+step "immutable releases"
+api -X PUT "repos/$repo/immutable-releases"
+
+step "done"

@@ -71,6 +71,10 @@ jobs:
           # Of whichever repository built it: a fork's interface links to the fork.
           build-args: HLB_SOURCE=${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
           outputs: type=image,name=${{ steps.name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          # Attached to the image itself, so they travel with it to any registry: what it
+          # contains (SPDX, read from its layers) and how it was built.
+          sbom: true
+          provenance: mode=max
 
       - name: Keep the digest
         run: |
@@ -93,6 +97,8 @@ jobs:
         target: [agent, controller, caddy]
     permissions:
       packages: write
+      # The keyless signature's identity: this workflow, at this tag.
+      id-token: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -128,3 +134,26 @@ jobs:
           docker buildx imagetools create "${tags[@]}" \
             $(printf "$image@sha256:%s " *)
           docker buildx imagetools inspect "$image:$version"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
+
+      # The index both architectures hang from, by its digest: a tag moves, and signing
+      # one would sign whatever it named at that instant. Checked as anyone would:
+      #
+      #   cosign verify ghcr.io/<owner>/hlb-agent:<version> \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     --certificate-identity-regexp \
+      #       '^https://github.com/<owner>/<repo>/\.github/workflows/images\.yml@refs/tags/v'
+      - name: Signed
+        env:
+          image: ${{ steps.name.outputs.image }}
+          version: ${{ steps.name.outputs.version }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$image:$version" \
+            --format '{{json .Manifest}}' | jq -r .digest)
+          cosign sign --yes "$image@$digest"
+          cosign verify "$image@$digest" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF" >/dev/null
