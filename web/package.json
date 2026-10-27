@@ -20,7 +20,7 @@
 	"devDependencies": {
 		"@axe-core/playwright": "4.14.0",
 		"@inlang/paraglide-js": "^2.25.4",
-		"@inlang/plugin-message-format": "4.5.4",
+		"@inlang/plugin-message-format": "4.5.5",
 		"@lucide/svelte": "^1.52.0",
 		"@playwright/test": "1.64.1",
 		"@sveltejs/adapter-static": "^4.0.0",

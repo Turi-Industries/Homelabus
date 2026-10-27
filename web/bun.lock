@@ -11,7 +11,7 @@
       "devDependencies": {
         "@axe-core/playwright": "4.14.0",
         "@inlang/paraglide-js": "^2.25.4",
-        "@inlang/plugin-message-format": "4.5.4",
+        "@inlang/plugin-message-format": "4.5.5",
         "@lucide/svelte": "^1.52.0",
         "@playwright/test": "1.64.1",
         "@sveltejs/adapter-static": "^4.0.0",
@@ -69,7 +69,7 @@
 
     "@inlang/paraglide-js": ["@inlang/paraglide-js@2.29.2", "", { "dependencies": { "@inlang/recommend-sherlock": "^0.2.1", "@inlang/sdk": "^4.0.4", "commander": "11.1.0", "consola": "3.4.0", "jiti": "^2.7.0", "json5": "2.2.3", "jsonc-parser": "^3.3.1", "unplugin": "^2.1.2", "urlpattern-polyfill": "^10.0.0", "valibot": "^1.4.2" }, "peerDependencies": { "eslint": "^9.0.0 || ^10.0.0", "typescript": ">=5.6", "vite": ">=5.0.0" }, "optionalPeers": ["eslint", "typescript", "vite"], "bin": { "paraglide-js": "bin/run.js" } }, "sha512-fbgYu7DT6b9m4dY5mAVEGipGE3yUOk1KTF+1964N9eg+vQ3qNGNa5Gy2HwqoX88B9ai97rvsqC2X/l+mEI9tuQ=="],
 
-    "@inlang/plugin-message-format": ["@inlang/plugin-message-format@4.5.4", "", { "dependencies": { "@inlang/sdk": "4.0.4", "@sinclair/typebox": "^0.31.17" } }, "sha512-rpNQgDvL723tvUM9VWu6uwXnRzIGSTBN7M7QJbQmpPk0SROMXjXPEafVteEZ1RAeeETcYsUG8OJes6nCcnYu6A=="],
+    "@inlang/plugin-message-format": ["@inlang/plugin-message-format@4.5.5", "", { "dependencies": { "@inlang/sdk": "4.0.4", "@sinclair/typebox": "^0.31.17" } }, "sha512-wFA0x9isGySoim2JUP2NNMslLnYrYQESbWfhv8qJueRH+d3c6iHkkQJxMF3D7PZ9BafEaj6fw0HJhoTa5c2EMw=="],
 
     "@inlang/recommend-sherlock": ["@inlang/recommend-sherlock@0.2.1", "", { "dependencies": { "comment-json": "^4.2.3" } }, "sha512-ckv8HvHy/iTqaVAEKrr+gnl+p3XFNwe5D2+6w6wJk2ORV2XkcRkKOJ/XsTUJbPSiyi4PI+p+T3bqbmNx/rDUlg=="],
 
