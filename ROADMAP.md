@@ -112,6 +112,10 @@ crates (`hlb-secrets`, `hlb-bootstrap` against `hlb-types` and the catalog) and 
 in two worktrees. The admin diary and the documentation site run alongside all of them.
 
 **1. Going public.** Gate: a bare VM installs a verified `hlb` in one command.
+✅ Passed 2026-10-27 on `v0.2.1`: a fresh Debian 12 cloud VM of the lab — no Docker, no
+cosign — ran the README's `curl … | sh` and got `hlb 0.2.1`, signature and checksum
+verified, cosign not left behind; served the same release with a byte added to the
+binary, it refused and installed nothing.
 - ✅ The whole history scanned on 2026-10-27 — 411 commits, every branch and tag,
   gitleaks 8.24.3 and trufflehog 3.88.0: 16 and 27 findings, none verified, every one a
   test fixture or a documentation example (`postgres://u:p@h`, `alice-password-0123…`).
@@ -144,8 +148,10 @@ in two worktrees. The admin diary and the documentation site run alongside all o
   Turi Industries in a new repository, the owner's name and domain replaced by
   fictional ones beforehand (Léna Martin, `home.example`; the themes `Dark` and
   `Light`). Immutable releases on, 2026-10-27 — they have an API after all, which
-  `github-settings.sh` sets. Left: installing the Renovate app on the organisation; the
-  OpenSSF Best Practices badge.
+  `github-settings.sh` sets. ✅ Renovate's app installed on the repository and run,
+  2026-10-27: one pull request per catalog app; its first run grouped 0.x minors —
+  breaking releases in Cargo — with the patches, so each now has its own, RustCrypto
+  and rand moving as one. The OpenSSF Best Practices badge: dropped by the owner.
 - ✅ Written 2026-10-27, run on `v0.2.0` the same day:
   `.github/workflows/release.yml` builds `hlb` as a static musl binary for `x86_64` and
   `aarch64` on native runners, refuses one that is not static or whose `--version` is
