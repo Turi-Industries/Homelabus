@@ -3,6 +3,7 @@
 # Installs `hlb` from a release, and runs nothing it downloaded before checking it:
 #
 #   curl -fsSL https://github.com/Turi-Industries/Homelabus/releases/latest/download/install.sh | sh
+#   wget -qO- https://github.com/Turi-Industries/Homelabus/releases/latest/download/install.sh | sh
 #
 # 1. cosign, itself checked against the checksum written below, verifies the keyless
 #    signature of SHA256SUMS: made by this repository's release workflow, on a version
@@ -45,7 +46,15 @@ case "$(uname -m)" in
     aarch64 | arm64) target=aarch64-unknown-linux-musl cosign_arch=arm64 ;;
     *) die "no release build for $(uname -m)" ;;
 esac
-command -v curl >/dev/null || die "curl is needed"
+# Debian installs wget with its standard utilities and curl only when asked: a fresh
+# server has one and not the other.
+if command -v curl >/dev/null; then
+    download() { curl -fsSL --retry 3 -o "$2" "$1"; }
+elif command -v wget >/dev/null; then
+    download() { wget -q --tries=3 -O "$2" "$1"; }
+else
+    die "curl or wget is needed"
+fi
 
 if command -v sha256sum >/dev/null; then
     sha256() { sha256sum "$1" | cut -d' ' -f1; }
@@ -66,7 +75,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 fetch() {
-    curl -fsSL --retry 3 -o "$tmp/$2" "$1" || die "could not download $1"
+    download "$1" "$tmp/$2" || die "could not download $1"
 }
 
 fetch "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-$cosign_arch" cosign

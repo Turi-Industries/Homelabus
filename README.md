@@ -84,6 +84,8 @@ VictoriaMetrics and Grafana (monitoring), oauth2-proxy and Anubis.
 ```sh
 # Download hlb: the installer checks its signature before installing anything
 curl -fsSL https://github.com/Turi-Industries/Homelabus/releases/latest/download/install.sh | sh
+# a fresh Debian has wget and no curl:
+#   wget -qO- https://github.com/Turi-Industries/Homelabus/releases/latest/download/install.sh | sh
 
 sudo hlb cluster init --endpoint 192.168.1.10 --apply   # Docker, Swarm, the state, the vault
 hlb install vikunja                                     # shows what it would do, changes nothing
