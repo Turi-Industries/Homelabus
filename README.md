@@ -90,13 +90,37 @@ hlb install vikunja                                     # shows what it would do
 hlb install vikunja --apply                             # does it
 ```
 
-Until the first release is published, build it instead: `cargo build --release -p
-hlb-cli`. Putting apps online and inviting people takes a few more commands, all in
+From a checkout, `cargo build --release -p hlb-cli` builds the same binary. Putting
+apps online and inviting people takes a few more commands, all in
 [the command tour](docs/cli-tour.md#putting-apps-online-and-inviting-people).
 
 🔴 **Keep the vault's master key safe.** `cluster init` creates it, and losing it makes
 every secret and every backup unrecoverable. Keep two copies offline: `hlb emergency
 kit` prints one.
+
+## How it compares
+
+**YunoHost** is the closest in spirit. It is free software (AGPL) built for people
+rather than developers, with one account for every app and a mail server included. It
+runs on one server, and its community has packaged hundreds of apps. Homelabus spreads
+a dozen apps over several machines, and proves its backups and restores instead of
+assuming they work.
+
+**Cloudron** is polished, and also runs on one server. Its platform is not free
+software, and it is paid beyond two apps.
+
+**Coolify** is a self-hosted Heroku. It deploys your own code and one-click services to
+several servers, and leaves sign-in, mail and the links between apps to you.
+
+Choose Homelabus if you want several ordinary machines to act as one, backups whose
+restores are proven, and a tool that tells you what is not protected. Choose another
+one if you need a large catalog today, or a project with more than one maintainer.
+
+## Security
+
+What Homelabus defends against, what it has to trust and what it does not protect yet
+is in [the security model](docs/security-model.md). A machine carried away from the
+house can be read today: disk encryption comes next.
 
 ## Status
 
@@ -112,6 +136,7 @@ proven is listed openly in [the known limitations](docs/limitations.md).
 | [docs/operating.md](docs/operating.md) | the dashboard, backups, storage, accounts, the daemon |
 | [docs/how-it-works.md](docs/how-it-works.md) | the design: how an app's needs become a plan |
 | [docs/limitations.md](docs/limitations.md) | what is missing or not yet proven |
+| [docs/security-model.md](docs/security-model.md) | what it defends against, what it trusts, what is not protected yet |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
 
 ## Contributing

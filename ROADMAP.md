@@ -143,9 +143,10 @@ in two worktrees. The admin diary and the documentation site run alongside all o
   when it runs again. **The history starts over** (owner's decision): one commit by
   Turi Industries in a new repository, the owner's name and domain replaced by
   fictional ones beforehand (Léna Martin, `home.example`; the themes `Dark` and
-  `Light`). Left: installing the Renovate app on the organisation; immutable releases
-  (no API); the OpenSSF Best Practices badge.
-- ✅ Written 2026-10-27, **not yet run** — its first run is the first tag:
+  `Light`). Immutable releases on, 2026-10-27 — they have an API after all, which
+  `github-settings.sh` sets. Left: installing the Renovate app on the organisation; the
+  OpenSSF Best Practices badge.
+- ✅ Written 2026-10-27, run on `v0.2.0` the same day:
   `.github/workflows/release.yml` builds `hlb` as a static musl binary for `x86_64` and
   `aarch64` on native runners, refuses one that is not static or whose `--version` is
   not the tag's, attests each one's provenance, and signs `SHA256SUMS` keylessly with
@@ -157,14 +158,17 @@ in two worktrees. The admin diary and the documentation site run alongside all o
   cosign's own signed release and refusing it with a byte added. Written by hand rather
   than by cargo-dist, whose workflow names its actions by tag. The job that can push
   checks nothing out — `workflows.rs` now refuses a write given to a whole workflow and
-  `contents: write` beside a checkout. Left: images signed by cosign with an SBOM; a
-  changelog from git-cliff, without imposing Conventional Commits on the history's
-  style.
+  `contents: write` beside a checkout. ✅ The images too, the same evening: each
+  architecture carries an SPDX SBOM and max-mode provenance as BuildKit attestations,
+  and the multi-architecture index is signed keylessly by its digest, then verified
+  against the workflow's identity before the job ends. Left: a changelog from
+  git-cliff, without imposing Conventional Commits on the history's style.
 - ✅ A README that is a front page, 2026-10-27: the promise in one sentence, what it
   does and is not, a quick start of four commands, the status, where each document is —
   ~100 lines where there were 735. The rest moved whole to `docs/how-it-works.md`,
   `docs/operating.md`, `docs/limitations.md` and CONTRIBUTING's integration suites.
-  Left: against YunoHost, Cloudron and Coolify; the security model. Documentation in Diátaxis' four parts on Starlight (bun, an OpenAPI
+  ✅ Against YunoHost, Cloudron and Coolify, and `docs/security-model.md` — what it
+  defends against, trusts, and does not protect yet — 2026-10-27. Left: documentation in Diátaxis' four parts on Starlight (bun, an OpenAPI
   plugin, a link checker); the CLI, schema and API references generated from clap,
   schemars and OpenAPI and refused when stale, as `web/openapi.json` is; screenshots from
   `/shots` only.
