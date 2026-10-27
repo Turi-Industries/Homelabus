@@ -76,6 +76,10 @@ pub enum Source {
     Dnf { os: &'static str },
     /// The distribution's own package.
     Distribution { package: &'static str },
+    /// Nowhere: the distribution's package is below [`crate::deps::DOCKER_FLOOR`] and
+    /// Docker publishes no repository for it. Refused before anything is installed — an
+    /// install would put the old engine in place, and the next run would refuse it.
+    Unavailable { why: &'static str },
 }
 
 impl Source {
@@ -93,6 +97,7 @@ impl Source {
                 p
             }
             Self::Distribution { package } => vec![package],
+            Self::Unavailable { .. } => Vec::new(),
         }
     }
 
@@ -101,7 +106,7 @@ impl Source {
         match self {
             Self::Apt { .. } => APT_CONFLICTS,
             Self::Dnf { .. } => DNF_CONFLICTS,
-            Self::Distribution { .. } => &[],
+            Self::Distribution { .. } | Self::Unavailable { .. } => &[],
         }
     }
 
@@ -112,6 +117,7 @@ impl Source {
             }
             Self::Dnf { os } => format!("Docker's RPM repository ({os}), key compiled in"),
             Self::Distribution { package } => format!("the distribution's \"{package}\""),
+            Self::Unavailable { why } => format!("nowhere: {why}"),
         }
     }
 
@@ -151,7 +157,7 @@ impl Source {
                     ),
                 ),
             ],
-            Self::Distribution { .. } => Vec::new(),
+            Self::Distribution { .. } | Self::Unavailable { .. } => Vec::new(),
         }
     }
 }
@@ -189,17 +195,24 @@ pub fn source(distro: &Distro) -> Source {
             }
             // Devuan and other derivatives: their codenames are not Debian's, and
             // guessing one would pin the node to the wrong release.
-            Source::Distribution {
-                package: "docker.io",
+            Source::Unavailable {
+                why: "no suite of Docker's repository matches this release, and the \
+                      distribution's docker.io lags far behind (Debian 12's is 20.10)",
             }
         }
         Family::RedHat => match distro.id.as_str() {
             "fedora" => Source::Dnf { os: "fedora" },
             "rhel" => Source::Dnf { os: "rhel" },
             "centos" | "rocky" | "almalinux" | "ol" => Source::Dnf { os: "centos" },
-            // Amazon Linux's `$releasever` matches none of Docker's directories.
-            _ => Source::Distribution { package: "docker" },
+            // Amazon Linux's `$releasever` matches none of Docker's directories, and
+            // its own package was 25.0 on 2026-10-27.
+            _ => Source::Unavailable {
+                why: "Docker publishes no repository for this distribution, and its own \
+                      package lags (Amazon Linux 2023's is 25)",
+            },
         },
+        // Their own packages follow Docker's releases: 29.7 or later on all three on
+        // 2026-10-27.
         Family::Alpine | Family::Arch | Family::Suse => Source::Distribution { package: "docker" },
     }
 }
@@ -325,20 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn a_debian_derivative_with_its_own_codenames_falls_back_to_its_own_package() {
+    fn a_debian_derivative_with_its_own_codenames_is_refused_rather_than_given_docker_io() {
         let d = distro("ID=devuan\nID_LIKE=debian\nVERSION_CODENAME=daedalus\nPRETTY_NAME=x\n");
-        assert_eq!(
-            source(&d),
-            Source::Distribution {
-                package: "docker.io"
-            }
-        );
+        assert!(matches!(source(&d), Source::Unavailable { .. }));
+    }
+
+    #[test]
+    fn amazon_linux_is_refused_rather_than_given_its_lagging_package() {
+        let d = distro("ID=amzn\nID_LIKE=fedora\nVERSION_ID=2023\nPRETTY_NAME=x\n");
+        assert!(matches!(source(&d), Source::Unavailable { .. }));
     }
 
     #[test]
     fn a_debian_without_a_codename_is_not_guessed() {
         let d = distro("ID=debian\nPRETTY_NAME=\"Debian\"\n");
-        assert!(matches!(source(&d), Source::Distribution { .. }));
+        assert!(matches!(source(&d), Source::Unavailable { .. }));
     }
 
     #[test]

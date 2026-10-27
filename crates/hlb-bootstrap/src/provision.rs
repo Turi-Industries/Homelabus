@@ -154,6 +154,9 @@ pub fn plan(
     let docker_source = match deps.docker().map(|d| &d.presence) {
         Some(Presence::Missing) => {
             let source = docker::source(distro);
+            if let docker::Source::Unavailable { why } = source {
+                return Err(format!("Docker cannot be installed here: {why}"));
+            }
             let conflicts: Vec<&String> = facts
                 .docker_conflicts
                 .iter()
@@ -592,6 +595,16 @@ mod tests {
         // not know the package exists.
         let refresh = positions(&p, |s| runs(s, "apt-get update"));
         assert!(refresh.iter().any(|r| *r > repo[0] && *r < engine[0]));
+    }
+
+    #[test]
+    fn a_distribution_with_no_docker_above_the_floor_is_refused_before_anything_installs() {
+        let d = distro("ID=amzn\nID_LIKE=fedora\nVERSION_ID=2023\nPRETTY_NAME=x\n");
+        let refused = plan(&d, &deps::plan(&d, &[]), &Facts::default()).expect_err("refused");
+        assert!(
+            refused.contains("Docker cannot be installed here"),
+            "{refused}"
+        );
     }
 
     #[test]
