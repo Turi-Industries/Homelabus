@@ -4,11 +4,11 @@
 //! The traps are NOT the same as for PostgreSQL, which is precisely why this file
 //! exists: transposing the Postgres test would prove nothing here.
 //!
-//! First run against a real MariaDB 11.8 on 2026-10-17.
+//! First run against a real MariaDB 11.8 on 2026-10-17, and 12.3 on 2026-10-27.
 //!
 //! ```sh
 //! docker run -d --name hlb-test-my -e MARIADB_ROOT_PASSWORD=test \
-//!     -p 53306:3306 mariadb:11.8
+//!     -p 53306:3306 mariadb:12.3
 //! export HLB_TEST_MYSQL=mysql://root:test@localhost:53306/mysql
 //! cargo test -p hlb-platform --test mariadb_isolation -- --ignored --test-threads=1
 //! docker rm -f hlb-test-my

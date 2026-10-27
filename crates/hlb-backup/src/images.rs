@@ -16,4 +16,4 @@ pub const POSTGRES_CLIENT: &str =
 /// `mariadb-dump`: the catalog's own MariaDB image, whose tools are the server's — a
 /// test of the catalog holds the two to one reference.
 pub const MARIADB_CLIENT: &str =
-    "mariadb:11.8.8@sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c";
+    "mariadb:12.3.2@sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc";
