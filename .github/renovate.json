@@ -48,6 +48,11 @@
       "allowedVersions": "<0.12"
     },
     {
+      "description": "TypeScript 7 is the native compiler, without the JavaScript API (`ts.factory`) openapi-typescript generates the API's types through; svelte-check accepts up to 6 as well. Lift once both declare 7.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
     },
