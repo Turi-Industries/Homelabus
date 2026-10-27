@@ -67,10 +67,13 @@ impl MariadbProvisioner {
         let sql = |e: sqlx::Error| Error::Sql(e.to_string());
         // Detached: `USE` would otherwise stay on a connection the pool hands out again.
         let mut conn = self.pool.acquire().await.map_err(sql)?.detach();
-        sqlx::query(&format!("USE `{}`", escape_ident(database)))
-            .execute(&mut conn)
-            .await
-            .map_err(sql)?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "USE `{}`",
+            escape_ident(database)
+        )))
+        .execute(&mut conn)
+        .await
+        .map_err(sql)?;
         sqlx::query("SET SESSION max_statement_time = 5")
             .execute(&mut conn)
             .await
@@ -79,7 +82,7 @@ impl MariadbProvisioner {
             .execute(&mut conn)
             .await
             .map_err(sql)?;
-        let row = sqlx::query(query)
+        let row = sqlx::query(sqlx::AssertSqlSafe(query))
             .fetch_optional(&mut conn)
             .await
             .map_err(sql)?;
@@ -96,15 +99,18 @@ impl MariadbProvisioner {
         validate_identifier(database)?;
         let sql = |e: sqlx::Error| Error::Sql(e.to_string());
         let mut conn = self.pool.acquire().await.map_err(sql)?.detach();
-        sqlx::query(&format!("USE `{}`", escape_ident(database)))
-            .execute(&mut conn)
-            .await
-            .map_err(sql)?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "USE `{}`",
+            escape_ident(database)
+        )))
+        .execute(&mut conn)
+        .await
+        .map_err(sql)?;
         sqlx::query("SET SESSION max_statement_time = 5")
             .execute(&mut conn)
             .await
             .map_err(sql)?;
-        let done = sqlx::query(statement)
+        let done = sqlx::query(sqlx::AssertSqlSafe(statement))
             .execute(&mut conn)
             .await
             .map_err(sql)?;
@@ -122,7 +128,7 @@ impl MariadbProvisioner {
 
         if !self.database_exists(database).await? {
             let stmt = create_database_statement(database);
-            sqlx::query(&stmt)
+            sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::Sql(e.to_string()))?;
@@ -137,7 +143,7 @@ impl MariadbProvisioner {
                 escape_str(user),
                 escape_str(password)
             );
-            sqlx::query(&stmt)
+            sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
@@ -147,7 +153,7 @@ impl MariadbProvisioner {
 
         // 🔴 The scope: `database.*` and NEVER `*.*`. That is the whole isolation.
         let grant = grant_statement(database, user);
-        sqlx::query(&grant)
+        sqlx::query(sqlx::AssertSqlSafe(grant.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;
@@ -170,7 +176,7 @@ impl MariadbProvisioner {
             escape_str(user),
             escape_str(password)
         );
-        sqlx::query(&stmt)
+        sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
@@ -225,7 +231,7 @@ impl MariadbProvisioner {
     /// Notably used to read a database's storage engines before dumping it -
     /// `--single-transaction` does not protect non-transactional tables.
     pub async fn column_values(&self, sql: &str) -> Result<Vec<String>> {
-        let rows = sqlx::query(sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;

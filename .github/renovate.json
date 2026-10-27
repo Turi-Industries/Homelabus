@@ -46,7 +46,7 @@
       "labels": ["dependencies", "catalog"]
     },
     {
-      "description": "Its refs are branches (`stable`, `1.88.0`), which Renovate's tag lookup cannot read; and the MSRV's must never move by itself.",
+      "description": "Its refs are branches (`stable`, `1.94.0`), which Renovate's tag lookup cannot read; and the MSRV's must never move by itself.",
       "matchPackageNames": ["dtolnay/rust-toolchain"],
       "enabled": false
     },

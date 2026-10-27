@@ -36,10 +36,12 @@ async fn drop_all(p: &PostgresProvisioner, names: &[&str]) {
         .expect("signin de nettoyage");
 
     for n in names {
-        let _ = sqlx::query(&format!(r#"DROP DATABASE IF EXISTS "{n}" WITH (FORCE)"#))
-            .execute(&pool)
-            .await;
-        let _ = sqlx::query(&format!(r#"DROP ROLE IF EXISTS "{n}""#))
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"DROP DATABASE IF EXISTS "{n}" WITH (FORCE)"#
+        )))
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(r#"DROP ROLE IF EXISTS "{n}""#)))
             .execute(&pool)
             .await;
     }

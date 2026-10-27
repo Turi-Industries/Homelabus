@@ -13,7 +13,7 @@ hlb-api.workspace = true
 hlb-platform.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
-reqwest = { version = "0.13", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { workspace = true, features = ["net", "time"] }
 tracing.workspace = true
 

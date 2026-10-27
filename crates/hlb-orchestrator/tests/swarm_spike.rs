@@ -22,8 +22,10 @@ const IMAGE: &str = "alpine:3";
 /// realistic scenario of a wrong digest or a withdrawn image.
 const BROKEN: &str = "alpine:this-version-does-not-exist";
 
-fn orch() -> SwarmOrchestrator {
-    SwarmOrchestrator::connect().expect("daemon docker reachable")
+async fn orch() -> SwarmOrchestrator {
+    SwarmOrchestrator::connect()
+        .await
+        .expect("daemon docker reachable")
 }
 
 /// A unique name per test: tests can run in parallel against one daemon.
@@ -48,7 +50,7 @@ fn sleeper(n: &str) -> ServiceSpec {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q1_daemon_and_swarm_reachable() {
-    let version = orch().ping().await.expect("ping");
+    let version = orch().await.ping().await.expect("ping");
     println!("✓ daemon docker {version}");
 }
 
@@ -56,7 +58,7 @@ async fn q1_daemon_and_swarm_reachable() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q2_deploy_and_convergence() {
-    let o = orch();
+    let o = orch().await;
     let n = name("deploy");
     cleanup(&o, &n).await;
 
@@ -77,7 +79,7 @@ async fn q2_deploy_and_convergence() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q3_placement_constraints() {
-    let o = orch();
+    let o = orch().await;
     let n = name("placement");
     cleanup(&o, &n).await;
 
@@ -105,7 +107,7 @@ async fn q3_placement_constraints() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q4_update_image() {
-    let o = orch();
+    let o = orch().await;
     let n = name("update");
     cleanup(&o, &n).await;
 
@@ -131,7 +133,7 @@ async fn q4_update_image() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q5_automatic_rollback_on_a_failed_update() {
-    let o = orch();
+    let o = orch().await;
     let n = name("rollback");
     cleanup(&o, &n).await;
 
@@ -186,7 +188,7 @@ async fn q5_automatic_rollback_on_a_failed_update() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q6_list_only_sees_what_it_manages() {
-    let o = orch();
+    let o = orch().await;
     let n = name("list");
     cleanup(&o, &n).await;
 
@@ -213,7 +215,11 @@ async fn q6_list_only_sees_what_it_manages() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn q7_unknown_service() {
-    let err = orch().status("hlb-spike-does-not-exist").await.unwrap_err();
+    let err = orch()
+        .await
+        .status("hlb-spike-does-not-exist")
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, hlb_orchestrator::Error::NotFound(_)),
         "{err:?}"
@@ -244,7 +250,7 @@ async fn hardening_reaches_swarm() {
     // 🔴 The test that was missing: the security spec was declared in manifests,
     // validated, and never passed on. A container deployed with Docker's default
     // privileges while "secure by default" was supposed to be an invariant.
-    let o = orch();
+    let o = orch().await;
     let n = name("durcissement");
     cleanup(&o, &n).await;
 
@@ -273,7 +279,7 @@ async fn hardening_reaches_swarm() {
 async fn a_relaxed_manifest_is_honoured_too() {
     // An app that needs more must be able to ask - otherwise the default hardening
     // would be worked around by disabling Homelabus.
-    let o = orch();
+    let o = orch().await;
     let n = name("assoupli");
     cleanup(&o, &n).await;
 
@@ -304,7 +310,7 @@ async fn a_relaxed_manifest_is_honoured_too() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn healthchecks_reach_swarm() {
-    let o = orch();
+    let o = orch().await;
     let n = name("sonde");
     cleanup(&o, &n).await;
 
@@ -340,7 +346,7 @@ async fn healthchecks_reach_swarm() {
 #[tokio::test]
 #[ignore = "needs an active Docker Swarm"]
 async fn an_image_moved_or_a_scale_keeps_the_probe() {
-    let o = orch();
+    let o = orch().await;
     let n = name("probe-kept");
     cleanup(&o, &n).await;
     let hc = hlb_types::Healthcheck {
@@ -381,7 +387,7 @@ async fn declared_volumes_are_actually_mounted() {
     // executor and then NEVER attached to the service. Data went into the container's
     // ephemeral layer and disappeared on the first redeploy - while being declared
     // "backed up".
-    let o = orch();
+    let o = orch().await;
     let n = name("montage");
     let vol = format!("{n}-data");
     cleanup(&o, &n).await;
@@ -433,7 +439,7 @@ async fn a_fresh_swarm_gets_overlays_at_the_mesh_mtu_and_services_join_them() {
     // One node on a throwaway daemon: nothing else will ever join it.
     o.cluster_init("127.0.0.1").await.expect("swarm init");
 
-    let mtu_of = |n: bollard::models::Network| {
+    let mtu_of = |n: bollard::models::NetworkInspect| {
         n.options
             .and_then(|o| o.get("com.docker.network.driver.mtu").cloned())
     };
@@ -490,7 +496,7 @@ async fn a_fresh_swarm_gets_overlays_at_the_mesh_mtu_and_services_join_them() {
 #[tokio::test]
 #[ignore = "needs an active Swarm"]
 async fn files_reach_the_container_at_their_path() {
-    let o = orch();
+    let o = orch().await;
     let n = name("files");
     cleanup(&o, &n).await;
     let content = "metadata_dir = \"/var/lib/garage/meta\"\nreplication_factor = 1\n";
@@ -527,7 +533,7 @@ async fn files_reach_the_container_at_their_path() {
 #[ignore = "needs an active Swarm"]
 async fn declared_ports_are_published_on_the_node_itself() {
     use hlb_types::manifest::{Protocol, PublishedPort};
-    let o = orch();
+    let o = orch().await;
     let n = name("ports");
     cleanup(&o, &n).await;
     let mut spec = sleeper(&n);
@@ -589,7 +595,7 @@ async fn a_private_image_is_pulled_with_the_credentials_given() {
     let image = "127.0.0.1:5000/private/alpine:3";
 
     // Without credentials: the task is rejected on the pull.
-    let anon = orch();
+    let anon = orch().await;
     let n = name("private-anon");
     cleanup(&anon, &n).await;
     anon.deploy(&ServiceSpec::new(&n, image).command(["sleep", "3600"]))
@@ -627,7 +633,7 @@ async fn a_private_image_is_pulled_with_the_credentials_given() {
 async fn a_command_reaches_a_container_through_a_job_on_its_node() {
     // The path a task on ANOTHER node takes: the daemon `hlb` talks to has none of
     // that node's containers. One node here, so the path is taken by hand.
-    let o = orch();
+    let o = orch().await;
     let n = name("exec-remote");
     cleanup(&o, &n).await;
     // Its container is looked for on this node's daemon: placed elsewhere, none is.

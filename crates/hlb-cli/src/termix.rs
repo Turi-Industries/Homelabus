@@ -13,7 +13,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub async fn run(cli: &Cli, cmd: &TermixCmd) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
-    let orch = SwarmOrchestrator::connect()?;
+    let orch = SwarmOrchestrator::connect().await?;
     let network = cli.platform_network.clone();
     let reach = move |u: &str| relay::reach(u, &network);
     let access = NodeAccess {

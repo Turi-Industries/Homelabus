@@ -77,7 +77,7 @@ pub async fn run(
         return bucket(cli, state, vault, app, &manifest, &volume, &r).await;
     }
 
-    let orch = SwarmOrchestrator::connect().ok();
+    let orch = SwarmOrchestrator::connect().await.ok();
     let o = orch
         .as_ref()
         .map(|o| o as &dyn hlb_orchestrator::Orchestrator);
@@ -261,7 +261,7 @@ async fn bucket(
     bucket: &str,
     r: &Request<'_>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let orch = SwarmOrchestrator::connect().ok();
+    let orch = SwarmOrchestrator::connect().await.ok();
     let o = orch
         .as_ref()
         .map(|o| o as &dyn hlb_orchestrator::Orchestrator);
@@ -453,7 +453,7 @@ async fn database(
         return Ok(ExitCode::FAILURE);
     };
 
-    let orch = SwarmOrchestrator::connect().ok();
+    let orch = SwarmOrchestrator::connect().await.ok();
     let o = orch
         .as_ref()
         .map(|o| o as &dyn hlb_orchestrator::Orchestrator);

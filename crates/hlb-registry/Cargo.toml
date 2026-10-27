@@ -10,7 +10,7 @@ description = "Digest resolution and update policy."
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde_json.workspace = true
 hlb-types.workspace = true
-reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

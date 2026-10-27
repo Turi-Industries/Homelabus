@@ -10,7 +10,7 @@
 //! and `ssh-keygen -y` both read it back, which the tests hold.
 
 use base64::Engine as _;
-use rand::RngCore as _;
+use rand::Rng as _;
 use sha2::Digest as _;
 
 use crate::{Error, Result};
@@ -40,7 +40,7 @@ impl std::fmt::Debug for NodeKey {
 impl NodeKey {
     pub fn generate(comment: &str) -> Self {
         let mut seed = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand::rng().fill_bytes(&mut seed);
         Self::from_seed(seed, comment)
     }
 
@@ -88,7 +88,7 @@ impl NodeKey {
         let mut private = Vec::new();
         // Two equal words: a reader that decrypted with the wrong passphrase finds
         // them different. Unencrypted, they only have to match.
-        let check = rand::rngs::OsRng.next_u32().to_be_bytes();
+        let check = rand::rng().next_u32().to_be_bytes();
         private.extend_from_slice(&check);
         private.extend_from_slice(&check);
         put_string(&mut private, KEY_TYPE.as_bytes());

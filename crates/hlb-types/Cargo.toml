@@ -21,7 +21,9 @@ chrono-tz = "0.10"
 # halves never disagree: P-256 for Web Push (VAPID), RSA for ActivityPub's signatures.
 # Generation only — no signature, no decryption is ever made here.
 p256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
-rand_chacha = "0.10"
+# On rand_core 0.6, as `rsa` 0.9 is: a seeded key is derived through both, and a
+# newer ChaCha20Rng does not reach rsa's traits.
+rand_chacha = "0.3"
 rsa = "0.9"
 
 [lints]

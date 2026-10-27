@@ -247,7 +247,7 @@ impl hlb_updater::BackupProvider for PlacedProvider {
                 "no known volume for \"{app}\" — the backup cannot be guaranteed"
             ));
         };
-        let orch = hlb_orchestrator::SwarmOrchestrator::connect().ok();
+        let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
         let orch = orch
             .as_ref()
             .map(|o| o as &dyn hlb_orchestrator::Orchestrator);

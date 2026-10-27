@@ -48,7 +48,7 @@ async-trait.workspace = true
 serde_yaml_ng.workspace = true
 tempfile = "3"
 # The live roles test reads PocketID's token preview, as an app would get it.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
 [lints]
 workspace = true
