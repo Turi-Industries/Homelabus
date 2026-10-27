@@ -18,7 +18,7 @@ tracing.workspace = true
 # Rasterizes an uploaded SVG logo to PNG at `set_logo` time. Not for want of an SVG
 # renderer in the browser: an SVG is a document that can carry script, and the logo is
 # served without authentication from the controller's own origin. A PNG cannot run.
-resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
