@@ -34,7 +34,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # Measured 2026-10-05: `time`, `serde_with` and `home` declare 1.88, and the workspace
 # checks clean on 1.88.0 with all targets. A CI job checks it, because a value announced
