@@ -204,7 +204,7 @@ spec:
         intervalSecs: 10
 
     - name: meilisearch
-      image: { repo: getmeili/meilisearch, tag: "v1.53", digest: "sha256:cf9bb47e8ecf080f0b3ca33f58a2f9d1e382d5479d360541df05e1c49841e4a9" }
+      image: { repo: getmeili/meilisearch, tag: "v1.55", digest: "sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c" }
       env:
         MEILI_ENV: production
         MEILI_NO_ANALYTICS: "true"
@@ -506,7 +506,7 @@ spec:
         startPeriodSecs: 60
 
     - name: livekit
-      image: { repo: livekit/livekit-server, tag: "v1.12.0", digest: "sha256:b1281e66e35e8f9749ffbcf0fe6ab4d40d1438aa00f36c2ea7e6975e5e261e2e" }
+      image: { repo: livekit/livekit-server, tag: "v1.13.10", digest: "sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a" }
       # 🔴 Calls do not go through Caddy: the media arrives on 7881/tcp and
       # 7882/udp, straight to this node. The router forwards them to ONE machine,
       # the ingress's — the guide says which ports; here, where it is.
