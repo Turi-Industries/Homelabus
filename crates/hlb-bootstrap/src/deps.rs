@@ -89,8 +89,11 @@ pub enum Probe {
 /// than as one more package: where it comes from is a decision of its own.
 pub const DOCKER: &str = "docker";
 
-/// The oldest Docker Engine accepted: older ones mishandle Swarm.
-pub const DOCKER_FLOOR: &str = "24.0";
+/// The oldest Docker Engine accepted. Swarm itself needs 25 — 24 drops
+/// `no_new_privileges` from a service's spec without a word (`hardening_reaches_swarm`,
+/// measured on 24.0.9 to 27.5.1) — and the floor is the current major, which every
+/// source [`crate::docker::source`] picks installs.
+pub const DOCKER_FLOOR: &str = "29.0";
 
 /// The base dependencies, present on every node.
 pub const BASE: &[Dependency] = &[
@@ -366,7 +369,7 @@ mod tests {
     fn an_existing_recent_docker_is_left_alone() {
         // 🔴 The most important rule: we add, we do not replace. Overwriting the
         // Docker configuration of an existing machine breaks something else.
-        let p = plan(&debian(), &[("docker", Some("27.3.1".into()))]);
+        let p = plan(&debian(), &[("docker", Some("29.9.2".into()))]);
         let docker = p
             .decisions
             .iter()
@@ -394,7 +397,7 @@ mod tests {
             "{}",
             docker.describe()
         );
-        assert!(docker.describe().contains("24.0"));
+        assert!(docker.describe().contains(DOCKER_FLOOR));
     }
 
     #[test]

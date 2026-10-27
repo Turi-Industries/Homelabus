@@ -307,7 +307,7 @@ mod tests {
     fn healthy() -> Observation {
         Observation {
             os_release: "ID=debian\nPRETTY_NAME=\"Debian 12\"\n".into(),
-            docker_version: Some("27.3.1".into()),
+            docker_version: Some("29.9.2".into()),
             docker_is_snap: false,
             podman_present: false,
             total_memory_mb: Some(16384),
