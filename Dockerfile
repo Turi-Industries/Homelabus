@@ -65,7 +65,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 # The Docker CLI: backups and dumps run in containers it starts. A static binary,
 # taken from Docker's own image rather than a distribution's lagging package.
-COPY --from=docker:29.8-cli@sha256:35cfcf893c20f2931f4909151b5407aaaeab711277de7ce8b8f521f095d54c32 /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29.9-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/target/release/hlb-controller /usr/local/bin/hlb-controller
 COPY --from=web /src/web/build /usr/share/hlb/ui
 # The catalog it installs from: without it the interface says installing is unavailable.
