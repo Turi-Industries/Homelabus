@@ -20,6 +20,22 @@
       "groupName": "interface packages"
     },
     {
+      "description": "Below 1.0 a minor is a breaking release, and the group compiles only if every one of its updates does: such an update gets its own pull request.",
+      "matchManagers": ["cargo", "bun"],
+      "matchUpdateTypes": ["minor"],
+      "matchCurrentValue": "/^[\\^~]?0\\./",
+      "groupName": "{{depName}}"
+    },
+    {
+      "description": "A RustCrypto release moves the traits its crates share (`digest`, `cipher`): hmac without sha2, or aes without cbc, does not compile.",
+      "matchSourceUrls": ["https://github.com/RustCrypto/**"],
+      "groupName": "RustCrypto"
+    },
+    {
+      "matchSourceUrls": ["https://github.com/rust-random/**"],
+      "groupName": "rand"
+    },
+    {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
     },
