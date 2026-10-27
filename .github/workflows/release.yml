@@ -113,9 +113,10 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+        # Named: with no checkout there is no `.git` for gh to find the repository in.
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
-            --title "$GITHUB_REF_NAME" dist/*
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag \
+            --generate-notes --title "$GITHUB_REF_NAME" dist/*
 
   # The release's own install.sh, run on a machine that never saw the build: the files
   # come from the published release, the signature is checked against this workflow.
