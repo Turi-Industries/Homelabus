@@ -6,7 +6,7 @@ metadata:
   category: mail
   homepage: https://roundcube.net
 spec:
-  image: { repo: roundcube/roundcubemail, tag: "1.7.4-apache", digest: "sha256:23d2bf8c125ca92d7fb6f1be17f1077b3d662f1a01791253ceb7364a7913270a" }
+  image: { repo: roundcube/roundcubemail, tag: "1.7.5-apache", digest: "sha256:a6ef4cff166b5e2056238bb400ca84210bd796c83d859495ab67e60101ff2c55" }
   requires:
     # Preferences, address book, folder cache. Small but not disposable: losing it
     # erases the sending identities and the local contacts.
