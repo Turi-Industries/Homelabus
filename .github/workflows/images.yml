@@ -31,9 +31,9 @@ jobs:
           # Native runners for each architecture: compiling the workspace under QEMU
           # emulation takes hours where it takes minutes natively.
           - platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
