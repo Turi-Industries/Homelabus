@@ -9,7 +9,7 @@ spec:
   # `11.8.x` and not `lts`: an "lts" tag changes MAJOR version the day the next LTS
   # comes out. A major database migration must never arrive by surprise during a
   # nightly maintenance window.
-  image: { repo: mariadb, tag: "11.8.8", digest: "sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c" }
+  image: { repo: mariadb, tag: "12.3.2", digest: "sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc" }
   # 🔴 Swarm's virtual IP forgets a connection idle for 900 s and tells neither end:
   # the server's keepalives cross it for every client, as PostgreSQL's do. 0 — the
   # image's default — is the system's 7200. The image's own entrypoint and command
