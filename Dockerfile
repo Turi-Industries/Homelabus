@@ -31,7 +31,7 @@ RUN xcaddy build v2.11.4 \
 FROM caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9 AS caddy
 COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy
 
-FROM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS build
+FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
 WORKDIR /src
 COPY . .
 # The commit the interface's source link names (AGPL §13); unset, this version's tag.
