@@ -6,13 +6,16 @@
 //! ```sh
 //! cargo test -p hlb-backup --test maria_roundtrip -- --ignored --test-threads=1 --nocapture
 //! ```
+//!
+//! The server is the client's image unless `HLB_TEST_MARIADB_SERVER` names another: an
+//! install keeps its major when the catalog's moves, and the new client dumps it.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use hlb_backup::images::MARIADB_CLIENT;
 use hlb_backup::mariadump::{self, Consistency, MariaDumper, MariaTarget};
 use hlb_backup::pgrunner::MariaContainerRunner;
 
-const IMAGE: &str = "mariadb:11.8";
 const CONTAINER: &str = "hlb-test-mariadump";
 const NETWORK: &str = "hlb-test-maria-net";
 const PASSWORD: &str = "test-password";
@@ -47,6 +50,10 @@ fn sql(db: &str, statement: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+fn server_image() -> String {
+    std::env::var("HLB_TEST_MARIADB_SERVER").unwrap_or_else(|_| MARIADB_CLIENT.to_string())
+}
+
 fn start() {
     let _ = docker(&["rm", "-f", CONTAINER]);
     let _ = docker(&["network", "create", NETWORK]);
@@ -59,7 +66,7 @@ fn start() {
         NETWORK,
         "-e",
         &format!("MARIADB_ROOT_PASSWORD={PASSWORD}"),
-        IMAGE,
+        &server_image(),
         "--event-scheduler=ON",
     ]);
     assert!(
@@ -100,7 +107,7 @@ fn target() -> MariaTarget {
 }
 
 fn dumper() -> MariaDumper<MariaContainerRunner> {
-    MariaDumper::new(MariaContainerRunner::new(IMAGE).network(NETWORK))
+    MariaDumper::new(MariaContainerRunner::new(MARIADB_CLIENT).network(NETWORK))
 }
 
 #[tokio::test]
