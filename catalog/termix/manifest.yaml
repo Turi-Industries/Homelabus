@@ -14,7 +14,7 @@ spec:
   # 26.10 rehearsed on 2026-10-19: a 2.9.2 volume migrated, its account and hosts kept,
   # and the whole of `hlb-engine/tests/live_termix.rs` — key, account, hosts, shares,
   # rotation — passed against this image; Termix's API is still the one read at 2.9.2.
-  image: { repo: ghcr.io/lukegus/termix, tag: "26.10.1", digest: "sha256:3b893227a5a4bb45104b7ba07a7b4520b1b5c571a27eb08a32a7ea7a203712a5" }
+  image: { repo: ghcr.io/lukegus/termix, tag: "26.10.5", digest: "sha256:28a627c1e2a568ea8c2d3fd83861675fdd3d8327a09f5a245c399b4864ad5ceb" }
   requires:
     # 🔴 SSO MANDATORY, and native. Termix holds the SSH keys of EVERY machine:
     # compromising it amounts to compromising the whole fleet, including the node
