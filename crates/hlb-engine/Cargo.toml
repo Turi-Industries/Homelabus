@@ -35,7 +35,7 @@ tracing.workspace = true
 serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The private root's file name, as `openssl rehash` gives it.
-sha1 = "0.10"
+sha1 = "0.11"
 rustls-pemfile = "2"
 # Waiting for Caddy's update to conclude.
 tokio = { workspace = true, features = ["time"] }
@@ -48,7 +48,7 @@ async-trait.workspace = true
 serde_yaml_ng.workspace = true
 tempfile = "3"
 # The live roles test reads PocketID's token preview, as an app would get it.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json"] }
 
 [lints]
 workspace = true

@@ -44,7 +44,7 @@ hlb-metrics.workspace = true
 hlb-guide.workspace = true
 hlb-notify.workspace = true
 futures.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json"] }
 hlb-updater.workspace = true
 axum = "0.8"
 utoipa.workspace = true
@@ -61,7 +61,7 @@ tracing-subscriber.workspace = true
 tempfile = "3"
 # Validates the API's real answers against the schemas its document declares. Without
 # its default features, which fetch remote schemas over the network.
-jsonschema = { version = "0.58", default-features = false }
+jsonschema = { version = "0.59", default-features = false }
 tower = "0.5"
 
 [lints]

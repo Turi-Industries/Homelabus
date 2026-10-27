@@ -7,22 +7,22 @@ license.workspace = true
 description = "Vaultwarden client: an organisation's members, and the emergency vault's deposits — Bitwarden's client cryptography included."
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "json"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # Bitwarden's client cryptography, the versions already in the workspace's tree.
-aes = "0.8"
-cbc = { version = "0.1", features = ["std"] }
-argon2 = "0.5"
-base64 = "0.22"
-hkdf = "0.12"
-hmac = "0.12"
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-rand = "0.8"
+aes = "0.9"
+cbc = { version = "0.2", features = ["std"] }
+argon2 = "0.6"
+base64 = "0.23"
+hkdf = "0.13"
+hmac = "0.13"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+rand = "0.10"
 rsa = { version = "0.9", features = ["sha2"] }
-sha1 = { version = "0.10", features = ["oid"] }
-sha2 = { version = "0.10", features = ["oid"] }
+sha1 = { version = "0.11", features = ["oid"] }
+sha2 = { version = "0.11", features = ["oid"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

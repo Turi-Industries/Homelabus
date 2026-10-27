@@ -10,7 +10,7 @@ description = "Git mirror of the desired state: history, diff and rollback."
 hlb-types.workspace = true
 # `vendored-libgit2`: no system dependency to install, consistent with the principle
 # "assume no binary is present on the host".
-git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 serde_yaml_ng.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
