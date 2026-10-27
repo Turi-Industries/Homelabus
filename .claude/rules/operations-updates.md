@@ -33,6 +33,12 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   than what runs is no move (`hlb_updater::check`), and the same build under another
   name is none either.
 
+- **A release moves three files, not one.** The workspace's `version` in `Cargo.toml`,
+  the catalog's `hlb-caddy` tag (`the_ingress_runs_the_image_this_release_builds`) and
+  `web/openapi.json` (`HLB_UPDATE_OPENAPI=1 cargo test -p hlb-controller --lib
+  the_committed_document_is_the_generated_one`). Run the WHOLE suite before tagging:
+  releases are immutable, and 0.2.1 took two red CI runs to find the last two.
+
 ## Digests
 
 - **An image is dated by its BUILD, at the digest that would run** (the configuration's
