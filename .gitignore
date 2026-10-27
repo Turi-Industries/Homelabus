@@ -1,0 +1,24 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# The controller's local state database.
+*.db
+*.db-shm
+*.db-wal
+
+# 🔴 The vault's master key — leaking it exposes EVERY secret and EVERY backup.
+# It never goes into git. Do not add an exception to the `*.key` rule below.
+hlb-master.key
+*.key
+!crates/**/*.key
+
+# Claude Code session artefacts, and what the Playwright MCP server writes beside them.
+.claude/RESUME.md
+.claude/worktrees/
+.playwright-mcp/
+
+# Local only, not part of the published repository: the architecture notes, and the
+# dated record of the work until 2026-10-27, when the history started over.
+PLAN.md
+docs/journal/

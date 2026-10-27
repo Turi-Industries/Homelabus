@@ -1,0 +1,37 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: anubis
+  displayName: Anubis
+  category: platform
+  homepage: https://anubis.techaro.lol
+spec:
+  # v1.27: the 1.28 line is days old.
+  image: { repo: ghcr.io/techarohq/anubis, tag: "v1.28.1", digest: "sha256:1744c03a918160a28b0d2e8c1656de6585f4071b30b4c3b0d51d02282c9b7c25" }
+  # Nothing of its own: an app opts in by naming `anubis` in its ingress chain, and
+  # Caddy then sends that app's visitors here before the app.
+  env:
+    BIND: ":8923"
+    # 🔴 Caddy's return listener (`hlb_ingress::caddyfile::ANUBIS_RETURN_PORT`): one
+    # target for every app behind it, the Host kept, Caddy routing by it. A test holds
+    # the two together.
+    TARGET: "http://caddy:8080"
+    # Signs the pass a visitor earns. Generated once: left to Anubis, a new key at
+    # every restart would send every visitor through the challenge again.
+    ED25519_PRIVATE_KEY_HEX: "{{ secret.signing-key:hex }}"
+    DIFFICULTY: "4"
+    # The visitor's address comes from Caddy's X-Real-IP, set on the way in.
+    SERVE_ROBOTS_TXT: "false"
+  security:
+    # It listens above 1024 and writes nothing: the default hardening holds.
+    readOnlyRootfs: true
+  swarm:
+    memory: { reserve: 32M, limit: 256M }
+    # One instance: a pass is signed by the key, so a second would accept it too —
+    # but two keep two memory stores of challenges, and a visitor answering on the
+    # other would be challenged again.
+    replicas: 1
+    tier: light
+    # No probe: the image is the bare binary, with no shell to run one.
+  update:
+    channel: minor

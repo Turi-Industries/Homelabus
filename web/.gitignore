@@ -1,0 +1,16 @@
+node_modules
+/.svelte-kit
+/build
+
+# Generated from `openapi.json` and `messages/` by `bun run generate`, before every
+# check, test and build: a committed copy would be a second source that can go stale.
+/src/lib/api/schema.d.ts
+/src/lib/api/requires.ts
+/src/lib/api/limits.ts
+/src/lib/paraglide
+
+vite.config.ts.timestamp-*
+
+# What Playwright leaves behind: traces and page snapshots of the last failure.
+/test-results
+/playwright-report

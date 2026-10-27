@@ -1,0 +1,11 @@
+# 🔴 The vault's master key, at any depth: a build context is sent whole to the daemon,
+# and a `COPY . .` puts it in an image layer that every pull then carries.
+**/*.key
+**/*.db
+**/*.db-*
+.git
+target
+web/node_modules
+web/build
+web/test-results
+PLAN.md

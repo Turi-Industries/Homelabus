@@ -1,0 +1,127 @@
+name: Images
+
+# The agent and the controller images `hlb fleet agent|controller --image …` deploy,
+# and the ingress the catalog's `caddy` runs. Published on a version tag:
+# `git tag v0.2.0 && git push origin v0.2.0`.
+#
+#   ghcr.io/<owner>/hlb-agent:<version>       and :latest
+#   ghcr.io/<owner>/hlb-controller:<version>  and :latest
+#   ghcr.io/<owner>/hlb-caddy:<version>       and :latest
+#
+# ⚠️ `catalog/_platform/caddy` names its image's version: a release changing the image
+# moves that tag in the same commit.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }} (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [agent, controller, caddy]
+        platform: [linux/amd64, linux/arm64]
+        include:
+          # Native runners for each architecture: compiling the workspace under QEMU
+          # emulation takes hours where it takes minutes natively.
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Image name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hlb-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by digest only: the tags are set once both architectures exist, so a
+      # node never pulls a tag that has its build missing.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          # Of whichever repository built it: a fork's interface links to the fork.
+          build-args: HLB_SOURCE=${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
+          outputs: type=image,name=${{ steps.name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ matrix.platform }}
+
+      - name: Keep the digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.target }}-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  publish:
+    name: publish ${{ matrix.target }}
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        target: [agent, controller, caddy]
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target }}-*
+          merge-multiple: true
+
+      - name: Image name and version
+        id: name
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hlb-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          # `v0.2.0` → `0.2.0`; a manual run without a tag publishes `edge`.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=edge" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: One tag for both architectures
+        working-directory: /tmp/digests
+        run: |
+          image="${{ steps.name.outputs.image }}"
+          version="${{ steps.name.outputs.version }}"
+          tags=(-t "$image:$version")
+          if [[ "$version" != edge ]]; then tags+=(-t "$image:latest"); fi
+          docker buildx imagetools create "${tags[@]}" \
+            $(printf "$image@sha256:%s " *)
+          docker buildx imagetools inspect "$image:$version"

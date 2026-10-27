@@ -1,0 +1,42 @@
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: |
+      Point {{ domain }} at the cluster. A wildcard is enough.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: safety-net
+    title: 🔴 Keep Roundcube as a second webmail
+    phase: post-install
+    severity: required
+    body: |
+      Bulwark is young: no Git release, no declared licence, and its v1 is only
+      targeted for 2026.
+
+      The day an update breaks it, you lose access to your mail — not the messages,
+      which are at Stalwart, but the means of reading them. Roundcube installed
+      alongside on another subdomain costs ~100 MB of RAM and removes that risk:
+      both hit the same server and share no state.
+
+        hlb install roundcube --domain webmail.{{ base_domain }}
+
+      It is the kind of thing the catalog makes trivial.
+
+  - id: url-jmap
+    title: Check the JMAP URL
+    phase: post-install
+    severity: blocking
+    after: [safety-net]
+    body: |
+      ⚠️ `JMAP_SERVER_URL` must be Stalwart's PUBLIC address: it is the BROWSER
+      that connects to it, not the container.
+
+      If you put an internal service name there, the page loads normally and the
+      sign-in fails with no clear message. Open {{ domain }} and sign in with a
+      mailbox's credentials to check it straight away.
+    deeplink: "https://{{ domain }}/"

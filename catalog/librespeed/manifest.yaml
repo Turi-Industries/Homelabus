@@ -1,0 +1,39 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: librespeed
+  displayName: LibreSpeed
+  category: network
+  homepage: https://github.com/librespeed/speedtest
+spec:
+  image: { repo: ghcr.io/librespeed/speedtest, tag: "6.3.0-alpine", digest: "sha256:6ac033cd117bff1b0158cf702c6cafcff31a84d7e3dd812421306ed0c8fd8b5a" }
+  # No capability: no database, no cache, no storage, no SSO.
+  #
+  # That is a choice, not an oversight. LibreSpeed can record the results
+  # (TELEMETRY=true), which requires a database AND keeps every visitor's IP
+  # address. A speed test does not need to know who ran it: we stay stateless, and
+  # the app becomes disposable — it redeploys losing nothing.
+  requires: []
+  ingress:
+    # 🔴 PUBLIC, and the only case in the catalog where that is justified without
+    # reservation: measuring your throughput from the VPN measures the VPN, not the
+    # line. The app exposes no data and keeps nothing.
+    - host: "{{ domain }}"
+      port: 8080
+      # No Anubis: a proof-of-work would skew the very measurement you came to take.
+      chain: [caddy-front, caddy-back]
+      expose: public
+  security:
+    # nginx writes its temporary files and its PID.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    memory: { reserve: 16M, limit: 128M }
+    # Stateless: several replicas would be possible, but a speed test saturated by
+    # its own instances would measure anything at all.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+  update:
+    channel: minor

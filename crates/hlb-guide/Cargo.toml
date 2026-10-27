@@ -1,0 +1,30 @@
+[package]
+name = "hlb-guide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Automatic verification of the declared manual actions."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-orchestrator.workspace = true
+hlb-api.workspace = true
+hlb-platform.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { workspace = true, features = ["net", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util", "io-util"] }
+hlb-catalog.workspace = true
+serde_yaml_ng.workspace = true
+# A real TLS server under a root of the house's kind, for the verifier's certificates.
+hlb-agent.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+
+[lints]
+workspace = true

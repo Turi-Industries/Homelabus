@@ -1,0 +1,23 @@
+[package]
+name = "hlb-ingress"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Caddyfile generation."
+
+[dependencies]
+hlb-types.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_yaml_ng.workspace = true
+tempfile = "3"
+# Caddy reads `UNCLEAN_PATH` with RE2; the test reads it with the same syntax.
+regex = "1"
+
+[lints]
+workspace = true

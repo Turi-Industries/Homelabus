@@ -1,0 +1,50 @@
+[package]
+name = "hlb-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CLI hlb."
+
+[[bin]]
+name = "hlb"
+path = "src/main.rs"
+
+[dependencies]
+hlb-types.workspace = true
+hlb-api.workspace = true
+# What the emergency vault's checks say, as `hlb emergency vault` prints them.
+hlb-bitwarden.workspace = true
+hlb-catalog.workspace = true
+hlb-resolver.workspace = true
+hlb-orchestrator.workspace = true
+hlb-state.workspace = true
+hlb-engine.workspace = true
+hlb-secrets.workspace = true
+hlb-platform.workspace = true
+hlb-ingress.workspace = true
+hlb-mail.workspace = true
+hlb-mesh.workspace = true
+hlb-agent.workspace = true
+hlb-selfupdate.workspace = true
+hlb-metrics.workspace = true
+hlb-users.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json.workspace = true
+tempfile = "3"
+hlb-registry.workspace = true
+hlb-updater.workspace = true
+hlb-backup.workspace = true
+hlb-backup-run.workspace = true
+hlb-identity.workspace = true
+hlb-guide.workspace = true
+hlb-gitops.workspace = true
+hlb-bootstrap.workspace = true
+hlb-objstore.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+clap.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

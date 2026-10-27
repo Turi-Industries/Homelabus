@@ -1,0 +1,33 @@
+[package]
+name = "hlb-backup-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "One backup pass over every destination: volumes, databases, SQLite, Homelabus's own state."
+
+[dependencies]
+hlb-backup.workspace = true
+hlb-types.workspace = true
+futures.workspace = true
+hlb-orchestrator.workspace = true
+hlb-objstore.workspace = true
+async-trait.workspace = true
+hlb-platform.workspace = true
+hlb-secrets.workspace = true
+hlb-state.workspace = true
+hlb-updater.workspace = true
+# The emergency kit's fingerprint.
+sha2 = "0.10"
+tempfile = "3"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

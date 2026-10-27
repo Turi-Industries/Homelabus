@@ -1,0 +1,25 @@
+[package]
+name = "hlb-termix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Termix, given the cluster's nodes: its API, the nodes' key, and the account it reaches each node as."
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The nodes' key, generated in memory: never a file, never `ssh-keygen`.
+ed25519-dalek = "3.0.0"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "process"] }
+tempfile = "3"
+
+[lints]
+workspace = true

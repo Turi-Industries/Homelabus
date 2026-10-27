@@ -1,0 +1,36 @@
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: "Point {{ domain }} at the cluster."
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: first-sign-in
+    title: Open your vault through PocketID
+    phase: post-install
+    severity: blocking
+    body: |
+      Sign in with PocketID and choose your master password: it encrypts the
+      vault, and nobody — Homelabus included — can recover it.
+
+      There is no sign-up form: only the people PocketID knows come in.
+    deeplink: "https://{{ domain }}/#/sso"
+    # Attested: no page says whether anyone has a vault without a sign-in, and
+    # `/alive` said "done" before anyone opened one.
+    verify:
+      type: attest
+
+  - id: keep-local-login
+    title: 🔴 Never enable SSO_ONLY
+    phase: post-install
+    severity: required
+    body: |
+      Vaultwarden is your break-glass access to everything else. With SSO_ONLY=true,
+      if PocketID goes down you lose access to the vault that holds what you need to
+      repair it. Always keep master-password authentication.
+    verify:
+      type: attest

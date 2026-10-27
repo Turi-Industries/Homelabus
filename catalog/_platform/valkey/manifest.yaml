@@ -1,0 +1,27 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: valkey
+  displayName: Valkey
+  category: platform
+spec:
+  # 9 rehearsed on 2026-10-19: 9.1.2 loaded 8.1.10's RDB, keys and queues whole, under
+  # this manifest's own restrictions.
+  image: { repo: valkey/valkey, tag: "9-alpine", digest: "sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11" }
+  requires:
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: false      # cache: rebuildable, no point backing it up
+  security:
+    # Valkey drops its privileges to its own user at startup.
+    capAdd: [SETGID, SETUID]
+  swarm:
+    memory: { reserve: 32M, limit: 256M }
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+  update:
+    channel: minor

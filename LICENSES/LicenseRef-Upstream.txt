@@ -1,0 +1,12 @@
+Files under this identifier belong to the projects that published them, under their
+own terms, and are NOT covered by the GNU Affero General Public License that covers the
+rest of Homelabus.
+
+- catalog/**/icon.svg and catalog/**/icon.png are each application's own logo, shown
+  only to name that application in the catalog. Each is a trademark of its owner, and
+  its use here implies no endorsement.
+- crates/hlb-bootstrap/keys/*.asc are Docker, Inc.'s public signing keys for its
+  package repositories, carried so a node verifies what it installs without fetching
+  the key it verifies with.
+
+Anyone redistributing Homelabus must follow those projects' terms for these files.

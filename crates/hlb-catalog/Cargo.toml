@@ -1,0 +1,25 @@
+[package]
+name = "hlb-catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Loading and validating the application catalog."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-api.workspace = true
+hlb-resolver.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hlb-backup.workspace = true
+serde_json.workspace = true
+hlb-registry.workspace = true
+hlb-ingress.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+tempfile = "3"
+
+[lints]
+workspace = true

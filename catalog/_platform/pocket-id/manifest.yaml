@@ -1,0 +1,94 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: pocket-id
+  displayName: Pocket ID
+  category: platform
+  homepage: https://pocket-id.org
+spec:
+  image: { repo: ghcr.io/pocket-id/pocket-id, tag: "v2", digest: "sha256:323e7ef5bfacf7cf32f22f3d10ccdf48e0c97c94d67e7e40b0b996830deb5165" }
+  requires:
+    - kind: storage
+      name: data
+      path: /app/data
+      tier: local
+      backup: true
+      sqlite: true       # Backed up by snapshot, never a hot copy
+    # Its own sending account: a sign-in from a new device is said to its owner.
+    - kind: smtp
+  ingress:
+    - host: "{{ domain }}"
+      port: 1411
+      chain: [caddy-front, caddy-back]   # no Anubis: it would break the OIDC callbacks
+      # 🔴 Its first visitor creates the administrator (`/setup`): public at once, that
+      # visitor could be a scanner. Reachable from private addresses until the
+      # recovery codes and the second passkey are handled, public after — invitations
+      # need it.
+      expose: after-guide
+  security:
+    # The entrypoint creates a user and adjusts permissions at startup: it needs a
+    # writable rootfs and the matching capabilities.
+    # Declared explicitly rather than relaxing the default for everyone.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    memory: { reserve: 64M, limit: 256M }
+    replicas: 1
+    tier: heavy
+  update:
+    # The cluster's most critical service: never an automatic update.
+    channel: pin
+  env:
+    # 🔴 It becomes the OIDC issuer, the cookies' domain and the WebAuthn relying
+    # party. Left at its default (`localhost`), every client rejects the tokens and
+    # every passkey is bound to a name nobody reaches.
+    APP_URL: "https://{{ domain }}"
+    # Behind Caddy: the client's address is in X-Forwarded-For.
+    TRUST_PROXY: "true"
+    # Encrypts its signing keys at rest; v2 refuses to start without it.
+    ENCRYPTION_KEY: "{{ secret.encryption-key }}"
+    # The key Homelabus calls the API with (`pocket-id-api-key` in the vault), set at
+    # install. Before v2.2 a person had to create one in the settings after signing in
+    # by passkey, and nothing was provisioned until they did. It acts as a synthetic
+    # administrator `/setup` does not count, so the first visitor still creates theirs.
+    STATIC_API_KEY: "{{ secret.api-key }}"
+
+    # 🔴 Its settings come from here, and its settings screen is read-only: written in
+    # its database, they were one admin session away from `allowUserSignups: open`,
+    # and nothing here would have known. A setting changes in this manifest, then
+    # `hlb upgrade pocket-id`. What is not given keeps PocketID's default (2.18).
+    UI_CONFIG_DISABLED: "true"
+    ALLOW_USER_SIGNUPS: disabled
+    SMTP_HOST: "{{ smtp.host }}"
+    SMTP_PORT: "{{ smtp.port }}"
+    SMTP_TLS: starttls
+    SMTP_USER: "{{ smtp.user }}"
+    SMTP_PASSWORD: "{{ smtp.password }}"
+    SMTP_FROM: "{{ smtp.from }}"
+    # A sign-in from a device it has not seen is mailed to the account's owner: the
+    # one notice that a passkey or a session was taken.
+    EMAIL_LOGIN_NOTIFICATION_ENABLED: "true"
+    # 🔴 Both would let a mailed code stand in for a passkey: whoever reads the mailbox
+    # signs in. Enrolment is a single-use link Homelabus hands over instead.
+    EMAIL_ONE_TIME_ACCESS_AS_UNAUTHENTICATED_ENABLED: "false"
+    EMAIL_ONE_TIME_ACCESS_AS_ADMIN_ENABLED: "false"
+  assertions:
+    - id: signups-closed
+      holds: nobody creates a PocketID account without an invitation
+      check:
+        type: http
+        path: /api/application-configuration
+        # The public settings, in the order of PocketID's own struct (2.18).
+        contains: '{"key":"allowUserSignups","type":"","value":"disabled"}'
+    - id: settings-read-only
+      holds: PocketID's settings are this manifest's, and its settings screen changes none
+      check:
+        type: env
+        name: UI_CONFIG_DISABLED
+        equals: "true"
+    - id: no-mailed-sign-in
+      holds: no mailed code signs anyone in to PocketID in place of a passkey
+      check:
+        type: http
+        path: /api/application-configuration
+        contains: '{"key":"emailOneTimeAccessAsUnauthenticatedEnabled","type":"","value":"false"}'

@@ -1,0 +1,24 @@
+steps:
+  - id: recovery-codes
+    title: Print the recovery codes
+    phase: post-install
+    severity: blocking
+    body: |
+      PocketID works by passkey only. If you lose your device without these
+      codes, you lose access to the WHOLE cluster.
+
+      Print them and store them physically, outside the cluster.
+    verify:
+      type: attest
+
+  - id: second-passkey
+    title: Register a second passkey
+    phase: post-install
+    severity: required
+    after: [recovery-codes]
+    body: |
+      On different media — ideally a hardware key. A single passkey
+      is a single point of loss.
+    deeplink: "https://{{ domain }}/settings/passkeys"
+    verify:
+      type: attest

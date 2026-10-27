@@ -1,0 +1,27 @@
+[package]
+name = "hlb-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "State store: installed apps, plan progress, manual actions."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-api.workspace = true
+hlb-users.workspace = true
+sqlx.workspace = true
+serde_yaml_ng.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Rasterizes an uploaded SVG logo to PNG at `set_logo` time. Not for want of an SVG
+# renderer in the browser: an SVG is a document that can carry script, and the logo is
+# served without authentication from the controller's own origin. A PNG cannot run.
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

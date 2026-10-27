@@ -1,0 +1,58 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: caddy
+  displayName: Caddy
+  category: platform
+  homepage: https://caddyserver.com
+spec:
+  # Built from this repository's Dockerfile (`--target caddy`): the DNS modules a
+  # wildcard certificate needs and the CrowdSec bouncer are compiled in. A standard
+  # image refuses to start on either directive.
+  image: { repo: ghcr.io/turi-industries/hlb-caddy, tag: "0.2.0", builtHere: true }
+  requires:
+    # The certificates and the ACME account. Backed up: lost, every certificate is
+    # requested again at once, and a few lost volumes in a week exhaust the quota.
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: true
+    - kind: storage
+      name: config
+      path: /config
+      tier: local
+      backup: false
+    # Its access log, which CrowdSec reads from this same volume. Not backed up: what
+    # it holds is turned into decisions, and rolled over.
+    - kind: storage
+      name: logs
+      path: /var/log/caddy
+      tier: local
+      backup: false
+  # No `ingress` of its own, and no `files`: its Caddyfile is generated from every
+  # installed manifest and delivered by `hlb` at each publication — never through
+  # Caddy's admin API, which has no authentication and which every app on the overlay
+  # would otherwise reach.
+  security:
+    # Host mode: the client's own address reaches Caddy, which the private routes and
+    # the CrowdSec bouncer both decide on. Through the routing mesh every request
+    # would come from an overlay address.
+    publishedPorts: [80, 443]
+    # The binary carries the capability to bind below 1024: with every capability
+    # dropped, the kernel refuses to execute it at all.
+    capAdd: [NET_BIND_SERVICE]
+  swarm:
+    memory: { reserve: 64M, limit: 512M }
+    # 🔴 One instance, on the machine the router forwards 80 and 443 to — labelled by
+    # `hlb config exposure --node`. Two would each request their own certificates,
+    # from two ACME accounts, against one quota.
+    replicas: 1
+    tier: light
+    nodeLabel: hlb.ingress
+    healthcheck:
+      # The admin API listens inside the container only, which is where the probe runs.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+  update:
+    # Moves with Homelabus: the image is built from its Dockerfile.
+    channel: pin

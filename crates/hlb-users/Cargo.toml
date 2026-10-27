@@ -1,0 +1,24 @@
+[package]
+name = "hlb-users"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Human accounts: identity, mailboxes, aliases and quotas."
+
+[dependencies]
+# A role's level is the schema's: authorization keeps its four.
+hlb-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The addy.io contract's types appear in the controller's OpenAPI document.
+utoipa.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_yaml_ng.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

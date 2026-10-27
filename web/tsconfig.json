@@ -1,0 +1,8 @@
+{
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"strict": true,
+		"noUncheckedIndexedAccess": true
+	},
+	"include": ["src", "e2e", "vite.config.ts", "playwright.config.ts", "playwright.shots.config.ts"]
+}

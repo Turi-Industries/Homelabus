@@ -1,0 +1,2087 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"accounts_incomplete_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} account incomplete.",
+				"countPlural=*": "{count} accounts incomplete."
+			}
+		}
+	],
+	"accounts_incomplete_explanation": "A half-created account looks functional: the person signs in and receives nothing, or receives without being able to sign in. Creation is resumable.",
+	"accounts_still_receiving_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} expired alias STILL receiving.",
+				"countPlural=*": "{count} expired aliases STILL receiving."
+			}
+		}
+	],
+	"accounts_broken_promise_explanation": "A mail server cannot expire an alias: the purge has not run, and those addresses you believe closed stay open.",
+	"accounts_valid_for": "valid for",
+	"accounts_people": "people",
+	"accounts_unit_hour": "h",
+	"accounts_unit_day": "d",
+	"accounts_role": "role",
+	"accounts_session_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} session",
+				"countPlural=*": "{count} sessions"
+			}
+		}
+	],
+	"accounts_link_will_let_in": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "This link will let {count} person in.",
+				"countPlural=*": "This link will let {count} people in."
+			}
+		}
+	],
+	"accounts_link_leak_explanation": "If it leaks, that is as many accounts created. One link per person costs more to pass on, and far less to revoke.",
+	"accounts_admin_role": "ADMIN role",
+	"accounts_admin_role_explanation": "The person will be able to grant roles and destroy data.",
+	"accounts_create_the_link": "Create the link…",
+	"accounts_default_mailbox": [
+		{
+			"declarations": [
+				"input is_default",
+				"input address"
+			],
+			"selectors": [
+				"is_default"
+			],
+			"match": {
+				"is_default=1": "{address} (default)",
+				"is_default=*": "{address}"
+			}
+		}
+	],
+	"accounts_still_receiving_badge": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} expired alias still receiving",
+				"countPlural=*": "{count} expired aliases still receiving"
+			}
+		}
+	],
+	"accounts_revoke": "Revoke",
+	"accounts_kept_as_a_trace": "kept as a trace",
+	"accounts_active_alias_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} active alias",
+				"countPlural=*": "{count} active aliases"
+			}
+		}
+	],
+	"accounts_pocket_id_reference": "PocketID: {id}",
+	"action_action_could_not_be_started": "The action could not be started",
+	"action_close": "Close",
+	"action_preview_nothing_changed_yet": "Preview — nothing has been changed yet",
+	"action_what_will_be_done_in_order": "What will be done, in this order:",
+	"action_destructive_operation": "Destructive operation",
+	"action_confirmation_explanation": "Applying will explicitly confirm \"{target}\". The role is not enough: repeating the name is what stops you destroying the wrong target.",
+	"action_equivalent_command_line": "Equivalent command line:",
+	"action_copy": "Copy",
+	"action_prepare_for_later": "Prepare for later:",
+	"action_plan_name_hint": "plan name",
+	"action_record": "Record",
+	"action_applying": "Applying…",
+	"action_apply_irreversible": "Apply — irreversible",
+	"action_apply": "Apply",
+	"action_link_shown_once_explanation": "Shown once only: it is recorded nowhere. The QR can also be photographed over your shoulder — do not display it in front of someone it is not meant for.",
+	"action_step_planned": "planned",
+	"action_step_done": "done",
+	"action_step_failed": "FAILED",
+	"alerts_title": "Alerts",
+	"alerts_active_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} active alert",
+				"countPlural=*": "{count} active alerts"
+			}
+		}
+	],
+	"alerts_active_count_with_muted": [
+		{
+			"declarations": [
+				"input count",
+				"input muted",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} active alert, {muted} muted",
+				"countPlural=*": "{count} active alerts, {muted} muted"
+			}
+		}
+	],
+	"alerts_no_active_alert": "No active alert.",
+	"alerts_rules_cannot_be_evaluated": [
+		{
+			"declarations": [
+				"input rules",
+				"local rulesPlural = rules: plural"
+			],
+			"selectors": [
+				"rulesPlural"
+			],
+			"match": {
+				"rulesPlural=one": "{rules} rule can no longer be evaluated.",
+				"rulesPlural=*": "{rules} rules can no longer be evaluated."
+			}
+		}
+	],
+	"alerts_blind_monitoring_explanation": "This is NOT \"all is well\": collection has probably gone down, and this monitoring has been blind since.",
+	"alerts_for_duration": "for {duration}",
+	"alerts_measured_value": "{value} (threshold {threshold})",
+	"alerts_no_data": "no data",
+	"announcements_no_announcement_published": "No announcement published.",
+	"announcements_published": "Published",
+	"announcements_title_hint": "Title",
+	"announcements_body_hint": "What people need to know, in a few lines.",
+	"announcements_level_label": "level",
+	"announcements_level_information": "information",
+	"announcements_level_maintenance": "maintenance",
+	"announcements_level_warning": "warning",
+	"announcements_level_incident": "incident",
+	"announcements_audience_label": "who will see",
+	"announcements_audience_everyone": "everyone",
+	"announcements_audience_viewer_up": "from viewer up",
+	"announcements_audience_operations": "operations",
+	"announcements_audience_admins": "the admins",
+	"announcements_pin": "pin",
+	"announcements_incident_visible_to_everyone": "This incident will be visible to everyone.",
+	"announcements_incident_visible_explanation": "It will stay displayed until you close it: an outage that vanishes from the screen on its own makes people believe it is fixed.",
+	"announcements_maintenance_reaches_portal": "This maintenance will reach the portal.",
+	"announcements_maintenance_explanation": "The people who only have a mailbox will see it too. Too many operational messages make them stop reading the announcements.",
+	"announcements_publish_ellipsis": "Publish…",
+	"announcements_title_and_body_needed": "a title and a body are needed",
+	"announcements_pinned": "pinned",
+	"announcements_remove": "Remove",
+	"announcements_published_by_at": "{at} · {author}",
+	"announcements_update_hint": "Where do things stand? This update is added to the thread, it replaces nothing.",
+	"announcements_add_an_update": "Add an update",
+	"announcements_to_close_incident": "To close the incident, publish the last update then remove it.",
+	"app_detail_back_up_now": "Back up now",
+	"app_detail_short_preview": "Preview",
+	"app_detail_status": "Status",
+	"app_detail_replicas": "Replicas",
+	"app_detail_running_desired": "{running} / {desired}",
+	"app_detail_image": "Image",
+	"app_detail_last_backup": "Last backup",
+	"app_detail_last_verification": "Last verification",
+	"app_detail_replica_of_node": "replica {slot} of {node} — {state}",
+	"app_detail_unknown_node": "unknown node",
+	"app_detail_placement": "Placement",
+	"app_detail_manual_actions": "Manual actions",
+	"app_assertions": "What it must keep true",
+	"app_assertions_explanation": "Read from the running application every night. To read them now:",
+	"app_assertions_command": "hlb assert {app}",
+	"app_assertion_holds": "holds",
+	"app_assertion_broken": "does not hold",
+	"app_assertion_unknown": "not read",
+	"app_assertion_fix": "What to do:",
+	"app_jobs": "Scheduled work",
+	"app_jobs_explanation": "Run by the controller in the application's own container when due. To run one now:",
+	"app_jobs_command": "hlb job {app} {job} --apply",
+	"app_job_every_day": "every day",
+	"app_job_every_week": "every week",
+	"app_job_never_run": "never run yet — due at once",
+	"app_job_last_run": "last run {at}",
+	"app_job_next_run": "next {at}",
+	"app_job_succeeded": "succeeded",
+	"app_job_failed": "failed",
+	"app_job_waiting": "not run yet",
+	"app_detail_blocking": "blocking",
+	"app_detail_what_was_provisioned": "What was provisioned",
+	"app_detail_volumes": "Volumes",
+	"app_detail_name_and_path": "{name} : {path}",
+	"app_detail_sqlite": "SQLite",
+	"app_detail_backed_up": "backed up",
+	"app_detail_not_backed_up": "NOT backed up",
+	"app_detail_environment_variables": "Environment variables",
+	"app_detail_env_explanation": "The tokens are shown as they are: their value never leaves the vault, and a visible token says what the app is wired to — which asterisks would not.",
+	"app_detail_manifest_frozen": "Manifest frozen at deployment",
+	"app_detail_manifest_frozen_explanation": "The installation's, not the current catalog's: it is what is actually running.",
+	"app_detail_if_i_lose_everything_now": "If I lose everything right now",
+	"app_detail_confidence": "Confidence: {explanation}",
+	"app_detail_coverage": "Coverage",
+	"app_detail_never": "NEVER",
+	"app_detail_no_backup_recorded": "No backup recorded for this application.",
+	"app_detail_backup_run_command": "hlb backup run --app <name> --force",
+	"app_detail_recent_runs": "Recent runs",
+	"app_detail_run_kind": "{kind}{to_destination}",
+	"app_detail_to_destination": " to {destination}",
+	"app_detail_no_action_recorded": "No action recorded on this application.",
+	"app_detail_what_changed_in_manifest": "What changed in the manifest",
+	"app_detail_no_manifest_history": "No manifest history: the Git mirror is not enabled, and the state only keeps the current version.",
+	"app_detail_first_known_version": "First known version: there is nothing before it.",
+	"app_detail_no_manifest_change": "No manifest change.",
+	"app_detail_nothing_to_configure": "This application declares no capability, no volume and no environment variable: there is nothing to configure.",
+	"apps_no_application_installed": "No application installed.",
+	"backups_no_application_installed": "No application installed.",
+	"backups_dest_add_command": "hlb backup dest add <name> --location <path>",
+	"backups_no_up_to_date_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} application has NO up-to-date copy.",
+				"countPlural=*": "{count} applications have NO up-to-date copy."
+			}
+		}
+	],
+	"backups_single_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} application is left with a single copy.",
+				"countPlural=*": "{count} applications are left with a single copy."
+			}
+		}
+	],
+	"backups_at_least_two_copies": "Every application has at least two copies.",
+	"backups_protection_explanation": "The number of declared destinations says nothing about the number of copies: a failing destination protects nothing.",
+	"backups_coverage_per_application": "Coverage per application",
+	"backups_no_run_recorded": "No backup recorded yet.",
+	"backups_never": "NEVER",
+	"backups_nothing_to_back_up": "nothing to back up",
+	"catalog_catalog_unreadable": "No application readable. The controller was started without --catalog, or the directory cannot be read.",
+	"catalog_installed": "installed",
+	"catalog_before_installing": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} manual action before installing:",
+				"countPlural=*": "{count} manual actions before installing:"
+			}
+		}
+	],
+	"drift_no_gap": "No gap: what is running matches what was decided.",
+	"drift_will_be_corrected": "Will be corrected on the next pass",
+	"drift_correctable_explanation": "The Swarm instruction comes from a decision: it gets corrected. These call for no action from you.",
+	"drift_left_as_is_deliberately": "Left as is, deliberately",
+	"drift_refusal_explanation": "A system that over-corrects is more dangerous than one that corrects nothing. Here is what Homelabus saw and did not touch, and why.",
+	"duration_in_the_future": "in the future?",
+	"duration_seconds": "{n} s",
+	"duration_minutes": "{n} min",
+	"duration_hours": "{n} h",
+	"duration_days": "{n} d",
+	"duration_months": "{n} mo",
+	"duration_never_verified": "never verified",
+	"freshness_connecting": "connecting…",
+	"freshness_cannot_connect": "CANNOT CONNECT — {error}",
+	"journal_title": "Journal",
+	"journal_integrity_explanation": "Append-only and chained: each entry carries the previous one's fingerprint. Check the integrity: hlb audit --verify",
+	"journal_no_action_recorded": "No action recorded.",
+	"journal_action_on_target": "{action} on {target}",
+	"journal_actor_with_role": "{actor} ({role})",
+	"journal_verdict_refused": "refused (protection)",
+	"journal_verdict_failed": "failed",
+	"journal_verdict_ok": "ok",
+	"my_account_service_token_explanation": "This access is a service token: it carries a role, not an identity. There is no account behind it, so nothing here is yours.",
+	"my_account_service_token_command": "hlb token create <name> --role operator --user <account>",
+	"my_account_my_addresses": "My addresses",
+	"my_account_no_mailbox": "No mailbox. You can sign in, and your address receives nothing — that usually shows on the first lost password reset.",
+	"my_account_default_mailbox": "default",
+	"my_account_what_you_can_do": "What you can do",
+	"my_account_can_read_self": "View your own account",
+	"my_account_can_act_on_self": "Act on your own account",
+	"my_account_can_read": "Read the console",
+	"my_account_can_publish": "Install and publish applications",
+	"my_account_can_operate": "Operate the fleet (scale, back up, restart)",
+	"my_account_can_manage_accounts": "Manage accounts and invitations",
+	"my_account_can_destroy": "Remove applications",
+	"my_account_yes": "yes",
+	"my_account_no": "no",
+	"my_account_identity": "Identity",
+	"my_account_identity_explanation": "Your names, as PocketID gives them to every application you sign in to.",
+	"my_account_first_name": "First name",
+	"my_account_last_name": "Last name",
+	"my_account_display_name": "Display name",
+	"my_account_email": "Address given to applications: {address}",
+	"my_account_save_names": "Save",
+	"my_account_names_title": "Change my names",
+	"my_account_identity_not_configured": "PocketID is not configured on this installation: your names cannot be changed from here.",
+	"my_account_identity_not_linked": "Your account has no PocketID identity yet. An administrator can finish creating it.",
+	"my_account_identity_unreachable": "PocketID is not answering: your names cannot be read right now.",
+	"my_account_passkeys_explanation": "Your passkeys are kept by PocketID alone: you add and remove them there.",
+	"my_account_passkeys": "Manage my passkeys in PocketID",
+	"my_account_default_mailbox_choose": "Default mailbox",
+	"my_account_default_mailbox_explanation": "Your identity, and the address applications receive from PocketID.",
+	"my_account_make_default": "Make default",
+	"my_account_default_title": "Make {address} my default mailbox",
+	"my_account_sessions": "My sessions",
+	"my_account_sessions_explanation": "Every browser signed in to this console as you.",
+	"my_account_no_session": "No open session.",
+	"my_account_this_session": "this session",
+	"my_account_unknown_device": "Unknown browser",
+	"my_account_session_seen": "used {age} ago · expires in {left}",
+	"my_account_sign_out_device": "Sign out",
+	"my_account_sign_out_device_title": "Sign out {device}",
+	"my_account_sign_out_elsewhere": "Sign out everywhere else",
+	"my_mailbox_no_mailbox_on_account": "No mailbox on this account yet. An alias needs somewhere to deliver.",
+	"my_mailbox_create_my_mailbox": "Create my mailbox",
+	"my_mailbox_local_part": "local part",
+	"my_mailbox_local_part_explanation": "The part before the @ — the domain is added automatically.",
+	"my_mailbox_create_an_alias": "Create an alias",
+	"my_mailbox_hint_explanation": "Name the recipient, not the address: a random suffix is added. \"amazon\" alone would be guessable, and a bulk sender tries the obvious ones for the price of one.",
+	"my_mailbox_create": "Create",
+	"my_mailbox_delivers_to": "delivers to {address}",
+	"my_mailbox_expired_still_receiving": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} address expired and still receiving.",
+				"countPlural=*": "{count} addresses expired and still receiving."
+			}
+		}
+	],
+	"my_mailbox_purge_explanation": "The purge has not removed them from the mail server. They keep taking mail, and nothing on the sender's side says otherwise.",
+	"my_mailbox_my_aliases": "My aliases",
+	"my_mailbox_no_alias_yet": "No alias yet. One address per recipient is what tells you who leaked it.",
+	"my_mailbox_purge": "Purge",
+	"my_mailbox_disable": "Disable",
+	"node_detail_cpu": "CPU",
+	"node_detail_memory": "Memory",
+	"node_detail_swap": "Swap",
+	"node_detail_disks": "Disks",
+	"node_detail_up_since": "Up since",
+	"node_detail_distro": "Distro",
+	"node_detail_kernel": "Kernel",
+	"node_detail_last_report": "Last report",
+	"node_detail_no_interfaces": "No network interface reported.",
+	"node_detail_rx_tx": "{rx} in, {tx} out",
+	"node_detail_no_containers": "No container is hosted here.",
+	"node_detail_availability": "Availability",
+	"node_detail_unknown_to_swarm": "Swarm does not know this machine: an agent reports it, and no node in the cluster carries its hostname. There is nothing to drain here.",
+	"node_detail_state_active": "active",
+	"node_detail_state_draining": "draining",
+	"node_detail_state_paused": "paused",
+	"node_detail_state_unknown": "unknown",
+	"node_detail_active_explanation": "This node takes its share of the work, and Swarm places new containers on it.",
+	"node_detail_draining_explanation": "Swarm has moved its containers elsewhere and places nothing new here. The machine stays in the cluster.",
+	"node_detail_paused_explanation": "It keeps what it already runs and takes nothing new.",
+	"node_detail_unknown_explanation": "Swarm did not say what state this node is in.",
+	"node_detail_drain": "Drain this node",
+	"node_detail_drain_consequence": "Moves every container off this machine and places nothing new on it. What runs elsewhere is untouched, and the node stays in the cluster.",
+	"node_detail_return_to_service": "Return to service",
+	"node_detail_return_consequence": "Swarm places containers here again. Nothing moves back on its own: what left stays where it went until it is restarted.",
+	"node_detail_unreachable_no_measurement": "This machine is not answering: there is nothing to measure. What was last known about it is above.",
+	"nodes_node_count_with_unreachable": [
+		{
+			"declarations": [
+				"input count",
+				"input unreachable",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} node, {unreachable} unreachable",
+				"countPlural=*": "{count} nodes, {unreachable} unreachable"
+			}
+		}
+	],
+	"nodes_no_agent_reporting": "No agent is reporting. Is the agent service deployed?",
+	"nodes_add_node_command": "hlb node add <host> --apply",
+	"nodes_agent_version": "agent {version}",
+	"nodes_cpu": "CPU",
+	"nodes_memory": "Memory",
+	"nodes_swap": "Swap",
+	"nodes_free_space": "{size} free",
+	"nodes_unknown": "unknown",
+	"nodes_last_report": "last report {age} ago",
+	"plans_title": "Prepared plans",
+	"plans_no_prepared_plan": "No prepared plan. Preview an action, then file it under a name to execute it later.",
+	"plans_replay_explanation": "Each plan is filed exactly as it was previewed. Replaying it reruns its preview — not the execution: what it describes may have changed since.",
+	"plans_by": "by {author} {age} ago",
+	"portal_your_applications": "Your applications",
+	"portal_access_explanation": "These applications exist and are exposed. Homelabus does not decide your access rights: your identity carries them.",
+	"portal_no_exposed_application": "No exposed application for now.",
+	"portal_announcements": "Announcements",
+	"portal_your_addresses": "Your addresses",
+	"portal_address_with_default": [
+		{
+			"declarations": [
+				"input is_default",
+				"input address"
+			],
+			"selectors": [
+				"is_default"
+			],
+			"match": {
+				"is_default=1": "{address} (default)",
+				"is_default=*": "{address}"
+			}
+		}
+	],
+	"portal_stopped_domain": "{domain} — stopped",
+	"portal_follow_up_at": "{at} · {author}",
+	"portal_no_updates_since_published": "No updates since it was published.",
+	"route_node_detail_tab_network": "Network",
+	"route_node_detail_tab_containers": "Containers",
+	"secrets_without_value_explanation": "The values never leave the vault, not even to this page: the API's type has no field to carry them. To read one, you need the master key and the command line.",
+	"secrets_no_secret_recorded": "No secret recorded.",
+	"secrets_rotation_explanation": "Rotating a secret is not a write, it is an ordered procedure. The vault is not authoritative: the password ALSO lives in PostgreSQL, at PocketID or at Garage.",
+	"secrets_created_ago": "created {age} ago",
+	"secrets_rotated_ago": "rotated {age} ago",
+	"secrets_kind_not_recognised": "Kind not recognised: no procedure is proposed, it would be invented.",
+	"security_exposure_explanation": "What each application asks for, against what was really published at the last application of the ingress configuration.",
+	"security_no_route_exposed": "No application exposes a route.",
+	"security_ingress_command": "hlb ingress --apply",
+	"security_divergence_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} divergence between what is declared and what answers.",
+				"countPlural=*": "{count} divergences between what is declared and what answers."
+			}
+		}
+	],
+	"security_divergence_explanation": "An app published by mistake shows nowhere else: not in the manifest, which says the opposite, nor in the list of apps.",
+	"security_runbook": "Runbook",
+	"security_runbook_explanation": "Generated from the real state at the moment you ask for it: inventory of the nodes, destinations, restart order and recovery procedure. Written by hand, a runbook is wrong on the day you need it.",
+	"security_runbook_storage_reminder": "To be printed and stored OUTSIDE the cluster: a runbook that does not survive the outage it documents documents nothing.",
+	"security_break_glass_explanation": "Homelabus can verify only the last point itself. The other three are declarations: it keeps the date, and asks again when it ages.",
+	"security_verified_by_homelabus": "Verified by Homelabus: the trace of a successful drill is what counts, and nothing else.",
+	"security_i_have_checked_this_point": "I have checked this point",
+	"settings_your_theme": "Your theme",
+	"settings_theme_follows_you": "This choice follows you across all your devices: it is stored on the server, not in this browser.",
+	"settings_language": "Language",
+	"settings_language_explanation": "Applies everywhere, immediately — the same choice as the theme. Kept on this device only: unlike the theme, it does not follow you to another browser.",
+	"settings_installations_own_with_name": "the installation's own ({default})",
+	"settings_installations_own": "the installation's own",
+	"settings_appearance": "Appearance",
+	"settings_appearance_explanation": "The brand and the theme live on the server: changing them does not require recompiling the interface, and they follow across all devices.",
+	"settings_appearance_command": "hlb config appearance --name \"Turi Industries\"",
+	"settings_legibility": "Legibility",
+	"settings_legibility_explanation": "A theme is not allowed to make the states, the accent or \"info\" indistinguishable. Every palette is validated: text contrast, and the distinction of every pair under three colour-vision deficiencies — protanopia, deuteranopia, tritanopia.",
+	"settings_theme_legible": "{name} : legible",
+	"signup_title": "Create your account",
+	"signup_no_invitation": "No invitation in this link.",
+	"signup_no_invitation_explanation": "Sign-up happens through a link received from an administrator. If you have one, open it as it is — without retyping part of the address.",
+	"signup_name_explanation": "This name will be your sign-in identifier AND the local part of your mail address. It cannot be changed afterwards.",
+	"signup_name_label": "name",
+	"signup_first_name_hint": "first name",
+	"signup_name_rules": "Lowercase, digits, dot and dash. No space, no capital, no accent.",
+	"signup_name_available": "This name is available.",
+	"signup_check_this_name": "Check this name",
+	"signup_create_my_account": "Create my account",
+	"signup_creating": "creating…",
+	"signup_finish_now": "Finish now: register your passkey",
+	"signup_finish_now_explanation": "This link is shown only once and expires in 12 hours. There is no password: your device becomes the key.",
+	"signup_to_finish": "to finish",
+	"signup_incomplete_explanation": "Your account exists, but not everything is in place. Report it to the person who invited you: a re-run on their side will finish what is missing.",
+	"signup_go_to_home_page": "Go to the home page",
+	"status_title": "Service status",
+	"status_public_warning": "This page is PUBLIC: it shows your exposed services and your open incidents to anyone who knows the address.",
+	"status_ongoing_incidents": "Ongoing incidents",
+	"status_scheduled_maintenance": "Scheduled maintenance",
+	"status_services": "Services",
+	"status_history": "History",
+	"storage_wizard_explanation": "Assembles the command for you — it changes nothing itself. Copy it, then run it yourself on the storage node.",
+	"storage_wizard_pool_label": "pool",
+	"storage_wizard_pool_hint": "leave empty if this machine has only one",
+	"storage_wizard_root_label": "dataset root",
+	"storage_wizard_import_step": "1. Import the pool, create the datasets",
+	"storage_wizard_import_explanation": "Importing is reversible (zpool export). Creating a pool is NOT, and this never does it: that command is printed with the disks left to you.",
+	"storage_wizard_network_label": "network allowed to mount",
+	"storage_wizard_network_hint": "e.g. 10.0.0.0/24",
+	"storage_wizard_export_step": "2. The /etc/exports lines",
+	"storage_wizard_export_explanation": "Printed, not written: the file may already have lines you added, and rewriting it wholesale would drop them.",
+	"storage_wizard_copy": "Copy",
+	"storage_wizard_value_has_a_space": "A space here splits the command below into two arguments, and it will not run.",
+	"timeline_title": "Timeline",
+	"timeline_nothing_recorded_yet": "Nothing recorded yet: no backup, no action.",
+	"timeline_river_explanation": "Backups and actions in a single dated river. This is where an outage comes close to what preceded it.",
+	"timeline_today": "today",
+	"timeline_yesterday": "yesterday",
+	"timeline_days_ago": [
+		{
+			"declarations": [
+				"input days",
+				"local daysPlural = days: plural"
+			],
+			"selectors": [
+				"daysPlural"
+			],
+			"match": {
+				"daysPlural=one": "{days} day ago",
+				"daysPlural=*": "{days} days ago"
+			}
+		}
+	],
+	"todo_title": "To do",
+	"todo_no_manual_action_pending": "No manual action pending.",
+	"todo_ack_is_an_attestation": "Marking an action \"done\" is an attestation, not a checkbox. Ticking it without having done it unblocks a deployment that will fail later, with a message unrelated to the cause.",
+	"todo_attest": "Attest",
+	"todo_blocking": "blocking",
+	"todo_installation_health": "Installation health",
+	"todo_health_explanation": "The things you believe are done and have never verified. None blocks anything — they are discovered at the worst moment.",
+	"health_topic_backups": "Backups",
+	"health_topic_offsite": "Off-site",
+	"health_topic_drill": "Restore rehearsal",
+	"health_topic_deadman": "Deadman",
+	"health_topic_admin": "Administrative access",
+	"health_topic_audit": "Audit log",
+	"health_no_destination": "No destination declared: nothing is backed up anywhere.",
+	"health_single_destination": "A single destination: one copy disappears with the machine carrying it, and a power failure takes both.",
+	"health_destinations": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} destination declared.",
+				"countPlural=*": "{count} destinations declared."
+			}
+		}
+	],
+	"health_drill_never": "Never rehearsed: nobody knows whether a restore works. The restore is the least-travelled path in the system, and the only one you discover on the worst day.",
+	"health_drill_today": "Rehearsed today.",
+	"health_drill_recent": "Rehearsed {ago} ago.",
+	"health_drill_due": "Rehearsed {ago} ago — the aim is every {every}.",
+	"health_drill_overdue": "Rehearsed {ago} ago. Past {late} the procedure has had time to drift: a path that moves, a password that rotates, a version that changes.",
+	"health_heartbeat_absent": "No heartbeat: if everything stops, nothing will warn you.",
+	"health_heartbeat": "Last heartbeat {ago} ago. This screen only attests to the heartbeat: the watchdog does not run here and cannot declare itself alive on its own.",
+	"health_admin_unknown": "No admin token recorded: access may go through an OIDC session, which cannot be checked from here.",
+	"health_admin_single": "A single admin token: that is the right number.",
+	"health_admin_tokens": "{count} admin tokens in circulation: each one opens everything, and you no longer know which are still in use.",
+	"health_audit_intact": "The chaining is intact: no entry was removed or modified.",
+	"health_audit_broken": "The chaining is BROKEN: an entry was removed or modified.",
+	"health_audit_unreadable": "The log could not be read back.",
+	"topology_anti_affinity_explanation": "Anti-affinity must be about the HARDWARE, not the node: two virtual machines on the same server are two Swarm nodes and one point of failure.",
+	"topology_overstated_redundancy": "Overstated redundancy",
+	"topology_and_if_it_went_down": "And if it went down?",
+	"topology_worst_case_at_top": "Each row takes down a whole domain. The worst case is at the top.",
+	"topology_outage_domains": "Outage domains",
+	"topology_undeclared_domain": "Undeclared domain",
+	"topology_undeclared_domain_explanation": "These nodes may share hardware — nothing lets us know. Declare it: hlb node add --failure-domain <name>",
+	"topology_concentrated_domain_explanation": "This hardware carries more than half the cluster: losing it would take the quorum with it.",
+	"topology_no_service": "no service",
+	"nav_home": "Home",
+	"nav_apps": "Applications",
+	"nav_infra": "Infrastructure",
+	"nav_data": "Data",
+	"nav_security": "Security",
+	"nav_activity": "Activity",
+	"nav_people": "People",
+	"nav_settings": "Settings",
+	"nav_me": "Me",
+	"nav_main": "Main navigation",
+	"nav_sections": "Sections of this module",
+	"nav_open_menu": "Open the menu",
+	"nav_close_menu": "Close the menu",
+	"nav_sign_out": "Sign out",
+	"nav_signed_in_as": "Signed in as {account}",
+	"nav_service_token": "Service token",
+	"nav_source": "Homelabus {version} · source code",
+	"nav_needs_attention": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} item needs attention",
+				"countPlural=*": "{count} items need attention"
+			}
+		}
+	],
+	"state_loading": "Loading…",
+	"state_never_received": "Nothing has been received: the request failed — {error}",
+	"state_stale": "Controller unreachable — what follows is {age} old ({error})",
+	"state_retry": "Retry",
+	"state_gone": "Nothing by that name here: it does not exist, or no longer does.",
+	"state_back_to_list": "Back to the list",
+	"state_unreachable_short": "Controller unreachable",
+	"state_not_found": "This page does not exist.",
+	"state_go_home": "Back to the home",
+	"state_signed_out": "You are not signed in.",
+	"state_sign_in": "Sign in",
+	"attention_ok": "fine",
+	"attention_notice": "to look at",
+	"attention_critical": "needs action",
+	"inbox_title": "Needs attention",
+	"inbox_all_clear": "Nothing needs you. Every source the inbox reads answered, and none has anything to report.",
+	"inbox_incomplete": "The inbox could not be read — {error}. Something may need you.",
+	"inbox_waiting": "Reading every source…",
+	"home_arrange": "Arrange",
+	"home_add": "Pin a card",
+	"home_arrange_title": "Arrange the home",
+	"home_unpin": "Unpin",
+	"home_move_up": "Move up",
+	"home_move_down": "Move down",
+	"home_reset": "Back to the default cards",
+	"home_all_pinned": "Every card is pinned.",
+	"home_save_failed": "The arrangement was not saved: {error}",
+	"palette_open": "Search",
+	"palette_placeholder": "Go to a page, an application, a machine…",
+	"palette_nothing": "Nothing matches.",
+	"palette_label": "Search the interface",
+	"palette_shortcut_hint": "Ctrl K",
+	"shortcuts_title": "Keyboard shortcuts",
+	"shortcuts_palette": "Search everything",
+	"shortcuts_help": "Show these shortcuts",
+	"shortcuts_close": "Close a panel",
+	"action_previewing": "Asking the controller what this would do…",
+	"action_blockers": "Why it cannot be done as it stands",
+	"action_warnings": "Worth knowing before you apply",
+	"action_outcome_done": "Done — every step completed.",
+	"action_outcome_failed": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Stopped: {count} step failed, and nothing after it was attempted.",
+				"countPlural=*": "Stopped: {count} steps failed, and nothing after them was attempted."
+			}
+		}
+	],
+	"action_outcome_incomplete": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "INCOMPLETE: {count} step cannot be performed by Homelabus yet — do it by hand.",
+				"countPlural=*": "INCOMPLETE: {count} steps cannot be performed by Homelabus yet — do them by hand."
+			}
+		}
+	],
+	"action_type_to_confirm": "Type {target} to confirm",
+	"action_copied": "Copied",
+	"action_copy_selected": "Selected — copy it with Ctrl+C",
+	"action_recorded": "Recorded as the plan {name}.",
+	"action_step_unimplemented": "NOT AUTOMATED",
+	"action_panel_label": "Action",
+	"page_apps_installed": "Installed",
+	"page_apps_catalog": "Catalog",
+	"page_apps_todo": "Manual steps",
+	"page_apps_plans": "Saved plans",
+	"page_infra_nodes": "Machines",
+	"page_infra_resilience": "Resilience",
+	"page_infra_drift": "Drift",
+	"page_infra_health": "Diagnosis",
+	"page_infra_storage": "Storage",
+	"page_data_coverage": "Coverage",
+	"page_data_runs": "Runs",
+	"page_security_exposure": "Exposure",
+	"page_security_secrets": "Secrets",
+	"page_security_rotation": "Rotation",
+	"page_activity_alerts": "Alerts",
+	"page_activity_timeline": "Timeline",
+	"page_activity_audit": "Journal",
+	"page_activity_tasks": "Tasks",
+	"page_people_accounts": "Accounts",
+	"page_people_invitations": "Invitations",
+	"page_people_announcements": "Announcements",
+	"page_people_recovery": "Break-glass",
+	"page_settings_appearance": "Appearance",
+	"page_settings_exports": "Exports and runbook",
+	"page_me_home": "My space",
+	"page_me_mailbox": "Mailbox",
+	"page_me_account": "Account",
+	"page_me_preferences": "Preferences",
+	"page_me_status": "Service status",
+	"words_node_unreachable": "not answering",
+	"words_node_disk_full": "{path} is {used} full: nothing more is deployed there",
+	"words_node_disk_filling": "{path} is filling up: {used}",
+	"words_node_swapping": "swapping: it slows down before it falls over",
+	"words_node_load": "load {per_core} per core",
+	"words_node_reboot_pending": "waiting for a reboot to run its security fixes — hlb node upgrade does it, drained",
+	"words_coverage_no_destination": "no backup destination declared",
+	"words_coverage_never": "NEVER backed up — it runs, and its data is protected by nothing",
+	"words_coverage_no_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "no up-to-date copy: the only destination is too old",
+				"countPlural=*": "no up-to-date copy: all {count} destinations are too old"
+			}
+		}
+	],
+	"words_coverage_one_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "one up-to-date copy, out of {count} destination",
+				"countPlural=*": "one up-to-date copy, out of {count} destinations"
+			}
+		}
+	],
+	"words_coverage_fresh_copies": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} up-to-date copy",
+				"countPlural=*": "{count} up-to-date copies"
+			}
+		}
+	],
+	"words_topology_illusion": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service has every replica on one piece of hardware",
+				"countPlural=*": "{count} services have every replica on one piece of hardware"
+			}
+		}
+	],
+	"words_topology_concentrated": "{nodes} of {total} machines on {domain}: losing it takes the quorum",
+	"words_topology_concentrated_unknown": "{nodes} of {total} machines share an undeclared domain",
+	"words_topology_spread_unknown": "some machines have no declared failure domain: the real spread is unknown",
+	"words_topology_spread": "spread across several failure domains",
+	"words_topology_no_machine": "no machine known: nothing to judge the spread of",
+	"words_recovery_none_ever": "no safeguard ever verified: if PocketID goes down, nothing says you can still get in",
+	"words_recovery_never": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} safeguard never verified",
+				"countPlural=*": "{count} safeguards never verified"
+			}
+		}
+	],
+	"words_recovery_to_reverify": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} safeguard to verify again",
+				"countPlural=*": "{count} safeguards to verify again"
+			}
+		}
+	],
+	"words_recovery_all_recent": "every safeguard recently verified",
+	"words_status_down": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service down",
+				"countPlural=*": "{count} services down"
+			}
+		}
+	],
+	"words_status_incidents": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} incident open",
+				"countPlural=*": "{count} incidents open"
+			}
+		}
+	],
+	"words_status_degraded": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service degraded",
+				"countPlural=*": "{count} services degraded"
+			}
+		}
+	],
+	"words_status_nothing_exposed": "No service is exposed",
+	"words_status_all_operational": "Every service is operational",
+	"words_service_operational": "operational",
+	"words_service_degraded": "degraded",
+	"words_service_unavailable": "unavailable",
+	"words_service_maintenance": "maintenance",
+	"widget_apps": "Applications",
+	"widget_nodes": "Machines",
+	"widget_resilience": "Resilience",
+	"widget_backups": "Latest backups",
+	"widget_exposure": "Public addresses",
+	"widget_activity": "Recent activity",
+	"widget_tasks": "Cluster services",
+	"widget_announcements": "Announcements",
+	"widget_uptime": "Availability",
+	"widget_nodes_none": "No agent is reporting.",
+	"widget_exposure_none": "Nothing is reachable from the internet.",
+	"widget_activity_none": "Nothing recorded yet.",
+	"widget_tasks_none": "No task reported.",
+	"widget_announcements_none": "No announcement in force.",
+	"apps_filter": "Filter the applications",
+	"apps_open_site": "Open {domain}",
+	"app_tab_overview": "Overview",
+	"app_tab_config": "Configuration",
+	"app_tab_backups": "Backups",
+	"app_tab_history": "History",
+	"app_diagnosis": "Why it is in this state",
+	"app_unknown_cause": "The search stopped before reaching a cause: that is \"unknown\", not \"nothing\".",
+	"app_remedy": "What fixes it: {remedy}",
+	"app_back_up_title": "Back up {app} now",
+	"app_scale_title": "Run {app} on {count} replicas",
+	"app_scale_label": "Replicas wanted",
+	"app_scale_preview": "Preview the change",
+	"app_scale_zero": "Zero is not a size, it is a shutdown: remove the application instead.",
+	"app_remove": "Remove…",
+	"app_upgrade": "Apply the catalog…",
+	"app_upgrade_title": "Bring {app} to the catalog",
+	"app_remove_title": "Remove {app}",
+	"app_per_destination": "Per destination",
+	"app_failed_run": "failed: {error}",
+	"catalog_column_category": "Category",
+	"catalog_column_before": "Before installing",
+	"catalog_column_state": "State",
+	"catalog_manual_steps": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} manual step",
+				"countPlural=*": "{count} manual steps"
+			}
+		}
+	],
+	"catalog_requires": "What it asks for",
+	"need_database": "{engine} database “{name}”, with a role of its own",
+	"need_database_extensions": "{engine} database “{name}”, with a role of its own — the server's image must carry: {extensions}",
+	"need_cache_shared": "{engine} cache, shared",
+	"need_cache_dedicated": "{engine} cache, its own",
+	"need_sso_native": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "sign-in through PocketID (OIDC, {count} return address)",
+				"countPlural=*": "sign-in through PocketID (OIDC, {count} return addresses)"
+			}
+		}
+	],
+	"need_sso_proxy_header": "sign-in at the portal, which hands the identity over in a header",
+	"need_sso_proxy_only": "the portal in front: the application has no accounts of its own",
+	"need_sso_excluded": "no single sign-on, on purpose",
+	"need_smtp": "sending mail from an account of its own, which sends as itself only",
+	"need_smtp_person": "sending mail as the person signed in, with their own mailbox",
+	"need_mailbox": "a mailbox",
+	"need_mailbox_aliases": "a mailbox, with aliases",
+	"need_quota": "{need} — a {size} quota declared, not enforced",
+	"need_volume_local": "volume “{name}” at {path}, on its machine",
+	"need_volume_nfs": "volume “{name}” at {path}, on the NAS (NFS)",
+	"need_volume_sqlite": "{need} (a SQLite database: copied from a snapshot)",
+	"need_bucket": "S3 bucket “{name}”",
+	"need_backed_up": "{need} — backed up",
+	"need_not_backed_up": "{need} — NOT backed up",
+	"catalog_filter": "Filter the catalog",
+	"catalog_install": "Install…",
+	"catalog_install_title": "Install {app}",
+	"catalog_domain": "Domain",
+	"catalog_domain_hint": "app.example.org",
+	"catalog_homepage": "Project page",
+	"todo_attest_title": "Attest: {title}",
+	"infra_quorum_holds": "quorum holds",
+	"infra_quorum_lost": "QUORUM LOST",
+	"infra_quorum_unknown": "quorum unknown",
+	"infra_goes_down": "Goes down: {list}",
+	"infra_nothing_goes_down": "Nothing goes down.",
+	"infra_remaining": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} machine left",
+				"countPlural=*": "{count} machines left"
+			}
+		}
+	],
+	"infra_if_lost": "If {target} is lost",
+	"infra_reduced": "Survives diminished: {list}",
+	"infra_drain_title": "Drain {node}",
+	"infra_return_title": "Return {node} to service",
+	"infra_tier": "tier {tier}",
+	"rotation_step_change_in_postgres": "Change the password IN PostgreSQL (ALTER ROLE … PASSWORD)",
+	"rotation_step_write_to_vault": "Write the new value to the vault",
+	"rotation_step_redeploy_for_new_variable": "Redeploy the app so it receives the new variable",
+	"rotation_step_regenerate_in_pocket_id": "Regenerate the client secret IN PocketID",
+	"rotation_step_redeploy": "Redeploy the app",
+	"rotation_step_create_new_key_in_garage": "Create a NEW key in Garage — the old one stays valid",
+	"rotation_step_write_to_vault_garage_never_returns_it": "Write it to the vault: Garage will never show it again",
+	"rotation_step_delete_old_key_only_after_app_works": "Delete the old key ONLY after seeing the app work",
+	"rotation_step_change_on_stalwart": "Change the password on Stalwart",
+	"rotation_step_redeploy_and_reconfigure_mail": "Redeploy the app, and reconfigure the mail clients",
+	"rotation_step_do_not_rotate_before_verified_restore": "Do NOT rotate before a restore has been verified",
+	"rotation_step_add_key_to_restic_repository": "Add the new key to the restic repository (restic key add)",
+	"rotation_step_remove_old_restic_key_after_drill": "Remove the old key from the repository only after a successful drill",
+	"rotation_step_nothing_reads_it": "Nothing reads it: Valkey runs without a password — it can be forgotten",
+	"rotation_step_create_new_key_at_s3_provider": "Create a new key at the S3 provider",
+	"rotation_step_back_up_and_verify_it_succeeds": "Run a backup and VERIFY it succeeds: a failed rotation only shows there",
+	"rotation_step_revoke_old_key_after_backup_passes": "Revoke the old key once that backup has passed",
+	"rotation_step_generate_new_key_at_provider": "Generate a new key at the provider",
+	"rotation_step_reload_what_reads_it": "Reload the configuration that reads it",
+	"rotation_consequence_redeploy_app": "Requires redeploying {app}: without it, the app keeps the old value and fails without saying why.",
+	"rotation_consequence_redeploy_whatever": "Requires redeploying whatever uses it: the application could not be derived from the name.",
+	"rotation_consequence_reload": "Read on every use: reloading the configuration is enough.",
+	"security_reach_internet": "internet",
+	"security_reach_vpn_only": "VPN only",
+	"security_reach_diverged": "diverged",
+	"export_csv": "Download as CSV",
+	"alerts_muted_by": "muted by {by} — {remaining} left; it stays visible, one notch lower",
+	"alerts_muted": "muted — {remaining} left; it stays visible, one notch lower",
+	"alerts_level_unknown": "cannot be evaluated",
+	"alerts_level_info": "info",
+	"alerts_level_important": "important",
+	"alerts_level_critical": "critical",
+	"tasks_failed_only": "Failures only",
+	"tasks_on_node": "on {node}",
+	"tasks_wanted": "wanted {desired}, is {state}",
+	"timeline_filter_all": "Everything",
+	"timeline_kind_backup": "Backups",
+	"timeline_kind_verification": "Verifications",
+	"timeline_kind_action": "Actions",
+	"timeline_kind_alert": "Alerts",
+	"audit_filter": "Filter by person, action or target",
+	"people_role_change": "Change the role",
+	"people_role_title": "Give {account} the role {role}",
+	"people_role_user": "user — their own mailbox and portal",
+	"people_role_viewer": "viewer — sees operations, changes nothing",
+	"people_role_operator": "operator — installs, backs up, publishes",
+	"people_role_admin": "admin — everything, including destroying and granting",
+	"people_invite_title": "Invite: {role}",
+	"people_revoke_title": "Revoke invitation {reference}",
+	"people_note_hint": "who it is for (optional)",
+	"people_new_invitation": "New invitation",
+	"people_no_invitation": "No invitation. An invitation is a link that lets someone create their own account.",
+	"people_invitation_state_pending": "unused",
+	"people_invitation_state_partly_used": "partly used",
+	"people_invitation_state_exhausted": "exhausted",
+	"people_invitation_state_expired": "expired",
+	"people_widely_open": "widely open — the one you forget to close",
+	"people_publish_title": "Publish: {title}",
+	"people_remove_title": "Remove the announcement {title}",
+	"people_follow_up_title": "Update: {title}",
+	"people_new_announcement": "New announcement",
+	"people_last_attested": "checked {age} ago by {by}",
+	"people_never_attested": "never checked — we know nothing about it",
+	"people_attest_failed": "Not recorded: {error}",
+	"settings_brand_name": "Name",
+	"settings_footer": "Footer",
+	"settings_accent": "Accent colour",
+	"settings_accent_theme": "The theme's own accent",
+	"settings_default_theme": "Theme for everyone who chose none",
+	"settings_save": "Save",
+	"settings_saved": "Saved.",
+	"settings_save_failed": "Not saved: {error}",
+	"settings_logo": "Logo",
+	"settings_logo_explanation": "PNG or SVG; an SVG is turned into an image on the server, since a logo is served to anyone and an SVG can carry script.",
+	"settings_logo_remove": "Remove the logo",
+	"settings_exports_explanation": "Every table you may want outside Homelabus — to keep, to print, to hand over.",
+	"settings_export_audit": "The journal: who did what",
+	"settings_export_accounts": "The accounts: who exists",
+	"settings_export_backups": "The backup runs",
+	"settings_runbook_download": "Download the runbook",
+	"me_create_mailbox_title": "Create the mailbox {local}",
+	"me_alias_created": "Created: {address}",
+	"me_alias_failed": "Not created: {error}",
+	"me_hint_label": "Who is it for?",
+	"me_disable_title": "Disable {address}",
+	"me_purge_title": "Purge {address}",
+	"me_alias_permanent": "permanent",
+	"me_alias_valid": "expires in {left}",
+	"me_alias_expired": "expired, no longer receives",
+	"me_alias_expired_active": "expired {since} ago and STILL RECEIVING",
+	"me_alias_unknown": "a state this version does not know",
+	"me_language_en": "English",
+	"me_language_fr": "Français",
+	"me_theme_saved_failed": "The theme was not saved: {error}",
+	"me_bitwarden": "Set up Bitwarden aliases…",
+	"me_bitwarden_failed": "Could not set it up: {error}",
+	"me_bitwarden_server": "Self-host server URL",
+	"me_bitwarden_token": "API key — shown this once only ({name})",
+	"me_bitwarden_domain": "Domain",
+	"me_bitwarden_title": "Bitwarden aliases",
+	"me_uptime_day": "{day}: {state}",
+	"me_uptime_no_sample": "no sample",
+	"uptime_private": "This status page is private. Sign in to see it.",
+	"signup_display_name": "How should we call you? (optional)",
+	"signup_refused": "Refused: {reasons}",
+	"kiosk_title": "Wall display",
+	"alerts_mute": "Mute…",
+	"alerts_mute_title": "Mute {rule}",
+	"alerts_mute_for": "For",
+	"alerts_mute_reason": "Why",
+	"alerts_mute_reason_hint": "what is being done about it",
+	"alerts_mute_confirm": "Mute",
+	"alerts_mute_explanation": "It stops notifying, not showing: it stays here, one notch lower, until the mute ends.",
+	"alerts_unmute": "Lift the mute",
+	"alerts_mute_failed": "Not done: {error}",
+	"alerts_mute_reason_given": "reason: {reason}",
+	"alerts_hours": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} hour",
+				"countPlural=*": "{count} hours"
+			}
+		}
+	],
+	"alerts_days": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} day",
+				"countPlural=*": "{count} days"
+			}
+		}
+	],
+	"table_all": "All",
+	"table_total": "{total} in all",
+	"table_matched": "{matched} of {total}",
+	"table_no_match": "Nothing matches.",
+	"table_clear": "Clear the search and filters",
+	"table_pages": "Pages",
+	"table_previous": "Previous",
+	"table_next": "Next",
+	"table_page": "Page {page} of {pages}",
+	"apps_column_name": "Application",
+	"apps_column_address": "Address",
+	"apps_column_blocking": "Blocking steps",
+	"apps_column_attention": "State",
+	"settings_density": "List density",
+	"settings_density_explanation": "How tightly the lists are set: compact shows more rows on a screen. It follows you, like the theme.",
+	"settings_density_comfortable": "Comfortable",
+	"settings_density_compact": "Compact",
+	"me_density_saved_failed": "The density was not saved: {error}",
+	"people_role_name_user": "user",
+	"people_role_name_viewer": "viewer",
+	"people_role_name_operator": "operator",
+	"people_role_name_admin": "administrator",
+	"words_account_complete": "complete",
+	"words_account_without_mailbox": "no mailbox",
+	"words_account_without_identity": "no identity",
+	"words_account_empty": "empty",
+	"accounts_column_name": "Person",
+	"accounts_column_state": "State",
+	"accounts_column_role": "Role",
+	"accounts_column_mailbox": "Address",
+	"accounts_column_sessions": "Sessions",
+	"accounts_column_aliases": "Aliases",
+	"accounts_search": "Search a name or an address",
+	"accounts_filter_incomplete": "incomplete",
+	"accounts_show_incomplete": "Show them",
+	"accounts_none": "No account yet.",
+	"accounts_detail_identity": "Identity",
+	"accounts_detail_none": "none",
+	"accounts_detail_mailboxes": "Mailboxes",
+	"accounts_detail_role": "Role and access",
+	"accounts_detail_repair": "To repair",
+	"audit_column_at": "When",
+	"audit_column_who": "Who",
+	"audit_column_what": "What",
+	"audit_column_outcome": "Outcome",
+	"audit_column_detail": "Detail",
+	"invitations_search": "Search a note, a role or who invited",
+	"invitations_column_state": "State",
+	"invitations_column_for": "For",
+	"invitations_column_by": "Invited by",
+	"invitations_column_left": "Left",
+	"invitations_column_note": "Note",
+	"invitations_column_action": "Action",
+	"timeline_search": "Search an application or an event",
+	"timeline_window": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "The latest event, from every source. Older ones are in the audit log and the backup runs.",
+				"countPlural=*": "The latest {count} events, from every source. Older ones are in the audit log and the backup runs."
+			}
+		}
+	],
+	"runs_result_ok": "ok",
+	"runs_result_failed": "failed",
+	"runs_column_app": "Application",
+	"runs_column_when": "When",
+	"runs_column_kind": "What",
+	"runs_column_destination": "Destination",
+	"runs_column_result": "Result",
+	"runs_search": "Search an application or a destination",
+	"runs_window": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "The latest run. The whole history is in the CSV.",
+				"countPlural=*": "The latest {count} runs. The whole history is in the CSV."
+			}
+		}
+	],
+	"secrets_column_name": "Name",
+	"secrets_column_purpose": "Purpose",
+	"secrets_search": "Search a name or a purpose",
+	"exposure_column_host": "Address",
+	"exposure_column_app": "Application",
+	"exposure_column_declared": "Declared",
+	"exposure_column_reach": "Reachable from",
+	"exposure_column_divergence": "Divergence",
+	"exposure_search": "Search an address or an application",
+	"table_selected": "{count} selected",
+	"table_unselect": "Clear the selection",
+	"table_select_page": "Select this page",
+	"table_select_row": "Select {row}",
+	"accounts_selection_role": "Give the role",
+	"accounts_selection_title": "Give {count} accounts the role {role}",
+	"cause_app_failed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application failed",
+				"countPlural=*": "{shown} applications failed"
+			}
+		}
+	],
+	"cause_app_partial": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application short of its replicas",
+				"countPlural=*": "{shown} applications short of their replicas"
+			}
+		}
+	],
+	"cause_guide_blocking": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "A manual step blocks {shown} application",
+				"countPlural=*": "Manual steps block {shown} applications"
+			}
+		}
+	],
+	"cause_catalog_changed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "The catalog has changed {shown} application since it was installed",
+				"countPlural=*": "The catalog has changed {shown} applications since they were installed"
+			}
+		}
+	],
+	"cause_job_failed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "A scheduled job of {shown} application failed",
+				"countPlural=*": "Scheduled jobs of {shown} applications failed"
+			}
+		}
+	],
+	"cause_mail_waiting": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Mail to {shown} domain has waited over an hour",
+				"countPlural=*": "Mail to {shown} domains has waited over an hour"
+			}
+		}
+	],
+	"cause_guide_pending": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "A manual step waits on {shown} application",
+				"countPlural=*": "Manual steps wait on {shown} applications"
+			}
+		}
+	],
+	"cause_never_backed_up": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application never backed up",
+				"countPlural=*": "{shown} applications never backed up"
+			}
+		}
+	],
+	"cause_no_backup_destination": "No backup destination: nothing is backed up anywhere",
+	"cause_no_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application with no up-to-date copy",
+				"countPlural=*": "{shown} applications with no up-to-date copy"
+			}
+		}
+	],
+	"cause_one_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application down to one up-to-date copy",
+				"countPlural=*": "{shown} applications down to one up-to-date copy"
+			}
+		}
+	],
+	"cause_single_destination": "A single backup destination: one copy, on one machine",
+	"cause_drill_never": "No restore was ever rehearsed",
+	"cause_drill_stale": "The last restore rehearsal is getting old",
+	"cause_node_unreachable": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine not answering",
+				"countPlural=*": "{shown} machines not answering"
+			}
+		}
+	],
+	"cause_node_disk_full": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine with a full disk",
+				"countPlural=*": "{shown} machines with a full disk"
+			}
+		}
+	],
+	"cause_node_disk_filling": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine whose disk is filling up",
+				"countPlural=*": "{shown} machines whose disk is filling up"
+			}
+		}
+	],
+	"cause_node_swapping": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine short of memory",
+				"countPlural=*": "{shown} machines short of memory"
+			}
+		}
+	],
+	"cause_node_load": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine overloaded",
+				"countPlural=*": "{shown} machines overloaded"
+			}
+		}
+	],
+	"cause_node_reboot_pending": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine waiting for a reboot",
+				"countPlural=*": "{shown} machines waiting for a reboot"
+			}
+		}
+	],
+	"cause_topology": "Resilience — {verdict}",
+	"cause_drift": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application differs from its declaration",
+				"countPlural=*": "{shown} applications differ from their declaration"
+			}
+		}
+	],
+	"cause_assertion_broken": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application does not hold what its manifest says",
+				"countPlural=*": "{shown} applications do not hold what their manifests say"
+			}
+		}
+	],
+	"cause_assertion_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application's settings were not read lately",
+				"countPlural=*": "{shown} applications' settings were not read lately"
+			}
+		}
+	],
+	"cause_mail_record_wrong": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} DNS record the mail needs is missing or wrong",
+				"countPlural=*": "{shown} DNS records the mail needs are missing or wrong"
+			}
+		}
+	],
+	"cause_mail_record_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} DNS record of the mail was not read lately",
+				"countPlural=*": "{shown} DNS records of the mail were not read lately"
+			}
+		}
+	],
+	"cause_mail_blocklists_refused": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} spam blocklist refuses Stalwart's resolver and checks nothing",
+				"countPlural=*": "{shown} spam blocklists refuse Stalwart's resolver and check nothing"
+			}
+		}
+	],
+	"cause_deadman_absent": "No deadman: if everything stops, nothing will warn you",
+	"cause_deadman_silent": "The deadman's heartbeat has stopped",
+	"cause_exposure_unknown": "Access never applied: what is reachable from outside is unknown",
+	"cause_exposed_against_manifest": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} address on the internet against its manifest",
+				"countPlural=*": "{shown} addresses on the internet against their manifest"
+			}
+		}
+	],
+	"cause_not_published": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} address should be published and is not",
+				"countPlural=*": "{shown} addresses should be published and are not"
+			}
+		}
+	],
+	"cause_route_not_applied": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} address with no route: access was not applied again",
+				"countPlural=*": "{shown} addresses with no route: access was not applied again"
+			}
+		}
+	],
+	"cause_orphan_route": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} route still answers for a removed application",
+				"countPlural=*": "{shown} routes still answer for removed applications"
+			}
+		}
+	],
+	"cause_secret_never_rotated": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} secret never rotated",
+				"countPlural=*": "{shown} secrets never rotated"
+			}
+		}
+	],
+	"cause_secret_rotation_due": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} secret due for rotation",
+				"countPlural=*": "{shown} secrets due for rotation"
+			}
+		}
+	],
+	"cause_certificate_expiring": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} mTLS certificate of the fleet ends soon and was not renewed",
+				"countPlural=*": "{shown} mTLS certificates of the fleet end soon and were not renewed"
+			}
+		}
+	],
+	"cause_admin_tokens": "Several admin tokens in circulation: each opens everything",
+	"cause_admin_unknown": "No admin token recorded: access cannot be checked from here",
+	"cause_audit_broken": "The audit log was altered: an entry was removed or modified",
+	"cause_audit_unreadable": "The audit log could not be read",
+	"cause_account_without_mailbox": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} account without a mailbox — signs in, receives nothing",
+				"countPlural=*": "{shown} accounts without a mailbox — sign in, receive nothing"
+			}
+		}
+	],
+	"cause_account_without_identity": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} account without an identity — mail arrives, nobody can read it",
+				"countPlural=*": "{shown} accounts without an identity — mail arrives, nobody can read it"
+			}
+		}
+	],
+	"cause_account_empty": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} empty account",
+				"countPlural=*": "{shown} empty accounts"
+			}
+		}
+	],
+	"cause_alias_still_receiving": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} account with an expired alias still receiving",
+				"countPlural=*": "{shown} accounts with an expired alias still receiving"
+			}
+		}
+	],
+	"cause_safeguard": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} break-glass safeguard to attest",
+				"countPlural=*": "{shown} break-glass safeguards to attest"
+			}
+		}
+	],
+	"cause_alert": "Alert {rule} is firing",
+	"cause_alert_blind": "Alert {rule} cannot be evaluated: this watch is blind",
+	"cause_and_more": "{names} and {more} more",
+	"safeguard_printed_codes": "printed sign-in codes",
+	"safeguard_two_passkeys": "two passkeys",
+	"safeguard_vaultwarden_local": "Vaultwarden's local sign-in",
+	"safeguard_pocketid_restored": "PocketID restore rehearsed",
+	"safeguard_emergency_vault": "recovery sign-ins in the emergency vault",
+	"safeguard_emergency_kit": "emergency kit printed and current",
+	"inbox_later": "Later",
+	"inbox_until_tomorrow": "Until tomorrow",
+	"inbox_for_a_week": "For a week",
+	"inbox_later_title": "Set aside: {title}",
+	"inbox_aside_title": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} set aside",
+				"countPlural=*": "{shown} set aside"
+			}
+		}
+	],
+	"inbox_aside_until": "set aside until {at}",
+	"inbox_bring_back": "Bring back",
+	"inbox_aside_failed": "Not done: {error}",
+	"reason_app_failed": "failed",
+	"reason_app_partial": "short of replicas",
+	"reason_guide_blocking": "blocked by a manual step",
+	"reason_catalog_changed": "the catalog has changed it",
+	"reason_job_failed": "its scheduled job failed: hlb job",
+	"reason_mail_waiting": "mail waits over an hour to leave: hlb mail queue",
+	"reason_guide_pending": "a manual step waits",
+	"reason_never_backed_up": "never backed up",
+	"reason_no_fresh_copy": "no up-to-date copy",
+	"reason_one_fresh_copy": "one up-to-date copy left",
+	"reason_node_unreachable": "not answering",
+	"reason_node_disk_full": "disk full",
+	"reason_node_disk_filling": "disk filling up",
+	"reason_node_swapping": "short of memory",
+	"reason_node_load": "overloaded",
+	"reason_node_reboot_pending": "a reboot is pending",
+	"reason_drift": "differs from its declaration",
+	"reason_assertion_broken": "does not hold what its manifest says",
+	"reason_assertion_unknown": "settings not read lately",
+	"reason_mail_record_wrong": "missing or wrong: mail is refused or filed as spam",
+	"reason_mail_record_unknown": "not read lately",
+	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",
+	"reason_exposed_against_manifest": "on the internet against its manifest",
+	"reason_not_published": "should be published",
+	"reason_route_not_applied": "no route",
+	"reason_orphan_route": "answers for a removed application",
+	"reason_secret_never_rotated": "never rotated",
+	"reason_secret_rotation_due": "due for rotation",
+	"reason_certificate_expiring": "not renewed: hlb pki renew --apply",
+	"reason_account_without_mailbox": "no mailbox",
+	"reason_account_without_identity": "no identity",
+	"reason_account_empty": "empty",
+	"reason_alias_still_receiving": "an expired alias still receives",
+	"alert_rule_backup_absent": "Some applications have NO successful backup. They may be running perfectly — the worst state of the system, and the one that looks healthiest.",
+	"alert_rule_backup_late": "A backup is more than 48 h old.",
+	"alert_rule_single_copy": "An application has only ONE up-to-date copy left. The other destinations are configured but failing — configured is not protected.",
+	"alert_rule_verification_stale": "No verified restore for over a month. A backup never restored is a hypothesis.",
+	"alert_rule_app_failed": "An application has failed.",
+	"alert_rule_node_unreachable": "A machine has stopped answering.",
+	"alert_rule_disk_full": "A disk is over 85 %. Beyond that, backups and dumps have no room left to run.",
+	"alert_rule_blocking_guides": "Manual steps are blocking an installation.",
+	"account_explain_complete": "Identity and mailbox: the account is whole.",
+	"account_explain_without_mailbox": "Identity created, NO mailbox: this person signs in everywhere and their address receives nothing. The first lost email will probably be a password reset. Running the creation again resumes where it stopped.",
+	"account_explain_without_identity": "Mailbox created, NO identity: mail arrives and nobody can read it. Running the creation again finishes it.",
+	"account_explain_empty": "No identity, no mailbox.",
+	"reason_exposure_unknown": "unknown: access was never applied",
+	"invitations_widely_open": "open to {count}",
+	"invitations_left": [
+		{
+			"declarations": [
+				"input remaining",
+				"input expires_in",
+				"local p = remaining: plural"
+			],
+			"selectors": [
+				"p"
+			],
+			"match": {
+				"p=one": "{remaining} use · {expires_in} left",
+				"p=*": "{remaining} uses · {expires_in} left"
+			}
+		}
+	],
+	"field_between": "Between {min} and {max}.",
+	"widget_problems": "Problems",
+	"home_tile_width": "Width",
+	"home_tile_height": "Height",
+	"home_layout_preview": "How the home will be laid out on a wide screen",
+	"home_tiles": "On the home",
+	"widget_summary": "At a glance",
+	"widget_cpu": "Processors",
+	"widget_memory": "Memory",
+	"widget_disks": "Disks",
+	"widget_accounts": "People",
+	"summary_machines": "machines online",
+	"summary_apps": "applications running",
+	"summary_cpu": "processor in use",
+	"summary_memory": "memory in use",
+	"summary_storage": "used of {total}",
+	"summary_public": "public addresses",
+	"widget_load": "load {load} per core",
+	"widget_unreachable": "unreachable",
+	"widget_up_for": "up {duration}",
+	"widget_hosting": "hosting {count}",
+	"widget_open": "Open {app}",
+	"widget_backup_done": "done",
+	"widget_backup_failed": "failed",
+	"widget_backup_to": "to {destination}",
+	"widget_backups_none": "No backup has run yet.",
+	"widget_services_none": "No service is exposed yet.",
+	"widget_replicas": "{alive} of {total} running",
+	"widget_accounts_count": "accounts",
+	"widget_mailboxes_count": "mailboxes",
+	"widget_aliases_count": "active aliases",
+	"widget_sessions_count": "open sessions",
+	"widget_swap": "swap {value}",
+	"widget_cluster_machines": "machines",
+	"widget_cluster_managers": "managers",
+	"widget_cluster_domains": "failure domains",
+	"widget_network": "Network",
+	"widget_received": "received",
+	"widget_sent": "sent",
+	"widget_cpu_curve": "Processor of {name} over the period",
+	"widget_memory_curve": "Memory and swap of {name} over the period",
+	"widget_disk_curve": "{disk} on {name} over the period",
+	"widget_network_curve": "Network of {name} over the period",
+	"widget_apps_curve": "Applications running over the period",
+	"widget_history_collecting": "Measuring — the curve fills in a minute at a time.",
+	"window_label": "Period shown by the curves",
+	"window_hour": "1 h",
+	"window_six_hours": "6 h",
+	"window_day": "24 h",
+	"status_no_data": "no data",
+	"widget_first_reading": "first reading…",
+	"page_people_roles": "Roles",
+	"roles_column_name": "Role",
+	"roles_column_level": "Level",
+	"roles_column_holders": "Holders",
+	"roles_column_apps": "Enters",
+	"roles_column_quotas": "Quotas",
+	"roles_column_actions": "Actions",
+	"roles_column_app": "Application",
+	"roles_column_state": "Who enters",
+	"roles_column_floor": "From the level",
+	"roles_column_allowed": "Roles let in",
+	"roles_administers": "administers {app}: {means}",
+	"roles_edit": "Change",
+	"roles_quota": "Quota",
+	"roles_delete": "Delete",
+	"roles_delete_title": "Delete the role {role}",
+	"roles_closed": "closed — no role is let in",
+	"roles_open_client": "its roles, through PocketID",
+	"roles_open_portal": "its roles, through the portal",
+	"roles_deny_title": "Stop letting {role} into {app}",
+	"roles_let_in": "A role to let into {app}",
+	"roles_let_in_button": "Let in",
+	"roles_allow_title": "Let {role} into {app}",
+	"roles_new": "New role",
+	"roles_sync": "Sync now",
+	"roles_sync_title": "Make PocketID and the applications hold the roles",
+	"roles_explanation": "A role is what someone may do here, which applications they enter and how much they may hold. Each one is a group in PocketID: an application lets in only the roles listed for it, and nobody when none is.",
+	"roles_notes": "Not done as asked",
+	"roles_heading_roles": "Roles",
+	"roles_heading_apps": "Who enters each application",
+	"roles_apps_explanation": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} closed: an application no role is let into opens for nobody.",
+				"countPlural=*": "{count} closed: an application no role is let into opens for nobody."
+			}
+		}
+	],
+	"roles_search": "Search the roles",
+	"roles_none": "No role",
+	"roles_search_apps": "Search the applications",
+	"roles_no_app": "No application signs anyone in through PocketID",
+	"roles_set_title": "The role {role}",
+	"roles_id": "Identifier",
+	"roles_id_explanation": "Lowercase letters, digits and hyphens. It names the role's PocketID group and never changes.",
+	"roles_name": "Name",
+	"roles_preview": "Preview",
+	"roles_quota_title": "{role}'s quota in {app}",
+	"roles_quota_none": "No quota",
+	"roles_quota_gib": "Quota, in GiB",
+	"roles_choice": "{name} ({level})",
+	"accounts_no_role": "no role",
+	"accounts_column_level": "Level",
+	"accounts_detail_quotas": "Quotas",
+	"accounts_quota_none": "no quota",
+	"accounts_quota_own": "their own, set by {by} on {at}",
+	"accounts_quota_role": "their role's",
+	"accounts_quota_absent": "waiting for their first sign-in to the application",
+	"accounts_quota_failed": "not applied",
+	"accounts_quota_change": "Change the quota",
+	"accounts_quota_title": "{account}'s quota in {app}",
+	"accounts_quota_back_to_role": "Their role's again",
+	"invitations_choose_role": "Choose the role the account will hold."
+}

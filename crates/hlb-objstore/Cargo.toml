@@ -1,0 +1,23 @@
+[package]
+name = "hlb-objstore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Garage admin client: buckets and isolated keys; the S3 calls that prove a destination cannot be erased."
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Signature Version 4, for the four S3 calls of a destination's proof.
+hmac = "0.12"
+sha2 = "0.10"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

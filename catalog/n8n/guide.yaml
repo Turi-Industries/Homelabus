@@ -1,0 +1,85 @@
+# What the deployment alone does not cover.
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: |
+      At your registrar, point {{ domain }} at the cluster.
+
+      If a wildcard *.{{ base_domain }} already exists, there is nothing to do.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: encryption-key
+    title: 🔴 Back up the encryption key
+    phase: post-install
+    severity: blocking
+    body: |
+      n8n encrypts ALL your workflows' credentials — API keys, tokens,
+      passwords — with a single key. Without it, the database is unreadable.
+
+      🔴 The trap: the PostgreSQL dump IS NOT ENOUGH. Restored on its own, it
+      gives back workflows whose credentials can none of them be decrypted. The
+      backup looks complete, the restore succeeds, and nothing works.
+
+      The key lives in /home/node/.n8n — hence the `backup: true` volume. But
+      check it, because this is the kind of mistake you only discover on a
+      jour de sinistre :
+
+        hlb backup status n8n
+        docker exec $(docker ps -qf name=n8n) cat /home/node/.n8n/config
+
+      Note the key down in Vaultwarden. Two copies beat one, and this one does
+      not regenerate.
+
+  - id: owner-account
+    title: The owner account
+    phase: post-install
+    severity: blocking
+    after: [encryption-key]
+    body: |
+      n8n's first visitor to /setup becomes the owner of the instance — and of
+      every credential its workflows hold. So the owner is created at the
+      install, before anyone can reach it: the address n8n sends mail from,
+      n8n@ your mail domain, with a generated password:
+
+        hlb secret-get n8n-owner-password
+
+      Sign in with it, then change the address to yours in your settings.
+    deeplink: "https://{{ domain }}/signin"
+    automate:
+      - method: api
+        # `showSetupOnFirstLoad` turns false once an owner exists (1.123.72).
+        probe:
+          path: /rest/settings
+          pointer: /data/userManagement/showSetupOnFirstLoad
+          equals: "false"
+        calls:
+          - verb: POST
+            path: /rest/owner/setup
+            body: '{"email":"{{ smtp.from }}","firstName":"Homelabus","lastName":"Owner","password":"{{ secret.owner-password }}"}'
+    # Attested: the API saying an owner exists (`/rest/settings`) sits behind the
+    # portal, and `/healthz` says n8n runs, never who owns it. The automation's probe,
+    # on the overlay, records the step when it is done.
+    verify:
+      type: attest
+
+  - id: external-webhooks
+    title: Understand the webhook limitation
+    phase: post-install
+    severity: recommended
+    after: [owner-account]
+    body: |
+      n8n being private, triggers called from outside (GitHub,
+      Stripe, a public form…) WILL NOT ARRIVE.
+
+      This is not a fault, it is the manifest's acknowledged trade-off: n8n holds
+      the credentials of everything it drives, and the ingress cannot yet
+      distinguish /webhook/* from the rest in order to open only that.
+
+      In the meantime, two things that do work:
+        - interval or polling triggers;
+        - webhooks called from the VPN.

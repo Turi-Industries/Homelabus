@@ -1,0 +1,12 @@
+# Read by `cargo audit` (CI's "Known vulnerabilities" job). An advisory is ignored here
+# only with the reason it does not reach Homelabus, and comes back the day that changes.
+[advisories]
+ignore = [
+    # rsa 0.9, the Marvin attack: a timing side channel on PRIVATE-key decryption, which
+    # needs an attacker timing very many decryptions of ciphertexts they chose. No fixed
+    # version exists. `hlb-bitwarden` decrypts one organisation key per nightly pass, from
+    # a Vaultwarden Homelabus installed; sqlx-mysql only encrypts, with MariaDB's public
+    # key; `hlb-types` only generates a key (the `:rsa` secret form) and hands it over.
+    # Revisit when `rsa` 0.10 is released, or if a decryption ever answers a request.
+    "RUSTSEC-2023-0071",
+]

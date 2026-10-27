@@ -1,0 +1,12 @@
+# Line endings are LF in the repository whatever the platform checks it out on: a shell
+# script or a Caddyfile with CRLF fails on the node it is deployed to.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.asc -diff
+
+# Generated, refused when stale: folded in reviews, left out of the language statistics.
+web/openapi.json linguist-generated=true
+Cargo.lock linguist-generated=true -diff
+web/bun.lock linguist-generated=true -diff

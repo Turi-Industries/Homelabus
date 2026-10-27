@@ -1,0 +1,75 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: ntfy
+  displayName: ntfy
+  category: platform
+  homepage: https://ntfy.sh
+spec:
+  image: { repo: binwiederhier/ntfy, tag: "v2.30.0", digest: "sha256:8563a39da2f5a47360618b2ab9200239c76b37f4145f6d627d9ab4368abd23f0" }
+  requires:
+    # Message and subscription cache. Backed up: losing it again disconnects every
+    # subscribed phone, which would have to be resubscribed by hand.
+    - kind: storage
+      name: cache
+      path: /var/cache/ntfy
+      tier: local
+      backup: true
+  # 🔴 The image's entrypoint is `ntfy` alone: without `serve` it printed its help and
+  # exited, and Swarm started it again — the catalog's ntfy never received an alert.
+  command: [ntfy, serve]
+  env:
+    NTFY_BASE_URL: "https://{{ domain }}"
+    # Without a file, the messages a phone has not fetched yet live in memory and die
+    # with the task — the volume above held nothing.
+    NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+    # Behind Caddy: each visitor's address is read from X-Forwarded-For, or every one
+    # shares Caddy's rate limit.
+    NTFY_BEHIND_PROXY: "true"
+
+    # 🔴 Closed by default: ntfy's own default is read-write for anyone, and the alerts
+    # topic was guessable (`homelab`) — anyone could read what is broken here, or
+    # forge an alert. Three accounts, declared, their passwords generated into the
+    # vault and given to ntfy as bcrypt hashes: `homelabus` publishes the
+    # controller's alerts, `watchdog` the deadman's from another machine, `reader` is
+    # what a phone subscribes with (`hlb secret-get ntfy-reader-password`). The
+    # declared ones are kept in this file, which ntfy rewrites from these at start.
+    NTFY_AUTH_FILE: /var/cache/ntfy/auth.db
+    NTFY_AUTH_DEFAULT_ACCESS: deny-all
+    NTFY_AUTH_USERS: >-
+      homelabus:{{ secret.publisher-password:bcrypt }}:user,watchdog:{{ secret.watchdog-password:bcrypt }}:user,reader:{{ secret.reader-password:bcrypt }}:user
+    NTFY_AUTH_ACCESS: "homelabus:*:write-only,watchdog:*:write-only,reader:*:read-only"
+  ingress:
+    # 🔴 Public, and deliberately so: an alert that only arrives from the VPN does not
+    # arrive when the VPN is down — precisely the moment it matters. Its accounts, not
+    # the topic's name, are what keeps it closed.
+    - host: "{{ domain }}"
+      port: 80
+      chain: [caddy-front, caddy-back]
+      expose: public
+      # The web app's sign-in: a token for a username and password, 401 when wrong.
+      authRoutes:
+        - paths: [/v1/account/token]
+          failsWith: 401
+  security:
+    # Writes its SQLite cache and drops its privileges at startup.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    memory: { reserve: 32M, limit: 256M }
+    # 🔴 A single instance: the cache is a local SQLite. Two replicas would split two
+    # different databases, and a subscriber would see only one message out of two
+    # depending on which node answered.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/v1/health | grep -q true"]
+  update:
+    channel: minor
+  assertions:
+    - id: closed-to-strangers
+      holds: nobody reads the alerts without an account
+      check: { type: http, path: "/homelabus-assertion/json?poll=1", status: [401, 403] }
+    - id: deny-all
+      holds: what no account is given is refused
+      check: { type: env, name: NTFY_AUTH_DEFAULT_ACCESS, equals: deny-all }

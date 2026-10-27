@@ -1,0 +1,51 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: mariadb
+  displayName: MariaDB
+  category: platform
+  homepage: https://mariadb.org
+spec:
+  # `11.8.x` and not `lts`: an "lts" tag changes MAJOR version the day the next LTS
+  # comes out. A major database migration must never arrive by surprise during a
+  # nightly maintenance window.
+  image: { repo: mariadb, tag: "11.8.8", digest: "sha256:24e76fcec8c003a0362d0dd53f4806e7e79458d7fdeaf47437760e19496f5a9c" }
+  # 🔴 Swarm's virtual IP forgets a connection idle for 900 s and tells neither end:
+  # the server's keepalives cross it for every client, as PostgreSQL's do. 0 — the
+  # image's default — is the system's 7200. The image's own entrypoint and command
+  # first, as its `Entrypoint` and `Cmd` say.
+  command:
+    - docker-entrypoint.sh
+    - mariadbd
+    - --tcp-keepalive-time=300
+    - --tcp-keepalive-interval=30
+    - --tcp-keepalive-probes=3
+  requires:
+    # Never on NFS, the same reason as PostgreSQL: file locking is not
+    # reliable there, and InnoDB depends on it.
+    - kind: storage
+      name: data
+      path: /var/lib/mysql
+      tier: local
+      backup: true
+  security:
+    # The entrypoint adjusts the data directory's permissions then drops its
+    # privileges to the mysql user.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    memory: { reserve: 256M, limit: 1G }
+    replicas: 1
+    # Pinned to the "heavy" node: local volumes do not follow containers
+    # rescheduled by Swarm.
+    tier: heavy
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+  update:
+    # Minor only: a major imposes an internal schema migration that an image
+    # rollback cannot reverse.
+    channel: minor
+  env:
+    # 🔴 The image refuses to initialise without a root password or an explicit
+    # "allow empty". Generated at install, kept in the vault.
+    MARIADB_ROOT_PASSWORD: "{{ secret.root-password }}"

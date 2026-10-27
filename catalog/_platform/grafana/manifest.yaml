@@ -1,0 +1,133 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: grafana
+  displayName: Grafana
+  category: platform
+  homepage: https://grafana.com
+spec:
+  # 13 rehearsed on 2026-10-19 on an 11.6.16 volume: its migrations to their end, the
+  # dashboards kept, the data source provisioned, every assertion's text still served.
+  image: { repo: grafana/grafana, tag: "13.2.4", digest: "sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f" }
+  requires:
+    # 🔴 Native SSO, no forward-auth. Grafana handles the roles itself: going through
+    # an authentication proxy would give everyone the same level, and a viewer could
+    # change the data sources.
+    - kind: sso
+      mode: native
+      redirectPaths: ["/login/generic_oauth"]
+    # Dashboards, preferences, API keys. SQLite: small, but losing it means rebuilding
+    # every dashboard by hand.
+    - kind: storage
+      name: data
+      path: /var/lib/grafana
+      tier: local
+      backup: true
+  ingress:
+    # Private: the dashboard has no reason to be reachable from outside, and it exposes
+    # the installation's full topology.
+    - host: "{{ domain }}"
+      port: 3000
+      chain: [caddy-back]
+      expose: private
+      # `password-auth.failed` is a 401 (Grafana 11.6).
+      authRoutes:
+        - paths: [/login]
+          failsWith: 401
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    memory: { reserve: 128M, limit: 512M }
+    # 🔴 A single instance: its database is a local SQLite. Two replicas would
+    # see two different sets of dashboards.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+  update:
+    channel: minor
+  env:
+    # 🔴 Without it Grafana starts on admin/admin, on a page anyone on the network
+    # reaches before you do.
+    GF_SECURITY_ADMIN_PASSWORD: "{{ secret.admin-password }}"
+    GF_SERVER_ROOT_URL: "https://{{ domain }}"
+    # `sso: native` provisions an OIDC client; these are what make Grafana use it.
+    # Declared and not wired, the client would exist and nobody would sign in with it.
+    GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+    GF_AUTH_GENERIC_OAUTH_NAME: "Pocket ID"
+    GF_AUTH_GENERIC_OAUTH_CLIENT_ID: "{{ oidc.client_id }}"
+    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
+    GF_AUTH_GENERIC_OAUTH_AUTH_URL: "{{ oidc.issuer }}/authorize"
+    GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "{{ oidc.issuer }}/api/oidc/token"
+    # No API URL: Pocket ID's own guide leaves it empty, the claims come from the ID
+    # token.
+    GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_NAME: "email:primary"
+    # 🔴 What each person may do in Grafana is their role's, read from `hlb_grafana` at
+    # every sign-in. Strict: no value is no entry — without it, someone the claim missed
+    # came in as a Viewer. `GrafanaAdmin` is the server's administrator, which only a
+    # claim allowed to assign it may grant.
+    GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: hlb_grafana
+    GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT: "true"
+    GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN: "true"
+
+    # Grafana's defaults, said here so the assertions below read what this decides: no
+    # sign-up form, no anonymous viewer — the dashboards map the whole installation.
+    GF_USERS_ALLOW_SIGN_UP: "false"
+    GF_AUTH_ANONYMOUS_ENABLED: "false"
+    # It calls grafana.com on its own: usage statistics, and the update checks the
+    # login page reported as `hasUpdate`. And a Gravatar per person who signs in.
+    GF_ANALYTICS_REPORTING_ENABLED: "false"
+    GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+    GF_SECURITY_DISABLE_GRAVATAR: "true"
+  # It installed empty: the measurements were in VictoriaMetrics and nothing told
+  # Grafana where. Provisioned, the source is read only — edited in the interface, it
+  # would be overwritten at the next start without a word.
+  files:
+    - path: /etc/grafana/provisioning/datasources/homelabus.yaml
+      content: |
+        apiVersion: 1
+        datasources:
+          - name: VictoriaMetrics
+            uid: homelabus-victoria-metrics
+            type: prometheus
+            access: proxy
+            url: http://victoria-metrics:8428
+            isDefault: true
+            editable: false
+  # The dashboards map the whole installation: from Homelabus's own `viewer` level up,
+  # as its console's read is.
+  access:
+    floor: viewer
+    admins:
+      level: admin
+      means: Grafana's server administration — its users, data sources and plugins
+    claims:
+      hlb_grafana: { byLevel: { viewer: Viewer, operator: Editor, admin: GrafanaAdmin } }
+  # Read from the sign-in page, whose boot data is what Grafana itself obeys.
+  assertions:
+    - id: signups-closed
+      holds: nobody creates a Grafana account from its sign-in page
+      check: { type: http, path: /login, contains: '"disableUserSignUp":true' }
+    - id: no-anonymous-viewer
+      holds: nobody sees the dashboards without signing in
+      check: { type: http, path: /login, contains: '"anonymousEnabled":false' }
+    - id: roles-strict
+      holds: nobody enters Grafana without a role saying as what
+      check: { type: env, name: GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT, equals: "true" }
+    - id: no-reporting
+      holds: Grafana sends no usage statistics out
+      check: { type: env, name: GF_ANALYTICS_REPORTING_ENABLED, equals: "false" }
+  # The server administrator, for when PocketID signs nobody in.
+  recovery:
+    - secret: admin-password
+      username: admin
+      path: /login
+      # The sign-in page's own call: 401 to a refusal (13.2.4). Grafana reads its
+      # administrator's password at the first start only, as Seafile does.
+      proof:
+        path: /login
+        body: '{"user":"{{ username }}","password":"{{ password }}"}'
+        pointer: /message

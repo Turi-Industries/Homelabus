@@ -1,0 +1,14 @@
+-- The destination mailbox of an API token.
+--
+-- 🔴 Why the mailbox lives on the TOKEN and not in the request.
+--
+-- The addy.io protocol has no field for choosing a mailbox: Bitwarden only sends
+-- `domain` and `description` (read from its source). So the user cannot be asked at
+-- generation time.
+--
+-- The token is the only place left, and it is in fact the right one: in Bitwarden
+-- you paste a token into the generator settings. One token per mailbox, and
+-- changing destination means changing token — explicit, and readable afterwards.
+--
+-- NULL = the account's default mailbox. The common case, and it asks for nothing.
+ALTER TABLE api_tokens ADD COLUMN mailbox TEXT;

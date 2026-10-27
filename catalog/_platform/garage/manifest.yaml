@@ -1,0 +1,95 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: garage
+  displayName: Garage
+  category: platform
+  homepage: https://garagehq.deuxfleurs.fr
+spec:
+  # v2.3.0: it is the admin API version `hlb-objstore` speaks.
+  image: { repo: dxflrs/garage, tag: "v2.4.1", digest: "sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020" }
+  requires:
+    # Metadata: which objects exist, where, with what permissions.
+    #
+    # 🔴 Backed up, and it is the part that counts. Losing it makes the data unreadable
+    # even if the blocks are intact: Garage would no longer know which block belongs to
+    # which object. It is the equivalent of a library catalogue.
+    - kind: storage
+      name: meta
+      path: /var/lib/garage/meta
+      tier: local
+      backup: true
+      # An LMDB database, not SQLite — the flag does not apply, but the principle does:
+      # stopping the service before copying stays the only way to be consistent.
+
+    # The data blocks themselves.
+    #
+    # ⚠️ NOT backed up as blocks: copied hot they restore nothing coherent, and a
+    # bucket nothing needs (a cache, a staging area) would ride along. An app's bucket
+    # that holds what cannot be lost says `backup: true`, and the pass reads its
+    # OBJECTS through the app's key into restic — Garage's replication protects nothing
+    # in a house with one storage node.
+    - kind: storage
+      name: data
+      path: /var/lib/garage/data
+      tier: local
+      backup: false
+  ingress:
+    # 🔴 PRIVATE. Garage has no authentication other than the S3 signature, and its
+    # admin API grants full powers with a simple token. Exposing either would publish
+    # every app's storage.
+    - host: "{{ domain }}"
+      port: 3900
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+  swarm:
+    memory: { reserve: 128M, limit: 1G }
+    # 🔴 ONE instance only as long as there is a single storage node. Garage can
+    # replicate between several nodes, but each instance has its own metadata volume:
+    # two Swarm replicas on the SAME volume would corrupt LMDB, and on two separate
+    # volumes they would form two clusters that ignore each other.
+    #
+    # Multi-node goes through `garage layout`, not through `replicas`.
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      # 🔴 The image is the bare binary: no shell, no wget. A `CMD-SHELL` probe can
+      # never pass, and every install timed out waiting for it. `garage status` answers
+      # as soon as the node is up — `/health` would stay 503 until a layout exists.
+      test: ["CMD", "/garage", "status"]
+  update:
+    # The metadata format changes between major versions, and the migration cannot be
+    # reversed by an image rollback.
+    channel: minor
+  env:
+    # Read from the environment, never from the file below: the plan carries the file,
+    # and only Swarm ever sees these. Garage wants exactly 32 bytes of hex for the RPC
+    # secret; every node of a Garage cluster must share it.
+    GARAGE_RPC_SECRET: "{{ secret.rpc-secret:hex }}"
+    GARAGE_ADMIN_TOKEN: "{{ secret.admin-token }}"
+  files:
+    # Garage takes the rest of its configuration from a file only — without one it
+    # does not start.
+    #
+    # ⚠️ `replication_factor` is 1: one storage node, one copy. Raising it later is a
+    # migration of every object, not an edit of this line — and every node must carry
+    # the same value.
+    #
+    # `s3_region` is what the S3 signature covers: a client announcing another region
+    # is refused with a signature error that says nothing about regions.
+    - path: /etc/garage.toml
+      content: |
+        metadata_dir = "/var/lib/garage/meta"
+        data_dir = "/var/lib/garage/data"
+        db_engine = "lmdb"
+        replication_factor = 1
+        rpc_bind_addr = "[::]:3901"
+
+        [s3_api]
+        s3_region = "garage"
+        api_bind_addr = "[::]:3900"
+
+        [admin]
+        api_bind_addr = "[::]:3903"

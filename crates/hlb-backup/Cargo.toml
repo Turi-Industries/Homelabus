@@ -1,0 +1,25 @@
+[package]
+name = "hlb-backup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "restic backups: retention, snapshots, verified restore."
+
+[dependencies]
+async-trait.workspace = true
+hlb-updater.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sqlx = { workspace = true, features = ["sqlite"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["process", "io-util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+serde_yaml_ng.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

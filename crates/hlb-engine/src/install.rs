@@ -1,0 +1,256 @@
+//! What an install runs from, and when it is recorded.
+//!
+//! One answer for `hlb install` and the interface's install: an app is recorded — its
+//! manifest frozen, its domain kept — only by a run that applies, and a run over an app
+//! already recorded resumes it rather than freezing the catalog's manifest again.
+
+use hlb_state::State;
+use hlb_types::Manifest;
+
+/// What an install of an app plans and freezes.
+#[derive(Debug, Clone)]
+pub struct Basis {
+    pub manifest: Manifest,
+    pub domain: Option<String>,
+    pub mail_domain: Option<String>,
+    /// The app is recorded already: this run resumes it.
+    pub resumed: Option<String>,
+}
+
+/// The basis of an install of `app`, read without writing.
+///
+/// A new app takes the catalog's manifest and the domains asked for. One already
+/// recorded keeps the manifest frozen at its install — its resolved digests included —
+/// and the domains it took.
+///
+/// 🔴 Frozen again from the catalog, a rerun replaced what an earlier run had resolved
+/// (an image built here lost its digest, and the deployment stayed refused as
+/// unpinned) and skipped `hlb upgrade`'s refusals of what strands data. A catalog
+/// change reaches a recorded app through `hlb upgrade`.
+///
+/// `Err` is a refusal to say: a domain that is not a domain name, one another app or
+/// the platform answers at already, or one asked for that is not the one the app has.
+pub async fn basis(
+    state: &State,
+    app: &str,
+    catalog: &Manifest,
+    domain: Option<String>,
+    mail_domain: Option<String>,
+) -> crate::Result<std::result::Result<Basis, String>> {
+    let (domain, mail_domain) = match (canonical(domain), canonical(mail_domain)) {
+        (Ok(d), Ok(m)) => (d, m),
+        (Err(refusal), _) | (_, Err(refusal)) => return Ok(Err(refusal)),
+    };
+    let Some((_, status)) = state
+        .installed_apps()
+        .await?
+        .into_iter()
+        .find(|(n, _)| n == app)
+    else {
+        if let Some(d) = &domain {
+            if let Some(refusal) = taken(state, app, catalog, d).await? {
+                return Ok(Err(refusal));
+            }
+        }
+        return Ok(Ok(Basis {
+            manifest: catalog.clone(),
+            domain,
+            mail_domain,
+            resumed: None,
+        }));
+    };
+    let recorded = state.app_domain(app).await?;
+    if let Some(asked) = domain
+        .as_deref()
+        .filter(|d| recorded.as_deref() != Some(*d))
+    {
+        return Ok(Err(format!(
+            "\"{app}\" is installed at {} — an install resumes it there, and does not \
+             move it to {asked}",
+            recorded.as_deref().unwrap_or("no domain")
+        )));
+    }
+    Ok(Ok(Basis {
+        manifest: state.app_manifest(app).await?,
+        domain: recorded,
+        mail_domain: state.app_mail_domain(app).await?.or(mail_domain),
+        resumed: Some(status),
+    }))
+}
+
+fn canonical(d: Option<String>) -> std::result::Result<Option<String>, String> {
+    d.map(|d| hlb_types::domain::parse(&d)).transpose()
+}
+
+/// Why a new app may not answer at `domain`: a name it would serve is another app's,
+/// or the interface's.
+///
+/// 🔴 The Caddyfile keeps ONE site per name, and which of two apps keeps it follows
+/// their order: an app installed at PocketID's name could have taken every sign-in.
+async fn taken(
+    state: &State,
+    app: &str,
+    manifest: &Manifest,
+    domain: &str,
+) -> crate::Result<Option<String>> {
+    let hosts = |m: &Manifest, d: Option<&str>| -> Vec<String> {
+        let mut h: Vec<String> = hlb_ingress::routes_from_manifest(m, d, true)
+            .into_iter()
+            .map(|r| r.host)
+            .collect();
+        h.extend(d.map(str::to_string));
+        h
+    };
+    let wanted = hosts(manifest, Some(domain));
+    if let Some(e) = state.exposure().await? {
+        let interface = e.controller_host();
+        if wanted.contains(&interface) {
+            return Ok(Some(format!(
+                "{interface} is where the interface answers — choose another domain"
+            )));
+        }
+    }
+    for (other, _) in state.installed_apps().await? {
+        if other == app {
+            continue;
+        }
+        let d = state.app_domain(&other).await?;
+        let theirs = hosts(&state.app_manifest(&other).await?, d.as_deref());
+        if let Some(h) = wanted.iter().find(|h| theirs.contains(h)) {
+            return Ok(Some(format!(
+                "{h} is where \"{other}\" answers — choose another domain"
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// Records the app — only by a run that applies, right before it executes: recording
+/// first is what makes the run resumable if it stops halfway.
+pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()> {
+    if basis.resumed.is_none() {
+        state
+            .upsert_app(app, &basis.manifest, basis.domain.as_deref())
+            .await?;
+    }
+    state
+        .set_app_mail_domain(app, basis.mail_domain.as_deref())
+        .await?;
+    Ok(())
+}
+
+/// The mail domain an app's plan is resolved with again — an upgrade, a redeployment:
+/// one named now, else the one its install took, else the exposure's.
+pub async fn mail_domain(
+    state: &State,
+    app: &str,
+    named: Option<String>,
+) -> crate::Result<Option<String>> {
+    if let Some(named) = named {
+        return hlb_types::domain::parse(&named)
+            .map(Some)
+            .map_err(crate::Error::Domain);
+    }
+    if let Some(kept) = state.app_mail_domain(app).await? {
+        return Ok(Some(kept));
+    }
+    Ok(state.exposure().await?.map(|e| e.domain))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(name: &str) -> Manifest {
+        serde_yaml_ng::from_str(&format!(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: {name} }}\nspec:\n  \
+             image: {{ repo: x/{name}, tag: \"1\" }}\n  ingress:\n    \
+             - host: \"{{{{ domain }}}}\"\n      port: 80\n"
+        ))
+        .expect("test manifest")
+    }
+
+    async fn refusal(state: &State, app: &str, domain: &str, mail: Option<&str>) -> String {
+        basis(
+            state,
+            app,
+            &manifest(app),
+            Some(domain.into()),
+            mail.map(str::to_string),
+        )
+        .await
+        .expect("state")
+        .expect_err("refused")
+    }
+
+    #[tokio::test]
+    async fn a_domain_that_would_write_caddyfile_directives_is_refused() {
+        let state = State::in_memory().await.expect("state");
+        let r = refusal(
+            &state,
+            "gitea",
+            "git.example.org {\n\tfile_server\n}\nx.example.org",
+            None,
+        )
+        .await;
+        assert!(r.contains("not a domain name"), "{r}");
+        let r = refusal(&state, "gitea", "git.example.org", Some("example.org}")).await;
+        assert!(r.contains("not a domain name"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn a_domain_another_app_answers_at_is_refused() {
+        let state = State::in_memory().await.expect("state");
+        state
+            .upsert_app("pocket-id", &manifest("pocket-id"), Some("id.example.org"))
+            .await
+            .expect("app");
+        let r = refusal(&state, "gitea", "ID.example.org.", None).await;
+        assert!(r.contains("pocket-id"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn the_interfaces_name_is_refused() {
+        let state = State::in_memory().await.expect("state");
+        state
+            .set_exposure(&hlb_state::Exposure {
+                domain: "example.org".into(),
+                certificates: hlb_state::Certificates::Internal,
+                acme_email: None,
+                dns_provider: None,
+                staging: false,
+                controller_host: None,
+                acme_ca: None,
+                acme_ca_root: None,
+            })
+            .await
+            .expect("exposure");
+        let r = refusal(&state, "gitea", "hlb.example.org", None).await;
+        assert!(r.contains("interface"), "{r}");
+    }
+
+    #[tokio::test]
+    async fn a_free_domain_is_taken_canonical() {
+        let state = State::in_memory().await.expect("state");
+        let b = basis(
+            &state,
+            "gitea",
+            &manifest("gitea"),
+            Some(" Git.Example.org ".into()),
+            Some("Example.org".into()),
+        )
+        .await
+        .expect("state")
+        .expect("accepted");
+        assert_eq!(b.domain.as_deref(), Some("git.example.org"));
+        assert_eq!(b.mail_domain.as_deref(), Some("example.org"));
+    }
+
+    #[tokio::test]
+    async fn an_upgrades_mail_domain_is_checked_too() {
+        let state = State::in_memory().await.expect("state");
+        assert!(mail_domain(&state, "gitea", Some("a b".into()))
+            .await
+            .is_err());
+    }
+}

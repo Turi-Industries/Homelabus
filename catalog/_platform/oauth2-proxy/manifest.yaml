@@ -1,0 +1,65 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: oauth2-proxy
+  displayName: OAuth2 Proxy
+  category: platform
+  homepage: https://oauth2-proxy.github.io/oauth2-proxy/
+spec:
+  # An exact version: the project publishes NO rolling minor tag (no "v7.15"), only
+  # patches. Pinning a non-existent version would pass catalog validation and would
+  # only fail at install time, on a registry error.
+  image: { repo: quay.io/oauth2-proxy/oauth2-proxy, tag: "v7.15.5", digest: "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916" }
+  requires:
+    # It stores nothing: the sessions live in a signed cookie. That is what allows
+    # restarting it without signing anyone out.
+    - kind: sso
+      mode: native
+      redirectPaths: ["/oauth2/callback"]
+  security:
+    # A static Go binary that writes nothing: it takes the full hardening.
+    readOnlyRootfs: true
+    capDrop: [ALL]
+  swarm:
+    memory: { reserve: 32M, limit: 128M }
+    # 🔴 Several replicas require ALL instances to share the same `--cookie-secret`,
+    # or a user authenticated by one is rejected by the other — one session out of
+    # two, at random. The secret comes from the vault, so it is possible; we stay at
+    # 1 until it is verified for real.
+    replicas: 1
+    tier: light
+    # No probe: the image is distroless — no shell, no wget — and a probe it cannot
+    # run never passes, so every install timed out waiting for it. Swarm's own
+    # running/failed state is what `wait_healthy` counts.
+  update:
+    channel: minor
+  env:
+    OAUTH2_PROXY_PROVIDER: "oidc"
+    OAUTH2_PROXY_OIDC_ISSUER_URL: "{{ oidc.issuer }}"
+    OAUTH2_PROXY_CLIENT_ID: "{{ oidc.client_id }}"
+    OAUTH2_PROXY_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    # Signs the session cookie. Generated once, kept in the vault: every replica must
+    # share it, and a new one signs everybody out.
+    OAUTH2_PROXY_COOKIE_SECRET: "{{ secret.cookie-secret }}"
+    OAUTH2_PROXY_COOKIE_SECURE: "true"
+    # Its default is 127.0.0.1: Caddy, on the overlay, would never reach it.
+    OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+    # Behind Caddy: the client's address and scheme come from the X-Forwarded headers.
+    OAUTH2_PROXY_REVERSE_PROXY: "true"
+    # 🔴 Without it the X-Auth-Request-* headers Caddy copies to the app do not exist,
+    # and the app sees an anonymous user — with no error anywhere.
+    OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+    # Who may pass is Pocket ID's decision, not a list of mail domains here.
+    OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+    # Forward-auth only: it answers yes or no, it proxies nothing.
+    OAUTH2_PROXY_UPSTREAMS: "static://202"
+    OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+    # 🔴 Each route behind the portal lets in the groups of the roles its app allows
+    # (`/oauth2/auth?allowed_groups=…`, written into the Caddyfile). PocketID gives the
+    # `groups` claim only to a client asking for that scope: without it the session has
+    # no group, and every route refuses everyone.
+    OAUTH2_PROXY_SCOPE: "openid email profile groups"
+    # The groups are the session's, read at sign-in. Refreshed every five minutes —
+    # PocketID hands out refresh tokens — a role taken away closes the door within
+    # five, where the cookie's week would have kept it open.
+    OAUTH2_PROXY_COOKIE_REFRESH: "5m"

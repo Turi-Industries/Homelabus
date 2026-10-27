@@ -1,0 +1,71 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: postgres
+  displayName: PostgreSQL
+  category: platform
+spec:
+  # 🔴 Immich's image, and not `postgres:17-alpine`. The same major version (17), but
+  # it embeds `pgvector` and `vchord` — which apps like Immich require and which do
+  # NOT install from SQL: an extension must be in the image.
+  #
+  # ⚠️ A TRAP WHEN SWITCHING, on an installation that already holds data. The alpine
+  # image is built on musl, this one on glibc, and the two do NOT sort text in the
+  # same order. B-tree indexes built under one become incoherent under the other:
+  # incomplete searches, unique constraints letting duplicates through — and
+  # PostgreSQL only signals it with a "collation version mismatch" warning, easy to
+  # miss.
+  #
+  # After switching, on EVERY database:
+  #   REINDEX DATABASE <base>;
+  #   ALTER DATABASE <base> REFRESH COLLATION VERSION;
+  #
+  # On a fresh installation, there is nothing to do.
+  image: { repo: ghcr.io/immich-app/postgres, tag: "17-vectorchord0.4.3-pgvector0.8.0", digest: "sha256:51f6abbfc720dde5cad9a39133d1c5247da8f073a449004da781c07b2cd9ee9c" }
+  # 🔴 Swarm's virtual IP forgets a TCP connection idle for 900 s (IPVS, measured on
+  # the lab: every established entry expires at 899) and tells neither end: a pooled
+  # connection quiet for a quarter of an hour fails the next query — Fluxer answered
+  # 503 the first time a channel was opened. The server's keepalives cross the VIP
+  # well before, for every client, whatever its pool does. The image's own entrypoint
+  # and configuration file, as its `Entrypoint` and `Cmd` say, then the three settings.
+  command:
+    - /usr/local/bin/immich-docker-entrypoint.sh
+    - postgres
+    - -c
+    - config_file=/etc/postgresql/postgresql.conf
+    - -c
+    - tcp_keepalives_idle=300
+    - -c
+    - tcp_keepalives_interval=30
+    - -c
+    - tcp_keepalives_count=3
+  requires:
+    # Never on NFS: file locking is not reliable there.
+    - kind: storage
+      name: data
+      path: /var/lib/postgresql/data
+      tier: local
+      backup: true
+  security:
+    # initdb adjusts the data directory's permissions and drops its privileges to the
+    # postgres user.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # Every app's database: killed, every app stops at once.
+    memory: { reserve: 256M, limit: 2G }
+    replicas: 1
+    # Pinned to the "heavy" node: local volumes do not follow containers
+    # rescheduled by Swarm.
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+  update:
+    channel: minor
+    # Twice the week: every app's data is in it, and a minor's bug in WAL or the
+    # planner shows on someone's real load first.
+    maturationDays: 14
+  env:
+    # 🔴 The image refuses to initialise without it. Generated at install, kept in the
+    # vault; `hlb` and the controller build their admin URL from it.
+    POSTGRES_PASSWORD: "{{ secret.admin-password }}"

@@ -1,0 +1,43 @@
+@import 'tailwindcss';
+
+/*
+ * The palette is runtime data: `/api/themes` serves every theme, shipped and declared,
+ * with the brand accent already laid over, and `paint` overwrites these variables from
+ * the chosen one. Tailwind's own colours are removed, so a stock colour utility produces
+ * nothing — and `sources.test.ts` refuses one before anyone wonders why.
+ *
+ * The values below are CSS system colours, which follow the system's light or dark
+ * setting: what shows while the themes are loading, or if they never arrive. The shell
+ * draws no state before a theme is painted, which is why `ok` and `critical` can share
+ * one here — they are never on screen together without one.
+ */
+@theme {
+	--color-*: initial;
+	--color-background: Canvas;
+	--color-surface: Canvas;
+	--color-raised-surface: Field;
+	--color-border: GrayText;
+	--color-text: CanvasText;
+	--color-muted-text: GrayText;
+	--color-accent: LinkText;
+	--color-on-accent: Canvas;
+	--color-ok: CanvasText;
+	--color-attention: CanvasText;
+	--color-critical: CanvasText;
+	--color-info: CanvasText;
+}
+
+:root {
+	color-scheme: light dark;
+	/* A list's row: `data-density` is the person's choice, stored with their theme. */
+	--row: 2.5rem;
+}
+
+:root[data-density='compact'] {
+	--row: 2rem;
+}
+
+body {
+	background-color: var(--color-background);
+	color: var(--color-text);
+}

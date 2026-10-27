@@ -1,0 +1,17 @@
+# Who owns each file and under what licence, read by `reuse lint` in CI
+# (https://reuse.software/spec-3.3/). One annotation covers the project, rather than a
+# header in each of seven hundred files; a file carrying its own SPDX lines keeps them.
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Turi Industries <contact@turi-industries.eu>"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+# What other projects published: their logos and Docker's signing keys.
+[[annotations]]
+path = ["catalog/**/icon.svg", "catalog/**/icon.png", "crates/hlb-bootstrap/keys/*.asc"]
+precedence = "override"
+SPDX-FileCopyrightText = "Each file's upstream project"
+SPDX-License-Identifier = "LicenseRef-Upstream"

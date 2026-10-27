@@ -1,0 +1,132 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hlb-types",
+    "crates/hlb-orchestrator",
+    "crates/hlb-resolver",
+    "crates/hlb-catalog",
+    "crates/hlb-ingress",
+    "crates/hlb-platform",
+    "crates/hlb-registry",
+    "crates/hlb-updater",
+    "crates/hlb-backup",
+    "crates/hlb-backup-run",
+    "crates/hlb-identity",
+    "crates/hlb-bitwarden",
+    "crates/hlb-termix",
+    "crates/hlb-guide",
+    "crates/hlb-gitops",
+    "crates/hlb-bootstrap",
+    "crates/hlb-agent",
+    "crates/hlb-mesh",
+    "crates/hlb-notify",
+    "crates/hlb-metrics",
+    "crates/hlb-objstore",
+    "crates/hlb-users",
+    "crates/hlb-mail",
+    "crates/hlb-api",
+    "crates/hlb-selfupdate",
+    "crates/hlb-controller",
+    "crates/hlb-secrets",
+    "crates/hlb-state",
+    "crates/hlb-engine",
+    "crates/hlb-cli",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+# Measured 2026-10-05: `time`, `serde_with` and `home` declare 1.88, and the workspace
+# checks clean on 1.88.0 with all targets. A CI job checks it, because a value announced
+# here and never exercised is how this workspace ended up claiming 1.85 while not
+# compiling on it. Raise it when a dependency does, not when a toolchain happens to.
+rust-version = "1.88"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Turi-Industries/Homelabus"
+
+[workspace.dependencies]
+# --- internal ---
+hlb-types = { path = "crates/hlb-types" }
+hlb-orchestrator = { path = "crates/hlb-orchestrator" }
+hlb-resolver = { path = "crates/hlb-resolver" }
+hlb-catalog = { path = "crates/hlb-catalog" }
+hlb-ingress = { path = "crates/hlb-ingress" }
+hlb-platform = { path = "crates/hlb-platform" }
+hlb-registry = { path = "crates/hlb-registry" }
+hlb-updater = { path = "crates/hlb-updater" }
+hlb-backup = { path = "crates/hlb-backup" }
+hlb-backup-run = { path = "crates/hlb-backup-run" }
+hlb-identity = { path = "crates/hlb-identity" }
+hlb-bitwarden = { path = "crates/hlb-bitwarden" }
+hlb-termix = { path = "crates/hlb-termix" }
+hlb-guide = { path = "crates/hlb-guide" }
+hlb-gitops = { path = "crates/hlb-gitops" }
+hlb-bootstrap = { path = "crates/hlb-bootstrap" }
+hlb-agent = { path = "crates/hlb-agent" }
+hlb-mesh = { path = "crates/hlb-mesh" }
+hlb-notify = { path = "crates/hlb-notify" }
+hlb-metrics = { path = "crates/hlb-metrics" }
+hlb-objstore = { path = "crates/hlb-objstore" }
+hlb-users = { path = "crates/hlb-users" }
+hlb-mail = { path = "crates/hlb-mail" }
+hlb-api = { path = "crates/hlb-api" }
+hlb-selfupdate = { path = "crates/hlb-selfupdate" }
+hlb-secrets = { path = "crates/hlb-secrets" }
+hlb-state = { path = "crates/hlb-state" }
+hlb-engine = { path = "crates/hlb-engine" }
+
+# --- runtime ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "process", "time"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# --- docker / swarm ---
+bollard = "0.19"
+
+# --- state ---
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+
+# --- serialisation ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+schemars = "1"
+# The controller's OpenAPI document, which the web interface's client is generated from.
+utoipa = { version = "6", features = ["axum_extras"] }
+utoipa-axum = "0.3"
+
+# --- errors / logs ---
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# --- cli ---
+clap = { version = "4", features = ["derive", "env"] }
+
+[profile.dev]
+# Full debug info made each of the ~75 test binaries hundreds of megabytes, all relinked
+# whenever `hlb-types` changes — the gate rewrote gigabytes per turn and saturated the
+# disk. Line tables keep file:line in backtraces; a debugger session can raise it locally.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# An RSA key's prime search, unoptimised, took 4.5 s — the `:rsa` secret form in every
+# test that renders it. Optimised, the two crates doing the arithmetic only.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# We want to be warned about `unwrap` in code that drives clusters.
+unwrap_used = "warn"
+expect_used = "warn"
+# Fired on code `async_trait` GENERATES, not code written here: the macro marks each
+# trait method `#[must_use]` over a `Pin<Box<dyn Future>>` that already is. Clippy 1.99
+# (CI's stable on 2026-10-14) refused all 21 methods of `Orchestrator` for it.
+double_must_use = "allow"

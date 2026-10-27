@@ -1,0 +1,127 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: vikunja
+  displayName: Vikunja
+  category: productivity
+  homepage: https://vikunja.io
+spec:
+  image: { repo: vikunja/vikunja, tag: "2.7", digest: "sha256:e2204a1c1c6a81e833c2b3a5442be182ca2335b54c2e7e37578cc3fe12a27cfc" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      redirectPaths: ["/auth/openid/pocketid"]
+    - kind: storage
+      name: files
+      path: /app/vikunja/files
+      tier: local
+      backup: true
+    - kind: smtp
+  # Vikunja reads its configuration through VIKUNJA_* variables.
+  env:
+    VIKUNJA_DATABASE_TYPE: postgres
+    VIKUNJA_DATABASE_HOST: "{{ db.host }}"
+    VIKUNJA_DATABASE_DATABASE: "{{ db.name }}"
+    VIKUNJA_DATABASE_USER: "{{ db.user }}"
+    VIKUNJA_DATABASE_PASSWORD: "{{ db.password }}"
+
+    # Without it, the sharing links and the invitations point at localhost.
+    VIKUNJA_SERVICE_PUBLICURL: "https://{{ domain }}/"
+
+    # 🔴 Signs every session. Left unset, Vikunja draws a new one at every start
+    # (`pkg/config/config.go`): each restart, each update, signed everyone out. Named
+    # `service.secret` since 2.0, `jwtsecret` deprecated; the vault's secret kept.
+    VIKUNJA_SERVICE_SECRET: "{{ secret.jwt-secret }}"
+    # People come through PocketID, which creates their account at the first sign-in
+    # whatever this says; the local sign-up form defaults to open. ⚠️ Local sign-in is
+    # left on: PocketID never joins an existing local account (`getOrCreateUser`,
+    # 0.24.6), so turning it off would lock out whoever signed up before — the
+    # assertion below finds them instead.
+    VIKUNJA_SERVICE_ENABLEREGISTRATION: "false"
+
+    # Reminders, password resets. `vikunja testmail` reached a Stalwart mailbox on
+    # 2026-10-18 — ⚠️ and printed "Testmail successfully sent" just the same when the
+    # certificate was refused and nothing left: only the mailbox proves a mail.
+    VIKUNJA_MAILER_ENABLED: "true"
+    VIKUNJA_MAILER_HOST: "{{ smtp.host }}"
+    VIKUNJA_MAILER_PORT: "{{ smtp.port }}"
+    VIKUNJA_MAILER_USERNAME: "{{ smtp.user }}"
+    VIKUNJA_MAILER_PASSWORD: "{{ smtp.password }}"
+    VIKUNJA_MAILER_FROMEMAIL: "{{ smtp.from }}"
+  files:
+    # 🔴 `sso: native` created the client in PocketID; this is what tells Vikunja.
+    # Since 2.0 its providers are a MAP keyed by id — the 0.24 list is refused, "wrong
+    # format" in its log, and the sign-in button gone (rehearsed 2026-10-19). The key
+    # gives the callback's last segment: `pocketid` → `/auth/openid/pocketid`, as before.
+    # From 0.24, `hlb upgrade vikunja` then `hlb update vikunja`: until the image
+    # moves, 0.24 reads neither this file nor `service.secret`.
+    - path: /etc/vikunja/config.yml
+      content: |
+        auth:
+          openid:
+            enabled: true
+            providers:
+              pocketid:
+                name: PocketID
+                authurl: "{{ oidc.issuer }}"
+                clientid: "{{ oidc.client_id }}"
+                clientsecret: "{{ oidc.client_secret }}"
+                scope: openid email profile
+  # A team per role, which Vikunja makes and keeps from `vikunja_groups` in the ID token
+  # at every sign-in (`pkg/modules/auth/openid`, 0.24.6): a household shares its
+  # projects with "Family" rather than person by person.
+  access:
+    claims:
+      vikunja_groups:
+        json: [ { name: "{{ role.name }}", oidcID: "{{ role.group }}" } ]
+  ingress:
+    - host: "{{ domain }}"
+      port: 3456
+      # No Anubis by default: it would make installing Vikunja require it. To put a
+      # proof-of-work in front, `hlb install anubis --apply`, then name it here:
+      # [caddy-front, anubis, caddy-back].
+      chain: [caddy-front, caddy-back]
+      expose: after-guide
+      # A wrong password is a 403 in Vikunja 2.7 — a 412 in 0.24 —, never a 401.
+      authRoutes:
+        - paths: [/api/v1/login]
+          failsWith: 403
+  security:
+    # 🔴 The image runs as 1000 and ships no `files` directory, so Docker makes the
+    # volume root's, 755: no attachment could ever be written — 0.24 said nothing, 2.7
+    # refuses to start ("storage validation failed"), both found on the lab's volume on
+    # 2026-10-19. Root in its container, with no capability, it owns what it writes.
+    user: "0:0"
+    readOnlyRootfs: false
+  swarm:
+    memory: { reserve: 64M, limit: 256M }
+    # One: its attachments sit on a local volume, which exists once per node — two
+    # replicas split them between nodes, or race each other's migrations on one.
+    replicas: 1
+    tier: light
+  update:
+    channel: minor
+  # Read from `/api/v1/info`, what Vikunja's own sign-in page reads.
+  assertions:
+    - id: signups-closed
+      holds: nobody creates a Vikunja account from its sign-up form
+      check:
+        type: http
+        path: /api/v1/info
+        pointer: /auth/local/registration_enabled
+        equals: false
+    - id: no-local-account
+      holds: no Vikunja account signs in with a password, past PocketID
+      check:
+        type: sql
+        query: SELECT count(*) FROM users WHERE issuer = 'local'
+        equals: "0"
+    - id: sign-in-through-pocketid
+      holds: people sign in to Vikunja through PocketID
+      check:
+        type: http
+        path: /api/v1/info
+        pointer: /auth/openid_connect/enabled
+        equals: true

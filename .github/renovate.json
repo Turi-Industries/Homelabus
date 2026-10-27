@@ -1,0 +1,43 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", "helpers:pinGitHubActionDigests"],
+  "description": "Every dependency moves through a pull request the gate has to pass. Nothing merges by itself: a catalog image is an app people's data lives in.",
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "7 days",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 10,
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on the first day of the month"] },
+  "packageRules": [
+    {
+      "description": "One pull request for the Rust crates and one for the interface's, minor and patch: forty separate ones would not be read.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "Rust crates"
+    },
+    {
+      "matchManagers": ["bun"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "interface packages"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "A catalog app is rehearsed before its version moves: one pull request per app, never grouped.",
+      "matchFileNames": ["catalog/**"],
+      "labels": ["dependencies", "catalog"]
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "The catalog names each image as { repo, tag, digest } on one line; `hlb catalog validate` refuses a tag and digest that disagree.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^catalog/.+/manifest\\.yaml$/"],
+      "matchStrings": [
+        "image:\\s*(?:&[\\w-]+\\s*)?\\{\\s*repo:\\s*(?<depName>[^,\\s]+),\\s*tag:\\s*\"(?<currentValue>[^\"]+)\",\\s*digest:\\s*\"(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

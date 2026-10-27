@@ -1,0 +1,68 @@
+[package]
+name = "hlb-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Daemon: read API and background loops."
+
+[lib]
+name = "hlb_controller"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hlb-controller"
+path = "src/main.rs"
+
+[dependencies]
+hlb-types.workspace = true
+serde_yaml_ng.workspace = true
+hlb-api.workspace = true
+# What the emergency vault's checks say, for the nightly loop's notification.
+hlb-bitwarden.workspace = true
+hlb-state.workspace = true
+hlb-engine.workspace = true
+hlb-ingress.workspace = true
+hlb-resolver.workspace = true
+hlb-catalog.workspace = true
+hlb-orchestrator.workspace = true
+hlb-backup.workspace = true
+hlb-backup-run.workspace = true
+# "Back up now", behind a trait its route is tested through; and the fake
+# orchestrator the action tests drive.
+async-trait.workspace = true
+hlb-secrets.workspace = true
+# The executor's clients, so the API can install rather than only preview.
+hlb-registry.workspace = true
+hlb-platform.workspace = true
+hlb-gitops.workspace = true
+hlb-agent.workspace = true
+hlb-mail.workspace = true
+hlb-identity.workspace = true
+hlb-users.workspace = true
+hlb-metrics.workspace = true
+hlb-guide.workspace = true
+hlb-notify.workspace = true
+futures.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+hlb-updater.workspace = true
+axum = "0.8"
+utoipa.workspace = true
+utoipa-axum.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["signal", "fs"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Validates the API's real answers against the schemas its document declares. Without
+# its default features, which fetch remote schemas over the network.
+jsonschema = { version = "0.58", default-features = false }
+tower = "0.5"
+
+[lints]
+workspace = true

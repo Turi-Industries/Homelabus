@@ -1,0 +1,101 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: jellyfin
+  displayName: Jellyfin
+  category: media
+  homepage: https://jellyfin.org
+spec:
+  image: { repo: jellyfin/jellyfin, tag: "10.11.11", digest: "sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db" }
+  requires:
+    # 🔴 NO SSO. Jellyfin speaks OIDC, but its clients — Android TV, Apple TV,
+    # Kodi, the mobile app — cannot follow an authentication redirect. Putting a
+    # portal in front cuts off everything that is not a browser, and the failure is
+    # discovered from the sofa. Jellyfin therefore keeps its own accounts, and the
+    # private exposure compensates.
+    #
+    # This is a DELIBERATE exclusion, not an oversight: `mode: none` records it as a
+    # decision, where omitting the capability would suggest a hole.
+    - kind: sso
+      mode: none
+
+    # Configuration and internal database. SQLite: the flag imposes the snapshot backup
+    # method — a SQLite file copied hot does not restore.
+    - kind: storage
+      name: config
+      path: /config
+      tier: local
+      backup: true
+      sqlite: true
+
+    # ⚠️ Transcoding cache: NOT backed up, deliberately. It rebuilds itself, it can
+    # weigh tens of gigabytes, and including it would drown the restic repository in
+    # disposable data at the expense of the irreplaceable.
+    - kind: storage
+      name: cache
+      path: /cache
+      tier: local
+      backup: false
+
+    # 🔴 The media library goes on the NAS, not on a local volume. It is the only
+    # storage in the catalog that warrants it: the volume exceeds what a node SSD
+    # holds, and the files are already backed up on the NAS side.
+    #
+    # ⚠️ NFS is forbidden for databases — here there are only files read
+    # sequentially, which is exactly what it is good for.
+    - kind: storage
+      name: media
+      path: /media
+      tier: nfs
+      backup: false
+  ingress:
+    - host: "{{ domain }}"
+      port: 8096
+      # No Anubis: a proof-of-work would break every non-browser client.
+      chain: [caddy-front, caddy-back]
+      # 🔴 Private. With no SSO in front, a public exposure would leave Jellyfin's
+      # sign-in form facing the internet — and its accounts are not protected by the
+      # identity provider.
+      expose: private
+      # A wrong password is an `AuthenticationException`, which Jellyfin 10.11 answers
+      # 401 (`ExceptionMiddleware`). Its routes ignore case, and so does Caddy's `path`.
+      authRoutes:
+        - paths: [/Users/AuthenticateByName]
+          failsWith: 401
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # Transcoding runs ffmpeg inside this container.
+    memory: { reserve: 256M, limit: 2G }
+    # 🔴 A single instance: the database is a local SQLite. Two replicas would hold
+    # two diverging libraries, and playback progress would jump from one episode to
+    # another depending on which node answered.
+    replicas: 1
+    # Transcoding is the heaviest load in the catalog.
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
+  update:
+    channel: minor
+  assertions:
+    - id: wizard-done
+      holds: nobody becomes Jellyfin's administrator through its first-run wizard
+      check:
+        type: http
+        path: /System/Info/Public
+        pointer: /StartupWizardCompleted
+        equals: true
+  # Its administrator, made by the guide's first-run step — the only way in, since its
+  # TV clients cannot go through the SSO.
+  recovery:
+    - secret: admin-password
+      username: admin
+      # 401 to a refusal, and to a client that does not name itself (10.11.11). One
+      # device id: each sign-in replaces the last one's token instead of adding a device.
+      proof:
+        path: /Users/AuthenticateByName
+        body: '{"Username":"{{ username }}","Pw":"{{ password }}"}'
+        headers:
+          Authorization: 'MediaBrowser Client="Homelabus", Device="Homelabus", DeviceId="homelabus-recovery-proof", Version="1"'
+        pointer: /AccessToken

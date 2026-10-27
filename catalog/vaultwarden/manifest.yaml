@@ -1,0 +1,167 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: vaultwarden
+  displayName: Vaultwarden
+  category: security
+  homepage: https://github.com/dani-garcia/vaultwarden
+spec:
+  # Official OIDC SSO since 1.35.0: the standard image, no fork.
+  image: { repo: vaultwarden/server, tag: "1.37.3", digest: "sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      # Callback derived from DOMAIN by Vaultwarden itself.
+      redirectPaths: ["/identity/connect/oidc-signin"]
+    - kind: storage
+      name: data
+      path: /data
+      tier: local
+      backup: true
+    - kind: smtp
+  # Vaultwarden only accepts a full URL for its database.
+  env:
+    # 🔴 `db.url` carries the password: it is a SECRET, despite looking like an address.
+    DATABASE_URL: "{{ db.url }}"
+    DOMAIN: "https://{{ domain }}"
+
+    # 🔴 Without SMTP_FROM, 1.37 refuses to START ("Both `SMTP_HOST` and `SMTP_FROM`
+    # need to be set", exit 12): the catalog's Vaultwarden never ran with these four.
+    # Its test mail (admin page) reached a Stalwart mailbox on 2026-10-18.
+    SMTP_HOST: "{{ smtp.host }}"
+    SMTP_PORT: "{{ smtp.port }}"
+    SMTP_SECURITY: starttls
+    SMTP_USERNAME: "{{ smtp.user }}"
+    SMTP_PASSWORD: "{{ smtp.password }}"
+    SMTP_FROM: "{{ smtp.from }}"
+    SMTP_FROM_NAME: Vaultwarden
+
+    SSO_ENABLED: "true"
+    SSO_AUTHORITY: "{{ oidc.issuer }}"
+    SSO_CLIENT_ID: "{{ oidc.client_id }}"
+    SSO_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    # 🔴 Never true: this vault is the way back in when PocketID is down.
+    SSO_ONLY: "false"
+    # A master password chosen on the first SSO sign-in is held to this, and an older
+    # one is changed at the next sign-in. `minComplexity` is zxcvbn's score, 0 to 4.
+    SSO_MASTER_PASSWORD_POLICY: >-
+      {"enforceOnLogin":true,"minComplexity":3,"minLength":14,"requireLower":false,"requireNumbers":false,"requireSpecial":false,"requireUpper":false}
+
+    # 🔴 Closed from the start. A person comes in through PocketID, whose people were
+    # invited — SSO sign-up does not read this (`src/api/identity.rs`, 1.37) —, or by
+    # an organisation's invitation. Until 2026-10-18 the guide sent the first person to
+    # `/#/register` and closed it afterwards: a form open on the internet meanwhile,
+    # free vault hosting for anyone, and a door the guide's own variable made
+    # unreachable since it was applied at plan time. ⚠️ SIGNUPS_DOMAINS_WHITELIST
+    # reopens it for its domains: hence the assertion below, read from Vaultwarden
+    # itself.
+    SIGNUPS_ALLOWED: "false"
+    SIGNUPS_VERIFY: "true"
+    # A hint is a clue to the master password kept beside the vault.
+    PASSWORD_HINTS_ALLOWED: "false"
+    # Bitwarden's push relay would send metadata to a third party (and needs an
+    # installation id this one has not).
+    PUSH_ENABLED: "false"
+    # Anyone who came in through PocketID or an invitation: the emergency vault is an
+    # organisation an owner creates (`hlb emergency vault`).
+    ORG_CREATION_USERS: all
+    # A group per role in the organisation Homelabus keeps (`access.members`): an owner
+    # gives each group its collections. Off, Vaultwarden drops the import's groups with
+    # a warning in its log, and every member sees what the organisation gives all.
+    ORG_GROUPS_ENABLED: "true"
+    # Caddy sets X-Forwarded-For to the address it saw — the client's, its ports being
+    # published in host mode — and no X-Real-IP: read as such, every failed sign-in in
+    # the log carried Caddy's address.
+    IP_HEADER: X-Forwarded-For
+    LOG_LEVEL: warn
+    # 🔴 Nothing in the volume configures Vaultwarden. `config.json` beats every
+    # variable above, and a restored volume is whatever the backup holds — after an
+    # intrusion, the intruder's: one forged in it opened the admin page on its own
+    # token and sign-ups to anyone (1.37.3, tried 2026-10-19). Read from outside the
+    # volume, it never exists — no admin token, so no admin page to write it — and
+    # mail templates come from the image. What the volume keeps is data: attachments,
+    # sends, icons, and the key that signs sessions.
+    CONFIG_FILE: /run/hlb/vaultwarden.json
+    TEMPLATES_FOLDER: /run/hlb/templates
+  # Read from Vaultwarden's own `/api/config`, which its clients read too: it reflects
+  # the whitelist and `config.json`, where the environment alone does not.
+  assertions:
+    - id: groups-on
+      holds: the organisation's groups follow the roles
+      check:
+        type: env
+        name: ORG_GROUPS_ENABLED
+        equals: "true"
+    - id: signups-closed
+      holds: nobody opens a vault here without PocketID or an invitation
+      check:
+        type: http
+        path: /api/config
+        pointer: /settings/disableUserRegistration
+        equals: true
+    - id: no-password-hints
+      holds: no master-password hint is kept
+      check: { type: env, name: PASSWORD_HINTS_ALLOWED, equals: "false" }
+    - id: local-login-kept
+      holds: the master password still opens the vault when PocketID is down
+      check: { type: env, name: SSO_ONLY, equals: "false" }
+    # 🔴 A second factor required by PocketID does not guard the master password's
+    # door: an account born from the SSO has none of its own. The organisation's policy
+    # removes a member without one — but never an owner or an admin (`two_factor/mod.rs`,
+    # 1.37.1), who are the accounts that matter most: hence every account, read here.
+    - id: two-step-required
+      holds: every organisation requires two-step login of its members
+      check:
+        type: sql
+        query: >-
+          SELECT coalesce(string_agg(o.name, ', ' ORDER BY o.name), '') FROM organizations o
+          WHERE NOT EXISTS (SELECT 1 FROM org_policies p
+          WHERE p.org_uuid = o.uuid AND p.atype = 0 AND p.enabled)
+        equals: ""
+    - id: every-account-has-a-second-factor
+      holds: every account has a second factor of its own, owners and admins included
+      check:
+        type: sql
+        # Remember-me tokens (5) and the challenges (1000 and up) are no factor.
+        query: >-
+          SELECT coalesce(string_agg(u.email, ', ' ORDER BY u.email), '') FROM users u
+          WHERE u.enabled AND length(u.password_hash) > 0
+          AND NOT EXISTS (SELECT 1 FROM twofactor t WHERE t.user_uuid = u.uuid
+          AND t.enabled AND t.atype < 1000 AND t.atype <> 5)
+        equals: ""
+  # The household's organisation follows the roles let in: whoever holds one is
+  # invited by their address, whoever no longer does is removed — through the route
+  # Bitwarden's Directory Connector imports with. An owner makes the organisation and its
+  # API key once, by hand: an organisation's key is encrypted by its owners' clients,
+  # and confirming a new member stays an owner's click for the same reason.
+  access:
+    members: bitwarden-directory
+  ingress:
+    - host: "{{ domain }}"
+      port: 80
+      # No Anubis: it would break the mobile clients and the browser extension.
+      chain: [caddy-front, caddy-back]
+      expose: after-guide
+      # Read in Vaultwarden 1.37.3: a wrong master password is a 400, never a 401 — and
+      # asking for the e-mailed second-factor code checks the master password first.
+      authRoutes:
+        - paths: [/identity/connect/token, /api/two-factor/send-email-login]
+          failsWith: 400
+  security:
+    # These apps write into their rootfs at startup (configuration, cache) and drop
+    # their privileges to a non-root user.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    memory: { reserve: 32M, limit: 256M }
+    replicas: 1
+    tier: heavy
+  update:
+    # 🔴 This is your password manager AND your break-glass access.
+    # Never an automatic update: notification and manual approval.
+    channel: pin
+    # Twice the week: a release that loses a vault is the one loss nothing restores
+    # in time.
+    maturationDays: 14

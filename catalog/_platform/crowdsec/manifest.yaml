@@ -1,0 +1,97 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: crowdsec
+  displayName: CrowdSec
+  category: platform
+  homepage: https://crowdsec.net
+spec:
+  # A patch version: the project publishes NO rolling `v1.7` tag — the one written
+  # here until 2026-10-11 passed validation and could not be pulled.
+  image: { repo: crowdsecurity/crowdsec, tag: "v1.8.1", digest: "sha256:0f2523fa61ef507f15d953045cface490cc880670c62f2755ced17524107f71a" }
+  requires:
+    # The decisions database and the machine credentials. Backed up: losing it again
+    # means re-enrolling every bouncer by hand.
+    - kind: storage
+      name: data
+      path: /var/lib/crowdsec/data
+      tier: local
+      backup: true
+    - kind: storage
+      name: config
+      path: /etc/crowdsec
+      tier: local
+      backup: true
+    # 🔴 CrowdSec analyses Caddy's logs. Without them it starts normally, sees NOTHING,
+    # and never bans anyone — a perfectly silent outage. This volume was its own until
+    # 2026-10-17, and nothing ever wrote into it: it is Caddy's now, read here, which
+    # places CrowdSec on Caddy's node.
+    - kind: storage
+      name: logs
+      path: /var/log/caddy
+      tier: local
+      backup: false
+      owner: caddy
+  security:
+    # Writes its acquisitions and its SQLite database into /etc/crowdsec and /var/lib.
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE]
+  swarm:
+    memory: { reserve: 128M, limit: 512M }
+    # 🔴 A single instance. Two decision engines sharing the same SQLite database
+    # would corrupt it, and two separate databases would give diverging decisions
+    # depending on which node answered the bouncer.
+    replicas: 1
+    # Light: it runs where Caddy runs, which is the machine the router forwards to —
+    # whatever its size. Heavy, it could be placed nowhere.
+    tier: light
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+  env:
+    # The parser and the scenarios for Caddy's JSON access log.
+    COLLECTIONS: "crowdsecurity/caddy"
+    # 🔴 The bouncer registers itself at start with this key, which Homelabus generated
+    # into the vault (`crowdsec-bouncer-key`) and writes into Caddy's configuration:
+    # nobody runs `cscli` on CrowdSec's machine. Named `caddy` by the suffix.
+    BOUNCER_KEY_caddy: "{{ secret.bouncer-key }}"
+  files:
+    # What CrowdSec reads: the access log Caddy writes into its `logs` volume.
+    - path: /etc/crowdsec/acquis.d/caddy.yaml
+      content: |
+        filenames:
+          - /var/log/caddy/*.log
+        labels:
+          type: caddy
+    # A wrong secret on a route an app declared (`authRoutes`), judged by the app's own
+    # refusal — Vaultwarden's 400, most apps' 401 — and the ingress's 429. No app is
+    # named: Caddy marks each line with the app (`hlb_auth`) and its refusal
+    # (`hlb_auth_fails`). The generic brute-force scenarios count only 401 and 403 on a
+    # POST, and never saw Vaultwarden's. Ten in a minute bans the address.
+    - path: /etc/crowdsec/scenarios/homelabus-auth-failures.yaml
+      content: |
+        type: leaky
+        name: homelabus/auth-failures
+        description: "Wrong secrets on an app's declared sign-in routes"
+        filter: |
+          evt.Meta.log_type == 'http_access-log' &&
+          evt.Unmarshaled.caddy.hlb_auth != nil &&
+          (evt.Meta.http_status == '429' ||
+           (evt.Unmarshaled.caddy.hlb_auth_fails != nil &&
+            evt.Meta.http_status == Sprintf('%v', evt.Unmarshaled.caddy.hlb_auth_fails)))
+        groupby: evt.Meta.source_ip
+        capacity: 10
+        leakspeed: 1m
+        blackhole: 5m
+        labels:
+          service: http
+          confidence: 3
+          spoofable: 0
+          classification:
+            - attack.T1110
+          behavior: "http:bruteforce"
+          label: "Wrong secrets on a sign-in route"
+          remediation: true
+  update:
+    # The detection scenarios move fast; staying on an old version amounts to no
+    # longer detecting the recent attacks.
+    channel: minor

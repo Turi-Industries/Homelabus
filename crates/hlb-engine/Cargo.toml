@@ -1,0 +1,54 @@
+[package]
+name = "hlb-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Plan executor: preview by default, idempotent, resumable."
+
+[dependencies]
+hlb-types.workspace = true
+hlb-resolver.workspace = true
+hlb-orchestrator.workspace = true
+hlb-state.workspace = true
+hlb-objstore.workspace = true
+hlb-secrets.workspace = true
+hlb-platform.workspace = true
+hlb-registry.workspace = true
+hlb-identity.workspace = true
+# A Bitwarden organisation's members, and the emergency vault's deposits.
+hlb-bitwarden.workspace = true
+# The nodes, kept in Termix.
+hlb-termix.workspace = true
+# The break-glass safeguard a verified deposit proves.
+hlb-api.workspace = true
+# What PocketID's groups and the apps should hold: the roles' rule, computed there.
+hlb-users.workspace = true
+hlb-guide.workspace = true
+hlb-ingress.workspace = true
+hlb-mail.workspace = true
+# The certificate Stalwart's submission port is served with, under Homelabus's root:
+# the same `openssl` path the root itself was made by.
+hlb-agent.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# The private root's file name, as `openssl rehash` gives it.
+sha1 = "0.10"
+rustls-pemfile = "2"
+# Waiting for Caddy's update to conclude.
+tokio = { workspace = true, features = ["time"] }
+# A guide's `sql` automation reaches the app's database through `hlb_guide::SqlWriter`.
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+async-trait.workspace = true
+serde_yaml_ng.workspace = true
+tempfile = "3"
+# The live roles test reads PocketID's token preview, as an app would get it.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[lints]
+workspace = true

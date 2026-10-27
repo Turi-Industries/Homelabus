@@ -1,0 +1,48 @@
+# An example theme, and the documentation of the format: every key below is required.
+# `hlb-controller --themes <dir>` loads this directory at startup; a file it refuses is
+# named in the log with the reason.
+name: Ardoise
+base: dark
+
+background: "#12151A"
+surface: "#1A1F26"
+raised_surface: "#232A33"
+border: "#323B47"
+text: "#E8ECF1"
+muted_text: "#9AA5B1"
+
+# 🔴 A COOL accent. A warm one merges with "critical" under deuteranopia, and every
+# primary button would then read as an alert — `Palette::validate` refuses the theme
+# rather than let that ship.
+accent: "#8AA0FF"
+on_accent: "#12151A"
+
+ok: "#3FCBB0"
+attention: "#F5C451"
+critical: "#EF6161"
+info: "#7FA8F5"
+
+# --- Optional, and optional on purpose -----------------------------------------------
+#
+# Everything above is required: a theme missing its `critical` colour would be painted
+# with a default nobody chose, and the one colour you must not guess is the one that says
+# something is wrong. The three keys below are the opposite — leaving them out means "the
+# letters and the size the project chose", which IS a decision.
+#
+# `typeface` / `typeface_mono` name a file sitting BESIDE this one, served by the
+# controller and fetched by the interface. A name only: no path, no URL, and `.woff2`,
+# `.woff`, `.ttf` or `.otf` — anything else is refused, because a browser handed a format
+# it cannot read draws the fallback face and says nothing. A theme naming a file that is
+# not there is refused by name at startup rather than quietly drawn in the project's font.
+#
+# ⚠️ A themed face changes how the interface LOOKS and never what it can SAY: it goes in
+# front of the project's fonts, so a glyph it lacks falls through to them.
+#
+# `scale` is how big this installation's interface is, between 0.8 and 1.6. It MULTIPLIES
+# the person's own text-size control rather than replacing it — which is also why it is
+# bounded: a theme at 4.0 would leave an interface too large to reach the control that
+# would undo it.
+#
+# typeface: Inter-Regular.ttf
+# typeface_mono: IBMPlexMono-Regular.ttf
+# scale: 1.1

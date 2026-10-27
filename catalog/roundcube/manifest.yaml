@@ -1,0 +1,83 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: roundcube
+  displayName: Roundcube
+  category: mail
+  homepage: https://roundcube.net
+spec:
+  image: { repo: roundcube/roundcubemail, tag: "1.7.4-apache", digest: "sha256:23d2bf8c125ca92d7fb6f1be17f1077b3d662f1a01791253ceb7364a7913270a" }
+  requires:
+    # Preferences, address book, folder cache. Small but not disposable: losing it
+    # erases the sending identities and the local contacts.
+    - kind: database
+      engine: postgres
+
+    # 🔴 NO SSO. Roundcube authenticates over IMAP against Stalwart with the mailbox's
+    # credentials — that is what makes it a SAFETY NET: the day PocketID is down, it
+    # stays reachable. Putting it behind the SSO would remove the very reason to
+    # install it.
+    - kind: sso
+      mode: none
+
+    # Each person sends as themselves, with their mailbox's own credentials: no account
+    # of Roundcube's. What it is given is Stalwart's address — and the root its
+    # certificate is under, without which PHP refuses it.
+    - kind: smtp
+      sender: person
+
+    # Attachments being drafted, previews. Rebuildable.
+    - kind: storage
+      name: temp
+      path: /tmp/roundcube-temp
+      tier: local
+      backup: false
+  env:
+    # ⚠️ The INTERNAL service name: unlike Bulwark, it is the CONTAINER that speaks
+    # IMAP, not the browser. Putting the public URL here would send the traffic out
+    # and back in through the proxy, for nothing.
+    #
+    # 🔴 `ssl://` on 993, `tls://` on 587. In Roundcube `tls://` is STARTTLS: written
+    # for IMAP on 993, a port that speaks TLS from the first byte, it waited for a
+    # greeting that never came — "Empty startup greeting (stalwart:993)", and nobody
+    # could sign in (1.7.3). Signed in, then sending, reached a Stalwart mailbox on
+    # 2026-10-18.
+    ROUNDCUBEMAIL_DEFAULT_HOST: "ssl://{{ smtp.host }}"
+    ROUNDCUBEMAIL_DEFAULT_PORT: "993"
+    ROUNDCUBEMAIL_SMTP_SERVER: "tls://{{ smtp.host }}"
+    ROUNDCUBEMAIL_SMTP_PORT: "{{ smtp.port }}"
+
+    ROUNDCUBEMAIL_DB_TYPE: pgsql
+    ROUNDCUBEMAIL_DB_HOST: "{{ db.host }}"
+    ROUNDCUBEMAIL_DB_PORT: "{{ db.port }}"
+    ROUNDCUBEMAIL_DB_NAME: "{{ db.name }}"
+    ROUNDCUBEMAIL_DB_USER: "{{ db.user }}"
+    ROUNDCUBEMAIL_DB_PASSWORD: "{{ db.password }}"
+
+    # 🔴 `managesieve` is the plugin that makes the sorting rules EDITABLE by the user.
+    # Without it, the rules Homelabus generates exist at Stalwart but nobody can
+    # re-read or fix them — and a rule you cannot inspect is a rule you do not trust.
+    #
+    ROUNDCUBEMAIL_PLUGINS: "archive,zipdownload,managesieve"
+    ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE: 25M
+  ingress:
+    - host: "{{ domain }}"
+      port: 80
+      chain: [caddy-front, caddy-back]
+      # 🔴 Private. It is a sign-in form for EVERY mailbox in the domain: public, it
+      # becomes the most profitable credential-stuffing target of the installation.
+      expose: private
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    memory: { reserve: 64M, limit: 256M }
+    # 🔴 A single instance: the PHP sessions and the attachments being drafted live on
+    # the local disk. Two replicas would sign the user out on one request out of
+    # two.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/ >/dev/null || exit 1"]
+  update:
+    channel: minor

@@ -1,0 +1,75 @@
+# What the deployment alone does not cover.
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: |
+      At your registrar, point {{ domain }} at the cluster.
+
+      If a wildcard *.{{ base_domain }} already exists, there is nothing to do.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: shared-on-the-pool
+    title: Put Seafile's data on the pool
+    phase: pre-install
+    severity: blocking
+    body: |
+      The `seafile-shared` volume holds every library, file and setting. Install
+      with `HLB_STORAGE_ROOT` pointing at the pool (`hlb storage init` prints it):
+      the volume is then a dataset of its own, snapshotted, and Seafile runs on
+      the storage node.
+
+      ⚠️ Without it, the data sits in Docker's directory of whichever node Seafile
+      landed on — kept across redeployments, but on that machine's system disk.
+
+  - id: admin-account
+    title: Keep the administrator's password
+    phase: post-install
+    severity: blocking
+    body: |
+      People sign in through PocketID. Seafile's own administrator — for when
+      PocketID cannot — is the address Seafile sends mail from, seafile@ your
+      mail domain, with a password generated at the install:
+
+        hlb secret-get seafile-admin-password
+
+      Put it in your password manager. Until this is done, Seafile stays
+      reachable from the VPN only — that is what `expose: after-guide`
+      guarantees.
+    deeplink: "https://{{ domain }}/accounts/login/"
+    # Attested: keeping a password is a person's act, and `/api2/ping/` only said
+    # Seafile runs.
+    verify:
+      type: attest
+
+  - id: no-s3
+    title: Understand the storage limit
+    phase: post-install
+    severity: tip
+    after: [admin-account]
+    body: |
+      The community edition stores everything on its volume. Object storage
+      (S3, and therefore Garage) is a PRO edition feature and does not switch on
+      here, whatever the configuration.
+
+      Concretely: the size of the pool is the limit, and the restic backup
+      copies those files one by one. Over several hundred gigabytes, check how
+      long a full backup takes before depending on it.
+
+  - id: history-and-space
+    title: Know how long deleted files stay
+    phase: post-install
+    severity: tip
+    after: [admin-account]
+    body: |
+      A file deleted or overwritten stays in its library's history for 90 days,
+      unless the library's owner chose another length in its settings; a
+      deleted library stays 30 days in the administrators' trash.
+
+      Every week, Homelabus runs Seafile's garbage collection, which frees the
+      space of what is past both. Until then, deleting frees nothing on the
+      pool. `hlb job` shows its last run.

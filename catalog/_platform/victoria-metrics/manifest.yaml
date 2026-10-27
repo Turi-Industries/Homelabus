@@ -1,0 +1,46 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: victoria-metrics
+  displayName: VictoriaMetrics
+  category: platform
+  homepage: https://victoriametrics.com
+spec:
+  image: { repo: victoriametrics/victoria-metrics, tag: "v1.154.0", digest: "sha256:4bd592341587d669b7f57d54bbb82bd21ac8675f4e24234b7703a7c0f85197d8" }
+  requires:
+    # 🔴 The history MUST survive a restart. A metrics database that started from
+    # scratch answers "I do not know" to the only question you really ask it: "was it
+    # already like this before?".
+    - kind: storage
+      name: data
+      path: /victoria-metrics-data
+      tier: local
+      # ⚠️ NOT backed up, deliberately. This data is derived: it rebuilds itself by
+      # collecting again, and its volume would crush the restic repository at the
+      # expense of what is really irreplaceable. Losing the history is annoying;
+      # losing an app's database is a disaster.
+      backup: false
+  ingress:
+    # 🔴 PRIVATE. VictoriaMetrics's API is writable AND has no native
+    # authentication: exposed, anyone can inject false measurements — and so silence
+    # the alerts by drowning them under healthy values.
+    - host: "{{ domain }}"
+      port: 8428
+      chain: [caddy-back]
+      expose: private
+  security:
+    readOnlyRootfs: false
+  swarm:
+    # It sizes its caches from this limit (60 % of it).
+    memory: { reserve: 128M, limit: 1G }
+    # 🔴 A single instance: the storage is a local directory. Two replicas would hold
+    # two different histories and would answer in turn, which would produce sawtooth
+    # graphs with no real cause.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8428/health | grep -q OK"]
+  update:
+    # The storage format changes between major versions and the migration cannot be
+    # reversed by a simple image rollback.
+    channel: minor

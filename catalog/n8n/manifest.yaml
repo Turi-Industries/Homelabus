@@ -1,0 +1,120 @@
+apiVersion: hlb/v1
+kind: App
+metadata:
+  name: n8n
+  displayName: n8n
+  category: automation
+  homepage: https://n8n.io
+spec:
+  # 2 rehearsed on 2026-10-19 on a 1.123 database: its migrations, the owner, an active
+  # workflow's production webhook and the sign-in's 401 all kept. ⚠️ A first start runs
+  # some 300 migrations before its API answers — 8.5 minutes on the lab's disk.
+  image: { repo: n8nio/n8n, tag: "2.43.4", digest: "sha256:c34ee9107a42b837e25cec0c8a927ab90a45b776aa2ccbf15e5b9cda466fad2c" }
+  requires:
+    - kind: database
+      engine: postgres
+
+    # 🔴 NO native SSO: n8n's OIDC is reserved for the enterprise edition.
+    # The community one has its own accounts (the first registrant is the
+    # owner). `proxy-only` therefore puts a portal in front.
+    #
+    # ⚠️ A consequence to know about: the portal ALSO covers /webhook/*.
+    # Triggers called from outside will not get through. As long as the
+    # ingress cannot distinguish paths, it is one or the other — and we
+    # choose to protect the interface, which holds the credentials.
+    - kind: sso
+      mode: proxy-only
+
+    # 🔴 To be KEPT EVEN with PostgreSQL. This directory does not only carry the
+    # SQLite database we have just replaced: it contains the encryption key, the
+    # instance logs and the source-control data. n8n says so itself. Removing it
+    # believing "everything is in the database" loses the key.
+    - kind: storage
+      name: data
+      path: /home/node/.n8n
+      tier: local
+      backup: true
+
+    # The workflows send mail (failure notifications, reports).
+    - kind: smtp
+  # 🔴 How n8n receives what the resolver provisioned.
+  #
+  # Without this block, the `n8n` database was created, its isolated role too, its
+  # password deposited in the vault — and n8n started knowing none of it, then fell
+  # back to its internal SQLite. Healthy service, green probe, and the data in a file
+  # nobody backed up while an empty database was faithfully dumped every night.
+  #
+  # ⚠️ Secret tokens are NOT resolved in the plan: `hlb plan` displays
+  # "{{ db.password }}", and only Swarm sees the value.
+  env:
+    DB_TYPE: postgresdb
+    DB_POSTGRESDB_HOST: "{{ db.host }}"
+    DB_POSTGRESDB_PORT: "{{ db.port }}"
+    DB_POSTGRESDB_DATABASE: "{{ db.name }}"
+    DB_POSTGRESDB_USER: "{{ db.user }}"
+    DB_POSTGRESDB_PASSWORD: "{{ db.password }}"
+
+    # n8n builds its webhook URLs from this. Without these three lines it
+    # announces "localhost:5678", which nothing outside can reach.
+    N8N_HOST: "{{ domain }}"
+    N8N_PROTOCOL: https
+    # `WEBHOOK_URL` until 2: deprecated there, for the test webhooks' base as well.
+    N8N_WEBHOOK_URL: "https://{{ domain }}/"
+
+    # Invitations, password resets, workflow failure notifications. Its password reset
+    # reached a Stalwart mailbox on 2026-10-18.
+    N8N_SMTP_HOST: "{{ smtp.host }}"
+    N8N_SMTP_PORT: "{{ smtp.port }}"
+    N8N_SMTP_USER: "{{ smtp.user }}"
+    N8N_SMTP_PASS: "{{ smtp.password }}"
+    # 🔴 Its default sender is empty, and its default `secure` is TRUE — TLS from the
+    # first byte, which port 587 answers in clear before STARTTLS: "wrong version
+    # number" on every mail. STARTTLS stays on by default.
+    N8N_SMTP_SENDER: "n8n <{{ smtp.from }}>"
+    N8N_SMTP_SSL: "false"
+  ingress:
+    - host: "{{ domain }}"
+      port: 5678
+      chain: [caddy-back]
+      # 🔴 Private. n8n stores the credentials of EVERY service it drives:
+      # API keys, tokens, passwords. It is a vault that does not know it.
+      expose: private
+      # Behind the portal, and n8n's own owner sign-in still checks a password:
+      # `AuthError`, a 401 (1.123).
+      authRoutes:
+        - paths: [/rest/login]
+          failsWith: 401
+      # 🔴 The production webhooks only, which a service outside calls with no session:
+      # past the portal and the private ranges, whatever the route says. Each is a
+      # workflow's own unguessable path, and a workflow that acts on one should check
+      # what it is sent. `/webhook-test/*`, the editor's, stays behind the portal.
+      openPaths: [/webhook/*]
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID]
+  swarm:
+    memory: { reserve: 256M, limit: 1G }
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz >/dev/null || exit 1"]
+  update:
+    channel: minor
+  assertions:
+    - id: owner-exists
+      holds: n8n has its owner — nobody claims the instance from its setup page
+      check:
+        type: http
+        path: /rest/settings
+        pointer: /data/userManagement/showSetupOnFirstLoad
+        equals: false
+  # Its owner, made by the guide's first-run step.
+  recovery:
+    - secret: owner-password
+      username: "{{ smtp.from }}"
+      path: /signin
+      # The sign-in page's own call: 401 to a refusal (2.43.4).
+      proof:
+        path: /rest/login
+        body: '{"emailOrLdapLoginId":"{{ username }}","password":"{{ password }}"}'
+        pointer: /data/id

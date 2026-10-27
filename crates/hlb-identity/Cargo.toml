@@ -1,0 +1,22 @@
+[package]
+name = "hlb-identity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "PocketID API client: provisioning OIDC clients."
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+hlb-types = { path = "../hlb-types" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util"] }
+serde_yaml_ng.workspace = true
+
+[lints]
+workspace = true

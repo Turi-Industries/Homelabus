@@ -1,0 +1,20 @@
+[package]
+name = "hlb-selfupdate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Updating Homelabus itself: compatibility, sequence, rollback."
+
+[dependencies]
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+hlb-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

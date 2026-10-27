@@ -1,0 +1,11 @@
+-- Bind an API token to a user.
+--
+-- 🔴 Until now a token carried a ROLE but no identity. That was enough to
+-- read cluster state — the state is the same for everyone. It stops being enough as
+-- soon as a request acts FOR someone: without this link, the alias API would have to
+-- take the user name from the request body, and a stolen token could then create
+-- aliases on anyone's mailbox.
+--
+-- NULL = service token, no identity. That covers operational tokens, and they are
+-- not allowed to act on a user's behalf.
+ALTER TABLE api_tokens ADD COLUMN user TEXT;

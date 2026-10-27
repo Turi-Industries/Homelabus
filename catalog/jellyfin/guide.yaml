@@ -1,0 +1,84 @@
+# What the deployment alone does not cover.
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: |
+      At your registrar, point {{ domain }} at the cluster.
+
+      If a wildcard *.{{ base_domain }} already exists, there is nothing to do.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: nfs-media
+    title: Check the media library's NFS share
+    phase: pre-install
+    severity: blocking
+    body: |
+      The `jellyfin-media` volume must point at the NAS's NFS share.
+
+      ⚠️ Without it, Jellyfin starts perfectly and presents an EMPTY library.
+      Nothing says the mount is missing: you assume an indexing problem and
+      go looking in the wrong place.
+
+      Check from a node:
+        showmount -e <nas>
+        mount | grep media
+
+  - id: first-account
+    title: The administrator account
+    phase: post-install
+    severity: blocking
+    body: |
+      Jellyfin's first-run wizard makes its first visitor the administrator, so
+      it is run at the install, before anyone reaches it: the administrator is
+      `admin`, with a generated password —
+
+        hlb secret-get jellyfin-admin-password
+
+      🔴 Jellyfin is NOT behind the SSO — its TV clients cannot follow an
+      authentication redirect. That password is therefore the only thing
+      protecting the media library: put it in Vaultwarden, nowhere else.
+    deeplink: "https://{{ domain }}/web/#/login.html"
+    automate:
+      - method: api
+        probe:
+          path: /System/Info/Public
+          pointer: /StartupWizardCompleted
+          equals: "true"
+        # The wizard's own calls, in its order (10.11.11). Remote access stays on:
+        # every request reaches Jellyfin through Caddy, never from its own network.
+        calls:
+          - verb: POST
+            path: /Startup/Configuration
+            body: '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
+          - { verb: GET, path: /Startup/User }
+          - verb: POST
+            path: /Startup/User
+            body: '{"Name":"admin","Password":"{{ secret.admin-password }}"}'
+          - verb: POST
+            path: /Startup/RemoteAccess
+            body: '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}'
+          - { verb: POST, path: /Startup/Complete }
+    verify:
+      type: http
+      # The wizard's last call sets it, after the administrator (10.11.11); `/health`
+      # answered with the wizard still open to its first visitor.
+      url: "https://{{ domain }}/System/Info/Public"
+      expectJson: { pointer: /StartupWizardCompleted, equals: "true" }
+
+  - id: remote-access
+    title: Decide on access outside the VPN
+    phase: post-install
+    severity: recommended
+    after: [first-account]
+    body: |
+      Jellyfin is exposed PRIVATELY: reachable from the VPN only.
+
+      Making it public would amount to putting its sign-in form facing the
+      internet, without the identity provider to cover it. If you want to
+      watch from elsewhere, the VPN is the right answer — Jellyfin clients
+      cope with it very well.

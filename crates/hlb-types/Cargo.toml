@@ -1,0 +1,28 @@
+[package]
+name = "hlb-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared types: manifests, capabilities, state. The single source of truth for the schema."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+# The `:bcrypt` form of a generated secret, for ntfy's declared users. Pure Rust.
+bcrypt = { version = "0.19", default-features = false, features = ["std"] }
+# The tz database, so `Europe/Pariss` is refused when it is set rather than at
+# Seafile's first start, which reads it once.
+chrono-tz = "0.10"
+# The key-pair forms of a generated secret, derived from the stored value so a pair's
+# halves never disagree: P-256 for Web Push (VAPID), RSA for ActivityPub's signatures.
+# Generation only — no signature, no decryption is ever made here.
+p256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
+rand_chacha = "0.3"
+rsa = "0.9"
+
+[lints]
+workspace = true

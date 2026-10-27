@@ -1,0 +1,22 @@
+[package]
+name = "hlb-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Digest resolution and update policy."
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde_json.workspace = true
+hlb-types.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

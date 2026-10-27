@@ -1,0 +1,2091 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"accounts_incomplete_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} compte incomplet.",
+				"countPlural=*": "{count} comptes incomplets."
+			}
+		}
+	],
+	"accounts_incomplete_explanation": "Un compte à moitié créé a l'air fonctionnel : la personne se connecte et ne reçoit rien, ou reçoit sans pouvoir se connecter. La création peut reprendre là où elle s'est arrêtée.",
+	"accounts_still_receiving_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} alias expiré ENCORE actif.",
+				"countPlural=*": "{count} alias expirés ENCORE actifs."
+			}
+		}
+	],
+	"accounts_broken_promise_explanation": "Un serveur mail ne peut pas faire expirer un alias : la purge n'a pas eu lieu, et ces adresses que vous croyez fermées restent ouvertes.",
+	"accounts_valid_for": "valable",
+	"accounts_people": "personnes",
+	"accounts_unit_hour": "h",
+	"accounts_unit_day": "j",
+	"accounts_role": "rôle",
+	"accounts_session_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} session",
+				"countPlural=*": "{count} sessions"
+			}
+		}
+	],
+	"accounts_link_will_let_in": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Ce lien fera entrer {count} personne.",
+				"countPlural=*": "Ce lien fera entrer {count} personnes."
+			}
+		}
+	],
+	"accounts_link_leak_explanation": "En cas de fuite, c'est autant de comptes créés. Un lien par personne coûte plus cher à transmettre, et beaucoup moins cher à révoquer.",
+	"accounts_admin_role": "rôle ADMIN",
+	"accounts_admin_role_explanation": "La personne pourra accorder des rôles et détruire des données.",
+	"accounts_create_the_link": "Créer le lien…",
+	"accounts_default_mailbox": [
+		{
+			"declarations": [
+				"input is_default",
+				"input address"
+			],
+			"selectors": [
+				"is_default"
+			],
+			"match": {
+				"is_default=1": "{address} (par défaut)",
+				"is_default=*": "{address}"
+			}
+		}
+	],
+	"accounts_still_receiving_badge": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} alias expiré encore actif",
+				"countPlural=*": "{count} alias expirés encore actifs"
+			}
+		}
+	],
+	"accounts_revoke": "Révoquer",
+	"accounts_kept_as_a_trace": "conservée comme trace",
+	"accounts_active_alias_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} alias actif",
+				"countPlural=*": "{count} alias actifs"
+			}
+		}
+	],
+	"accounts_pocket_id_reference": "PocketID : {id}",
+	"action_action_could_not_be_started": "L'action n'a pas pu démarrer",
+	"action_close": "Fermer",
+	"action_preview_nothing_changed_yet": "Aperçu — rien n'a encore été modifié",
+	"action_what_will_be_done_in_order": "Ce qui sera fait, dans cet ordre :",
+	"action_destructive_operation": "Opération destructrice",
+	"action_confirmation_explanation": "Appliquer exigera de confirmer explicitement \"{target}\". Le rôle ne suffit pas : répéter le nom est ce qui vous empêche de détruire la mauvaise cible.",
+	"action_equivalent_command_line": "Commande équivalente :",
+	"action_copy": "Copier",
+	"action_prepare_for_later": "Préparer pour plus tard :",
+	"action_plan_name_hint": "nom du plan",
+	"action_record": "Enregistrer",
+	"action_applying": "Application…",
+	"action_apply_irreversible": "Appliquer — irréversible",
+	"action_apply": "Appliquer",
+	"action_link_shown_once_explanation": "Affiché une seule fois : il n'est enregistré nulle part. Le QR code peut aussi être photographié par-dessus votre épaule — ne l'affichez pas devant quelqu'un à qui il n'est pas destiné.",
+	"action_step_planned": "prévue",
+	"action_step_done": "faite",
+	"action_step_failed": "ÉCHOUÉE",
+	"alerts_title": "Alertes",
+	"alerts_active_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} alerte active",
+				"countPlural=*": "{count} alertes actives"
+			}
+		}
+	],
+	"alerts_active_count_with_muted": [
+		{
+			"declarations": [
+				"input count",
+				"input muted",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} alerte active, {muted} en sourdine",
+				"countPlural=*": "{count} alertes actives, {muted} en sourdine"
+			}
+		}
+	],
+	"alerts_no_active_alert": "Aucune alerte active.",
+	"alerts_rules_cannot_be_evaluated": [
+		{
+			"declarations": [
+				"input rules",
+				"local rulesPlural = rules: plural"
+			],
+			"selectors": [
+				"rulesPlural"
+			],
+			"match": {
+				"rulesPlural=one": "{rules} règle ne peut plus être évaluée.",
+				"rulesPlural=*": "{rules} règles ne peuvent plus être évaluées."
+			}
+		}
+	],
+	"alerts_blind_monitoring_explanation": "Ce n'est PAS \"tout va bien\" : la collecte est probablement tombée, et cette surveillance est aveugle depuis.",
+	"alerts_for_duration": "depuis {duration}",
+	"alerts_measured_value": "{value} (seuil {threshold})",
+	"alerts_no_data": "aucune donnée",
+	"announcements_no_announcement_published": "Aucune annonce publiée.",
+	"announcements_published": "Publiée",
+	"announcements_title_hint": "Titre",
+	"announcements_body_hint": "Ce que les gens doivent savoir, en quelques lignes.",
+	"announcements_level_label": "niveau",
+	"announcements_level_information": "information",
+	"announcements_level_maintenance": "maintenance",
+	"announcements_level_warning": "avertissement",
+	"announcements_level_incident": "incident",
+	"announcements_audience_label": "qui verra",
+	"announcements_audience_everyone": "tout le monde",
+	"announcements_audience_viewer_up": "à partir de viewer",
+	"announcements_audience_operations": "les opérations",
+	"announcements_audience_admins": "les admins",
+	"announcements_pin": "épingler",
+	"announcements_incident_visible_to_everyone": "Cet incident sera visible de tout le monde.",
+	"announcements_incident_visible_explanation": "Il restera affiché jusqu'à ce que vous le fermiez : une panne qui disparaît d'elle-même de l'écran fait croire qu'elle est résolue.",
+	"announcements_maintenance_reaches_portal": "Cette maintenance atteindra le portail.",
+	"announcements_maintenance_explanation": "Les personnes qui n'ont qu'une boîte mail la verront aussi. Trop de messages opérationnels leur font arrêter de lire les annonces.",
+	"announcements_publish_ellipsis": "Publier…",
+	"announcements_title_and_body_needed": "un titre et un corps sont nécessaires",
+	"announcements_pinned": "épinglée",
+	"announcements_remove": "Retirer",
+	"announcements_published_by_at": "{at} · {author}",
+	"announcements_update_hint": "Où en est-on ? Cette mise à jour s'ajoute au fil, elle ne remplace rien.",
+	"announcements_add_an_update": "Ajouter une mise à jour",
+	"announcements_to_close_incident": "Pour fermer l'incident, publiez la dernière mise à jour puis retirez-la.",
+	"app_detail_back_up_now": "Sauvegarder maintenant",
+	"app_detail_short_preview": "Aperçu",
+	"app_detail_status": "Statut",
+	"app_detail_replicas": "Répliques",
+	"app_detail_running_desired": "{running} / {desired}",
+	"app_detail_image": "Image",
+	"app_detail_last_backup": "Dernière sauvegarde",
+	"app_detail_last_verification": "Dernière vérification",
+	"app_detail_replica_of_node": "réplique {slot} de {node} — {state}",
+	"app_detail_unknown_node": "nœud inconnu",
+	"app_detail_placement": "Placement",
+	"app_detail_manual_actions": "Actions manuelles",
+	"app_assertions": "Ce qu'elle doit garantir",
+	"app_assertions_explanation": "Relu chaque nuit sur l'application en marche. Pour le relire tout de suite :",
+	"app_assertions_command": "hlb assert {app}",
+	"app_assertion_holds": "tient",
+	"app_assertion_broken": "ne tient pas",
+	"app_assertion_unknown": "non relu",
+	"app_assertion_fix": "Que faire :",
+	"app_jobs": "Travaux planifiés",
+	"app_jobs_explanation": "Lancés par le contrôleur dans le conteneur de l'application, à leur échéance. Pour en lancer un tout de suite :",
+	"app_jobs_command": "hlb job {app} {job} --apply",
+	"app_job_every_day": "chaque jour",
+	"app_job_every_week": "chaque semaine",
+	"app_job_never_run": "jamais lancé — dû tout de suite",
+	"app_job_last_run": "dernier passage {at}",
+	"app_job_next_run": "prochain {at}",
+	"app_job_succeeded": "réussi",
+	"app_job_failed": "en échec",
+	"app_job_waiting": "pas encore lancé",
+	"app_detail_blocking": "bloquant",
+	"app_detail_what_was_provisioned": "Ce qui a été provisionné",
+	"app_detail_volumes": "Volumes",
+	"app_detail_name_and_path": "{name} : {path}",
+	"app_detail_sqlite": "SQLite",
+	"app_detail_backed_up": "sauvegardé",
+	"app_detail_not_backed_up": "PAS sauvegardé",
+	"app_detail_environment_variables": "Variables d'environnement",
+	"app_detail_env_explanation": "Les jetons sont montrés tels quels : leur valeur ne quitte jamais le coffre, et un jeton visible dit à quoi l'application est réellement câblée — ce que des astérisques ne diraient pas.",
+	"app_detail_manifest_frozen": "Manifeste figé au déploiement",
+	"app_detail_manifest_frozen_explanation": "Celui de l'installation, pas celui du catalogue actuel : c'est ce qui tourne réellement.",
+	"app_detail_if_i_lose_everything_now": "Si je perds tout maintenant",
+	"app_detail_confidence": "Confiance : {explanation}",
+	"app_detail_coverage": "Couverture",
+	"app_detail_never": "JAMAIS",
+	"app_detail_no_backup_recorded": "Aucune sauvegarde enregistrée pour cette application.",
+	"app_detail_backup_run_command": "hlb backup run --app <nom> --force",
+	"app_detail_recent_runs": "Exécutions récentes",
+	"app_detail_run_kind": "{kind}{to_destination}",
+	"app_detail_to_destination": " vers {destination}",
+	"app_detail_no_action_recorded": "Aucune action enregistrée sur cette application.",
+	"app_detail_what_changed_in_manifest": "Ce qui a changé dans le manifeste",
+	"app_detail_no_manifest_history": "Aucun historique de manifeste : le miroir Git n'est pas activé, et l'état ne conserve que la version actuelle.",
+	"app_detail_first_known_version": "Première version connue : il n'y a rien avant elle.",
+	"app_detail_no_manifest_change": "Aucun changement de manifeste.",
+	"app_detail_nothing_to_configure": "Cette application ne déclare ni capacité, ni volume, ni variable d'environnement : il n'y a rien à configurer.",
+	"apps_no_application_installed": "Aucune application installée.",
+	"backups_no_application_installed": "Aucune application installée.",
+	"backups_dest_add_command": "hlb backup dest add <nom> --location <chemin>",
+	"backups_no_up_to_date_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} application n'a AUCUNE copie à jour.",
+				"countPlural=*": "{count} applications n'ont AUCUNE copie à jour."
+			}
+		}
+	],
+	"backups_single_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} application n'a plus qu'une seule copie.",
+				"countPlural=*": "{count} applications n'ont plus qu'une seule copie."
+			}
+		}
+	],
+	"backups_at_least_two_copies": "Chaque application a au moins deux copies.",
+	"backups_protection_explanation": "Le nombre de destinations déclarées ne dit rien du nombre de copies : une destination en échec ne protège rien.",
+	"backups_coverage_per_application": "Couverture par application",
+	"backups_no_run_recorded": "Aucune sauvegarde enregistrée pour l'instant.",
+	"backups_never": "JAMAIS",
+	"backups_nothing_to_back_up": "rien à sauvegarder",
+	"catalog_catalog_unreadable": "Aucune application lisible. Le contrôleur a été démarré sans --catalog, ou le répertoire ne peut pas être lu.",
+	"catalog_installed": "installée",
+	"catalog_before_installing": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} action manuelle avant d'installer :",
+				"countPlural=*": "{count} actions manuelles avant d'installer :"
+			}
+		}
+	],
+	"drift_no_gap": "Aucun écart : ce qui tourne correspond à ce qui a été décidé.",
+	"drift_will_be_corrected": "Sera corrigé au prochain passage",
+	"drift_correctable_explanation": "L'instruction Swarm vient d'une décision : elle est corrigée. Ceux-ci ne demandent aucune action de votre part.",
+	"drift_left_as_is_deliberately": "Laissé tel quel, délibérément",
+	"drift_refusal_explanation": "Un système qui sur-corrige est plus dangereux qu'un système qui ne corrige rien. Voici ce que Homelabus a vu et n'a pas touché, et pourquoi.",
+	"duration_in_the_future": "dans le futur ?",
+	"duration_seconds": "{n} s",
+	"duration_minutes": "{n} min",
+	"duration_hours": "{n} h",
+	"duration_days": "{n} j",
+	"duration_months": "{n} mois",
+	"duration_never_verified": "jamais vérifié",
+	"freshness_connecting": "connexion…",
+	"freshness_cannot_connect": "CONNEXION IMPOSSIBLE — {error}",
+	"journal_title": "Journal",
+	"journal_integrity_explanation": "Ajout seul et chaîné : chaque entrée porte l'empreinte de la précédente. Vérifier l'intégrité : hlb audit --verify",
+	"journal_no_action_recorded": "Aucune action enregistrée.",
+	"journal_action_on_target": "{action} sur {target}",
+	"journal_actor_with_role": "{actor} ({role})",
+	"journal_verdict_refused": "refusé (protection)",
+	"journal_verdict_failed": "échoué",
+	"journal_verdict_ok": "ok",
+	"my_account_service_token_explanation": "Cet accès est un jeton de service : il porte un rôle, pas une identité. Il n'y a pas de compte derrière, donc rien ici n'est le vôtre.",
+	"my_account_service_token_command": "hlb token create <nom> --role operator --user <compte>",
+	"my_account_my_addresses": "Mes adresses",
+	"my_account_no_mailbox": "Aucune boîte mail. Vous pouvez vous connecter, et votre adresse ne reçoit rien — ce qui se voit en général à la première réinitialisation de mot de passe perdue.",
+	"my_account_default_mailbox": "par défaut",
+	"my_account_what_you_can_do": "Ce que vous pouvez faire",
+	"my_account_can_read_self": "Voir votre propre compte",
+	"my_account_can_act_on_self": "Agir sur votre propre compte",
+	"my_account_can_read": "Lire la console",
+	"my_account_can_publish": "Installer et publier des applications",
+	"my_account_can_operate": "Piloter la flotte (redimensionner, sauvegarder, redémarrer)",
+	"my_account_can_manage_accounts": "Gérer les comptes et les invitations",
+	"my_account_can_destroy": "Supprimer des applications",
+	"my_account_yes": "oui",
+	"my_account_no": "non",
+	"my_account_identity": "Identité",
+	"my_account_identity_explanation": "Vos noms, tels que PocketID les donne à chaque application où vous vous connectez.",
+	"my_account_first_name": "Prénom",
+	"my_account_last_name": "Nom",
+	"my_account_display_name": "Nom affiché",
+	"my_account_email": "Adresse donnée aux applications : {address}",
+	"my_account_save_names": "Enregistrer",
+	"my_account_names_title": "Modifier mes noms",
+	"my_account_identity_not_configured": "PocketID n'est pas configuré sur cette installation : vos noms ne peuvent pas être modifiés d'ici.",
+	"my_account_identity_not_linked": "Votre compte n'a pas encore d'identité PocketID. Un administrateur peut terminer sa création.",
+	"my_account_identity_unreachable": "PocketID ne répond pas : vos noms ne peuvent pas être lus pour l'instant.",
+	"my_account_passkeys_explanation": "Vos clés d'accès sont gardées par PocketID seul : c'est là que vous en ajoutez ou en retirez.",
+	"my_account_passkeys": "Gérer mes clés d'accès dans PocketID",
+	"my_account_default_mailbox_choose": "Boîte par défaut",
+	"my_account_default_mailbox_explanation": "Votre identité, et l'adresse que les applications reçoivent de PocketID.",
+	"my_account_make_default": "Définir par défaut",
+	"my_account_default_title": "Faire de {address} ma boîte par défaut",
+	"my_account_sessions": "Mes sessions",
+	"my_account_sessions_explanation": "Chaque navigateur connecté à cette console en votre nom.",
+	"my_account_no_session": "Aucune session ouverte.",
+	"my_account_this_session": "cette session",
+	"my_account_unknown_device": "Navigateur inconnu",
+	"my_account_session_seen": "utilisée il y a {age} · expire dans {left}",
+	"my_account_sign_out_device": "Déconnecter",
+	"my_account_sign_out_device_title": "Déconnecter {device}",
+	"my_account_sign_out_elsewhere": "Se déconnecter partout ailleurs",
+	"my_mailbox_no_mailbox_on_account": "Aucune boîte mail sur ce compte pour l'instant. Un alias a besoin d'une destination.",
+	"my_mailbox_create_my_mailbox": "Créer ma boîte mail",
+	"my_mailbox_local_part": "partie locale",
+	"my_mailbox_local_part_explanation": "La partie avant le @ — le domaine est ajouté automatiquement.",
+	"my_mailbox_create_an_alias": "Créer un alias",
+	"my_mailbox_hint_explanation": "Nommez le destinataire, pas l'adresse : un suffixe aléatoire est ajouté. \"amazon\" seul serait devinable, et un envoyeur en masse essaie les évidents pour le prix d'un.",
+	"my_mailbox_create": "Créer",
+	"my_mailbox_delivers_to": "livre à {address}",
+	"my_mailbox_expired_still_receiving": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} adresse expirée et encore active.",
+				"countPlural=*": "{count} adresses expirées et encore actives."
+			}
+		}
+	],
+	"my_mailbox_purge_explanation": "La purge ne les a pas retirées du serveur mail. Elles continuent de recevoir du courrier, et rien côté expéditeur ne dit le contraire.",
+	"my_mailbox_my_aliases": "Mes alias",
+	"my_mailbox_no_alias_yet": "Aucun alias pour l'instant. Une adresse par destinataire est ce qui vous dit qui a fuité.",
+	"my_mailbox_purge": "Purger",
+	"my_mailbox_disable": "Désactiver",
+	"node_detail_cpu": "CPU",
+	"node_detail_memory": "Mémoire",
+	"node_detail_swap": "Swap",
+	"node_detail_disks": "Disques",
+	"node_detail_up_since": "En ligne depuis",
+	"node_detail_distro": "Distribution",
+	"node_detail_kernel": "Noyau",
+	"node_detail_last_report": "Dernier rapport",
+	"node_detail_no_interfaces": "Aucune interface réseau signalée.",
+	"node_detail_rx_tx": "{rx} reçus, {tx} envoyés",
+	"node_detail_no_containers": "Aucun conteneur n'est hébergé ici.",
+	"node_detail_availability": "Disponibilité",
+	"node_detail_unknown_to_swarm": "Swarm ne connaît pas cette machine : un agent la rapporte, et aucun nœud de la grappe ne porte son nom d'hôte. Il n'y a rien à vidanger ici.",
+	"node_detail_state_active": "active",
+	"node_detail_state_draining": "en vidange",
+	"node_detail_state_paused": "en pause",
+	"node_detail_state_unknown": "inconnue",
+	"node_detail_active_explanation": "Ce nœud prend sa part du travail, et Swarm y place de nouveaux conteneurs.",
+	"node_detail_draining_explanation": "Swarm a déplacé ses conteneurs ailleurs et n'en place plus ici. La machine reste dans la grappe.",
+	"node_detail_paused_explanation": "Elle garde ce qu'elle exécute déjà et ne prend rien de nouveau.",
+	"node_detail_unknown_explanation": "Swarm n'a pas dit dans quel état se trouve ce nœud.",
+	"node_detail_drain": "Vidanger ce nœud",
+	"node_detail_drain_consequence": "Déplace tous les conteneurs hors de cette machine et n'en place plus aucun dessus. Ce qui tourne ailleurs n'est pas touché, et le nœud reste dans la grappe.",
+	"node_detail_return_to_service": "Remettre en service",
+	"node_detail_return_consequence": "Swarm y replace des conteneurs. Rien ne revient tout seul : ce qui est parti reste où il est allé jusqu'à son prochain redémarrage.",
+	"node_detail_unreachable_no_measurement": "Cette machine ne répond pas : il n'y a rien à mesurer. Ce que l'on sait d'elle en dernier est au-dessus.",
+	"nodes_node_count_with_unreachable": [
+		{
+			"declarations": [
+				"input count",
+				"input unreachable",
+				"local countPlural = count: plural",
+				"local unreachablePlural = unreachable: plural"
+			],
+			"selectors": [
+				"countPlural",
+				"unreachablePlural"
+			],
+			"match": {
+				"countPlural=one, unreachablePlural=one": "{count} nœud, {unreachable} injoignable",
+				"countPlural=one, unreachablePlural=*": "{count} nœud, {unreachable} injoignables",
+				"countPlural=*, unreachablePlural=one": "{count} nœuds, {unreachable} injoignable",
+				"countPlural=*, unreachablePlural=*": "{count} nœuds, {unreachable} injoignables"
+			}
+		}
+	],
+	"nodes_no_agent_reporting": "Aucun agent ne remonte d'information. Le service agent est-il déployé ?",
+	"nodes_add_node_command": "hlb node add <hôte> --apply",
+	"nodes_agent_version": "agent {version}",
+	"nodes_cpu": "CPU",
+	"nodes_memory": "Mémoire",
+	"nodes_swap": "Swap",
+	"nodes_free_space": "{size} libre",
+	"nodes_unknown": "inconnu",
+	"nodes_last_report": "dernier rapport il y a {age}",
+	"plans_title": "Plans préparés",
+	"plans_no_prepared_plan": "Aucun plan préparé. Prévisualisez une action, puis enregistrez-la sous un nom pour l'exécuter plus tard.",
+	"plans_replay_explanation": "Chaque plan est enregistré exactement tel qu'il a été prévisualisé. Le rejouer relance son aperçu — pas l'exécution : ce qu'il décrit a pu changer depuis.",
+	"plans_by": "par {author} il y a {age}",
+	"portal_your_applications": "Vos applications",
+	"portal_access_explanation": "Ces applications existent et sont exposées. Homelabus ne décide pas de vos droits d'accès : c'est votre identité qui les porte.",
+	"portal_no_exposed_application": "Aucune application exposée pour l'instant.",
+	"portal_announcements": "Annonces",
+	"portal_your_addresses": "Vos adresses",
+	"portal_address_with_default": [
+		{
+			"declarations": [
+				"input is_default",
+				"input address"
+			],
+			"selectors": [
+				"is_default"
+			],
+			"match": {
+				"is_default=1": "{address} (par défaut)",
+				"is_default=*": "{address}"
+			}
+		}
+	],
+	"portal_stopped_domain": "{domain} — arrêtée",
+	"portal_follow_up_at": "{at} · {author}",
+	"portal_no_updates_since_published": "Aucune mise à jour depuis la publication.",
+	"route_node_detail_tab_network": "Réseau",
+	"route_node_detail_tab_containers": "Conteneurs",
+	"secrets_without_value_explanation": "Les valeurs ne quittent jamais le coffre, pas même vers cette page : le type de l'API n'a aucun champ pour les porter. Pour en lire une, il faut la clé maîtresse et la ligne de commande.",
+	"secrets_no_secret_recorded": "Aucun secret enregistré.",
+	"secrets_rotation_explanation": "Faire tourner un secret n'est pas une écriture, c'est une procédure ordonnée. Le coffre ne fait pas autorité : le mot de passe vit AUSSI dans PostgreSQL, chez PocketID ou chez Garage.",
+	"secrets_created_ago": "créé il y a {age}",
+	"secrets_rotated_ago": "tourné il y a {age}",
+	"secrets_kind_not_recognised": "Nature non reconnue : aucune procédure n'est proposée, elle serait inventée.",
+	"security_exposure_explanation": "Ce que chaque application demande, comparé à ce qui a réellement été publié à la dernière application de la configuration d'entrée.",
+	"security_no_route_exposed": "Aucune application n'expose de route.",
+	"security_ingress_command": "hlb ingress --apply",
+	"security_divergence_count": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} divergence entre ce qui est déclaré et ce qui répond.",
+				"countPlural=*": "{count} divergences entre ce qui est déclaré et ce qui répond."
+			}
+		}
+	],
+	"security_divergence_explanation": "Une application publiée par erreur n'apparaît nulle part ailleurs : ni dans le manifeste, qui dit le contraire, ni dans la liste des applications.",
+	"security_runbook": "Runbook",
+	"security_runbook_explanation": "Généré à partir de l'état réel au moment où vous le demandez : inventaire des nœuds, des destinations, ordre de redémarrage et procédure de restauration. Écrit à la main, un runbook est faux le jour où vous en avez besoin.",
+	"security_runbook_storage_reminder": "À imprimer et conserver EN DEHORS du cluster : un runbook qui ne survit pas à la panne qu'il documente ne documente rien.",
+	"security_break_glass_explanation": "Homelabus ne peut vérifier lui-même que le dernier point. Les trois autres sont des déclarations : il garde la date, et redemande quand elle vieillit.",
+	"security_verified_by_homelabus": "Vérifié par Homelabus : c'est la trace d'un exercice réussi qui compte, et rien d'autre.",
+	"security_i_have_checked_this_point": "J'ai vérifié ce point",
+	"settings_your_theme": "Votre thème",
+	"settings_theme_follows_you": "Ce choix vous suit sur tous vos appareils : il est stocké sur le serveur, pas dans ce navigateur.",
+	"settings_language": "Langue",
+	"settings_language_explanation": "S'applique partout, immédiatement — le même choix que le thème. Conservé sur cet appareil seulement : contrairement au thème, il ne vous suit pas vers un autre navigateur.",
+	"settings_installations_own_with_name": "celui de l'installation ({default})",
+	"settings_installations_own": "celui de l'installation",
+	"settings_appearance": "Apparence",
+	"settings_appearance_explanation": "La marque et le thème vivent sur le serveur : les changer ne demande pas de recompiler l'interface, et ils suivent sur tous les appareils.",
+	"settings_appearance_command": "hlb config appearance --name \"Turi Industries\"",
+	"settings_legibility": "Lisibilité",
+	"settings_legibility_explanation": "Un thème n'a pas le droit de rendre les états, l'accent ou \"info\" indistinguables. Chaque palette est validée : contraste du texte, et distinction de chaque paire sous trois déficiences de vision des couleurs — protanopie, deutéranopie, tritanopie.",
+	"settings_theme_legible": "{name} : lisible",
+	"signup_title": "Créez votre compte",
+	"signup_no_invitation": "Aucune invitation dans ce lien.",
+	"signup_no_invitation_explanation": "L'inscription se fait par un lien reçu d'un administrateur. Si vous en avez un, ouvrez-le tel quel — sans retaper une partie de l'adresse.",
+	"signup_name_explanation": "Ce nom sera votre identifiant de connexion ET la partie locale de votre adresse mail. Il ne pourra plus être changé ensuite.",
+	"signup_name_label": "nom",
+	"signup_first_name_hint": "prénom",
+	"signup_name_rules": "Minuscules, chiffres, point et tiret. Pas d'espace, pas de majuscule, pas d'accent.",
+	"signup_name_available": "Ce nom est disponible.",
+	"signup_check_this_name": "Vérifier ce nom",
+	"signup_create_my_account": "Créer mon compte",
+	"signup_creating": "création…",
+	"signup_finish_now": "Terminer maintenant : enregistrez votre clé d'accès",
+	"signup_finish_now_explanation": "Ce lien n'est affiché qu'une fois et expire dans 12 heures. Il n'y a pas de mot de passe : votre appareil devient la clé.",
+	"signup_to_finish": "pour terminer",
+	"signup_incomplete_explanation": "Votre compte existe, mais tout n'est pas en place. Signalez-le à la personne qui vous a invité : une réexécution de son côté terminera ce qui manque.",
+	"signup_go_to_home_page": "Aller à la page d'accueil",
+	"status_title": "État du service",
+	"status_public_warning": "Cette page est PUBLIQUE : elle montre vos services exposés et vos incidents ouverts à quiconque connaît l'adresse.",
+	"status_ongoing_incidents": "Incidents en cours",
+	"status_scheduled_maintenance": "Maintenance planifiée",
+	"status_services": "Services",
+	"status_history": "Historique",
+	"storage_wizard_explanation": "Assemble la commande pour vous — elle ne change rien elle-même. Copiez-la, puis exécutez-la vous-même sur le nœud de stockage.",
+	"storage_wizard_pool_label": "pool",
+	"storage_wizard_pool_hint": "laissez vide si cette machine n'en a qu'un",
+	"storage_wizard_root_label": "racine des jeux de données",
+	"storage_wizard_import_step": "1. Importer le pool, créer les jeux de données",
+	"storage_wizard_import_explanation": "L'import est réversible (zpool export). Créer un pool ne l'est PAS, et ceci ne le fait jamais : cette commande est affichée, les disques restant à votre charge.",
+	"storage_wizard_network_label": "réseau autorisé à monter",
+	"storage_wizard_network_hint": "ex. 10.0.0.0/24",
+	"storage_wizard_export_step": "2. Les lignes de /etc/exports",
+	"storage_wizard_export_explanation": "Affichées, pas écrites : le fichier peut déjà contenir des lignes que vous avez ajoutées, et le réécrire entièrement les supprimerait.",
+	"storage_wizard_copy": "Copier",
+	"storage_wizard_value_has_a_space": "Une espace ici coupe la commande ci-dessous en deux arguments, et elle ne s'exécutera pas.",
+	"timeline_title": "Chronologie",
+	"timeline_nothing_recorded_yet": "Rien d'enregistré pour l'instant : aucune sauvegarde, aucune action.",
+	"timeline_river_explanation": "Sauvegardes et actions dans un seul fil daté. C'est ici qu'une panne se rapproche de ce qui l'a précédée.",
+	"timeline_today": "aujourd'hui",
+	"timeline_yesterday": "hier",
+	"timeline_days_ago": [
+		{
+			"declarations": [
+				"input days",
+				"local daysPlural = days: plural"
+			],
+			"selectors": [
+				"daysPlural"
+			],
+			"match": {
+				"daysPlural=one": "il y a {days} jour",
+				"daysPlural=*": "il y a {days} jours"
+			}
+		}
+	],
+	"todo_title": "À faire",
+	"todo_no_manual_action_pending": "Aucune action manuelle en attente.",
+	"todo_ack_is_an_attestation": "Marquer une action \"faite\" est une attestation, pas une case à cocher. La cocher sans l'avoir faite débloque un déploiement qui échouera plus tard, avec un message sans rapport avec la cause.",
+	"todo_attest": "Attester",
+	"todo_blocking": "bloquant",
+	"todo_installation_health": "Santé de l'installation",
+	"todo_health_explanation": "Les choses que vous croyez faites et n'avez jamais vérifiées. Aucune ne bloque quoi que ce soit — elles se découvrent au pire moment.",
+	"health_topic_backups": "Sauvegardes",
+	"health_topic_offsite": "Hors site",
+	"health_topic_drill": "Répétition de restauration",
+	"health_topic_deadman": "Veilleur",
+	"health_topic_admin": "Accès administrateur",
+	"health_topic_audit": "Journal d'audit",
+	"health_no_destination": "Aucune destination déclarée : rien n'est sauvegardé nulle part.",
+	"health_single_destination": "Une seule destination : une copie disparaît avec la machine qui la porte, et une coupure de courant emporte les deux.",
+	"health_destinations": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} destination déclarée.",
+				"countPlural=*": "{count} destinations déclarées."
+			}
+		}
+	],
+	"health_drill_never": "Jamais répétée : personne ne sait si une restauration fonctionne. C'est le chemin le moins parcouru du système, et le seul qu'on découvre le pire jour.",
+	"health_drill_today": "Répétée aujourd'hui.",
+	"health_drill_recent": "Répétée il y a {ago}.",
+	"health_drill_due": "Répétée il y a {ago} — l'objectif est tous les {every}.",
+	"health_drill_overdue": "Répétée il y a {ago}. Au-delà de {late}, la procédure a eu le temps de dériver : un chemin qui bouge, un mot de passe qui change, une version qui évolue.",
+	"health_heartbeat_absent": "Aucun battement : si tout s'arrête, rien ne vous préviendra.",
+	"health_heartbeat": "Dernier battement il y a {ago}. Cet écran n'atteste que du battement : le veilleur ne tourne pas ici et ne peut pas se déclarer vivant lui-même.",
+	"health_admin_unknown": "Aucun jeton admin enregistré : l'accès passe peut-être par une session OIDC, qu'on ne peut pas vérifier d'ici.",
+	"health_admin_single": "Un seul jeton admin : c'est le bon nombre.",
+	"health_admin_tokens": "{count} jetons admin en circulation : chacun ouvre tout, et on ne sait plus lesquels servent encore.",
+	"health_audit_intact": "Le chaînage est intact : aucune entrée n'a été supprimée ni modifiée.",
+	"health_audit_broken": "Le chaînage est ROMPU : une entrée a été supprimée ou modifiée.",
+	"health_audit_unreadable": "Le journal n'a pas pu être relu.",
+	"topology_anti_affinity_explanation": "L'anti-affinité doit porter sur le MATÉRIEL, pas sur le nœud : deux machines virtuelles sur le même serveur sont deux nœuds Swarm et un seul point de défaillance.",
+	"topology_overstated_redundancy": "Redondance surestimée",
+	"topology_and_if_it_went_down": "Et si ça tombait ?",
+	"topology_worst_case_at_top": "Chaque ligne fait tomber tout un domaine. Le pire cas est en haut.",
+	"topology_outage_domains": "Domaines de panne",
+	"topology_undeclared_domain": "Domaine non déclaré",
+	"topology_undeclared_domain_explanation": "Ces nœuds partagent peut-être le même matériel — rien ne permet de le savoir. Déclarez-le : hlb node add --failure-domain <nom>",
+	"topology_concentrated_domain_explanation": "Ce matériel porte plus de la moitié du cluster : le perdre emporterait le quorum avec lui.",
+	"topology_no_service": "aucun service",
+	"nav_home": "Accueil",
+	"nav_apps": "Applications",
+	"nav_infra": "Infrastructure",
+	"nav_data": "Données",
+	"nav_security": "Sécurité",
+	"nav_activity": "Activité",
+	"nav_people": "Personnes",
+	"nav_settings": "Réglages",
+	"nav_me": "Moi",
+	"nav_main": "Navigation principale",
+	"nav_sections": "Sections de ce module",
+	"nav_open_menu": "Ouvrir le menu",
+	"nav_close_menu": "Fermer le menu",
+	"nav_sign_out": "Se déconnecter",
+	"nav_signed_in_as": "Connecté en tant que {account}",
+	"nav_service_token": "Jeton de service",
+	"nav_source": "Homelabus {version} · code source",
+	"nav_needs_attention": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} élément à regarder",
+				"countPlural=*": "{count} éléments à regarder"
+			}
+		}
+	],
+	"state_loading": "Chargement…",
+	"state_never_received": "Rien n'a été reçu : la requête a échoué — {error}",
+	"state_stale": "Contrôleur injoignable — ce qui suit date de {age} ({error})",
+	"state_retry": "Réessayer",
+	"state_gone": "Rien à ce nom ici : cela n'existe pas, ou plus.",
+	"state_back_to_list": "Retour à la liste",
+	"state_unreachable_short": "Contrôleur injoignable",
+	"state_not_found": "Cette page n'existe pas.",
+	"state_go_home": "Retour à l'accueil",
+	"state_signed_out": "Vous n'êtes pas connecté.",
+	"state_sign_in": "Se connecter",
+	"attention_ok": "ok",
+	"attention_notice": "à regarder",
+	"attention_critical": "action requise",
+	"inbox_title": "À regarder",
+	"inbox_all_clear": "Rien ne vous attend. Chaque source lue par la boîte a répondu, et aucune n'a rien à signaler.",
+	"inbox_incomplete": "La boîte de réception n'a pas pu être lue — {error}. Quelque chose a peut-être besoin de vous.",
+	"inbox_waiting": "Lecture de chaque source…",
+	"home_arrange": "Organiser",
+	"home_add": "Épingler une carte",
+	"home_arrange_title": "Organiser l'accueil",
+	"home_unpin": "Retirer",
+	"home_move_up": "Monter",
+	"home_move_down": "Descendre",
+	"home_reset": "Revenir aux cartes par défaut",
+	"home_all_pinned": "Toutes les cartes sont épinglées.",
+	"home_save_failed": "L'organisation n'a pas été enregistrée : {error}",
+	"palette_open": "Rechercher",
+	"palette_placeholder": "Aller à une page, une application, une machine…",
+	"palette_nothing": "Rien ne correspond.",
+	"palette_label": "Rechercher dans l'interface",
+	"palette_shortcut_hint": "Ctrl K",
+	"shortcuts_title": "Raccourcis clavier",
+	"shortcuts_palette": "Tout rechercher",
+	"shortcuts_help": "Afficher ces raccourcis",
+	"shortcuts_close": "Fermer un panneau",
+	"action_previewing": "Le contrôleur prépare l'aperçu…",
+	"action_blockers": "Pourquoi ce n'est pas faisable en l'état",
+	"action_warnings": "À savoir avant d'appliquer",
+	"action_outcome_done": "Fait — chaque étape est terminée.",
+	"action_outcome_failed": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Arrêté : {count} étape a échoué, et rien n'a été tenté après.",
+				"countPlural=*": "Arrêté : {count} étapes ont échoué, et rien n'a été tenté après."
+			}
+		}
+	],
+	"action_outcome_incomplete": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "INCOMPLET : {count} étape ne peut pas encore être faite par Homelabus — faites-la à la main.",
+				"countPlural=*": "INCOMPLET : {count} étapes ne peuvent pas encore être faites par Homelabus — faites-les à la main."
+			}
+		}
+	],
+	"action_type_to_confirm": "Tapez {target} pour confirmer",
+	"action_copied": "Copié",
+	"action_copy_selected": "Sélectionné — copiez-le avec Ctrl+C",
+	"action_recorded": "Enregistré comme le plan {name}.",
+	"action_step_unimplemented": "NON AUTOMATISÉE",
+	"action_panel_label": "Action",
+	"page_apps_installed": "Installées",
+	"page_apps_catalog": "Catalogue",
+	"page_apps_todo": "Étapes manuelles",
+	"page_apps_plans": "Plans enregistrés",
+	"page_infra_nodes": "Machines",
+	"page_infra_resilience": "Résilience",
+	"page_infra_drift": "Dérive",
+	"page_infra_health": "Diagnostic",
+	"page_infra_storage": "Stockage",
+	"page_data_coverage": "Couverture",
+	"page_data_runs": "Exécutions",
+	"page_security_exposure": "Exposition",
+	"page_security_secrets": "Secrets",
+	"page_security_rotation": "Rotation",
+	"page_activity_alerts": "Alertes",
+	"page_activity_timeline": "Chronologie",
+	"page_activity_audit": "Journal",
+	"page_activity_tasks": "Tâches",
+	"page_people_accounts": "Comptes",
+	"page_people_invitations": "Invitations",
+	"page_people_announcements": "Annonces",
+	"page_people_recovery": "Accès de secours",
+	"page_settings_appearance": "Apparence",
+	"page_settings_exports": "Exports et runbook",
+	"page_me_home": "Mon espace",
+	"page_me_mailbox": "Messagerie",
+	"page_me_account": "Compte",
+	"page_me_preferences": "Préférences",
+	"page_me_status": "État des services",
+	"words_node_unreachable": "ne répond pas",
+	"words_node_disk_full": "{path} est plein à {used} : plus rien n'y est déployé",
+	"words_node_disk_filling": "{path} se remplit : {used}",
+	"words_node_swapping": "swappe : elle ralentit avant de tomber",
+	"words_node_load": "charge {per_core} par cœur",
+	"words_node_reboot_pending": "attend un redémarrage pour appliquer ses correctifs de sécurité — hlb node upgrade s’en charge, après l’avoir vidée",
+	"words_coverage_no_destination": "aucune destination de sauvegarde déclarée",
+	"words_coverage_never": "JAMAIS sauvegardée — elle tourne, et rien ne protège ses données",
+	"words_coverage_no_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "aucune copie à jour : la seule destination est trop ancienne",
+				"countPlural=*": "aucune copie à jour : les {count} destinations sont trop anciennes"
+			}
+		}
+	],
+	"words_coverage_one_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "une seule copie à jour, sur {count} destination",
+				"countPlural=*": "une seule copie à jour, sur {count} destinations"
+			}
+		}
+	],
+	"words_coverage_fresh_copies": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} copie à jour",
+				"countPlural=*": "{count} copies à jour"
+			}
+		}
+	],
+	"words_topology_illusion": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service a toutes ses répliques sur un seul matériel",
+				"countPlural=*": "{count} services ont toutes leurs répliques sur un seul matériel"
+			}
+		}
+	],
+	"words_topology_concentrated": "{nodes} machines sur {total} sur {domain} : le perdre emporte le quorum",
+	"words_topology_concentrated_unknown": "{nodes} machines sur {total} partagent un domaine non déclaré",
+	"words_topology_spread_unknown": "des machines n'ont pas de domaine de panne déclaré : la répartition réelle est inconnue",
+	"words_topology_spread": "réparti sur plusieurs domaines de panne",
+	"words_topology_no_machine": "aucune machine connue : rien dont juger la répartition",
+	"words_recovery_none_ever": "aucune protection jamais vérifiée : si PocketID tombe, rien ne dit que vous pourrez encore entrer",
+	"words_recovery_never": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} protection jamais vérifiée",
+				"countPlural=*": "{count} protections jamais vérifiées"
+			}
+		}
+	],
+	"words_recovery_to_reverify": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} protection à revérifier",
+				"countPlural=*": "{count} protections à revérifier"
+			}
+		}
+	],
+	"words_recovery_all_recent": "chaque protection vérifiée récemment",
+	"words_status_down": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service indisponible",
+				"countPlural=*": "{count} services indisponibles"
+			}
+		}
+	],
+	"words_status_incidents": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} incident en cours",
+				"countPlural=*": "{count} incidents en cours"
+			}
+		}
+	],
+	"words_status_degraded": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} service dégradé",
+				"countPlural=*": "{count} services dégradés"
+			}
+		}
+	],
+	"words_status_nothing_exposed": "Aucun service n'est exposé",
+	"words_status_all_operational": "Tous les services fonctionnent",
+	"words_service_operational": "opérationnel",
+	"words_service_degraded": "dégradé",
+	"words_service_unavailable": "indisponible",
+	"words_service_maintenance": "maintenance",
+	"widget_apps": "Applications",
+	"widget_nodes": "Machines",
+	"widget_resilience": "Résilience",
+	"widget_backups": "Dernières sauvegardes",
+	"widget_exposure": "Accès publics",
+	"widget_activity": "Activité récente",
+	"widget_tasks": "Services du cluster",
+	"widget_announcements": "Annonces",
+	"widget_uptime": "Disponibilité",
+	"widget_nodes_none": "Aucun agent ne se manifeste.",
+	"widget_exposure_none": "Rien n'est joignable depuis internet.",
+	"widget_activity_none": "Rien d'enregistré pour l'instant.",
+	"widget_tasks_none": "Aucune tâche signalée.",
+	"widget_announcements_none": "Aucune annonce en cours.",
+	"apps_filter": "Filtrer les applications",
+	"apps_open_site": "Ouvrir {domain}",
+	"app_tab_overview": "Aperçu",
+	"app_tab_config": "Configuration",
+	"app_tab_backups": "Sauvegardes",
+	"app_tab_history": "Historique",
+	"app_diagnosis": "Pourquoi elle est dans cet état",
+	"app_unknown_cause": "La recherche s'est arrêtée avant d'atteindre une cause : c'est « inconnu », pas « rien ».",
+	"app_remedy": "Ce qui règle le problème : {remedy}",
+	"app_back_up_title": "Sauvegarder {app} maintenant",
+	"app_scale_title": "Faire tourner {app} sur {count} répliques",
+	"app_scale_label": "Répliques voulues",
+	"app_scale_preview": "Prévisualiser le changement",
+	"app_scale_zero": "Zéro n'est pas une taille, c'est un arrêt : retirez plutôt l'application.",
+	"app_remove": "Retirer…",
+	"app_upgrade": "Appliquer le catalogue…",
+	"app_upgrade_title": "Aligner {app} sur le catalogue",
+	"app_remove_title": "Retirer {app}",
+	"app_per_destination": "Par destination",
+	"app_failed_run": "échec : {error}",
+	"catalog_column_category": "Catégorie",
+	"catalog_column_before": "Avant d'installer",
+	"catalog_column_state": "État",
+	"catalog_manual_steps": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} étape manuelle",
+				"countPlural=*": "{count} étapes manuelles"
+			}
+		}
+	],
+	"catalog_requires": "Ce qu'elle demande",
+	"need_database": "base {engine} « {name} », avec son propre rôle",
+	"need_database_extensions": "base {engine} « {name} », avec son propre rôle — l'image du serveur doit contenir : {extensions}",
+	"need_cache_shared": "cache {engine}, partagé",
+	"need_cache_dedicated": "cache {engine}, à elle seule",
+	"need_sso_native": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "connexion par PocketID (OIDC, {count} adresse de retour)",
+				"countPlural=*": "connexion par PocketID (OIDC, {count} adresses de retour)"
+			}
+		}
+	],
+	"need_sso_proxy_header": "connexion au portail, qui transmet l'identité dans un en-tête",
+	"need_sso_proxy_only": "le portail devant : l'application n'a pas de comptes à elle",
+	"need_sso_excluded": "pas de connexion unique, volontairement",
+	"need_smtp": "envoi de courriel depuis un compte à elle, qui n’envoie qu’en son nom",
+	"need_smtp_person": "envoi de courriel au nom de la personne connectée, avec sa propre boîte",
+	"need_mailbox": "une boîte aux lettres",
+	"need_mailbox_aliases": "une boîte aux lettres, avec des alias",
+	"need_quota": "{need} — un quota de {size} déclaré, non appliqué",
+	"need_volume_local": "volume « {name} » sur {path}, sur sa machine",
+	"need_volume_nfs": "volume « {name} » sur {path}, sur le NAS (NFS)",
+	"need_volume_sqlite": "{need} (une base SQLite : copiée depuis un instantané)",
+	"need_bucket": "compartiment S3 « {name} »",
+	"need_backed_up": "{need} — sauvegardé",
+	"need_not_backed_up": "{need} — NON sauvegardé",
+	"catalog_filter": "Filtrer le catalogue",
+	"catalog_install": "Installer…",
+	"catalog_install_title": "Installer {app}",
+	"catalog_domain": "Domaine",
+	"catalog_domain_hint": "app.exemple.org",
+	"catalog_homepage": "Page du projet",
+	"todo_attest_title": "Attester : {title}",
+	"infra_quorum_holds": "le quorum tient",
+	"infra_quorum_lost": "QUORUM PERDU",
+	"infra_quorum_unknown": "quorum inconnu",
+	"infra_goes_down": "Tombe : {list}",
+	"infra_nothing_goes_down": "Rien ne tombe.",
+	"infra_remaining": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} machine restante",
+				"countPlural=*": "{count} machines restantes"
+			}
+		}
+	],
+	"infra_if_lost": "Si {target} est perdu",
+	"infra_reduced": "Survit diminué : {list}",
+	"infra_drain_title": "Vider {node}",
+	"infra_return_title": "Remettre {node} en service",
+	"infra_tier": "niveau {tier}",
+	"rotation_step_change_in_postgres": "Changer le mot de passe DANS PostgreSQL (ALTER ROLE … PASSWORD)",
+	"rotation_step_write_to_vault": "Écrire la nouvelle valeur dans le coffre",
+	"rotation_step_redeploy_for_new_variable": "Redéployer l'application pour qu'elle reçoive la nouvelle variable",
+	"rotation_step_regenerate_in_pocket_id": "Régénérer le secret client DANS PocketID",
+	"rotation_step_redeploy": "Redéployer l'application",
+	"rotation_step_create_new_key_in_garage": "Créer une NOUVELLE clé dans Garage — l'ancienne reste valide",
+	"rotation_step_write_to_vault_garage_never_returns_it": "L'écrire dans le coffre : Garage ne la montrera plus jamais",
+	"rotation_step_delete_old_key_only_after_app_works": "Supprimer l'ancienne clé SEULEMENT après avoir vu l'application fonctionner",
+	"rotation_step_change_on_stalwart": "Changer le mot de passe sur Stalwart",
+	"rotation_step_redeploy_and_reconfigure_mail": "Redéployer l'application, et reconfigurer les clients de messagerie",
+	"rotation_step_do_not_rotate_before_verified_restore": "NE PAS renouveler avant d'avoir vérifié une restauration",
+	"rotation_step_add_key_to_restic_repository": "Ajouter la nouvelle clé au dépôt restic (restic key add)",
+	"rotation_step_remove_old_restic_key_after_drill": "Retirer l'ancienne clé du dépôt seulement après un exercice réussi",
+	"rotation_step_nothing_reads_it": "Rien ne le lit : Valkey tourne sans mot de passe — il peut être oublié",
+	"rotation_step_create_new_key_at_s3_provider": "Créer une nouvelle clé chez le fournisseur S3",
+	"rotation_step_back_up_and_verify_it_succeeds": "Lancer une sauvegarde et VÉRIFIER qu'elle réussit : une rotation ratée ne se voit que là",
+	"rotation_step_revoke_old_key_after_backup_passes": "Révoquer l'ancienne clé une fois cette sauvegarde passée",
+	"rotation_step_generate_new_key_at_provider": "Générer une nouvelle clé chez le fournisseur",
+	"rotation_step_reload_what_reads_it": "Recharger la configuration qui la lit",
+	"rotation_consequence_redeploy_app": "Exige de redéployer {app} : sans cela, l'application garde l'ancienne valeur et échoue sans dire pourquoi.",
+	"rotation_consequence_redeploy_whatever": "Exige de redéployer ce qui l'utilise : l'application n'a pas pu être déduite du nom.",
+	"rotation_consequence_reload": "Lu à chaque usage : recharger la configuration suffit.",
+	"security_reach_internet": "internet",
+	"security_reach_vpn_only": "VPN seulement",
+	"security_reach_diverged": "divergent",
+	"export_csv": "Télécharger en CSV",
+	"alerts_muted_by": "mise en sourdine par {by} — encore {remaining} ; elle reste visible, un cran plus bas",
+	"alerts_muted": "en sourdine — encore {remaining} ; elle reste visible, un cran plus bas",
+	"alerts_level_unknown": "non évaluable",
+	"alerts_level_info": "info",
+	"alerts_level_important": "importante",
+	"alerts_level_critical": "critique",
+	"tasks_failed_only": "Échecs seulement",
+	"tasks_on_node": "sur {node}",
+	"tasks_wanted": "voulue {desired}, est {state}",
+	"timeline_filter_all": "Tout",
+	"timeline_kind_backup": "Sauvegardes",
+	"timeline_kind_verification": "Vérifications",
+	"timeline_kind_action": "Actions",
+	"timeline_kind_alert": "Alertes",
+	"audit_filter": "Filtrer par personne, action ou cible",
+	"people_role_change": "Changer le rôle",
+	"people_role_title": "Donner à {account} le rôle {role}",
+	"people_role_user": "utilisateur — sa messagerie et le portail",
+	"people_role_viewer": "observateur — voit l'exploitation, ne change rien",
+	"people_role_operator": "opérateur — installe, sauvegarde, publie",
+	"people_role_admin": "administrateur — tout, y compris détruire et donner des droits",
+	"people_invite_title": "Inviter : {role}",
+	"people_revoke_title": "Révoquer l'invitation {reference}",
+	"people_note_hint": "pour qui (facultatif)",
+	"people_new_invitation": "Nouvelle invitation",
+	"people_no_invitation": "Aucune invitation. Une invitation est un lien qui permet à quelqu'un de créer son propre compte.",
+	"people_invitation_state_pending": "inutilisée",
+	"people_invitation_state_partly_used": "en partie utilisée",
+	"people_invitation_state_exhausted": "épuisée",
+	"people_invitation_state_expired": "expirée",
+	"people_widely_open": "largement ouverte — celle qu'on oublie de fermer",
+	"people_publish_title": "Publier : {title}",
+	"people_remove_title": "Retirer l'annonce {title}",
+	"people_follow_up_title": "Mise à jour : {title}",
+	"people_new_announcement": "Nouvelle annonce",
+	"people_last_attested": "vérifié il y a {age} par {by}",
+	"people_never_attested": "jamais vérifié — on n'en sait rien",
+	"people_attest_failed": "Non enregistré : {error}",
+	"settings_brand_name": "Nom",
+	"settings_footer": "Pied de page",
+	"settings_accent": "Couleur d'accent",
+	"settings_accent_theme": "L'accent du thème",
+	"settings_default_theme": "Thème de ceux qui n'en ont choisi aucun",
+	"settings_save": "Enregistrer",
+	"settings_saved": "Enregistré.",
+	"settings_save_failed": "Non enregistré : {error}",
+	"settings_logo": "Logo",
+	"settings_logo_explanation": "PNG ou SVG ; un SVG est converti en image sur le serveur, car le logo est servi à tous et un SVG peut porter du script.",
+	"settings_logo_remove": "Retirer le logo",
+	"settings_exports_explanation": "Chaque table que vous voulez hors de Homelabus — à garder, imprimer, transmettre.",
+	"settings_export_audit": "Le journal : qui a fait quoi",
+	"settings_export_accounts": "Les comptes : qui existe",
+	"settings_export_backups": "Les exécutions de sauvegarde",
+	"settings_runbook_download": "Télécharger le runbook",
+	"me_create_mailbox_title": "Créer la boîte {local}",
+	"me_alias_created": "Créé : {address}",
+	"me_alias_failed": "Non créé : {error}",
+	"me_hint_label": "Pour qui ?",
+	"me_disable_title": "Désactiver {address}",
+	"me_purge_title": "Purger {address}",
+	"me_alias_permanent": "permanent",
+	"me_alias_valid": "expire dans {left}",
+	"me_alias_expired": "expiré, ne reçoit plus",
+	"me_alias_expired_active": "expiré depuis {since} et REÇOIT ENCORE",
+	"me_alias_unknown": "un état que cette version ne connaît pas",
+	"me_language_en": "English",
+	"me_language_fr": "Français",
+	"me_theme_saved_failed": "Le thème n'a pas été enregistré : {error}",
+	"me_bitwarden": "Configurer les alias Bitwarden…",
+	"me_bitwarden_failed": "Impossible de configurer : {error}",
+	"me_bitwarden_server": "URL du serveur auto-hébergé",
+	"me_bitwarden_token": "Clé d'API — montrée cette seule fois ({name})",
+	"me_bitwarden_domain": "Domaine",
+	"me_bitwarden_title": "Alias Bitwarden",
+	"me_uptime_day": "{day} : {state}",
+	"me_uptime_no_sample": "aucune mesure",
+	"uptime_private": "Cette page d'état est privée. Connectez-vous pour la voir.",
+	"signup_display_name": "Comment vous appeler ? (facultatif)",
+	"signup_refused": "Refusé : {reasons}",
+	"kiosk_title": "Affichage mural",
+	"alerts_mute": "Mettre en sourdine…",
+	"alerts_mute_title": "Mettre {rule} en sourdine",
+	"alerts_mute_for": "Pendant",
+	"alerts_mute_reason": "Pourquoi",
+	"alerts_mute_reason_hint": "ce qui est fait pour y remédier",
+	"alerts_mute_confirm": "Mettre en sourdine",
+	"alerts_mute_explanation": "Elle cesse de notifier, pas d'apparaître : elle reste ici, un cran plus bas, jusqu'à la fin de la sourdine.",
+	"alerts_unmute": "Lever la sourdine",
+	"alerts_mute_failed": "Non fait : {error}",
+	"alerts_mute_reason_given": "raison : {reason}",
+	"alerts_hours": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} heure",
+				"countPlural=*": "{count} heures"
+			}
+		}
+	],
+	"alerts_days": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} jour",
+				"countPlural=*": "{count} jours"
+			}
+		}
+	],
+	"table_all": "Tous",
+	"table_total": "{total} au total",
+	"table_matched": "{matched} sur {total}",
+	"table_no_match": "Rien ne correspond.",
+	"table_clear": "Effacer la recherche et les filtres",
+	"table_pages": "Pages",
+	"table_previous": "Précédente",
+	"table_next": "Suivante",
+	"table_page": "Page {page} sur {pages}",
+	"apps_column_name": "Application",
+	"apps_column_address": "Adresse",
+	"apps_column_blocking": "Étapes bloquantes",
+	"apps_column_attention": "État",
+	"settings_density": "Densité des listes",
+	"settings_density_explanation": "L'espacement des listes : compact en montre davantage par écran. Ce choix vous suit, comme le thème.",
+	"settings_density_comfortable": "Confortable",
+	"settings_density_compact": "Compacte",
+	"me_density_saved_failed": "La densité n'a pas été enregistrée : {error}",
+	"people_role_name_user": "utilisateur",
+	"people_role_name_viewer": "observateur",
+	"people_role_name_operator": "opérateur",
+	"people_role_name_admin": "administrateur",
+	"words_account_complete": "complet",
+	"words_account_without_mailbox": "sans boîte mail",
+	"words_account_without_identity": "sans identité",
+	"words_account_empty": "vide",
+	"accounts_column_name": "Personne",
+	"accounts_column_state": "État",
+	"accounts_column_role": "Rôle",
+	"accounts_column_mailbox": "Adresse",
+	"accounts_column_sessions": "Sessions",
+	"accounts_column_aliases": "Alias",
+	"accounts_search": "Chercher un nom ou une adresse",
+	"accounts_filter_incomplete": "incomplets",
+	"accounts_show_incomplete": "Les afficher",
+	"accounts_none": "Aucun compte pour l'instant.",
+	"accounts_detail_identity": "Identité",
+	"accounts_detail_none": "aucune",
+	"accounts_detail_mailboxes": "Boîtes mail",
+	"accounts_detail_role": "Rôle et accès",
+	"accounts_detail_repair": "Pour réparer",
+	"audit_column_at": "Quand",
+	"audit_column_who": "Qui",
+	"audit_column_what": "Quoi",
+	"audit_column_outcome": "Résultat",
+	"audit_column_detail": "Détail",
+	"invitations_search": "Chercher une note, un rôle ou qui a invité",
+	"invitations_column_state": "État",
+	"invitations_column_for": "Pour",
+	"invitations_column_by": "Invité par",
+	"invitations_column_left": "Reste",
+	"invitations_column_note": "Note",
+	"invitations_column_action": "Action",
+	"timeline_search": "Chercher une application ou un événement",
+	"timeline_window": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Le dernier événement, toutes sources confondues. Les plus anciens sont dans le journal et l'historique des sauvegardes.",
+				"countPlural=*": "Les {count} derniers événements, toutes sources confondues. Les plus anciens sont dans le journal et l'historique des sauvegardes."
+			}
+		}
+	],
+	"runs_result_ok": "ok",
+	"runs_result_failed": "échec",
+	"runs_column_app": "Application",
+	"runs_column_when": "Quand",
+	"runs_column_kind": "Quoi",
+	"runs_column_destination": "Destination",
+	"runs_column_result": "Résultat",
+	"runs_search": "Chercher une application ou une destination",
+	"runs_window": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "La dernière exécution. L'historique complet est dans le CSV.",
+				"countPlural=*": "Les {count} dernières exécutions. L'historique complet est dans le CSV."
+			}
+		}
+	],
+	"secrets_column_name": "Nom",
+	"secrets_column_purpose": "Usage",
+	"secrets_search": "Chercher un nom ou un usage",
+	"exposure_column_host": "Adresse",
+	"exposure_column_app": "Application",
+	"exposure_column_declared": "Déclarée",
+	"exposure_column_reach": "Joignable depuis",
+	"exposure_column_divergence": "Divergence",
+	"exposure_search": "Chercher une adresse ou une application",
+	"table_selected": "{count} sélectionnés",
+	"table_unselect": "Vider la sélection",
+	"table_select_page": "Sélectionner cette page",
+	"table_select_row": "Sélectionner {row}",
+	"accounts_selection_role": "Donner le rôle",
+	"accounts_selection_title": "Donner à {count} comptes le rôle {role}",
+	"cause_app_failed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application en échec",
+				"countPlural=*": "{shown} applications en échec"
+			}
+		}
+	],
+	"cause_app_partial": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application sans toutes ses répliques",
+				"countPlural=*": "{shown} applications sans toutes leurs répliques"
+			}
+		}
+	],
+	"cause_guide_blocking": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une étape manuelle bloque {shown} application",
+				"countPlural=*": "Des étapes manuelles bloquent {shown} applications"
+			}
+		}
+	],
+	"cause_catalog_changed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Le catalogue a changé {shown} application depuis son installation",
+				"countPlural=*": "Le catalogue a changé {shown} applications depuis leur installation"
+			}
+		}
+	],
+	"cause_job_failed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une tâche planifiée de {shown} application a échoué",
+				"countPlural=*": "Des tâches planifiées de {shown} applications ont échoué"
+			}
+		}
+	],
+	"cause_mail_waiting": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Du courrier vers {shown} domaine attend depuis plus d'une heure",
+				"countPlural=*": "Du courrier vers {shown} domaines attend depuis plus d'une heure"
+			}
+		}
+	],
+	"cause_guide_pending": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une étape manuelle attend sur {shown} application",
+				"countPlural=*": "Des étapes manuelles attendent sur {shown} applications"
+			}
+		}
+	],
+	"cause_never_backed_up": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application jamais sauvegardée",
+				"countPlural=*": "{shown} applications jamais sauvegardées"
+			}
+		}
+	],
+	"cause_no_backup_destination": "Aucune destination de sauvegarde : rien n'est sauvegardé nulle part",
+	"cause_no_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application sans copie à jour",
+				"countPlural=*": "{shown} applications sans copie à jour"
+			}
+		}
+	],
+	"cause_one_fresh_copy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application avec une seule copie à jour",
+				"countPlural=*": "{shown} applications avec une seule copie à jour"
+			}
+		}
+	],
+	"cause_single_destination": "Une seule destination de sauvegarde : une copie, sur une machine",
+	"cause_drill_never": "Aucune restauration n'a jamais été répétée",
+	"cause_drill_stale": "La dernière répétition de restauration commence à dater",
+	"cause_node_unreachable": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine ne répond pas",
+				"countPlural=*": "{shown} machines ne répondent pas"
+			}
+		}
+	],
+	"cause_node_disk_full": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine au disque plein",
+				"countPlural=*": "{shown} machines au disque plein"
+			}
+		}
+	],
+	"cause_node_disk_filling": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine dont le disque se remplit",
+				"countPlural=*": "{shown} machines dont le disque se remplit"
+			}
+		}
+	],
+	"cause_node_swapping": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine à court de mémoire",
+				"countPlural=*": "{shown} machines à court de mémoire"
+			}
+		}
+	],
+	"cause_node_load": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine surchargée",
+				"countPlural=*": "{shown} machines surchargées"
+			}
+		}
+	],
+	"cause_node_reboot_pending": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine en attente de redémarrage",
+				"countPlural=*": "{shown} machines en attente de redémarrage"
+			}
+		}
+	],
+	"cause_topology": "Résilience — {verdict}",
+	"cause_drift": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application s'écarte de sa déclaration",
+				"countPlural=*": "{shown} applications s'écartent de leur déclaration"
+			}
+		}
+	],
+	"cause_assertion_broken": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application ne tient pas ce que dit son manifeste",
+				"countPlural=*": "{shown} applications ne tiennent pas ce que dit leur manifeste"
+			}
+		}
+	],
+	"cause_assertion_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Les réglages de {shown} application n'ont pas été relus récemment",
+				"countPlural=*": "Les réglages de {shown} applications n'ont pas été relus récemment"
+			}
+		}
+	],
+	"cause_mail_record_wrong": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} enregistrement DNS nécessaire au mail manque ou est faux",
+				"countPlural=*": "{shown} enregistrements DNS nécessaires au mail manquent ou sont faux"
+			}
+		}
+	],
+	"cause_mail_record_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} enregistrement DNS du mail n'a pas été relu récemment",
+				"countPlural=*": "{shown} enregistrements DNS du mail n'ont pas été relus récemment"
+			}
+		}
+	],
+	"cause_mail_blocklists_refused": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} liste noire anti-spam refuse le résolveur de Stalwart et ne vérifie rien",
+				"countPlural=*": "{shown} listes noires anti-spam refusent le résolveur de Stalwart et ne vérifient rien"
+			}
+		}
+	],
+	"cause_deadman_absent": "Aucun veilleur : si tout s'arrête, rien ne vous préviendra",
+	"cause_deadman_silent": "Le veilleur ne bat plus",
+	"cause_exposure_unknown": "Accès jamais appliqués : on ignore ce qui est joignable de l'extérieur",
+	"cause_exposed_against_manifest": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} adresse sur internet contre son manifeste",
+				"countPlural=*": "{shown} adresses sur internet contre leur manifeste"
+			}
+		}
+	],
+	"cause_not_published": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} adresse attendue et non publiée",
+				"countPlural=*": "{shown} adresses attendues et non publiées"
+			}
+		}
+	],
+	"cause_route_not_applied": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} adresse sans route : les accès n'ont pas été réappliqués",
+				"countPlural=*": "{shown} adresses sans route : les accès n'ont pas été réappliqués"
+			}
+		}
+	],
+	"cause_orphan_route": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} route répond encore pour une application retirée",
+				"countPlural=*": "{shown} routes répondent encore pour des applications retirées"
+			}
+		}
+	],
+	"cause_secret_never_rotated": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} secret jamais renouvelé",
+				"countPlural=*": "{shown} secrets jamais renouvelés"
+			}
+		}
+	],
+	"cause_secret_rotation_due": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} secret à renouveler",
+				"countPlural=*": "{shown} secrets à renouveler"
+			}
+		}
+	],
+	"cause_certificate_expiring": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} certificat mTLS de la flotte expire bientôt sans avoir été renouvelé",
+				"countPlural=*": "{shown} certificats mTLS de la flotte expirent bientôt sans avoir été renouvelés"
+			}
+		}
+	],
+	"cause_admin_tokens": "Plusieurs jetons admin en circulation : chacun ouvre tout",
+	"cause_admin_unknown": "Aucun jeton admin enregistré : l'accès ne peut pas être vérifié d'ici",
+	"cause_audit_broken": "Le journal a été altéré : une entrée a été supprimée ou modifiée",
+	"cause_audit_unreadable": "Le journal n'a pas pu être relu",
+	"cause_account_without_mailbox": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} compte sans boîte mail — se connecte, ne reçoit rien",
+				"countPlural=*": "{shown} comptes sans boîte mail — se connectent, ne reçoivent rien"
+			}
+		}
+	],
+	"cause_account_without_identity": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} compte sans identité — le courrier arrive, personne ne peut le lire",
+				"countPlural=*": "{shown} comptes sans identité — le courrier arrive, personne ne peut le lire"
+			}
+		}
+	],
+	"cause_account_empty": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} compte vide",
+				"countPlural=*": "{shown} comptes vides"
+			}
+		}
+	],
+	"cause_alias_still_receiving": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} compte dont un alias expiré reçoit encore",
+				"countPlural=*": "{shown} comptes dont un alias expiré reçoit encore"
+			}
+		}
+	],
+	"cause_safeguard": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} accès de secours à attester",
+				"countPlural=*": "{shown} accès de secours à attester"
+			}
+		}
+	],
+	"cause_alert": "L'alerte {rule} est déclenchée",
+	"cause_alert_blind": "L'alerte {rule} ne peut plus être évaluée : cette surveillance est aveugle",
+	"cause_and_more": "{names} et {more} de plus",
+	"safeguard_printed_codes": "codes de connexion imprimés",
+	"safeguard_two_passkeys": "deux clés d'accès",
+	"safeguard_vaultwarden_local": "connexion locale Vaultwarden",
+	"safeguard_pocketid_restored": "restauration de PocketID répétée",
+	"safeguard_emergency_vault": "connexions de secours dans le coffre d'urgence",
+	"safeguard_emergency_kit": "kit d'urgence imprimé et à jour",
+	"inbox_later": "Plus tard",
+	"inbox_until_tomorrow": "Jusqu'à demain",
+	"inbox_for_a_week": "Pendant une semaine",
+	"inbox_later_title": "Mettre de côté : {title}",
+	"inbox_aside_title": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} mis de côté",
+				"countPlural=*": "{shown} mis de côté"
+			}
+		}
+	],
+	"inbox_aside_until": "mis de côté jusqu'au {at}",
+	"inbox_bring_back": "Ramener",
+	"inbox_aside_failed": "Non fait : {error}",
+	"reason_app_failed": "en échec",
+	"reason_app_partial": "sans toutes ses répliques",
+	"reason_guide_blocking": "bloquée par une étape manuelle",
+	"reason_catalog_changed": "le catalogue l'a changée",
+	"reason_job_failed": "sa tâche planifiée a échoué : hlb job",
+	"reason_mail_waiting": "du courrier attend depuis plus d'une heure de partir : hlb mail queue",
+	"reason_guide_pending": "une étape manuelle attend",
+	"reason_never_backed_up": "jamais sauvegardée",
+	"reason_no_fresh_copy": "aucune copie à jour",
+	"reason_one_fresh_copy": "une seule copie à jour",
+	"reason_node_unreachable": "ne répond pas",
+	"reason_node_disk_full": "disque plein",
+	"reason_node_disk_filling": "le disque se remplit",
+	"reason_node_swapping": "à court de mémoire",
+	"reason_node_load": "surchargée",
+	"reason_node_reboot_pending": "un redémarrage attend",
+	"reason_drift": "s'écarte de sa déclaration",
+	"reason_assertion_broken": "ne tient pas ce que dit son manifeste",
+	"reason_assertion_unknown": "réglages non relus récemment",
+	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
+	"reason_mail_record_unknown": "non relu récemment",
+	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",
+	"reason_exposed_against_manifest": "sur internet contre son manifeste",
+	"reason_not_published": "devrait être publiée",
+	"reason_route_not_applied": "sans route",
+	"reason_orphan_route": "répond pour une application retirée",
+	"reason_secret_never_rotated": "jamais renouvelé",
+	"reason_secret_rotation_due": "à renouveler",
+	"reason_certificate_expiring": "non renouvelé : hlb pki renew --apply",
+	"reason_account_without_mailbox": "sans boîte mail",
+	"reason_account_without_identity": "sans identité",
+	"reason_account_empty": "vide",
+	"reason_alias_still_receiving": "un alias expiré reçoit encore",
+	"alert_rule_backup_absent": "Des applications n'ont AUCUNE sauvegarde réussie. Elles tournent peut-être parfaitement — le pire état du système, et celui qui a l'air le plus sain.",
+	"alert_rule_backup_late": "Une sauvegarde date de plus de 48 h.",
+	"alert_rule_single_copy": "Une application n'a plus qu'UNE copie à jour. Les autres destinations sont configurées mais échouent — configuré n'est pas protégé.",
+	"alert_rule_verification_stale": "Aucune restauration vérifiée depuis plus d'un mois. Une sauvegarde jamais restaurée est une hypothèse.",
+	"alert_rule_app_failed": "Une application est en échec.",
+	"alert_rule_node_unreachable": "Une machine ne répond plus.",
+	"alert_rule_disk_full": "Un disque dépasse 85 %. Au-delà, sauvegardes et exports n'ont plus la place de tourner.",
+	"alert_rule_blocking_guides": "Des étapes manuelles bloquent une installation.",
+	"account_explain_complete": "Identité et boîte mail : le compte est complet.",
+	"account_explain_without_mailbox": "Identité créée, SANS boîte mail : la personne se connecte partout et son adresse ne reçoit rien. Le premier courrier perdu sera sans doute une réinitialisation de mot de passe. Relancer la création reprend là où elle s'est arrêtée.",
+	"account_explain_without_identity": "Boîte mail créée, SANS identité : le courrier arrive et personne ne peut le lire. Relancer la création la termine.",
+	"account_explain_empty": "Ni identité, ni boîte mail.",
+	"reason_exposure_unknown": "inconnu : les accès n'ont jamais été appliqués",
+	"invitations_widely_open": "ouverte à {count}",
+	"invitations_left": [
+		{
+			"declarations": [
+				"input remaining",
+				"input expires_in",
+				"local p = remaining: plural"
+			],
+			"selectors": [
+				"p"
+			],
+			"match": {
+				"p=one": "{remaining} entrée · encore {expires_in}",
+				"p=*": "{remaining} entrées · encore {expires_in}"
+			}
+		}
+	],
+	"field_between": "Entre {min} et {max}.",
+	"widget_problems": "Problèmes",
+	"home_tile_width": "Largeur",
+	"home_tile_height": "Hauteur",
+	"home_layout_preview": "Disposition de l'accueil sur un grand écran",
+	"home_tiles": "Sur l'accueil",
+	"widget_summary": "Homelab en bref",
+	"widget_cpu": "Processeurs",
+	"widget_memory": "Mémoire",
+	"widget_disks": "Disques",
+	"widget_accounts": "Personnes",
+	"summary_machines": "machines en ligne",
+	"summary_apps": "applications allumées",
+	"summary_cpu": "processeur utilisé",
+	"summary_memory": "mémoire utilisée",
+	"summary_storage": "utilisés sur {total}",
+	"summary_public": "accès publics",
+	"widget_load": "charge {load} par cœur",
+	"widget_unreachable": "injoignable",
+	"widget_up_for": "allumée depuis {duration}",
+	"widget_hosting": "héberge {count}",
+	"widget_open": "Ouvrir {app}",
+	"widget_backup_done": "réussie",
+	"widget_backup_failed": "échouée",
+	"widget_backup_to": "vers {destination}",
+	"widget_backups_none": "Aucune sauvegarde n'a encore tourné.",
+	"widget_services_none": "Aucun service n'est encore exposé.",
+	"widget_replicas": "{alive} sur {total} en marche",
+	"widget_accounts_count": "comptes",
+	"widget_mailboxes_count": "boîtes mail",
+	"widget_aliases_count": "alias actifs",
+	"widget_sessions_count": "sessions ouvertes",
+	"widget_swap": "swap {value}",
+	"widget_cluster_machines": "machines",
+	"widget_cluster_managers": "managers",
+	"widget_cluster_domains": "domaines de panne",
+	"widget_network": "Réseau",
+	"widget_received": "reçu",
+	"widget_sent": "envoyé",
+	"widget_cpu_curve": "Processeur de {name} sur la période",
+	"widget_memory_curve": "Mémoire et swap de {name} sur la période",
+	"widget_disk_curve": "{disk} sur {name} sur la période",
+	"widget_network_curve": "Réseau de {name} sur la période",
+	"widget_apps_curve": "Applications en marche sur la période",
+	"widget_history_collecting": "Mesure en cours — la courbe se remplit minute par minute.",
+	"window_label": "Période des courbes",
+	"window_hour": "1 h",
+	"window_six_hours": "6 h",
+	"window_day": "24 h",
+	"status_no_data": "pas de mesure",
+	"widget_first_reading": "première mesure…",
+	"page_people_roles": "Rôles",
+	"roles_column_name": "Rôle",
+	"roles_column_level": "Niveau",
+	"roles_column_holders": "Titulaires",
+	"roles_column_apps": "Entre dans",
+	"roles_column_quotas": "Quotas",
+	"roles_column_actions": "Actions",
+	"roles_column_app": "Application",
+	"roles_column_state": "Qui entre",
+	"roles_column_floor": "À partir du niveau",
+	"roles_column_allowed": "Rôles admis",
+	"roles_administers": "administre {app} : {means}",
+	"roles_edit": "Modifier",
+	"roles_quota": "Quota",
+	"roles_delete": "Supprimer",
+	"roles_delete_title": "Supprimer le rôle {role}",
+	"roles_closed": "fermée — aucun rôle admis",
+	"roles_open_client": "ses rôles, par PocketID",
+	"roles_open_portal": "ses rôles, par le portail",
+	"roles_deny_title": "Ne plus admettre {role} dans {app}",
+	"roles_let_in": "Un rôle à admettre dans {app}",
+	"roles_let_in_button": "Admettre",
+	"roles_allow_title": "Admettre {role} dans {app}",
+	"roles_new": "Nouveau rôle",
+	"roles_sync": "Synchroniser",
+	"roles_sync_title": "Faire tenir les rôles par PocketID et les applications",
+	"roles_explanation": "Un rôle dit ce qu'une personne peut faire ici, dans quelles applications elle entre et combien elle peut stocker. Chacun est un groupe PocketID : une application n'admet que les rôles listés pour elle, et personne quand il n'y en a aucun.",
+	"roles_notes": "Pas fait comme demandé",
+	"roles_heading_roles": "Rôles",
+	"roles_heading_apps": "Qui entre dans chaque application",
+	"roles_apps_explanation": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{count} fermée : une application sans rôle admis n'ouvre à personne.",
+				"countPlural=*": "{count} fermées : une application sans rôle admis n'ouvre à personne."
+			}
+		}
+	],
+	"roles_search": "Chercher un rôle",
+	"roles_none": "Aucun rôle",
+	"roles_search_apps": "Chercher une application",
+	"roles_no_app": "Aucune application ne connecte par PocketID",
+	"roles_set_title": "Le rôle {role}",
+	"roles_id": "Identifiant",
+	"roles_id_explanation": "Minuscules, chiffres et tirets. Il nomme le groupe PocketID du rôle et ne change jamais.",
+	"roles_name": "Nom",
+	"roles_preview": "Prévisualiser",
+	"roles_quota_title": "Quota de {role} dans {app}",
+	"roles_quota_none": "Aucun quota",
+	"roles_quota_gib": "Quota, en Gio",
+	"roles_choice": "{name} ({level})",
+	"accounts_no_role": "aucun rôle",
+	"accounts_column_level": "Niveau",
+	"accounts_detail_quotas": "Quotas",
+	"accounts_quota_none": "aucun quota",
+	"accounts_quota_own": "le sien, fixé par {by} le {at}",
+	"accounts_quota_role": "celui de son rôle",
+	"accounts_quota_absent": "en attente de sa première connexion à l'application",
+	"accounts_quota_failed": "non appliqué",
+	"accounts_quota_change": "Changer le quota",
+	"accounts_quota_title": "Quota de {account} dans {app}",
+	"accounts_quota_back_to_role": "De nouveau celui de son rôle",
+	"invitations_choose_role": "Choisissez le rôle que le compte aura."
+}

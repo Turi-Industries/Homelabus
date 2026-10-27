@@ -1,0 +1,23 @@
+[package]
+name = "hlb-notify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ntfy notifications: levels and quiet hours."
+
+[dependencies]
+# Quiet hours are the installation's own: 22:00 UTC is midnight in Paris in summer
+# and 18:00 in Montreal.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

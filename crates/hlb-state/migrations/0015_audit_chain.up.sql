@@ -1,0 +1,31 @@
+-- Chaining the audit log ("immutable, append-only").
+--
+-- ## The problem
+--
+-- The table is append-only by CONVENTION: the crate exposes neither deletion nor
+-- modification. But `hlb.db` is a SQLite file, and whoever reaches it can `UPDATE`
+-- it. "Append-only" then describes an intention, not a property — and the log proves
+-- nothing beyond the good faith of whoever holds it.
+--
+-- ## The chain
+--
+-- Each entry carries the fingerprint of the previous one. Modifying or removing an
+-- entry breaks every following one, which `hlb audit verify` detects. That does not
+-- prevent tampering — nothing does on a local file — but it makes it **visible**,
+-- which is the only guarantee reachable without a trusted third party.
+--
+-- Combined with the off-cluster export (`critical` class), an attacker would have to
+-- rewrite the chain here AND in a copy they cannot reach.
+--
+-- ## 🔴 Why older entries stay NULL
+--
+-- The fingerprints of existing entries could be computed at migration time. That
+-- would be worse than doing nothing: the chain would LOOK complete and prove nothing
+-- about the past, since it would be built from what the database contains today —
+-- tampering included.
+--
+-- Earlier entries therefore keep `hash IS NULL`, and `hlb audit verify` states
+-- explicitly from when the chain is verifiable. A guarantee you do not have must
+-- never look like one you do.
+ALTER TABLE audit_log ADD COLUMN prev_hash TEXT;
+ALTER TABLE audit_log ADD COLUMN hash TEXT;

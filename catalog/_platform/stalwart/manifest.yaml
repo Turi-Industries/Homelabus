@@ -1,0 +1,88 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: stalwart
+  displayName: Stalwart Mail
+  category: platform
+  homepage: https://stalw.art
+spec:
+  # 🔴 v0.16 minimum: it is from that version that account management goes through
+  # JMAP (`x:Account/set`). Versions <= 0.15 exposed an `/api/principal` that
+  # `hlb-mail` does not implement — mailbox provisioning would fail.
+  image: { repo: stalwartlabs/stalwart, tag: "v0.16.26", digest: "sha256:254ce5d7f3dbe4bb628ce2c7912e664ecb1c3466db79907f4a44d9a00117776b" }
+  requires:
+    # The image's own data directory: it belongs to the `stalwart` user, and a new
+    # volume inherits that. `/opt/stalwart` belonged to root, and RocksDB could not
+    # open its log there.
+    - kind: storage
+      name: data
+      path: /var/lib/stalwart
+      tier: local        # 🔴 never NFS: RocksDB + blobs
+      backup: true
+  ingress:
+    # Only the web interface goes through the proxy. The mail ports are published on
+    # the node itself, below: SMTP and IMAP are not HTTP, and a proof-of-work in front
+    # of SMTP would break reception.
+    - host: "{{ domain }}"
+      port: 8080
+      chain: [caddy-front, caddy-back]
+      expose: public
+  security:
+    # The binary carries a file capability to bind port 25: with every capability
+    # dropped, the kernel refuses to even execute it ("operation not permitted").
+    capAdd: [NET_BIND_SERVICE]
+    # SMTP, SMTPS, IMAPS, ManageSieve — in host mode, so the sender's address reaches
+    # the spam checks. Submission (587), which Stalwart's defaults do not open, is
+    # opened with the first app's sending account, and reached on the overlay only:
+    # people's own clients have 465.
+    publishedPorts: [25, 465, 993, 4190]
+  swarm:
+    memory: { reserve: 192M, limit: 1G }
+    # One instance: its RocksDB lives on one node's volume.
+    replicas: 1
+    tier: heavy
+  update:
+    # A mail server does not update itself on its own at night.
+    channel: pin
+  companions:
+    # 🔴 Its own recursive resolver. Stalwart's spam filter asks blocklists — Spamhaus,
+    # URIBL, DNSWL — which refuse a public resolver, and the node's is one in most
+    # houses: they answer a refusal, scored zero, and every spammer's message passes.
+    # Unbound recurses from the root itself (no forwarder in this image's config), asked
+    # by nobody else; Stalwart is pointed at it by Homelabus (`submission::own_resolver`).
+    - name: resolver
+      image: { repo: klutchell/unbound, tag: "1.26.1", digest: "sha256:9a3939ca33d6d3b42b81a70391bb8e43f0a08d2bd7a3fdffb43d427493345c36" }
+      tier: light
+      memory: { reserve: 32M, limit: 256M }
+      security:
+        # It rewrites its DNSSEC trust anchor (`root.key`) beside its config.
+        readOnlyRootfs: false
+        # Port 53, and the switch from root to its `unbound` user.
+        capAdd: [NET_BIND_SERVICE, SETUID, SETGID]
+      healthcheck:
+        # Answered from its own zones: a house whose internet is down keeps a healthy
+        # resolver, and Stalwart deployable.
+        test: ["CMD", "drill", "@127.0.0.1", "localhost"]
+  env:
+    # 🔴 Without a configuration Stalwart boots into a setup page that whoever reaches
+    # first configures. With the file below it boots its services, and this pins the
+    # administrator — generated at install, read back from the vault by `hlb` and the
+    # controller to provision mailboxes.
+    STALWART_RECOVERY_ADMIN: "admin:{{ secret.admin-password }}"
+  files:
+    # 0.16 reads only this: where its database lives. Everything else — domains,
+    # accounts, listeners — is in that database and set over JMAP. Checked against
+    # 0.16.26: with it, SMTP, SMTPS, IMAPS and ManageSieve listen from the first start.
+    - path: /etc/stalwart/config.json
+      content: '{"@type":"RocksDb","path":"/var/lib/stalwart/"}'
+  # Its recovery administrator: the mail server's way in when PocketID is down.
+  recovery:
+    - secret: admin-password
+      username: admin
+      # An empty JMAP request: 401 to a refusal (0.16.26). Its auto-ban counts
+      # failures by address, which a refusal never tried again keeps far from.
+      proof:
+        path: /jmap/
+        body: '{"using":["urn:ietf:params:jmap:core"],"methodCalls":[]}'
+        basic: true
+        pointer: /sessionState

@@ -1,0 +1,29 @@
+# What the deployment alone does not cover.
+steps:
+  - id: dns-record
+    title: Create the DNS record
+    phase: pre-install
+    severity: blocking
+    body: |
+      At your registrar, point {{ domain }} at the cluster.
+
+      If a wildcard *.{{ base_domain }} already exists, there is nothing to do.
+    verify:
+      type: dns
+      record: "{{ domain }}"
+    recheck: 24h
+
+  - id: first-sign-in
+    title: Sign in through PocketID
+    phase: post-install
+    severity: blocking
+    body: |
+      Each person signs in with PocketID: their account and their first project
+      are made then. There is no sign-up form.
+
+      Until this is done, Vikunja stays reachable from the VPN only.
+    deeplink: "https://{{ domain }}/login"
+    # Attested: no page open to all says whether a person has signed in, and
+    # `/api/v1/info` said "done" before anyone had.
+    verify:
+      type: attest
