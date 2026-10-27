@@ -56,6 +56,11 @@ jobs:
 
       # Pushed by digest only: the tags are set once both architectures exist, so a
       # node never pulls a tag that has its build missing.
+      #
+      # No build cache. One written under a tag is read by that tag alone, never the
+      # next: v0.2.0 left 5.5 GB nobody could use, and past the repository's 10 GB
+      # GitHub evicts main's Rust caches, so CI went cold. A published image is not
+      # built from layers another run wrote, either.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -66,8 +71,6 @@ jobs:
           # Of whichever repository built it: a fork's interface links to the fork.
           build-args: HLB_SOURCE=${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
           outputs: type=image,name=${{ steps.name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ matrix.platform }}
 
       - name: Keep the digest
         run: |
