@@ -48,6 +48,11 @@
       "allowedVersions": "<0.12"
     },
     {
+      "description": "MariaDB's rolling releases (13.0, 13.1…) are supported for a quarter or two; the catalog follows its yearly LTS, 12.3 supported until 2029. Lift for the next LTS.",
+      "matchPackageNames": ["mariadb"],
+      "allowedVersions": "<13"
+    },
+    {
       "description": "TypeScript 7 is the native compiler, without the JavaScript API (`ts.factory`) openapi-typescript generates the API's types through; svelte-check accepts up to 6 as well. Lift once both declare 7.",
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7"
