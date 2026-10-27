@@ -10,7 +10,7 @@ spec:
   # until 2026-10-11 — a third-party repackaging built for FREEBSD: no Linux node can
   # run it, and nothing short of a pull showed it. `pin`: a young project, updated by
   # hand after reading its notes.
-  image: { repo: ghcr.io/bulwarkmail/webmail, tag: "1.14.2", digest: "sha256:9885a046afab5054719004b885bd821d164f0d4e50a21100b96595b0400e0403" }
+  image: { repo: ghcr.io/bulwarkmail/webmail, tag: "1.18.0", digest: "sha256:a985e7e40eccc70f7c7dc5d6eceaf3429ab3b644a6cf58deb240a04d39a77738" }
   requires:
     # No database: Bulwark is a JMAP client. Everything — messages, folders, filters,
     # contacts — lives at Stalwart; what it keeps is its own administration, below.
