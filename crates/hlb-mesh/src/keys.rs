@@ -6,7 +6,7 @@
 //! private key travelling through a subprocess's standard output is one more leak to
 //! watch.
 
-use rand::RngCore;
+use rand::Rng as _;
 
 use crate::{Error, Result};
 

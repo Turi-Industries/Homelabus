@@ -8,7 +8,7 @@
 //! signed by hand (AWS Signature Version 4) rather than through an SDK of several
 //! hundred crates.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};

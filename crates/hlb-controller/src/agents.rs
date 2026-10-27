@@ -121,9 +121,8 @@ impl AgentPoller {
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .identity(identity)
-            .add_root_certificate(ca)
             // Our CA ONLY: public authorities have no business here.
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([ca])
             .build()
             .map_err(|e| format!("client mTLS : {e}"))?;
 
@@ -153,8 +152,7 @@ impl AgentPoller {
             reqwest::Client::builder()
                 .timeout(m.timeout)
                 .identity(reqwest::Identity::from_pem(m.client_pem.as_bytes()).ok()?)
-                .add_root_certificate(reqwest::Certificate::from_pem(m.ca_pem.as_bytes()).ok()?)
-                .tls_built_in_root_certs(false)
+                .tls_certs_only([reqwest::Certificate::from_pem(m.ca_pem.as_bytes()).ok()?])
                 .resolve(&m.server_name, std::net::SocketAddr::new(ip, self.port))
                 .build()
                 .ok()

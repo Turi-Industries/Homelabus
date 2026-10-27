@@ -64,7 +64,7 @@ impl PostgresProvisioner {
                 escape_ident(role),
                 quote_literal(password)
             );
-            sqlx::query(&stmt)
+            sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
@@ -75,7 +75,7 @@ impl PostgresProvisioner {
         let [create, access @ ..] = database_statements(database, role)?;
         if !self.database_exists(database).await? {
             // CREATE DATABASE is not transactional: it must stand alone.
-            sqlx::query(&create)
+            sqlx::query(sqlx::AssertSqlSafe(create.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::Sql(e.to_string()))?;
@@ -83,7 +83,7 @@ impl PostgresProvisioner {
             tracing::info!(database, "database created");
         }
         for stmt in access {
-            sqlx::query(&stmt)
+            sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(|e| Error::Sql(e.to_string()))?;
@@ -99,7 +99,7 @@ impl PostgresProvisioner {
     /// query would freeze the supported version, where a line of text lets the caller
     /// adapt.
     pub async fn query_raw(&self, sql: &str) -> Result<String> {
-        let rows = sqlx::query_scalar::<_, String>(sql)
+        let rows = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;
@@ -128,7 +128,7 @@ impl PostgresProvisioner {
             .execute(&mut *tx)
             .await
             .map_err(sql)?;
-        let row = sqlx::query(query)
+        let row = sqlx::query(sqlx::AssertSqlSafe(query))
             .fetch_optional(&mut *tx)
             .await
             .map_err(sql)?;
@@ -153,7 +153,7 @@ impl PostgresProvisioner {
             .execute(&mut *tx)
             .await
             .map_err(sql)?;
-        let done = sqlx::query(statement)
+        let done = sqlx::query(sqlx::AssertSqlSafe(statement))
             .execute(&mut *tx)
             .await
             .map_err(sql)?;
@@ -185,7 +185,7 @@ impl PostgresProvisioner {
             .execute(&mut *tx)
             .await
             .map_err(sql)?;
-        let mut write = sqlx::query(statement);
+        let mut write = sqlx::query(sqlx::AssertSqlSafe(statement));
         for p in params {
             write = write.bind(p);
         }
@@ -247,7 +247,7 @@ impl PostgresProvisioner {
             .await
             .map_err(|e| Error::Connect(e.to_string()))?;
 
-        sqlx::query(&extension_statement(extension)?)
+        sqlx::query(sqlx::AssertSqlSafe(extension_statement(extension)?))
             .execute(&pool)
             .await
             .map_err(|e| Error::Sql(e.to_string()))?;
@@ -264,7 +264,7 @@ impl PostgresProvisioner {
             escape_ident(role),
             quote_literal(password)
         );
-        sqlx::query(&stmt)
+        sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
@@ -427,7 +427,7 @@ async fn probe_in(
         .rev()
         .find(|n| probe.contains(&format!("${n}")))
         .unwrap_or(0);
-    let mut q = sqlx::query_scalar::<_, Option<bool>>(probe);
+    let mut q = sqlx::query_scalar::<_, Option<bool>>(sqlx::AssertSqlSafe(probe));
     for p in &params[..wanted] {
         q = q.bind(p);
     }

@@ -11,7 +11,7 @@ description = "ntfy notifications: levels and quiet hours."
 # and 18:00 in Montreal.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

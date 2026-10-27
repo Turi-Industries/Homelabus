@@ -7,15 +7,17 @@ license.workspace = true
 description = "Vaultwarden client: an organisation's members, and the emergency vault's deposits — Bitwarden's client cryptography included."
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# Bitwarden's client cryptography, the versions already in the workspace's tree.
+# Bitwarden's client cryptography, held at the line `rsa` 0.9 (its newest stable release)
+# is built on: digest 0.10 and rand_core 0.6. Its Sha1 and Sha256 pick the OAEP padding,
+# so a sha2 0.11 here does not compile — they move together once rsa 0.10 is out.
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 argon2 = "0.5"
-base64 = "0.22"
+base64 = "0.23"
 hkdf = "0.12"
 hmac = "0.12"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }

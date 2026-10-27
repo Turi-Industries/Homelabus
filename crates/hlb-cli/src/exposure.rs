@@ -245,7 +245,7 @@ pub async fn run(cli: &crate::Cli, r: Request<'_>) -> Result<ExitCode, Box<dyn s
     let current = state.exposure().await?;
     // Optional: the settings can be written before the cluster exists, and read where
     // no Docker answers.
-    let orch = SwarmOrchestrator::connect().ok();
+    let orch = SwarmOrchestrator::connect().await.ok();
     let nodes = match &orch {
         Some(o) => o.nodes().await.unwrap_or_default(),
         None => Vec::new(),
@@ -650,7 +650,7 @@ async fn readers_of_ingress(
 /// Republishes the routes after something they depend on changed — a step handled,
 /// which opens an `after-guide` route. Said, never fatal: the change itself is done.
 pub async fn republish(cli: &crate::Cli, state: &hlb_state::State) {
-    let Ok(orch) = SwarmOrchestrator::connect() else {
+    let Ok(orch) = SwarmOrchestrator::connect().await else {
         return;
     };
     let vault = crate::open_vault(cli).ok();

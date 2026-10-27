@@ -36,11 +36,11 @@ members = [
 [workspace.package]
 version = "0.2.1"
 edition = "2021"
-# Measured 2026-10-05: `time`, `serde_with` and `home` declare 1.88, and the workspace
-# checks clean on 1.88.0 with all targets. A CI job checks it, because a value announced
-# here and never exercised is how this workspace ended up claiming 1.85 while not
-# compiling on it. Raise it when a dependency does, not when a toolchain happens to.
-rust-version = "1.88"
+# Measured 2026-10-27: sqlx 0.9 declares 1.94 (every other dependency 1.88 or less), and
+# the workspace checks clean on 1.94.0 with all targets. A CI job checks it, because a
+# value announced here and never exercised is how this workspace ended up claiming 1.85
+# while not compiling on it. Raise it when a dependency does, not when a toolchain happens to.
+rust-version = "1.94"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/Turi-Industries/Homelabus"
 
@@ -81,10 +81,10 @@ futures = "0.3"
 async-trait = "0.1"
 
 # --- docker / swarm ---
-bollard = "0.19"
+bollard = "0.21"
 
 # --- state ---
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 
 # --- serialisation ---
 serde = { version = "1", features = ["derive"] }

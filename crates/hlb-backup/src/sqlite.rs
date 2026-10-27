@@ -155,7 +155,7 @@ pub async fn snapshot(source: &Path, destination: &Path) -> Result<u64> {
 
     // The path cannot be a bound parameter in a VACUUM.
     let dest = destination.to_string_lossy().replace('\'', "''");
-    sqlx::query(&format!("VACUUM INTO '{dest}'"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{dest}'")))
         .execute(&pool)
         .await
         .map_err(|e| Error::Unexpected(format!("snapshot of {}: {e}", source.display())))?;

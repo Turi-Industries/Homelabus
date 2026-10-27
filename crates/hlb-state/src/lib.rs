@@ -1005,8 +1005,8 @@ impl State {
             sql: &'q str,
             words: &[String],
             outcome: Option<&str>,
-        ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-            let mut q = sqlx::query(sql);
+        ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
             for w in words {
                 q = q.bind(w.clone());
             }

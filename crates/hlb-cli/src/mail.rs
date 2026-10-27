@@ -60,7 +60,7 @@ async fn relay_cmd(
             if let Some(t) = state.mail_relay_spf().await? {
                 println!("The domain's SPF must name {t}: `hlb mail dns` reads it.");
             }
-            match SwarmOrchestrator::connect() {
+            match SwarmOrchestrator::connect().await {
                 Ok(orch) => {
                     let job = mail_relay::port25_job(&cli.platform_network);
                     match orch.run_job(&job, 60).await {
@@ -145,7 +145,7 @@ async fn relay_cmd(
                 eprintln!("No password given — nothing was done.");
                 return Ok(ExitCode::FAILURE);
             }
-            let orch = SwarmOrchestrator::connect()?;
+            let orch = SwarmOrchestrator::connect().await?;
             let roots = hlb_engine::submission::trusted_roots(state).await?;
             let job = mail_relay::trial_job(&r, password, &cli.platform_network, &roots);
             if let Err(why) = hlb_engine::submission::try_account(&orch, &job).await {

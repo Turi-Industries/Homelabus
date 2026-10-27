@@ -233,7 +233,7 @@ impl GitMirror {
             if previous_content.as_deref() == Some(content) {
                 if let Some(last) = out.last_mut() {
                     last.0 = commit.id().to_string()[..8].to_string();
-                    last.1 = commit.summary().unwrap_or("").to_string();
+                    last.1 = commit.summary().ok().flatten().unwrap_or("").to_string();
                 }
                 continue;
             }
@@ -246,7 +246,7 @@ impl GitMirror {
 
             out.push((
                 commit.id().to_string()[..8].to_string(),
-                commit.summary().unwrap_or("").to_string(),
+                commit.summary().ok().flatten().unwrap_or("").to_string(),
                 content.to_string(),
             ));
         }
@@ -266,7 +266,7 @@ impl GitMirror {
             let c = self.repo.find_commit(oid?)?;
             out.push((
                 c.id().to_string()[..8].to_string(),
-                c.summary().unwrap_or("").to_string(),
+                c.summary().ok().flatten().unwrap_or("").to_string(),
             ));
         }
         Ok(out)

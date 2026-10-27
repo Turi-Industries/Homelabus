@@ -3118,7 +3118,7 @@ async fn node_upgrade(
 
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
-    let orch = SwarmOrchestrator::connect()?;
+    let orch = SwarmOrchestrator::connect().await?;
 
     let nodes = orch.nodes().await?;
     let Some(target) = nodes
@@ -3371,7 +3371,7 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
 
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
-    let mut orch = SwarmOrchestrator::connect()?;
+    let mut orch = SwarmOrchestrator::connect().await?;
 
     if let FleetCmd::Agent { service, .. } = cmd {
         if !service.starts_with(hlb_orchestrator::SYSTEM_PREFIX) {
@@ -3814,7 +3814,7 @@ async fn cluster_init(
 
     // -- 4. The Swarm ------------------------------------------------------------
     // Connected only now: Docker was installed a moment ago, by step 2.
-    let orch = SwarmOrchestrator::connect()?;
+    let orch = SwarmOrchestrator::connect().await?;
     let id = orch.cluster_init(&advertise).await?;
     println!("✓ Swarm active ({})", &id[..12.min(id.len())]);
 
@@ -3924,7 +3924,7 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     }
 
     // The recommended role depends on the cluster's current size.
-    let orch = SwarmOrchestrator::connect().ok();
+    let orch = SwarmOrchestrator::connect().await.ok();
     let nodes = match &orch {
         Some(o) => o.nodes().await.unwrap_or_default(),
         None => Vec::new(),
@@ -4479,7 +4479,7 @@ async fn execute_plan(
     apply: bool,
     verb: &str,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let orch = SwarmOrchestrator::connect()?;
+    let orch = SwarmOrchestrator::connect().await?;
     let vault = open_vault(cli)?;
 
     // PostgreSQL is only wired in if it is reachable: without it,
@@ -5012,7 +5012,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Stop { app, apply } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
                 let Some(current) = orch.status(app).await.ok().map(|s| s.desired_replicas) else {
                     eprintln!("🔴 \"{app}\" is not deployed, or Docker is unreachable.");
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
@@ -5065,7 +5065,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
                 let current = orch.status(app).await.ok().map(|s| s.desired_replicas);
 
                 match current {
@@ -5159,7 +5159,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 // The service first: forgetting the app while it still runs would leave
                 // a service nobody manages, invisible to every screen.
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
                 let manifest = state.app_manifest(app).await?;
                 let removed = hlb_engine::remove_services(&orch, app, &manifest).await?;
                 println!();
@@ -5223,7 +5223,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 // The ingress refuses at preview what would leave it unplaced, or
                 // serving names nobody chose; an app, a route through what is missing.
-                if let Ok(orch) = SwarmOrchestrator::connect() {
+                if let Ok(orch) = SwarmOrchestrator::connect().await {
                     let mut blockers =
                         hlb_engine::ingress::app_blockers(&orch, &entry.manifest).await;
                     if entry.manifest.metadata.name == hlb_types::manifest::INGRESS_SERVICE {
@@ -5370,7 +5370,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 };
                 // What an install refuses, an upgrade refuses too: a route through an
                 // Anubis nobody installed, another app's volume with that app gone.
-                let ingress = match SwarmOrchestrator::connect() {
+                let ingress = match SwarmOrchestrator::connect().await {
                     Ok(orch) => hlb_engine::ingress::app_blockers(&orch, &next).await,
                     Err(_) => Vec::new(),
                 };
@@ -5516,7 +5516,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     );
                     return Ok(ExitCode::SUCCESS);
                 }
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
                 let run = hlb_engine::jobs::run(&orch, &state, app, job, now).await?;
                 println!("{}", run.output);
                 state
@@ -5633,6 +5633,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(async {
                 let state = open_state(&cli).await?;
                 let orch = SwarmOrchestrator::connect()
+                    .await
                     .ok()
                     .map(|o| std::sync::Arc::new(o) as std::sync::Arc<dyn Orchestrator>);
                 // From a manager's shell, the apps and the databases are overlay names:
@@ -5722,7 +5723,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(async {
                 let state = open_state(&cli).await?;
                 let vault = open_vault(&cli)?;
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
                 let Some(exposure) = state.exposure().await? else {
                     eprintln!("🔴 No domain configured: nothing is published.");
                     eprintln!("   hlb config exposure --domain <domain> --email <address> --apply");
@@ -5787,7 +5788,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = open_state(&cli).await?;
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
 
                 let report = Reconciler::new(&orch, &state).reconcile(*apply).await?;
                 if *apply && !(report.corrected.is_empty() && report.failed.is_empty()) {
@@ -7646,7 +7647,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 use hlb_backup::dr;
 
                 let state = open_state(&cli).await?;
-                let orch = SwarmOrchestrator::connect().ok();
+                let orch = SwarmOrchestrator::connect().await.ok();
 
                 match cmd {
                     DrCmd::Exercise {
@@ -8008,7 +8009,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
 
                     PkiCmd::Renew { service, apply } => {
-                        let orch = SwarmOrchestrator::connect()?;
+                        let orch = SwarmOrchestrator::connect().await?;
                         let lines = hlb_engine::pki::Renewal {
                             state: &state,
                             vault: &vault,
@@ -8741,7 +8742,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 // passes) under the key it read at start. Running, it races the rewrite
                 // and keeps writing under the old key after it.
                 let controller = hlb_engine::pki::CONTROLLER_SERVICE;
-                let running = match SwarmOrchestrator::connect() {
+                let running = match SwarmOrchestrator::connect().await {
                     Ok(orch) => orch
                         .status(controller)
                         .await
@@ -10013,7 +10014,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                         }
 
-                        let orch = SwarmOrchestrator::connect()?;
+                        let orch = SwarmOrchestrator::connect().await?;
                         println!("{}…", c.describe());
                         let from = installed.reference();
                         let outcome = hlb_updater::apply(&orch, &state, c, 180).await?;
@@ -10226,7 +10227,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     BackupCmd::Run { force, app } => {
                         // One pass, the same the controller runs on its own: two copies
                         // had drifted apart — see `hlb-backup-run`.
-                        let orch = SwarmOrchestrator::connect().ok();
+                        let orch = SwarmOrchestrator::connect().await.ok();
                         // Garage does not resolve on a host: a relay, for this command —
                         // opened only when an app keeps a bucket the pass reads.
                         let mut buckets = false;
@@ -10726,7 +10727,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     )
                     .await;
                 }
-                let orch = SwarmOrchestrator::connect()?;
+                let orch = SwarmOrchestrator::connect().await?;
 
                 match cmd {
                     // Handled above, before connecting.
@@ -10939,7 +10940,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 if let NodeCmd::Prune { apply } = cmd {
-                    let orch = SwarmOrchestrator::connect()?;
+                    let orch = SwarmOrchestrator::connect().await?;
                     let report = hlb_engine::prune::run(&orch, *apply).await?;
                     if *apply {
                         let state = open_state(&cli).await?;
@@ -10984,7 +10985,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 if let NodeCmd::Tier { node, set, apply } = cmd {
-                    let orch = SwarmOrchestrator::connect()?;
+                    let orch = SwarmOrchestrator::connect().await?;
                     let nodes = orch.nodes().await?;
                     let n = nodes
                         .iter()
@@ -11183,7 +11184,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Ps => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                let o = SwarmOrchestrator::connect()?;
+                let o = SwarmOrchestrator::connect().await?;
                 let services = o.list().await?;
 
                 if services.is_empty() {
