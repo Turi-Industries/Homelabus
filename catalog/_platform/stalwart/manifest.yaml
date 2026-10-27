@@ -9,7 +9,7 @@ spec:
   # 🔴 v0.16 minimum: it is from that version that account management goes through
   # JMAP (`x:Account/set`). Versions <= 0.15 exposed an `/api/principal` that
   # `hlb-mail` does not implement — mailbox provisioning would fail.
-  image: { repo: stalwartlabs/stalwart, tag: "v0.16.26", digest: "sha256:254ce5d7f3dbe4bb628ce2c7912e664ecb1c3466db79907f4a44d9a00117776b" }
+  image: { repo: stalwartlabs/stalwart, tag: "v0.16.27", digest: "sha256:c429b311c93db5606598abc1c68225a85a6953183848ae01bee9c6a98885836c" }
   requires:
     # The image's own data directory: it belongs to the `stalwart` user, and a new
     # volume inherits that. `/opt/stalwart` belonged to root, and RocksDB could not

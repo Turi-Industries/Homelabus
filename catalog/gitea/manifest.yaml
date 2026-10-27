@@ -9,7 +9,7 @@ spec:
   # 28 — Gitea's own renumbering of 1.28 — rehearsed on 2026-10-19 on a 1.27 database
   # through this start: its migrations, a private repository, a push reaching Gitea
   # through the hooks it wrote again, the PocketID source and its secret all kept.
-  image: { repo: gitea/gitea, tag: "28.1", digest: "sha256:f505a0d3a41323b786e05942fc7a4075e07ae7c169fd9485649aa55ee543a21a" }
+  image: { repo: gitea/gitea, tag: "28.2", digest: "sha256:30777c91280d973fa02be48b1ade735bd6859e8f6f7af3b4444d519437852504" }
   requires:
     - kind: database
       engine: postgres
