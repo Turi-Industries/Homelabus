@@ -38,6 +38,12 @@ pub struct PlatformAccess {
 pub const NTFY_PUBLISHER: (&str, &str) = ("homelabus", "publisher-password");
 pub const NTFY_WATCHDOG: (&str, &str) = ("watchdog", "watchdog-password");
 
+/// The vault entry holding the watchdog's password — what `hlb metrics deadman` prints,
+/// and so the target its audit entry names.
+pub fn ntfy_watchdog_secret() -> String {
+    generated("ntfy", NTFY_WATCHDOG.1)
+}
+
 /// Where the PocketID API key is kept: `{{ secret.api-key }}` in its manifest.
 pub const POCKETID_KEY_SECRET: &str = "pocket-id-api-key";
 
@@ -105,7 +111,7 @@ pub async fn from_vault(state: &State, vault: &Vault) -> crate::Result<PlatformA
         ntfy_publisher: read(generated("ntfy", NTFY_PUBLISHER.1))
             .await?
             .map(|p| (NTFY_PUBLISHER.0.to_string(), p)),
-        ntfy_watchdog: read(generated("ntfy", NTFY_WATCHDOG.1))
+        ntfy_watchdog: read(ntfy_watchdog_secret())
             .await?
             .map(|p| (NTFY_WATCHDOG.0.to_string(), p)),
     })

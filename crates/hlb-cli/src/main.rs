@@ -7587,13 +7587,27 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     // own account, generated at ntfy's install, goes in the script.
                     let rt = tokio::runtime::Runtime::new()?;
                     let account = rt.block_on(async {
-                        let state = open_state(&cli).await.ok()?;
-                        let vault = open_vault(&cli).ok()?;
-                        hlb_engine::access::from_vault(&state, &vault)
-                            .await
-                            .ok()?
-                            .ntfy_watchdog
-                    });
+                        let Ok(state) = open_state(&cli).await else {
+                            return Ok::<_, Box<dyn std::error::Error>>(None);
+                        };
+                        let Ok(vault) = open_vault(&cli) else {
+                            return Ok(None);
+                        };
+                        let Ok(access) = hlb_engine::access::from_vault(&state, &vault).await
+                        else {
+                            return Ok(None);
+                        };
+                        // The script carries the password: recorded BEFORE it is shown,
+                        // like `hlb secret-get`, or this verb is the read that leaves no
+                        // trace.
+                        if access.ntfy_watchdog.is_some() {
+                            let name = hlb_engine::access::ntfy_watchdog_secret();
+                            state
+                                .audit("cli", ACTOR_ROLE, "secret-read", &name, "ok", None)
+                                .await?;
+                        }
+                        Ok(access.ntfy_watchdog)
+                    })?;
                     println!(
                         "{}",
                         deadman::watchdog_script(
