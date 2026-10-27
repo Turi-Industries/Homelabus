@@ -9,7 +9,7 @@ spec:
   # The web client's server. Everything else is a companion, as Fluxer's own compose
   # bundle (`fluxer-compose-2026.1026.223737`) lays it out — every Fluxer image pinned
   # to that release, each tagged by its own build time.
-  image: { repo: ghcr.io/fluxerapp/fluxer-app-proxy-self-hosted, tag: "2026.1026.223737", digest: "sha256:694c59e9332d6b626c6e8e0b5e1c41fd882e700a86ece7c9a7c5bcf06fb0aa49" }
+  image: { repo: ghcr.io/fluxerapp/fluxer-app-proxy-self-hosted, tag: "2026.1027.190751", digest: "sha256:aec368cfc99c4a0e55e8be06d8f4e5e9b8720cd7f1068b0c7610e858e514a59e" }
   requires:
     # One JSONB table (`fluxer_kv`) that the api, the worker, `users` and `messages`
     # each create at their start, as the database's owner: no extension.
@@ -146,7 +146,7 @@ spec:
     # In the order they start: Swarm has no `depends_on`, and each waits for the one
     # before to be healthy — the stores, then the services the api calls, then the api.
     - name: valkey
-      image: { repo: valkey/valkey, tag: "9-alpine", digest: "sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11" }
+      image: { repo: valkey/valkey, tag: "9-alpine", digest: "sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b" }
       # Sessions, rate limits, locks — and `asset:deletion:queue`, which nothing
       # rebuilds: `noeviction`, or a full memory drops queue keys without a word.
       command: [docker-entrypoint.sh, valkey-server, /etc/valkey/valkey.conf]
@@ -178,7 +178,7 @@ spec:
         intervalSecs: 10
 
     - name: nats
-      image: { repo: nats, tag: "2.14-alpine", digest: "sha256:fce5fbf8b29ee0baa790e67bcd4abafebdd97363aa025f7d46a17489df002e30" }
+      image: { repo: nats, tag: "2.15-alpine", digest: "sha256:5fe569eab270ed1ac62e7974b80e86db130d33f464fe276beedd9003f50576dc" }
       # JetStream from a file only: the jobs (`JOBS`, seven days, and `JOBS_DLQ`).
       command: [nats-server, --config, /etc/nats/nats.conf]
       files:
@@ -204,7 +204,7 @@ spec:
         intervalSecs: 10
 
     - name: meilisearch
-      image: { repo: getmeili/meilisearch, tag: "v1.55", digest: "sha256:ff546679970126f8822e15d1b6a06bfbff1f2ce2e43f810cfb5258012f92de5c" }
+      image: { repo: getmeili/meilisearch, tag: "v1.56", digest: "sha256:1f578fa865f8251894b3bf38d6668d6209a3f451f8f65ab953e129d4c1db5ef4" }
       env:
         MEILI_ENV: production
         MEILI_NO_ANALYTICS: "true"
@@ -229,7 +229,7 @@ spec:
         intervalSecs: 10
 
     - name: snowflakes
-      image: { repo: ghcr.io/fluxerapp/fluxer-snowflakes, tag: "2026.1026.202726", digest: "sha256:fb3e503c2f14c8afb8f5ddbbeba814f50d0df684363eb507d0aa5794a6fa479f" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-snowflakes, tag: "2026.1027.190820", digest: "sha256:ba6d231b2ab535269ffe0d5c25fce9b4aae82938b0367db30df9fbfc8eba2b29" }
       # ⚠️ One: its worker id is its shard's, and a second would hand out the same ids.
       sharedEnv: true
       env: { FLUXER_SVC_NAME: snowflakes, FLUXER_SVC_MODE: combined, TOKIO_WORKER_THREADS: "2", MALLOC_ARENA_MAX: "2" }
@@ -241,7 +241,7 @@ spec:
         startPeriodSecs: 60
 
     - name: users
-      image: { repo: ghcr.io/fluxerapp/fluxer-users, tag: "2026.1026.202726", digest: "sha256:1476af31cde273d4ebec31618cdd84bf6c5c3d3f4a8cc853140cdfc083d4d0c2" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-users, tag: "2026.1027.190837", digest: "sha256:3a8be98697f46c7688568d78b7da1cba7df9b4ed2c59855a7a9dbe222aedfd7e" }
       sharedEnv: true
       # Every pool counted against PostgreSQL's 100, which every app shares: the
       # compose's 90 would have been all of them (`fluxer_cannot_exhaust_…`).
@@ -250,21 +250,21 @@ spec:
       healthcheck: *svc-probe
 
     - name: gifs
-      image: { repo: ghcr.io/fluxerapp/fluxer-gifs, tag: "2026.1026.202726", digest: "sha256:1bfe0a8d9f34a79e500e51623fc00882cdc41ac881a75dbcd93848883876e200" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-gifs, tag: "2026.1027.190843", digest: "sha256:5aebd6773c11f0ecc163cd40c3d063cc824c80d51ac6d44557fe1c3d70f77e72" }
       sharedEnv: true
       env: { FLUXER_SVC_NAME: gifs, FLUXER_SVC_MODE: combined, FLUXER_GIFS_SHARD_CACHE_MAX_BYTES: "134217728", TOKIO_WORKER_THREADS: "2", MALLOC_ARENA_MAX: "2" }
       memory: { reserve: 32M, limit: 256M }
       healthcheck: *svc-probe
 
     - name: messages
-      image: { repo: ghcr.io/fluxerapp/fluxer-messages, tag: "2026.1026.202726", digest: "sha256:545f41564a7f1bb77c8b95fb27ffa6030333130fe8044d69da715f502e121187" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-messages, tag: "2026.1027.190820", digest: "sha256:377987ff361857e653c55571569ef0c4c66d4e66bc1a215032253c4fa9aa3df2" }
       sharedEnv: true
       env: { FLUXER_SVC_NAME: messages, FLUXER_SVC_MODE: combined, FLUXER_POSTGRES_MAX_CONNECTIONS: "4", TOKIO_WORKER_THREADS: "2", MALLOC_ARENA_MAX: "2" }
       memory: { reserve: 32M, limit: 256M }
       healthcheck: *svc-probe
 
     - name: media-proxy
-      image: { repo: ghcr.io/fluxerapp/fluxer-media-proxy, tag: "2026.1026.202726", digest: "sha256:94b3413febd3c9e93aa300bc42d6f306f2490ac675f29e0ef812d49f1cd59cfc" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-media-proxy, tag: "2026.1027.190818", digest: "sha256:b8bf52aaa0152d91c94b9f4aa4076b1e4aa963fff953bbe12adae961ffc78a31" }
       sharedEnv: true
       env:
         FLUXER_MEDIA_PROXY_PORT: "8080"
@@ -283,7 +283,7 @@ spec:
         intervalSecs: 10
 
     - name: unfurl
-      image: { repo: ghcr.io/fluxerapp/fluxer-unfurl, tag: "2026.1026.202726", digest: "sha256:92d8f0505dc4f72e1bb075c9ae302e4c7fb9c0cc89e6b67a70e92030a316408b" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-unfurl, tag: "2026.1027.190906", digest: "sha256:6a2833ff6e4ccb0f0470a9f1f41c00fa909a634bb3cb2b466400ed57a1b3a92d" }
       sharedEnv: true
       env:
         FLUXER_SVC_NAME: unfurl
@@ -298,7 +298,7 @@ spec:
       healthcheck: *svc-probe
 
     - name: api
-      image: &api-image { repo: ghcr.io/fluxerapp/fluxer-api, tag: "2026.1026.223737", digest: "sha256:a334e9b86d034aa93b22adf285d9fb120259b233ef0c1abc941c99f74320ee5a" }
+      image: &api-image { repo: ghcr.io/fluxerapp/fluxer-api, tag: "2026.1027.190743", digest: "sha256:f78ceb022013796eee6150047aec263745a713f615b8c64e6aaa7a0d1190575e" }
       sharedEnv: true
       # 🔴 Fluxer keeps its sign-in in its database, set from its admin panel: no
       # variable and no file reach it. The api is started through this script, which
@@ -450,7 +450,7 @@ spec:
         startPeriodSecs: 90
 
     - name: gateway
-      image: { repo: ghcr.io/fluxerapp/fluxer-gateway, tag: "2026.1026.202726", digest: "sha256:216f2777e02072731a889954718cece87dc1edbe1de5f1ea6d594e3bf668fc34" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-gateway, tag: "2026.1027.190817", digest: "sha256:fc2c27be1ca4070ca89e869fd711147da81b63c025e3b1ec2affe8c1c8c26577" }
       sharedEnv: true
       env:
         FLUXER_GATEWAY_PORT: "8080"
@@ -469,7 +469,7 @@ spec:
         startPeriodSecs: 90
 
     - name: push
-      image: { repo: ghcr.io/fluxerapp/fluxer-push, tag: "2026.1026.202726", digest: "sha256:9348a21c3a34d4908f14071c28ac4a4910ba738715e3f5db505e7b0d8d307518" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-push, tag: "2026.1027.190820", digest: "sha256:6db795e9dabbc503a8379a7d5d39a19a8fc59fda207a0047cecd714a1763fd55" }
       sharedEnv: true
       env: { TOKIO_WORKER_THREADS: "2", MALLOC_ARENA_MAX: "2" }
       memory: { reserve: 32M, limit: 256M }
@@ -480,7 +480,7 @@ spec:
         startPeriodSecs: 60
 
     - name: static
-      image: { repo: ghcr.io/fluxerapp/fluxer-static, tag: "2026.1026.202726", digest: "sha256:cac08d26163e4a732444abc801735a728120ccb58eef7c03ef63ff10a374960c" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-static, tag: "2026.1027.190837", digest: "sha256:43044318df4c23499c9d8234841f8aa7a1080c27e0750c166123c0a0a360ef1a" }
       memory: { reserve: 32M, limit: 256M }
       # A Caddy: its autosaved configuration and its instance id, nothing kept.
       security: { tmpfs: [/config, /data] }
@@ -489,7 +489,7 @@ spec:
         intervalSecs: 10
 
     - name: admin
-      image: { repo: ghcr.io/fluxerapp/fluxer-admin, tag: "2026.1026.202726", digest: "sha256:4e6321a96cfc3fcade661a862f7d139206197e17eeb9d028a923dcca56f2fb5e" }
+      image: { repo: ghcr.io/fluxerapp/fluxer-admin, tag: "2026.1027.190827", digest: "sha256:ce465b52287c2d660458770714e589c18edbfbbe233d90e6ef4c21647cae4937" }
       sharedEnv: true
       env:
         FLUXER_ADMIN_PORT: "8080"
@@ -506,7 +506,7 @@ spec:
         startPeriodSecs: 60
 
     - name: livekit
-      image: { repo: livekit/livekit-server, tag: "v1.13.10", digest: "sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a" }
+      image: { repo: livekit/livekit-server, tag: "v1.13.11", digest: "sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20" }
       # 🔴 Calls do not go through Caddy: the media arrives on 7881/tcp and
       # 7882/udp, straight to this node. The router forwards them to ONE machine,
       # the ingress's — the guide says which ports; here, where it is.
