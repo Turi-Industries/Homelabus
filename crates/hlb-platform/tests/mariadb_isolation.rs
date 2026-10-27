@@ -38,14 +38,18 @@ async fn clean_up(bases: &[&str], users: &[&str]) {
         .expect("signin de nettoyage");
 
     for b in bases {
-        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS `{b}`"))
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS `{b}`"
+        )))
+        .execute(&pool)
+        .await;
     }
     for u in users {
-        let _ = sqlx::query(&format!("DROP USER IF EXISTS '{u}'@'%'"))
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP USER IF EXISTS '{u}'@'%'"
+        )))
+        .execute(&pool)
+        .await;
     }
 }
 

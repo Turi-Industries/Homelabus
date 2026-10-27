@@ -477,7 +477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let orchestrator = if cli.demo {
         None
     } else {
-        match SwarmOrchestrator::connect() {
+        match SwarmOrchestrator::connect().await {
             Ok(o) => Some(Arc::new(o)),
             Err(e) => {
                 tracing::warn!("Docker unreachable at startup ({e}) — reconciliation suspended");

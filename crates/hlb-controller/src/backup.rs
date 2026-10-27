@@ -37,7 +37,7 @@ impl PassConfig {
     ) -> hlb_backup_run::Result<Summary> {
         let vault = hlb_secrets::Vault::open(&self.master_key)?;
         // Where each volume is: a volume of another node is backed up there.
-        let orch = hlb_orchestrator::SwarmOrchestrator::connect().ok();
+        let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
         hlb_backup_run::Pass {
             state,
             vault: &vault,

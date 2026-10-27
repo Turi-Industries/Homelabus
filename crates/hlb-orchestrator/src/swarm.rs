@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use bollard::container::LogOutput;
 
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::VolumeCreateOptions as CreateVolumeOptions;
+use bollard::models::VolumeCreateRequest as CreateVolumeOptions;
 use bollard::models::{
-    HealthConfig, Limit, Mount, MountTypeEnum, MountVolumeOptions, MountVolumeOptionsDriverConfig,
+    HealthConfig, Limit, Mount, MountType, MountVolumeOptions, MountVolumeOptionsDriverConfig,
     NetworkAttachmentConfig, NetworkCreateRequest, ResourceObject, ServiceSpecMode,
     ServiceSpecModeReplicated, ServiceSpecModeReplicatedJob, ServiceSpecRollbackConfig,
     ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
@@ -230,8 +230,12 @@ impl SwarmOrchestrator {
 
 impl SwarmOrchestrator {
     /// Connects to the local daemon (Unix socket, or `DOCKER_HOST` when set).
-    pub fn connect() -> Result<Self> {
-        let docker = Docker::connect_with_defaults()?;
+    ///
+    /// 🔴 The API version is negotiated: `bollard` speaks its own (1.53, Docker 29) and a
+    /// daemon refuses any version above its maximum — every call on a Docker 24-28 node,
+    /// which the bootstrap's floor admits, would fail.
+    pub async fn connect() -> Result<Self> {
+        let docker = Docker::connect_with_defaults()?.negotiate_version().await?;
         Ok(Self {
             docker,
             registries: HashMap::new(),
@@ -522,7 +526,7 @@ impl SwarmOrchestrator {
                                 .map(|(vol, path)| Mount {
                                     target: Some(path.clone()),
                                     source: Some(vol.clone()),
-                                    typ: Some(MountTypeEnum::VOLUME),
+                                    typ: Some(MountType::VOLUME),
                                     // What makes a node other than this one create
                                     // the volume as NFS, or as the bind, it is.
                                     volume_options: spec.backing_of(vol).driver_options().map(
@@ -550,13 +554,13 @@ impl SwarmOrchestrator {
                                 .chain(spec.binds.iter().map(|b| Mount {
                                     target: Some(b.target.clone()),
                                     source: Some(b.source.clone()),
-                                    typ: Some(MountTypeEnum::BIND),
+                                    typ: Some(MountType::BIND),
                                     read_only: Some(b.read_only),
                                     ..Default::default()
                                 }))
                                 .chain(spec.hardening.tmpfs.iter().map(|path| Mount {
                                     target: Some(path.clone()),
-                                    typ: Some(MountTypeEnum::TMPFS),
+                                    typ: Some(MountType::TMPFS),
                                     // 🔴 Root's 0755 otherwise: Fluxer's api, run as
                                     // 65532, could not open its socket there (EACCES).
                                     // Sticky and open to all, as `/tmp` is.
@@ -596,6 +600,7 @@ impl SwarmOrchestrator {
                         memory_bytes: i64::try_from(m.reserve.0).ok(),
                         ..Default::default()
                     }),
+                    ..Default::default()
                 }),
                 // 🔴 A job that failed is not run again: a refused Caddyfile retried in
                 // a loop would only repeat its refusal, and never say it was final.
@@ -1897,7 +1902,7 @@ mod tests {
             .and_then(|c| c.mounts)
             .expect("a mount");
         assert_eq!(mounts.len(), 1);
-        assert_eq!(mounts[0].typ, Some(MountTypeEnum::TMPFS));
+        assert_eq!(mounts[0].typ, Some(MountType::TMPFS));
         assert_eq!(mounts[0].target.as_deref(), Some("/run/fluxer"));
         assert_eq!(
             mounts[0].tmpfs_options.as_ref().and_then(|o| o.mode),

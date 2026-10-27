@@ -36,6 +36,23 @@
       "groupName": "rand"
     },
     {
+      "description": "Held until `rsa` 0.10 is released: rsa 0.9 is built on digest 0.10 and rand_core 0.6, and Bitwarden's client cryptography and hlb-types' seeded RSA key go through both. rsa's own pull request is the one that lifts this.",
+      "matchFileNames": ["crates/hlb-bitwarden/Cargo.toml", "crates/hlb-types/Cargo.toml"],
+      "matchSourceUrls": ["https://github.com/RustCrypto/**", "https://github.com/rust-random/**"],
+      "matchPackageNames": ["!rsa", "!p256"],
+      "enabled": false
+    },
+    {
+      "description": "age 0.12 pulls p256 0.13, whose crypto-bigint 0.5 carries RUSTSEC-2026-0387 with no fixed release. Lift once age is on p256 0.14.",
+      "matchPackageNames": ["age"],
+      "allowedVersions": "<0.12"
+    },
+    {
+      "description": "TypeScript 7 is the native compiler, without the JavaScript API (`ts.factory`) openapi-typescript generates the API's types through; svelte-check accepts up to 6 as well. Lift once both declare 7.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
     },
@@ -46,7 +63,7 @@
       "labels": ["dependencies", "catalog"]
     },
     {
-      "description": "Its refs are branches (`stable`, `1.88.0`), which Renovate's tag lookup cannot read; and the MSRV's must never move by itself.",
+      "description": "Its refs are branches (`stable`, `1.94.0`), which Renovate's tag lookup cannot read; and the MSRV's must never move by itself.",
       "matchPackageNames": ["dtolnay/rust-toolchain"],
       "enabled": false
     },

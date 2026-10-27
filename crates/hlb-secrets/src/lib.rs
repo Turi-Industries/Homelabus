@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use age::secrecy::ExposeSecret;
 use age::x25519::{Identity, Recipient};
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -260,7 +260,7 @@ pub fn generate_password(len: usize) -> String {
 /// would be the shortest link in the whole chain, and the mistake would never show -
 /// the values look random either way.
 pub fn fill_random(buf: &mut [u8]) {
-    use rand::RngCore as _;
+    use rand::Rng as _;
     rand::rng().fill_bytes(buf);
 }
 

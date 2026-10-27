@@ -24,7 +24,7 @@ fn gib(v: f64) -> Option<u64> {
 /// Runs the sync and says what it found or did.
 pub async fn sync(cli: &Cli, state: &State, apply: bool) -> Result<Report> {
     let vault = open_vault(cli)?;
-    let orch = SwarmOrchestrator::connect()?;
+    let orch = SwarmOrchestrator::connect().await?;
     let network = cli.platform_network.clone();
     let reach = move |u: &str| relay::reach(u, &network);
     let report = RoleSync {
@@ -389,7 +389,7 @@ async fn republish(state: &State, cli: &Cli, m: &hlb_types::Manifest) {
     }
     let done = async {
         let vault = open_vault(cli)?;
-        let orch = SwarmOrchestrator::connect()?;
+        let orch = SwarmOrchestrator::connect().await?;
         hlb_engine::ingress::publish(&orch, state, Some(&vault)).await?;
         Ok::<_, Box<dyn std::error::Error>>(())
     }
