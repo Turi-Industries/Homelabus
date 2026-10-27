@@ -6,7 +6,7 @@ metadata:
   category: platform
   homepage: https://victoriametrics.com
 spec:
-  image: { repo: victoriametrics/victoria-metrics, tag: "v1.154.0", digest: "sha256:4bd592341587d669b7f57d54bbb82bd21ac8675f4e24234b7703a7c0f85197d8" }
+  image: { repo: victoriametrics/victoria-metrics, tag: "v1.154.1", digest: "sha256:c7884f32920dd45a9d86542a717227e63af03e060e53bbf8031e6e6fd0e1e05d" }
   requires:
     # 🔴 The history MUST survive a restart. A metrics database that started from
     # scratch answers "I do not know" to the only question you really ask it: "was it
