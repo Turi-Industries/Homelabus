@@ -277,6 +277,10 @@ the outside, which is the whole problem.
   used: 2026.8.0 crashes on Vaultwarden 1.37.1 as soon as an organisation has a policy
   (`Policy.toSdkPolicyView`: no `revisionDate`) — a nightly deposit through it would
   have stopped on the night the two-step policy was turned on.
+- **🔴 Vaultwarden 1.37.4 refuses an item without `encryptedFor`** — the writing
+  account's id, checked against the token — on create AND on rewrite, with a bare 422
+  (a parse failure: no message). The pin moved and every deposit failed; only
+  `live_emergency` said so. `Session::create`/`update` add it to whatever they write.
 - **An item Homelabus did not make is never touched**: only one carrying its
   `homelabus` field is. One it cannot decrypt is set aside and said, never a failure
   of the whole deposit — a newer client's format must not stop every night's.

@@ -1,4 +1,4 @@
-//! The routes an official client calls, as Vaultwarden 1.37.1 answers them
+//! The routes an official client calls, as Vaultwarden 1.37.4 answers them
 //! (`src/api/identity.rs`, `src/api/core/`).
 
 use serde_json::Value;
@@ -37,6 +37,8 @@ pub struct Session {
     /// Its private key, encrypted under its key.
     private_key: Option<String>,
     kdf: Option<Kdf>,
+    /// The account's id, read once: every item written names it.
+    account: std::sync::OnceLock<String>,
 }
 
 /// An account's keys, unwrapped by its master password.
@@ -176,6 +178,7 @@ impl Server {
             key: v["Key"].as_str().map(str::to_string),
             private_key: v["PrivateKey"].as_str().map(str::to_string),
             kdf,
+            account: std::sync::OnceLock::new(),
         })
     }
 
@@ -306,6 +309,7 @@ impl Session {
 
     /// A new item in an organisation's collections.
     pub async fn create(&self, cipher: &Value, collections: &[String]) -> Result<String> {
+        let cipher = self.signed(cipher).await?;
         let v = self
             .call(
                 self.http()
@@ -322,14 +326,33 @@ impl Session {
 
     /// An item rewritten whole.
     pub async fn update(&self, id: &str, cipher: &Value) -> Result<()> {
+        let cipher = self.signed(cipher).await?;
         self.call(
             self.http()
                 .put(self.server.url(&format!("/api/ciphers/{id}")))
-                .json(cipher),
+                .json(&cipher),
             "updating an item",
         )
         .await
         .map(drop)
+    }
+
+    /// The item as 1.37.4 accepts it: `encryptedFor`, the account writing, is required
+    /// and checked against the token — without it, every write is a 422 naming nothing.
+    async fn signed(&self, cipher: &Value) -> Result<Value> {
+        let account = match self.account.get() {
+            Some(a) => a.clone(),
+            None => {
+                let a = self.account_id().await?;
+                self.account.get_or_init(|| a).clone()
+            }
+        };
+        let mut cipher = cipher.clone();
+        cipher
+            .as_object_mut()
+            .ok_or_else(|| Error::Unexpected("an item that is not an object".into()))?
+            .insert("encryptedFor".into(), Value::String(account));
+        Ok(cipher)
     }
 
     /// A raw authenticated call, for what an owner's client does in the tests.
