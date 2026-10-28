@@ -228,6 +228,50 @@ pub fn catalog_move(installed: &Image, catalog: Option<&Image>) -> Option<Image>
     Some(c.clone())
 }
 
+/// Why the catalog's image cannot move alone, if it cannot: its manifest renamed the
+/// app's own volumes too.
+///
+/// 🔴 The catalog's image was tried with the catalog's manifest. Stalwart 1.0 opens a
+/// new store (`data-v1`) because it refuses a 0.16 one: moved alone, its image started
+/// over the old volume and the house had no mail. The new volumes come with `hlb
+/// upgrade`, which says how the data reaches them.
+pub fn held_move(installed: &Manifest, catalog: &Manifest) -> Option<String> {
+    catalog_move(&installed.spec.image, Some(&catalog.spec.image))?;
+    let (before, after) = (own_volumes(installed), own_volumes(catalog));
+    if before == after {
+        return None;
+    }
+    Some(format!(
+        "the catalog moves it to {}:{} with volumes of its own ({} → {}): its image waits \
+         for `hlb upgrade {}`",
+        catalog.spec.image.repo,
+        catalog.spec.image.tag,
+        before.join(", "),
+        after.join(", "),
+        catalog.metadata.name
+    ))
+}
+
+fn own_volumes(m: &Manifest) -> Vec<&str> {
+    let mut v: Vec<&str> = m
+        .spec
+        .requires
+        .iter()
+        .filter_map(|c| {
+            if let hlb_types::Capability::Storage {
+                name, owner: None, ..
+            } = c
+            {
+                Some(name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
 /// What a pass over the registries found.
 #[derive(Debug, Default)]
 pub struct Checked {
@@ -239,6 +283,9 @@ pub struct Checked {
     /// checked on its own, and what could not be read is SAID — dropped, it would read
     /// as "up to date".
     pub unreadable: Vec<(String, String)>,
+    /// The apps whose catalog move waits for `hlb upgrade`, with why — see
+    /// [`held_move`]. Each still gets what its own channel allows meanwhile.
+    pub held: Vec<(String, String)>,
 }
 
 /// Queries the registries for every installed app.
@@ -264,7 +311,12 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
         }
 
         let m = state.app_manifest(&app).await?;
-        match candidate(registry, now, at, &app, &m, catalog.get(&app)).await {
+        let mut theirs = catalog.get(&app);
+        if let Some(why) = theirs.and_then(|c| held_move(&m, c)) {
+            out.held.push((app.clone(), why));
+            theirs = None;
+        }
+        match candidate(registry, now, at, &app, &m, theirs).await {
             Ok(Some(c)) => out.candidates.push(c),
             Ok(None) => {}
             Err(e) => out.unreadable.push((app, e.to_string())),
@@ -605,6 +657,35 @@ mod tests {
             digest: digest.map(Into::into),
             built_here: false,
         }
+    }
+
+    fn stalwart(tag: &str, storage: &str) -> Manifest {
+        serde_yaml_ng::from_str(&format!(
+            r#"
+apiVersion: hlb/v1
+kind: PlatformService
+metadata: {{ name: stalwart }}
+spec:
+  image: {{ repo: stalwartlabs/stalwart, tag: "{tag}", digest: "sha256:{tag}" }}
+  requires:
+    - {{ kind: storage, name: {storage}, path: /var/lib/stalwart, tier: local }}
+"#
+        ))
+        .expect("manifest")
+    }
+
+    #[test]
+    fn a_catalog_image_moving_with_new_volumes_waits_for_the_upgrade() {
+        let installed = stalwart("v0.16.27", "data");
+        let why = held_move(&installed, &stalwart("v1.0.0", "data-v1")).expect("held");
+        assert!(why.contains("`hlb upgrade stalwart`"), "{why}");
+        assert!(why.contains("data → data-v1"), "{why}");
+        // The same volumes: an ordinary move. No move at all: nothing held.
+        assert_eq!(held_move(&installed, &stalwart("v0.16.28", "data")), None);
+        assert_eq!(
+            held_move(&installed, &stalwart("v0.16.27", "data-v1")),
+            None
+        );
     }
 
     #[test]

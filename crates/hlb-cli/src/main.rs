@@ -1377,6 +1377,14 @@ enum MailCmd {
     /// What Stalwart's queue still has to deliver, oldest first, with what the last
     /// attempt was told; recorded for the inbox. Exits 1 while one has waited an hour.
     Queue,
+    /// Move an installed Stalwart 0.16.27 to the catalog's 1.0: its store copied by
+    /// `stalwart-migrate` into a new volume while it serves, then stopped for the last
+    /// changes, every account compared, and 1.0 started on the copy. The 0.16 volume is
+    /// kept and never written. Preview by default.
+    Migrate {
+        #[arg(long)]
+        apply: bool,
+    },
     /// Where remote mail leaves through, and whether Stalwart's node reaches port 25 of
     /// the internet at all — most residential lines do not.
     Relay {
@@ -4467,6 +4475,106 @@ fn absolute(p: &std::path::Path) -> String {
         .to_string()
 }
 
+/// Freezes `next` as `app`'s manifest and runs its plan to the end — or puts `frozen`
+/// back. `refused` is what the caller found against the move; the storage and the
+/// routes are checked here, as an install checks them. `verb` names the run in the
+/// journal; `again` is the command that runs it again.
+#[allow(clippy::too_many_arguments)]
+async fn switch_manifest(
+    cli: &Cli,
+    state: &State,
+    app: &str,
+    guide: &hlb_types::Guide,
+    frozen: &hlb_types::Manifest,
+    next: &hlb_types::Manifest,
+    refused: Vec<String>,
+    mail_domain: Option<String>,
+    apply: bool,
+    verb: &str,
+    again: &str,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let storage = hlb_engine::StorageConfig {
+        local_root: cli.storage_root.clone(),
+        nfs_server: cli.nfs_server.clone(),
+        nfs_export: cli.nfs_export.clone(),
+    };
+    // What an install refuses, an upgrade refuses too: a route through an
+    // Anubis nobody installed, another app's volume with that app gone.
+    let ingress = match SwarmOrchestrator::connect().await {
+        Ok(orch) => hlb_engine::ingress::app_blockers(&orch, next).await,
+        Err(_) => Vec::new(),
+    };
+    let blockers: Vec<String> = refused
+        .into_iter()
+        .chain(storage.blockers_for(next))
+        .chain(ingress)
+        .collect();
+    if !blockers.is_empty() {
+        println!();
+        for b in &blockers {
+            eprintln!("🔴 {b}");
+        }
+        eprintln!("   Nothing was changed.");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let domain = state.app_domain(app).await?;
+    // The one named, else the one its install took, else the exposure's.
+    let mail_domain = hlb_engine::install::mail_domain(state, app, mail_domain).await?;
+    let params = InstallParams {
+        domain: domain.clone(),
+        mail_domain,
+        timezone: state.timezone().await?,
+        ..Default::default()
+    };
+    let plan = hlb_resolver::resolve_with_guide(next, guide, &params)?;
+    if !apply {
+        println!("\nWould freeze the catalog's manifest and run its plan again,");
+        println!("updating the running services in place:\n");
+        print!("{plan}");
+        println!("\nRerun with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Frozen, then the whole plan again: its actions keep what exists — a
+    // database, a secret, a volume — and a deployment updates its service
+    // in place rather than being skipped as done.
+    let status = state
+        .installed_apps()
+        .await?
+        .into_iter()
+        .find(|(n, _)| n == app)
+        .map(|(_, st)| st)
+        .unwrap_or_else(|| "running".to_string());
+    state.upsert_app(app, next, domain.as_deref()).await?;
+    state
+        .set_app_mail_domain(app, params.mail_domain.as_deref())
+        .await?;
+    state.reset_plan(app).await?;
+    println!();
+    let run = execute_plan(cli, state, app, &plan, &storage, true, verb).await;
+    // 🔴 The frozen manifest moves with what runs: back when nothing was
+    // redeployed, kept when the new spec was — and the app keeps the status,
+    // so the route, it had.
+    match hlb_engine::upgrade::settle(state, app, frozen, &status, domain.as_deref()).await? {
+        hlb_engine::upgrade::Settled::Finished | hlb_engine::upgrade::Settled::Partial => run,
+        hlb_engine::upgrade::Settled::Reverted => {
+            eprintln!(
+                "\n   The upgrade did not finish: \"{app}\" keeps the manifest it \
+                 had. `{again}` runs it again."
+            );
+            run.map(|_| ExitCode::FAILURE)
+        }
+        hlb_engine::upgrade::Settled::Interrupted => {
+            eprintln!(
+                "\n   The upgrade stopped after redeploying: \"{app}\" runs the new \
+                 manifest, which stays. `{again}` finishes it."
+            );
+            run.map(|_| ExitCode::FAILURE)
+        }
+    }
+}
+
 /// Runs an app's plan with every building block that answers wired in — `install`'s
 /// path, and `upgrade`'s: two copies would drift, and the one used less would be the
 /// one deploying without its database.
@@ -5363,87 +5471,20 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     println!("  its last upgrade stopped before its end — its plan runs again");
                 }
                 let refused = upgrade::refusals(&frozen, &next);
-                let storage = hlb_engine::StorageConfig {
-                    local_root: cli.storage_root.clone(),
-                    nfs_server: cli.nfs_server.clone(),
-                    nfs_export: cli.nfs_export.clone(),
-                };
-                // What an install refuses, an upgrade refuses too: a route through an
-                // Anubis nobody installed, another app's volume with that app gone.
-                let ingress = match SwarmOrchestrator::connect().await {
-                    Ok(orch) => hlb_engine::ingress::app_blockers(&orch, &next).await,
-                    Err(_) => Vec::new(),
-                };
-                let blockers: Vec<String> = refused
-                    .into_iter()
-                    .chain(storage.blockers_for(&next))
-                    .chain(ingress)
-                    .collect();
-                if !blockers.is_empty() {
-                    println!();
-                    for b in &blockers {
-                        eprintln!("🔴 {b}");
-                    }
-                    eprintln!("   Nothing was changed.");
-                    return Ok(ExitCode::FAILURE);
-                }
-
-                let domain = state.app_domain(app).await?;
-                // The one named, else the one its install took, else the exposure's.
-                let mail_domain =
-                    hlb_engine::install::mail_domain(&state, app, mail_domain.clone()).await?;
-                let params = InstallParams {
-                    domain: domain.clone(),
-                    mail_domain,
-                    timezone: state.timezone().await?,
-                    ..Default::default()
-                };
-                let plan = hlb_resolver::resolve_with_guide(&next, &entry.guide, &params)?;
-                if !*apply {
-                    println!("\nWould freeze the catalog's manifest and run its plan again,");
-                    println!("updating the running services in place:\n");
-                    print!("{plan}");
-                    println!("\nRerun with --apply.");
-                    return Ok(ExitCode::SUCCESS);
-                }
-
-                // Frozen, then the whole plan again: its actions keep what exists — a
-                // database, a secret, a volume — and a deployment updates its service
-                // in place rather than being skipped as done.
-                let status = state
-                    .installed_apps()
-                    .await?
-                    .into_iter()
-                    .find(|(n, _)| n == app)
-                    .map(|(_, st)| st)
-                    .unwrap_or_else(|| "running".to_string());
-                state.upsert_app(app, &next, domain.as_deref()).await?;
-                state
-                    .set_app_mail_domain(app, params.mail_domain.as_deref())
-                    .await?;
-                state.reset_plan(app).await?;
-                println!();
-                let run = execute_plan(&cli, &state, app, &plan, &storage, true, "upgrade").await;
-                // 🔴 The frozen manifest moves with what runs: back when nothing was
-                // redeployed, kept when the new spec was — and the app keeps the status,
-                // so the route, it had.
-                match upgrade::settle(&state, app, &frozen, &status, domain.as_deref()).await? {
-                    upgrade::Settled::Finished | upgrade::Settled::Partial => run,
-                    upgrade::Settled::Reverted => {
-                        eprintln!(
-                            "\n   The upgrade did not finish: \"{app}\" keeps the manifest it \
-                             had. `hlb upgrade {app} --apply` runs it again."
-                        );
-                        run.map(|_| ExitCode::FAILURE)
-                    }
-                    upgrade::Settled::Interrupted => {
-                        eprintln!(
-                            "\n   The upgrade stopped after redeploying: \"{app}\" runs the new \
-                             manifest, which stays. `hlb upgrade {app} --apply` finishes it."
-                        );
-                        run.map(|_| ExitCode::FAILURE)
-                    }
-                }
+                switch_manifest(
+                    &cli,
+                    &state,
+                    app,
+                    &entry.guide,
+                    &frozen,
+                    &next,
+                    refused,
+                    mail_domain.clone(),
+                    *apply,
+                    "upgrade",
+                    &format!("hlb upgrade {app} --apply"),
+                )
+                .await
             })
         }
 
@@ -9821,6 +9862,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 for (app, why) in &checked.unreadable {
                     eprintln!("✗ {app}: its registry could not be read — {why}");
                 }
+                // Not an update, and not "up to date" either: what the catalog wants waits.
+                for (app, why) in &checked.held {
+                    println!("⏸ {app}: {why}");
+                }
                 let candidates = checked.candidates;
 
                 match cmd {
@@ -9828,6 +9873,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     UpdateCmd::Scan { .. } => unreachable!(),
                     UpdateCmd::Check => {
                         if candidates.is_empty() && checked.unreadable.is_empty() {
+                            if !checked.held.is_empty() {
+                                return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                            }
                             println!("✓ everything is up to date.");
                             return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                         }

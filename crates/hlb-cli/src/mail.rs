@@ -32,6 +32,7 @@ pub async fn run(cli: &Cli, cmd: &MailCmd) -> Result<ExitCode> {
         MailCmd::Dns { domain } => dns(&state, &mail, domain.as_deref()).await,
         MailCmd::Relay { action } => relay_cmd(cli, &state, &mail, action.as_ref()).await,
         MailCmd::Queue => queue(&state, &mail).await,
+        MailCmd::Migrate { apply } => migrate(cli, &state, *apply).await,
     }
 }
 
@@ -376,4 +377,198 @@ async fn queue(state: &hlb_state::State, mail: &hlb_mail::Stalwart) -> Result<Ex
          closing port 25: `hlb mail relay` tries it, and sends through a provider instead."
     );
     Ok(ExitCode::FAILURE)
+}
+
+/// A whole first copy of a large store takes hours; the final pass only what changed
+/// since, plus a comparison of every account.
+const COPY_TIMEOUT_S: u64 = 6 * 3600;
+const FINAL_TIMEOUT_S: u64 = 6 * 3600;
+
+async fn migrate(cli: &Cli, state: &hlb_state::State, apply: bool) -> Result<ExitCode> {
+    use hlb_engine::stalwart_migrate::{self as sm, Pass};
+    let app = hlb_engine::submission::host();
+    let catalog = hlb_catalog::Catalog::load(&cli.catalog)?;
+    let entry = catalog.get(app)?;
+    let frozen = state.app_manifest(app).await?;
+    let [from, to, progress] = sm::volumes(app);
+    let (was, will) = (&frozen.spec.image, &entry.manifest.spec.image);
+    println!(
+        "Stalwart {}:{} → {}:{}\n",
+        was.repo, was.tag, will.repo, will.tag
+    );
+    let blockers = sm::blockers(&frozen, &entry.manifest);
+    if !blockers.is_empty() {
+        for b in &blockers {
+            eprintln!("🔴 {b}");
+        }
+        eprintln!("   Nothing was changed.");
+        return Ok(ExitCode::FAILURE);
+    }
+    println!(
+        "  1. {from} copied into the new volume {to} while 0.16 serves (progress in {progress})"
+    );
+    println!(
+        "  2. Stalwart stopped — senders keep their mail and retry — the last changes copied,"
+    );
+    println!("     the queue handed over, every account compared");
+    println!("  3. the catalog's manifest frozen: 1.0 on {to}");
+    println!("  {from} is opened read-only and kept: before 1.0 has served anyone, going back is");
+    println!(
+        "  starting 0.16 on it again. Users sign in to OAuth clients again; search is rebuilt."
+    );
+
+    let mut next = hlb_engine::upgrade::next(&frozen, &entry.manifest);
+    next.spec.image = entry.manifest.spec.image.clone();
+    let refused = hlb_engine::upgrade::refusals(&sm::after_copy(&frozen), &next);
+    let again = "hlb mail migrate --apply";
+    if !apply {
+        return crate::switch_manifest(
+            cli,
+            state,
+            app,
+            &entry.guide,
+            &frozen,
+            &next,
+            refused,
+            None,
+            false,
+            "migrate",
+            again,
+        )
+        .await;
+    }
+    if !refused.is_empty() {
+        for r in &refused {
+            eprintln!("🔴 {r}");
+        }
+        eprintln!("   Nothing was changed.");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let orch = SwarmOrchestrator::connect().await?;
+    println!("\n1/3 Copying while 0.16 serves…");
+    if !pass_ok(sm::run(&orch, app, Pass::Copy, COPY_TIMEOUT_S).await?) {
+        eprintln!("   Nothing was changed: 0.16 serves from {from}. `{again}` copies again.");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let replicas = orch.status(app).await?.desired_replicas.max(1);
+    let decided = state.app_replicas(app).await?;
+    println!("2/3 Stopping Stalwart for the last changes…");
+    orch.scale(app, 0).await?;
+    // Kept in the state: in Swarm alone, reconciliation starts it again within a minute,
+    // and the final pass stops on counters that moved.
+    crate::remember_replicas(cli, app, 0).await?;
+    for _ in 0..120 {
+        if orch.status(app).await?.running_replicas == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let restart = || async {
+        state.set_app_replicas(app, decided).await?;
+        orch.scale(app, replicas).await?;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    };
+    if !pass_ok(sm::run(&orch, app, Pass::Final, FINAL_TIMEOUT_S).await?) {
+        restart().await?;
+        eprintln!("   0.16 serves again from {from}, as it was. `{again}` resumes the copy.");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    println!("3/3 Starting 1.0 on {to}…");
+    state.set_app_replicas(app, decided).await?;
+    let run = crate::switch_manifest(
+        cli,
+        state,
+        app,
+        &entry.guide,
+        &frozen,
+        &next,
+        Vec::new(),
+        None,
+        true,
+        "migrate",
+        again,
+    )
+    .await?;
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "mail-migrate",
+            app,
+            if run == ExitCode::SUCCESS {
+                "ok"
+            } else {
+                "failed"
+            },
+            Some(&format!("{from} → {to}")),
+        )
+        .await?;
+    // Put back by the switch, nothing redeployed: 0.16 is still the one to run.
+    if state.app_manifest(app).await?.spec.image == frozen.spec.image {
+        restart().await?;
+        eprintln!("   0.16 serves again from {from}.");
+        return Ok(ExitCode::FAILURE);
+    }
+    // A client of its own: the generation is read once per client.
+    if let (Some(url), Some(user), Some(password)) = (
+        &cli.stalwart_url,
+        &cli.stalwart_admin,
+        &cli.stalwart_password,
+    ) {
+        let fresh = hlb_mail::Stalwart::new(
+            relay::reach(url, &cli.platform_network),
+            hlb_mail::Auth::Basic {
+                user: user.clone(),
+                password: password.clone(),
+            },
+        );
+        match fresh.generation().await {
+            Ok(hlb_mail::Generation::V1) => println!("✓ Stalwart answers as 1.0, from {to}."),
+            Ok(hlb_mail::Generation::V016) => {
+                eprintln!("🔴 Stalwart still answers as 0.16: its service did not switch.");
+                return Ok(ExitCode::FAILURE);
+            }
+            Err(e) => eprintln!("? Stalwart not asked: {e}"),
+        }
+    }
+    println!(
+        "  {from} is kept. Remove it once 1.0 is trusted: `docker volume rm {from}` on its node."
+    );
+    Ok(run)
+}
+
+/// Says how a pass ended; true when it did.
+fn pass_ok(outcome: hlb_engine::stalwart_migrate::Outcome) -> bool {
+    use hlb_engine::stalwart_migrate::Outcome;
+    match outcome {
+        Outcome::Done(lines) => {
+            if let Some(summary) = lines
+                .iter()
+                .rev()
+                .find(|l| l.starts_with("verify:") || l.starts_with("run "))
+            {
+                println!("   {summary}");
+            }
+            true
+        }
+        Outcome::Questions(q) => {
+            eprintln!(
+                "🔴 The store asks what Homelabus does not answer for it — a person decides:"
+            );
+            for line in q {
+                eprintln!("   {line}");
+            }
+            false
+        }
+        Outcome::Failed(lines) => {
+            eprintln!("🔴 The pass failed:");
+            for line in lines.iter().rev().take(15).rev() {
+                eprintln!("   {line}");
+            }
+            false
+        }
+    }
 }

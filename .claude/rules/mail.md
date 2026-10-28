@@ -34,6 +34,23 @@ the first.
   Not in any diff: 1.0 opens an `x:AcmeProvider` with its directory, then refuses to
   store it without a `description` — `validationFailed`, no reason — which 0.16
   computes and refuses given ("Cannot modify server set property").
+- **🔴 `stalwart-migrate` (1.0.3) runs unattended, but not as its README says.** Measured
+  on a fresh 0.16.27 store and on a copy of the lab's, in its image (uid 2000, so the new
+  volume is the server's): `prepare` refuses without a terminal, and `prepare
+  --non-interactive` passes once `answers.toml` answers EVERY question it lists — the
+  file's own "fields left out take the recommended value" is false, each one is "not
+  answered". A store made by Homelabus asks exactly four: `global.categories`,
+  `global.changed_defaults`, `global.new_permissions`, `instance.oauth_registration."x:OidcProvider"`.
+  `run --final --yes` then needs no terminal either (30 s watching the counters is its
+  floor). Both configs may name `/var/lib/stalwart/` — the catalog's line, so 1.0 mounts its
+  new volume where 0.16 had its own — with `--target-path-map /var/lib/stalwart=/var/lib/stalwart-v1`.
+  It does NOT check the source's version: a store from a 0.16 built 2026-10-11 prepared
+  without a word, though only 0.16.27 is supported — whoever runs it checks the digest.
+  Kept: account, mailbox, email and thread ids, passwords, aliases, a group, every
+  settings id (listeners, DKIM, routes, the own resolver); the rename
+  (`concurrency → maxConcurrentRequests`) and dropped `LLM_*` spam tags are in the report.
+  The 0.16 store is opened read-only and restarts as it was: rollback before 1.0 has
+  served anyone is starting 0.16 again.
 - **JMAP `update` REPLACES the whole property.** There is no "add an alias" operation:
   writing a single alias would erase all the others, without raising an error. Hence
   read-modify-write — and two simultaneous updates would lose the first.

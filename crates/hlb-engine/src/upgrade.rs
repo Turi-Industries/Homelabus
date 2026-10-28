@@ -123,6 +123,14 @@ pub fn refusals(frozen: &Manifest, next: &Manifest) -> Vec<String> {
                      then remove and install the app"
                 )),
                 Some(_) => {}
+                // 🔴 Removing and installing Stalwart is losing the house's mail: 1.0
+                // opens a new store, which only its migration fills.
+                None if crate::stalwart_migrate::crossing(frozen, next) => out.push(format!(
+                    "volume \"{name}\" gives way to \"{}\": Stalwart 1.0 cannot open a 0.16 \
+                     store. `hlb mail migrate --apply` copies the mail into the new one, then \
+                     switches — the old volume is kept",
+                    crate::stalwart_migrate::TO_STORAGE
+                )),
                 None => out.push(format!(
                     "volume \"{name}\" is no longer declared: the app would stop using its \
                      data. Remove and install the app once the data is saved elsewhere"
