@@ -196,6 +196,35 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
             ));
         }
     }
+    // 🔴 A secret reaches a container as a file — a Swarm secret, mounted in memory —
+    // never through its environment, which `docker inspect`, the Swarm API and every
+    // process's `/proc/<pid>/environ` show. Reached zero over three changes, counted.
+    // And a file an environment names is one the container mounts: Fluxer's push and
+    // media proxy stop on a `FLUXER_*_FILE` naming a file that is not there.
+    let containers = std::iter::once((String::new(), m.spec.env.clone(), &m.spec.files)).chain(
+        m.spec.companions.iter().map(|c| {
+            (
+                format!("companion {}: ", c.name),
+                c.environment(&m.spec),
+                &c.files,
+            )
+        }),
+    );
+    for (at, env, files) in containers {
+        for (var, value) in &env {
+            if hlb_types::binding::carries_secret(value) {
+                return refuse(format!(
+                    "{at}{var} hands a secret through the environment, which `docker \
+                     inspect` shows — mount it as a `files:` entry and give the app its path"
+                ));
+            }
+            if value.starts_with("/run/secrets/") && !files.iter().any(|f| &f.path == value) {
+                return refuse(format!(
+                    "{at}{var} names {value}, which no `files:` entry mounts there"
+                ));
+            }
+        }
+    }
     // 🔴 A template a guide uses that nothing fills reaches Swarm, which reads `{{ … }}`
     // as its own and refuses the service — LibreSpeed's `{{ base_domain }}` did. A
     // `{{ secret.* }}` there is refused too: the resolver plans no secret for it, and
@@ -505,6 +534,58 @@ mod tests {
         };
         let r = refused(&immich);
         assert!(r.len() == 1 && r[0].contains("expectJson"), "{r:?}");
+    }
+
+    #[test]
+    fn the_catalog_refuses_a_secret_in_an_environment_and_a_file_it_does_not_mount() {
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        let base = c.get("fluxer").expect("fluxer").clone();
+        let refused = |e: &Entry| {
+            Catalog {
+                entries: [("fluxer".to_string(), e.clone())].into(),
+            }
+            .validate_all()
+            .into_iter()
+            .map(|(_, e)| e.to_string())
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(refused(&base), Vec::<String>::new());
+
+        let mut main = base.clone();
+        main.manifest
+            .spec
+            .env
+            .insert("TOKEN".into(), "{{ secret.t:hex }}".into());
+        let r = refused(&main);
+        assert!(r[0].contains("TOKEN hands a secret"), "{r:?}");
+
+        // Through `sharedEnv`, which reaches each companion taking it.
+        let mut shared = base.clone();
+        shared.manifest.spec.shared_env.insert(
+            "FLUXER_S3_SECRET_ACCESS_KEY".into(),
+            "{{ s3.secret_key }}".into(),
+        );
+        let r = refused(&shared);
+        assert!(
+            r[0].contains("companion ") && r[0].contains("FLUXER_S3_SECRET_ACCESS_KEY"),
+            "{r:?}"
+        );
+
+        let mut dangling = base;
+        let push = dangling
+            .manifest
+            .spec
+            .companions
+            .iter_mut()
+            .find(|c| c.name == "push")
+            .expect("push");
+        push.files
+            .retain(|f| f.path != "/run/secrets/vapid-private");
+        let r = refused(&dangling);
+        assert!(
+            r[0].contains("companion push: FLUXER_VAPID_PRIVATE_KEY_FILE names"),
+            "{r:?}"
+        );
     }
 
     #[test]

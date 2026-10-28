@@ -361,7 +361,7 @@ the outside, which is the whole problem.
 
 - **A secret reaches a container as a file, never through its environment** —
   `docker inspect` shows a service's environment to anyone who reads the Swarm
-  (`hlb-catalog/tests/secrets_as_files.rs` counts what is left, held equal). A `files:`
+  (`catalog validate` refuses one, by `hlb_types::binding::carries_secret`). A `files:`
   entry `content: "{{ token }}"` on ONE quoted line: Swarm mounts it 0444, as written.
   🔴 PocketID's `ENCRYPTION_KEY_FILE` and oauth2-proxy's two `_FILE`s keep a final
   newline — one more byte decrypts nothing / a 33-byte cookie secret. 🔴 Garage refuses
@@ -372,7 +372,8 @@ the outside, which is the whole problem.
   exec` — a job, `access.quota.apply` — gets the SERVICE's environment, not the
   process's: it reads the file itself (Seafile's gc and quota). 🔴 Fluxer's push and
   media proxy resolve EVERY `FLUXER_*_FILE` they are given, so each companion names
-  only the files it mounts (`a_secret_file_named_in_an_environment_is_mounted`).
+  only the files it mounts — and `catalog validate` refuses a `/run/secrets` path named
+  in an environment that the container does not mount.
   LiveKit takes its whole configuration as a file (`--config`), never `key_file`,
   refused when readable by all; Meilisearch a TOML holding `master_key` alone
   (`MEILI_CONFIG_FILE_PATH`), its variables winning over the rest.
