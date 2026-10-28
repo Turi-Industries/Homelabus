@@ -59,8 +59,17 @@ unpinned=$(grep -rhE '^\s*-?\s*uses:' .github/workflows | grep -vcE '@[0-9a-f]{4
 row "3 never stolen" "CI actions not pinned by commit" "$unpinned" "0"
 ignored=$(grep -cE '"RUSTSEC-' .cargo/audit.toml 2>/dev/null || echo 0)
 row "3 never stolen" "advisories ignored by \`cargo audit\`" "$ignored (each with its reason)" "only with a reason that holds"
-row "3 never stolen" "releases signed, with a verifiable provenance" "UNMEASURED — no release carries a signature" "every artifact"
-row "3 never stolen" "catalog variables handing a container a secret through its environment" "UNMEASURED — probe: walk every manifest's \`env\` with \`Token::is_secret\` (counted by hand 2026-10-27: 51, and 9 through \`_FILE\`)" "0: \`docker inspect\` shows no secret"
+# The signature's own file, beside the release's: what `install.sh` checks first.
+if [[ $binary == *SHA256SUMS.sigstore.json* ]]; then
+    signed="$tag: \`SHA256SUMS\` signed by cosign"
+else
+    signed="${tag:-no tag}: no signature published"
+fi
+row "3 never stolen" "releases signed, with a verifiable provenance" "$signed" "every artifact"
+# The count `hlb-catalog/tests/secrets_as_files.rs` holds equal to the catalog's, by
+# `hlb_types::binding::carries_secret` — read from it rather than run, in milliseconds.
+in_env=$(grep -oE 'STILL_IN_AN_ENVIRONMENT: usize = [0-9]+' crates/hlb-catalog/tests/secrets_as_files.rs | grep -oE '[0-9]+$')
+row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
 row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted, the vault key a plain file)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
