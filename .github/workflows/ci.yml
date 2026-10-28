@@ -69,8 +69,13 @@ jobs:
       - run: bun install --frozen-lockfile
       # Against the lockfile, the advisories of the day: a dependency nobody changed can
       # become known-vulnerable between two pushes.
+      # An advisory is ignored only with why it does not reach Homelabus, and comes back
+      # the day that changes. GHSA-gcqx-w48m-w2h4, deepmerge's prototype poisoning: no
+      # fixed version exists (4.3.1 is its last, 2023). Only `vite-plugin-svelte` takes
+      # it, at build time, to merge this repository's own Svelte config — nothing in
+      # `build/` carries it. Revisit when the plugin drops it or a fix is released.
       - name: bun audit
-        run: bun audit
+        run: bun audit --ignore=GHSA-gcqx-w48m-w2h4
       - name: bun run check
         run: bun run check
       - name: bun run test
