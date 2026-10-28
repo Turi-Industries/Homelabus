@@ -239,6 +239,20 @@ impl SecretForm {
         Self::Rsa,
     ];
 
+    /// A public key, handed out on purpose: Web Push gives it to every browser.
+    pub fn is_public(self) -> bool {
+        match self {
+            Self::VapidPublic => true,
+            Self::Plain
+            | Self::Hex
+            | Self::Bcrypt
+            | Self::Base64url
+            | Self::Base64
+            | Self::VapidPrivate
+            | Self::Rsa => false,
+        }
+    }
+
     pub fn suffix(self) -> &'static str {
         match self {
             Self::Plain => "",
@@ -367,6 +381,24 @@ pub fn generated_secrets(value: &str) -> Vec<Result<GeneratedSecret, String>> {
     out
 }
 
+/// The S3 secret key, a token outside [`Token`] as the bucket's are.
+pub const S3_SECRET_KEY: &str = "{{ s3.secret_key }}";
+
+/// Does this value hand the service something that must never be seen — a secret
+/// token, a generated secret in any but its public form, or the S3 secret key?
+///
+/// 🔴 [`Token::is_secret`] alone misses most of them: of the catalog's secrets in an
+/// environment on 2026-10-28, 41 of 62 were generated (`{{ secret.x }}`) and one an S3
+/// key, both outside `Token`.
+pub fn carries_secret(value: &str) -> bool {
+    tokens_in(value).iter().any(Token::is_secret)
+        || value.contains(S3_SECRET_KEY)
+        || generated_secrets(value)
+            .iter()
+            .flatten()
+            .any(|g| !g.form.is_public())
+}
+
 /// The tokens present in a value.
 pub fn tokens_in(value: &str) -> Vec<Token> {
     Token::all()
@@ -493,6 +525,34 @@ mod tests {
         );
         for f in found.into_iter().flatten() {
             assert!(generated_secrets(&f.placeholder())[0] == Ok(f.clone()));
+        }
+    }
+
+    #[test]
+    fn every_kind_of_secret_is_told_from_a_coordinate() {
+        for secret in [
+            "{{ db.password }}",
+            "postgres://u:{{ db.password }}@h",
+            "{{ db.url }}",
+            "{{ oidc.client_secret }}",
+            "{{ smtp.password }}",
+            "{{ s3.secret_key }}",
+            "{{ secret.x }}",
+            "u:{{ secret.x:bcrypt }}",
+            "{{ secret.x:vapid-private }}",
+            "{{ secret.x:rsa }}",
+        ] {
+            assert!(carries_secret(secret), "{secret}");
+        }
+        for coordinate in [
+            "{{ db.host }}",
+            "{{ oidc.client_id }}",
+            "{{ s3.access_key }}",
+            "{{ secret.x:vapid-public }}",
+            "{{ companion.api.host }}",
+            "plain",
+        ] {
+            assert!(!carries_secret(coordinate), "{coordinate}");
         }
     }
 

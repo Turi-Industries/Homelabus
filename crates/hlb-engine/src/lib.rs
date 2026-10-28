@@ -950,7 +950,7 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                             s3.insert("{{ s3.access_key }}".to_string(), id);
                         }
                         if let Some(k) = self.read_secret(&format!("{app}-s3-secret")).await? {
-                            s3.insert("{{ s3.secret_key }}".to_string(), k);
+                            s3.insert(hlb_types::binding::S3_SECRET_KEY.to_string(), k);
                         }
                     }
 
