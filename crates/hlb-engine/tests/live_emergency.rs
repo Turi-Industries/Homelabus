@@ -166,14 +166,31 @@ async fn register(email: &str, password: &str) {
     let master = MasterKey::derive(password, email, KDF).expect("master key");
     let key = SymmetricKey::generate();
     let pair = KeyPair::generate().expect("pair");
-    let resp = reqwest::Client::new()
-        .post(format!("{}/identity/accounts/register", base()))
+    let http = reqwest::Client::new();
+    // 🔴 Two steps since 1.37.4, which answers 404 on the one-step `register`: without
+    // mail configured, the first hands back the token the mail would have carried, as
+    // bare text.
+    let verification: String = http
+        .post(format!(
+            "{}/identity/accounts/register/send-verification-email",
+            base()
+        ))
+        .json(&json!({ "email": email, "name": email }))
+        .send()
+        .await
+        .expect("verification")
+        .text()
+        .await
+        .expect("a token");
+    let resp = http
+        .post(format!("{}/identity/accounts/register/finish", base()))
         .json(&json!({
-            "email": email, "name": email, "masterPasswordHash": master.password_hash(password),
+            "email": email, "name": email, "emailVerificationToken": verification,
+            "masterPasswordHash": master.password_hash(password),
             "masterPasswordHint": null,
-            "key": master.stretch().expect("stretched").encrypt(&key.to_bytes()),
+            "userSymmetricKey": master.stretch().expect("stretched").encrypt(&key.to_bytes()),
             "kdf": 0, "kdfIterations": 600000,
-            "keys": { "publicKey": pair.public().expect("public"),
+            "userAsymmetricKeys": { "publicKey": pair.public().expect("public"),
                       "encryptedPrivateKey": pair.wrap(&key).expect("wrapped") },
         }))
         .send()

@@ -63,7 +63,7 @@ async fn owner_token(http: &reqwest::Client) -> String {
     v["access_token"].as_str().expect("token").to_string()
 }
 
-/// The members' addresses and whether each carries an external id.
+/// The members' addresses, sorted, and whether each carries an external id.
 async fn members(http: &reqwest::Client, token: &str, org: &str) -> Vec<(String, bool)> {
     let v: serde_json::Value = http
         .get(format!("{}/api/organizations/{org}/users", base()))
@@ -164,12 +164,28 @@ async fn the_roles_people_are_invited_and_removed_and_hand_added_ones_kept() {
     }
 
     // The owner, and their organisation, as an owner's client makes them.
+    // 🔴 Two steps since 1.37.4, which answers 404 on the one-step `register`: without
+    // mail configured, the first hands back the token the mail would have carried, as
+    // bare text.
+    let verification: String = http
+        .post(format!(
+            "{}/identity/accounts/register/send-verification-email",
+            base()
+        ))
+        .json(&serde_json::json!({ "email": OWNER, "name": "Owner" }))
+        .send()
+        .await
+        .expect("verification")
+        .text()
+        .await
+        .expect("a token");
     let registered = http
-        .post(format!("{}/identity/accounts/register", base()))
+        .post(format!("{}/identity/accounts/register/finish", base()))
         .json(&serde_json::json!({
-            "email": OWNER, "name": "Owner", "masterPasswordHash": HASH,
-            "masterPasswordHint": null, "key": OPAQUE, "kdf": 0, "kdfIterations": 600000,
-            "keys": { "publicKey": "pub", "encryptedPrivateKey": OPAQUE },
+            "email": OWNER, "name": "Owner", "emailVerificationToken": verification,
+            "masterPasswordHash": HASH, "masterPasswordHint": null,
+            "userSymmetricKey": OPAQUE, "kdf": 0, "kdfIterations": 600000,
+            "userAsymmetricKeys": { "publicKey": "pub", "encryptedPrivateKey": OPAQUE },
         }))
         .send()
         .await
@@ -242,8 +258,8 @@ async fn the_roles_people_are_invited_and_removed_and_hand_added_ones_kept() {
     assert_eq!(
         members(&http, &token, &org).await,
         [
-            ("owner@example.org".to_string(), false),
             ("lena@example.org".to_string(), true),
+            ("owner@example.org".to_string(), false),
             ("sacha@example.org".to_string(), true),
         ],
         "both invited, the owner untouched"
@@ -266,8 +282,8 @@ async fn the_roles_people_are_invited_and_removed_and_hand_added_ones_kept() {
     assert_eq!(
         members(&http, &token, &org).await,
         [
-            ("owner@example.org".to_string(), false),
             ("lena@example.org".to_string(), true),
+            ("owner@example.org".to_string(), false),
         ]
     );
     dir.import(&[member("lena")], &[group("family", &["lena"])])

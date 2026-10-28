@@ -418,14 +418,16 @@ fn a_forged_vaultwarden_config_opens_nothing() {
         admin.contains("disabled"),
         "the admin page opened on the volume's token"
     );
-    // 1.37.3 answered 200 with the forged file read.
+    // A sign-up's first step: 200 and its token when sign-ups are open, 400 closed.
+    // 🔴 1.37.4 dropped the one-step `/identity/accounts/register` — a 404 there proves
+    // nothing, and this test waited on it in vain.
     assert_eq!(
         status(&[
             "-H",
             "Content-Type: application/json",
             "-d",
-            r#"{"email":"a@b.test","name":"a","masterPasswordHash":"x","key":"2.a|b|c","kdf":0,"kdfIterations":600000}"#,
-            &format!("{base}/identity/accounts/register"),
+            r#"{"email":"a@b.test","name":"a"}"#,
+            &format!("{base}/identity/accounts/register/send-verification-email"),
         ]),
         400,
         "a sign-up passed"
