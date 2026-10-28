@@ -357,7 +357,7 @@ the outside, which is the whole problem.
   screen and closes nothing: the token was still "unused" after the role sync had made
   an administrator (the lab). The api's configuration sets `app_public.setup.configured`,
   which claims the bootstrap and burns the token, and its own token is the vault's
-  (`FLUXER_SETUP_TOKEN`), so none is ever written to a log Homelabus shows.
+  (`FLUXER_SETUP_TOKEN_FILE`), so none is ever written to a log Homelabus shows.
 
 - **A secret reaches a container as a file, never through its environment** —
   `docker inspect` shows a service's environment to anyone who reads the Swarm
@@ -370,7 +370,12 @@ the outside, which is the whole problem.
   reading its environment only (Stalwart, Termix, Bulwark's admin, Seafile) is started
   by `sh -c 'X=$(cat /run/secrets/x) exec <its Entrypoint and Cmd>'`. ⚠️ A `docker
   exec` — a job, `access.quota.apply` — gets the SERVICE's environment, not the
-  process's: it reads the file itself (Seafile's gc and quota).
+  process's: it reads the file itself (Seafile's gc and quota). 🔴 Fluxer's push and
+  media proxy resolve EVERY `FLUXER_*_FILE` they are given, so each companion names
+  only the files it mounts (`a_secret_file_named_in_an_environment_is_mounted`).
+  LiveKit takes its whole configuration as a file (`--config`), never `key_file`,
+  refused when readable by all; Meilisearch a TOML holding `master_key` alone
+  (`MEILI_CONFIG_FILE_PATH`), its variables winning over the rest.
 
 ## Invariants, encoded in tests
 

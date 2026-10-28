@@ -756,10 +756,11 @@ mod tests {
             v["media"]["attachment_decay"]["enabled"], false,
             "nothing a household sends disappears by itself"
         );
-        assert!(api
+        let token = api
             .env
-            .get("FLUXER_SETUP_TOKEN")
-            .is_some_and(|t| t.starts_with("{{ secret.")));
+            .get("FLUXER_SETUP_TOKEN_FILE")
+            .expect("the setup token, as a file");
+        assert!(file(token).starts_with("{{ secret."));
     }
 
     #[test]
