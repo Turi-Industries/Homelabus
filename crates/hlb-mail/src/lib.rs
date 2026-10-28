@@ -1533,6 +1533,11 @@ impl Stalwart {
         self.tasks(domain_id, "DnsManagement").await
     }
 
+    /// The key tasks of a domain: making its first keys, then each rotation.
+    pub async fn dkim_tasks(&self, domain_id: &str) -> Result<Vec<DnsTask>> {
+        self.tasks(domain_id, "DkimManagement").await
+    }
+
     /// The certificate requests of a domain, the latest first: one `Pending` until its
     /// next renewal once a certificate is issued, `Retry` with why while it fails.
     pub async fn acme_tasks(&self, domain_id: &str) -> Result<Vec<DnsTask>> {

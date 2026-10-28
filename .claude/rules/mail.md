@@ -43,7 +43,7 @@ the first.
   lives in its database. Its data goes in `/var/lib/stalwart` (owned by its user), and
   it needs `NET_BIND_SERVICE` back: the binary carries that file capability, and with
   every capability dropped the kernel refuses to execute it.
-- **🔴 A fresh Stalwart sends nobody's mail.** 0.16.26 listens on 25, 465, 993, 995,
+- **🔴 A fresh Stalwart sends nobody's mail.** 0.16.26 to 1.0.0 listen on 25, 465, 993, 995,
   4190, 443 and 8080 — not 587, which every app was handed. A listener added over JMAP
   (`x:NetworkListener/set`) is stored at once and BOUND AT THE NEXT RESTART only:
   `ReloadSettings` does not bind it. A certificate (`x:Certificate/set`) is served by
@@ -65,7 +65,8 @@ the first.
   could sign in. `ssl://` on 993, `tls://` on 587.
 - **Registry lists are MAPS keyed by index.** `credentials` and `aliases` are
   `{"0": {…}}`: an array is refused with `invalidPatch` under HTTP 200, and an array
-  READ finds nothing — the next write then erases every alias. Checked on 0.16.26.
+  READ finds nothing — the next write then erases every alias. Checked on 0.16.26 and
+  1.0.0.
 - **`SieveScript/*` needs `urn:ietf:params:jmap:sieve` in `using`**, or it is an
   `unknownMethod`. And a fresh server hosts no domain: `ensure_account` creates it.
 - **A Sieve script does not travel in the JMAP call.** `SieveScript` only carries a
@@ -141,7 +142,7 @@ the first.
   `domain` and `description`. The destination therefore lives on the TOKEN — one token
   per mailbox — and a token pointing at a vanished mailbox FAILS rather than falling
   back to the default: the user would believe their aliases are filed where they are not.
-- **🔴 Stalwart bans an address FOR EVER after 100 failed sign-ins a day** (0.16.26:
+- **🔴 Stalwart bans an address FOR EVER after 100 failed sign-ins a day** (0.16.26 to 1.0.0:
   `x:Security` `authBanRate`, `authBanPeriod: null`), and the right password is refused
   after. A webmail signs in for every person from its container's one address: a
   hundred wrong guesses through Roundcube shut the whole household out of it.
@@ -155,9 +156,10 @@ the first.
   read by the administrators' mailboxes. Membership is `memberGroupIds/<id>` patched
   alone — a rewrite of the map would drop groups Homelabus did not make.
 - **Stalwart closes an idle HTTP connection.** A pooled one reused a minute later failed
-  `IncompleteMessage`: the client keeps one five seconds at most.
-- **🔴 Stalwart says its container's name until it is given one.** 0.16.26's
-  `defaultHostname` is empty, so the banner, `EHLO` and every MX and SRV record of
+  `IncompleteMessage`: the client keeps one five seconds at most. Reused after 30 s,
+  closed by 65 s — 0.16.27 and 1.0.0 alike.
+- **🔴 Stalwart says its container's name until it is given one.** 0.16.26 to 1.0.0
+  leave `defaultHostname` empty, so the banner, `EHLO` and every MX and SRV record of
   `Domain.dnsZoneFile` read the task's id (`220 7f3a9c0e21b4`) — what a receiver checks
   against reverse DNS. `submission::name_server` writes its route's host, with the mail
   domain as `defaultDomainId`: the singleton is validated WHOLE, and a fresh one's
@@ -172,23 +174,30 @@ the first.
   NONE for a receiver (RFC 7208, 7489): judged `differs`, and `hlb mail dns` says to
   merge, never to add. Tried on `example.org` itself: its revoked wildcard DKIM
   (`p=`) and its null MX (`0 .`) both read `differs`.
-- **🔴 Stalwart publishes DKIM through a provider, and three ways it fails without a word**
-  (0.16.26, `hlb_engine::mail_dns`, tried on a real BIND over RFC 2136). A domain
+- **🔴 Stalwart publishes DKIM through a provider, and four ways it fails without a word**
+  (0.16.26 to 1.0.0, `hlb_engine::mail_dns`, tried on a real BIND over RFC 2136). A domain
   switched to `dnsManagement: Automatic` with `publishRecords: {"dkim": true}` publishes
   the keys already active and rotates them every 90 days — but: (1) a publishing task
   that fails is FAILED for good, never retried, so a key the night reads missing is
   asked for again (`publish_again`, a `DnsManagement` task made by hand) — 1.0 retries
   it itself, for ever (`Retry`, then `Stalled` after `x:TaskManager.alertAfter` = 5
-  attempts, backoff 1 min doubling to 6 h), so a task not `Failed` is left to it; (2) over UDP
-  the RSA key's signed update, past 512 bytes, never reaches the server and the task
-  counts as done; (3) at the switch the publishing races the rotation's scheduling,
-  which rewrites each key — one read mid-rewrite is skipped, the RSA key one switch in
-  two. `switch` waits until every active key has its `nextTransitionAt`, then asks
-  again. A `DnsServer` is accepted offline and its secret reads back `****`: Homelabus
+  attempts, backoff 1 min doubling to 6 h), so a task not `Failed` is left to it. A key
+  missing says why beside it — the task's reason, a refused credential (`read`); (2) over UDP
+  the RSA key's signed update, past 512 bytes, never reached the server and the task
+  counted as done (0.16.26; asked again, it reached BIND 9.20 on 0.16.27 and 1.0.0 —
+  Homelabus's own `Tsig` says `tcp` all the same); (3) at the switch the publishing
+  races the rotation's scheduling, which rewrites each key — one read mid-rewrite is
+  skipped, the RSA key one switch in two, six in six switched as the domain is made
+  (0.16.27 and 1.0.0). `switch` waits until every active key has its
+  `nextTransitionAt`, then asks again; (4) 1.0 switched while the domain's first keys
+  are being made — its `DkimManagement` task still pending — schedules NO rotation,
+  ever: no task left, no `nextTransitionAt` (0.16 schedules it either way). `switch`
+  waits for that task first, and `live_mail` holds the dates on both. A `DnsServer` is accepted offline and its secret reads back `****`: Homelabus
   marks its own by description, `Homelabus: <provider> <fingerprint>`. DuckDNS keeps one
   TXT a name, the certificate challenge's: refused. With DNS published by hand, Stalwart
   never rotates a key at all.
-- **🔴 Stalwart's defaults hand a relay's password to whoever is in the way** (0.16.26).
+- **🔴 Stalwart's defaults hand a relay's password to whoever is in the way** (0.16.26;
+  the same `default` and `invalid-tls` strategies on 1.0.0).
   The `default` TLS strategy takes STARTTLS when offered (`startTls: optional`) — a
   Mailpit offering none got the AUTH in the clear — and the outbound strategy retries a
   TLS error with `invalid-tls`, which accepts any certificate. `hlb_engine::mail_relay`
@@ -201,7 +210,8 @@ the first.
   recipients are at `example.net`, whose null MX sends nothing anywhere. Stalwart
   verifies through the system's roots (`rustls-platform-verifier`): `SSL_CERT_FILE`
   hands it a test root.
-- **🔴 A message Stalwart cannot hand over says nothing for three days** (0.16.26): retried
+- **🔴 A message Stalwart cannot hand over says nothing for three days** (0.16.26; the same
+  schedules on 1.0.0): retried
   (the first time 2 min after), its sender told after a day (`nextNotify`), bounced at three
   (`expires.expiresAt`, a TTL) — and port 25 closed by the line makes EVERY remote
   message do it. `x:QueuedMessage/get` reads the queue: recipients are a map keyed by
@@ -214,7 +224,7 @@ the first.
   the hour in the inbox by its domain and notifies it once, when it goes late.
 - **🔴 People's clients met Stalwart's own certificate on 465 and 993** (`CN=rcgen self
   signed cert`; Homelabus's was the overlay name's, for the apps). Stalwart picks one by
-  SNI — and of two naming the same name serves the one ending LAST (0.16.26, measured): a
+  SNI — and of two naming the same name serves the one ending LAST, whichever came first (0.16.26 to 1.0.0, measured): a
   ten-year leaf under Homelabus's root beside a 90-day ACME one hides every renewal.
   `hlb_engine::mail_tls` keeps the id of the leaf it gives (`mail-public-certificate`)
   and takes it back once ACME's is there. Stalwart's own ACME: `x:AcmeProvider` opens
@@ -229,14 +239,15 @@ the first.
   answering, then answers anyway. A private ACME root goes in through `trust::mount`
   (`SSL_CERT_DIR`, added to the image's): `SSL_CERT_FILE` REPLACES the system's roots,
   and Stalwart's spam-rule download from GitHub failed under it.
-- **🔴 Stalwart's traces went nowhere.** 0.16.26's one tracer is a `Log` writing to
+- **🔴 Stalwart's traces went nowhere.** 0.16.26 to 1.0.0 have one tracer, a `Log` writing to
   `/var/log/stalwart`, a directory the image does not have: the writer is never built and
   every event is dropped — `docker logs` empty, an ACME or delivery failure said nowhere.
   `submission::trace` adds a `Stdout` tracer (`x:Tracer/set`, effective at
   `ReloadSettings`, no restart) at install and every night; events go to stderr, which
   `docker service logs` reads. The queue and the tasks (`x:QueuedMessage`, `x:Task`) still
   say what failed, which is what Homelabus reads. A failed ACME order is RETRIED by
-  Stalwart (`x:Task` status `Retry`, `attemptNumber`), unlike a DKIM publication.
+  Stalwart (`x:Task` status `Retry`, `attemptNumber`), unlike a DKIM publication on 0.16
+  — 1.0 retries both.
 - **🔴 A trial verifies with what Stalwart verifies.** The relay's trial checked the
   relay's certificate against curl's public roots; Stalwart, under a private ACME
   authority, also trusts that authority's root (`trust::mount`) — a relay under it was
@@ -246,7 +257,7 @@ the first.
 - **🔴 A blocklist behind a public resolver checks nothing, and says so only in a tag.**
   Spamhaus answers 1.1.1.1 or 9.9.9.9 `127.255.255.254` (`127.255.255.255` when asked
   too much); URIBL, SURBL, DNSWL and SenderScore have their own refusal codes. Stalwart
-  0.16.26 tags it (`RBL_SPAMHAUS_BLOCKED_OPENRESOLVER`, `DBL_BLOCKED_OPENRESOLVER`,
+  0.16.26 to 1.0.0 tag it (`RBL_SPAMHAUS_BLOCKED_OPENRESOLVER`, `DBL_BLOCKED_OPENRESOLVER`,
   `URIBL_BLOCKED`, `DNSWL_BLOCKED`…, from the rules it downloads at start — empty for
   the first seconds) and scores it ZERO: every message passes. Its resolver is the
   system's, the node's. Through a router forwarding to an ISP, Spamhaus answered and
@@ -282,9 +293,11 @@ the first.
   which has no sender. Judged with the domain's, the relay's term never added to it —
   Stalwart only ever greets the relay.
 - **🔴 An ACME directory may refuse a nonce, and Stalwart does not ask again.** RFC 8555
-  has a client retry `badNonce`; Stalwart 0.16.26 opens an `x:AcmeProvider` at
-  creation and fails it whole — `mail_tls` asks three times. An order inside its task
-  is retried after 32, 64 and 128 s, the task "Pending" meanwhile. Pebble refuses 5 %
+  has a client retry `badNonce`; Stalwart opens an `x:AcmeProvider` at creation and
+  fails it whole (0.16.26 to 1.0.0: 5 and 3 in 10 at half the nonces refused) —
+  `mail_tls` asks three times. 0.16 retries an order INSIDE its task after 32, 64 and
+  128 s, the task "Pending" meanwhile; 1.0 has no `maxRetries`: the task goes `Retry`
+  at once and is retried whole, `x:TaskManager`'s backoff (about 1, 2, 4 min…). Pebble refuses 5 %
   of nonces ON PURPOSE (`PEBBLE_WFE_NONCEREJECT`): an order failed four times in ten,
   and the DNS-01 test lost its certificate past its wait — 0 % in the tests now, 76 s
   every run. An unverified directory and an unreachable one read alike, "error sending

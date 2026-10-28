@@ -2,7 +2,7 @@
 //! zones Stalwart computed — the same pass for `hlb mail dns` and the controller's night.
 
 use async_trait::async_trait;
-use hlb_api::mail_dns::{self, MailRecord, Purpose};
+use hlb_api::mail_dns::{self, MailRecord, Purpose, RecordState};
 
 /// Where records are resolved. A trait so the judging is tried without the internet.
 #[async_trait]
@@ -84,7 +84,18 @@ pub async fn read(
         refused_blocklists: mail.refused_blocklists().await.map_err(|e| e.to_string()),
         ..Reading::default()
     };
+    // Read only to say why a key is missing: a reading never fails for it.
+    let publishing = mail.domains_dns().await.unwrap_or_default();
     for (domain, zone) in mail.zones().await? {
+        // 🔴 The resolver says only "missing"; why is in Stalwart's task — a refused
+        // credential, `Failed` on 0.16, retried for ever on 1.0 (`Retry`, `Stalled`).
+        let failure = match publishing
+            .iter()
+            .find(|d| d.name == domain && d.published_by.is_some())
+        {
+            Some(d) => publishing_failure(&mail.dns_tasks(&d.id).await.unwrap_or_default()),
+            None => None,
+        };
         let zone = mail_dns::parse_zone(&zone);
         let needed = mail_dns::needed(&domain, &zone);
         for r in &zone {
@@ -105,7 +116,12 @@ pub async fn read(
                     Purpose::Mx => found,
                     _ => found.iter().map(|d| mail_dns::txt_value(d)).collect(),
                 });
-            let (state, observed) = mail_dns::judge(purpose, &expected, &answer);
+            let (state, mut observed) = mail_dns::judge(purpose, &expected, &answer);
+            if let (Purpose::Dkim, RecordState::Missing | RecordState::Differs, Some(why)) =
+                (purpose, state, &failure)
+            {
+                observed = format!("{observed} — {why}");
+            }
             out.records.push(MailRecord {
                 domain: domain.clone(),
                 name: expected.name,
@@ -118,6 +134,24 @@ pub async fn read(
         }
     }
     Ok(out)
+}
+
+/// Why Stalwart's publishing did not land, from its latest task that says: a task done
+/// is removed, so what is left is pending or has failed.
+fn publishing_failure(tasks: &[hlb_mail::DnsTask]) -> Option<String> {
+    let task = tasks.iter().find(|t| t.failure.is_some())?;
+    // One failure per record, joined, each with the provider's whole answer: the first
+    // says it, and a notification line stays readable.
+    let all = task.failure.as_deref()?;
+    let first = all.split("; ").next().unwrap_or(all);
+    let mut why: String = first.chars().take(300).collect();
+    if why.len() < first.len() {
+        why.push('…');
+    }
+    Some(match task.state.as_str() {
+        "Failed" => format!("Stalwart's publishing failed: {why}"),
+        _ => format!("Stalwart retries its publishing: {why}"),
+    })
 }
 
 /// What each judged record must hold: Stalwart's line, the relay's term added to the
@@ -213,16 +247,32 @@ pub fn stalwart_dns_server(
 /// 🔴 Switched on, Stalwart publishes and schedules the rotation in two tasks at once,
 /// and the rotation rewrites each key while the publishing reads them: a key read
 /// mid-rewrite is skipped without a word (0.16.26 — the RSA key, one switch in two on a
-/// real RFC 2136 server). So once every active key carries its next rotation, the
-/// publishing is asked for again, alone.
+/// real RFC 2136 server; six in six on 0.16.27 and 1.0.0 switched as the domain is
+/// made). So once every active key carries its next rotation, the publishing is asked
+/// for again, alone.
 pub async fn switch(
     mail: &hlb_mail::Stalwart,
     domain_id: &str,
     server: &str,
     records: &[String],
 ) -> crate::Result<()> {
+    let dkim = records.iter().any(|r| r == "dkim");
+    // 🔴 Switched while its first keys are being made — its `DkimManagement` task still
+    // pending — 1.0 schedules no rotation, ever, and says nothing (0.16 does). Waited
+    // until they are: no task left, or keys already rotated by schedule.
+    for _ in 0..if dkim { 30 } else { 0 } {
+        let keys = mail.dkim_keys(domain_id).await?;
+        let scheduled = keys
+            .iter()
+            .filter(|k| k.stage == "active")
+            .all(|k| k.next_transition.is_some());
+        if !keys.is_empty() && (scheduled || mail.dkim_tasks(domain_id).await?.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
     mail.publish_through(domain_id, server, records).await?;
-    if !records.iter().any(|r| r == "dkim") {
+    if !dkim {
         return Ok(());
     }
     for _ in 0..30 {
@@ -403,6 +453,35 @@ pub async fn publish_dkim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_missing_says_why_stalwart_did_not_publish_it() {
+        let task = |state: &str, failure: Option<&str>| hlb_mail::DnsTask {
+            id: state.into(),
+            state: state.into(),
+            created_at: String::new(),
+            failure: failure.map(str::to_string),
+        };
+        assert_eq!(publishing_failure(&[]), None);
+        assert_eq!(publishing_failure(&[task("Pending", None)]), None);
+        assert_eq!(
+            publishing_failure(&[task("Failed", Some("401 invalid token"))]).as_deref(),
+            Some("Stalwart's publishing failed: 401 invalid token"),
+            "0.16"
+        );
+        assert_eq!(
+            publishing_failure(&[
+                task("Pending", None),
+                task("Stalled", Some("401 invalid token"))
+            ])
+            .as_deref(),
+            Some("Stalwart retries its publishing: 401 invalid token"),
+            "1.0: the latest task that says"
+        );
+        let long = format!("{}; the next key, refused alike", "x".repeat(400));
+        let said = publishing_failure(&[task("Retry", Some(&long))]).expect("said");
+        assert!(said.ends_with('…') && !said.contains("next key"), "{said}");
+    }
 
     #[test]
     fn a_relays_term_goes_before_all_once() {

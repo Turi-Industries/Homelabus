@@ -691,6 +691,17 @@ async fn stalwart_publishes_its_active_keys_through_a_provider_and_again_when_as
         s.dns_tasks(&domain).await
     );
     println!("✓ both active keys published at the switch: {published:?}");
+    // Switched the moment the domain exists, as here: 1.0 scheduled no rotation at all.
+    let keys = s.dkim_keys(&domain).await.expect("keys");
+    assert!(
+        !keys.is_empty()
+            && keys
+                .iter()
+                .filter(|k| k.stage == "active")
+                .all(|k| k.next_transition.is_some()),
+        "every active key's rotation scheduled: {keys:?}"
+    );
+    println!("✓ and their rotation scheduled: {keys:?}");
 
     // Gone from the zone — a provider's failure, a person's mistake: asked again, back.
     let (gone, _) = &published[0];
@@ -933,7 +944,40 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
             assert_eq!(tasks.len(), before.len(), "no second task: {tasks:?}");
         }
     }
-    println!("✓ through the exposure's provider, once; its credential followed; retried");
+
+    // The reading says why the key is missing: Cloudflare's refusal, as Stalwart's
+    // task holds it — on 0.16 once the task asked again has failed in its turn.
+    struct Nowhere;
+    #[async_trait::async_trait]
+    impl hlb_engine::mail_dns::Lookup for Nowhere {
+        async fn lookup(&self, _: &str, _: &str) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+    }
+    let mut said = Vec::new();
+    for _ in 0..30 {
+        said = hlb_engine::mail_dns::read(&s, &Nowhere, None, &[], 1)
+            .await
+            .expect("read")
+            .records
+            .into_iter()
+            .filter(|r| r.domain == "example.org" && r.purpose == Purpose::Dkim)
+            .map(|r| r.observed)
+            .collect();
+        if !said.is_empty() && said.iter().all(|o| o.contains("Stalwart")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let why = match generation {
+        Generation::V016 => "Stalwart's publishing failed: ",
+        Generation::V1 => "Stalwart retries its publishing: ",
+    };
+    assert!(
+        !said.is_empty() && said.iter().all(|o| o.contains(why)),
+        "the reason beside the missing key: {said:?}"
+    );
+    println!("✓ through the exposure's provider, once; its credential followed; retried; said why: {said:?}");
     stop();
 }
 
