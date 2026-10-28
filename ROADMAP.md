@@ -103,6 +103,17 @@ exported — Homelabus never bills.
 - **Still ruled out**: automatic database failover, automatic major updates, `hlb`
   updating itself unattended.
 
+#### Decided by the owner, 2026-10-28
+
+- **Nodes move to Debian 13.** Verified boot needs it (systemd 257: `ukify`, the volume
+  measured into PCR 15); Debian 12 caps a node at level B. The preseed, Docker's and
+  ZFS's sources and the lab follow; existing nodes upgrade `bookworm → trixie` one at a
+  time, drained.
+- **Managers when protection and quorum disagree: asked each time.** `node add` and
+  `cluster init` show both costs — every app's secrets on a weak machine, or a control
+  plane that stops rescheduling while its one manager is away — and the person chooses;
+  neither is a default.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -201,14 +212,113 @@ no secret in `docker inspect`.
   Left: Swarm's autolock, its unlock key sealed the same way so a manager restarts
   alone — today `hlb cluster autolock` keeps the key in the vault and nothing unlocks
   at boot; sealing by default at `cluster init`, once the installer prints the kit.
-- LUKS with Clevis, two shares of three: the TPM, a Tang on another node of the house, a
-  Tang on the VPS answering the house's tunnel only. A power cut reopens everything with
-  the first two — no node may need one that needs it back; away from the house, nothing
-  opens; after a theft, deleting the Tang keys makes the disk unreadable for good.
-  ⚠️ TPM unlocking that does not check WHICH volume it opened falls to ten minutes of
-  physical access (CVE-2026-32606, IncusOS): the volume key measured into PCR 15, boot
-  refused on a mismatch — a lab test, not an option. ZFS native encryption, whose
-  `zfs send -w` lets a remote site keep a copy it cannot read.
+- **Each machine its protection level — detected, never declared** (owner's request,
+  2026-10-28: every kind of machine will be met, and the best protected should carry
+  what matters). What can be reached depends on the firmware, the TPM and the systemd
+  version, not on the distribution's name. Measured the same day: Debian 12 (systemd
+  252) has no `ukify` — not even in backports, which stop at 254 — and its cryptsetup
+  knows no `tpm2-measure-pcr`; Debian 13 (257) has both, a signed `systemd-boot` and
+  `pcrlock`; Clevis, Tang and `dropbear-initramfs` are in both; `sbctl` in neither;
+  DKMS (3.0.10, 3.2.2) signs modules with a MOK key of its own, which a person enrols
+  once at the console. Today `hlb` detects none of this: `node add` reads memory, disk
+  and kernel, nothing reads the firmware, and a manager is chosen by count alone.
+  - **Detection**: UEFI (`/sys/firmware/efi`), the TPM (`has-tpm2`'s `+driver`, then a
+    sealed round trip — `hlb secrets-seal` showed a TPM can answer every probe and
+    still not seal), Secure Boot (`mokutil --sb-state`), `systemd-detect-virt`, the
+    systemd version and the tools present, the DKMS modules (ZFS). Read by the agent,
+    shown by `node list`, `node add`'s preview and the interface.
+  - **Four levels**, each one sentence and never above what was detected:
+    **A — verified boot, disk bound to the network**: UEFI, Secure Boot, TPM 2.0,
+    systemd ≥ 257 — a signed UKI built by a `kernel-install` hook, the TPM bound to
+    PCR 7 and a SIGNED PCR 11 policy (a new kernel needs no reseal), unsealed in the
+    initrd phase only, the volume measured into PCR 15 (`tpm2-measure-pcr=yes`, the
+    fix for CVE-2026-32606), and Tang. **B — disk bound to the network, boot not
+    verified**: a TPM 2.0 on systemd 252 (Debian 12, RHEL 9) or without Secure Boot —
+    Clevis, the TPM and a Tang both required; the initrd and GRUB's command
+    line are neither signed nor measured, so whoever has the machine INSIDE the house
+    (Tang answering) gets a root shell (`rd.break`), and says so. **C — disk
+    encrypted, the boot chain open**: no usable TPM 2.0 (legacy BIOS, TPM 1.2) — Tang
+    alone where it must restart by itself, a FIDO2 key or a passphrase over
+    `dropbear-initramfs` where someone is there; `/boot` can be changed unseen.
+    **D — encrypted at rest, the host trusted**: a virtual machine — vTPM and Tang
+    inside, but the host reads its memory and its vTPM's state. `systemd-detect-virt`
+    tells a VM, not whose: a VM is D unless it names a node of the house as its host,
+    and is then the lower of the two. **No level for a VPS**: it stays out of the
+    Swarm (decided 2026-10-27); a provider's machine is promised nothing physical.
+    Servers with a BMC (iDRAC, iLO, IPMI) reach A or B, their console making the MOK
+    enrolment and a recovery remote — and their TPM is often an option not fitted,
+    which detection says.
+  - **🔴 The two halves of A do not combine as written.** A LUKS keyslot opens the disk
+    on its own: a TPM-only slot beside a TPM-and-Tang slot cancels the second factor,
+    and only the combined policy and the recovery key may exist. The signed PCR 11
+    policy is `systemd-cryptenroll`'s, which has no Tang; Clevis has Tang and binds
+    PCR values only as literals (Clevis 20's `tpm2` pin: `pcr_ids`, `pcr_digest`, no
+    signed policy — read 2026-10-28). The options, to measure on the lab before
+    choosing: Clevis bound to PCR 7 and 11 with values predicted by `systemd-measure`,
+    resealed by the kernel hook before each reboot; `systemd-cryptenroll` with the
+    signed policy and a PIN, no Tang — a person at every boot; or the disk opened by
+    the signed policy alone and Tang required one level up, for the vault key and
+    Swarm's unlock key — a machine stolen whole boots to a login prompt, its apps
+    never start, and what it gives up is what a running, locked-down system leaks.
+  - **The best protected machine carries what matters** (owner's question,
+    2026-10-28). A stolen node gives up different things: a Swarm manager holds the
+    whole Raft log — every app's secrets; the controller's node holds the vault's key
+    and the platform's administrators; a worker holds only the secrets of the tasks it
+    runs, in memory. So `cluster init` reads the level of its machine and says when
+    another would serve better; the controller and the vault live on the highest
+    level, and moving them later is a verb (`hlb controller move`, to write); a
+    manager is chosen by level, then count — a C or D node is never proposed, and a
+    manager below the best is a warning; nodes carry `hlb.protection=<level>`, and an
+    app the manifest calls vital (phase 3's criticality) is constrained to B or above.
+    ⚠️ One A machine and two weak ones: three managers put every secret on the weak
+    ones; one manager costs only the control plane's availability — tasks keep
+    running, nothing is rescheduled until it returns. Decided 2026-10-28: asked each
+    time, both costs shown, no default. The constraint on vital apps dies if a
+    two-node house on the lab cannot schedule them under it: then a warning only.
+  - **Debian 12 caps a node at B; nodes move to Debian 13** (decided 2026-10-28). The
+    preseed and the lab install Debian 12 alone today (`vm.sh`'s only Debian image):
+    the preseed, Docker's and ZFS's sources for trixie, the lab's image, and an
+    in-place `bookworm → trixie` upgrade drained one node at a time. A node still on
+    Debian 12 reaches B and says why.
+  - **The order, each step proven on the lab** — QEMU with OVMF (Debian's `ovmf`
+    carries variables with Microsoft's keys enrolled) and swtpm, so Secure Boot, the
+    TPM and the PCRs are real; `vm.sh` boots SeaBIOS today:
+    1. Detection and the level shown, nothing changed; a scorecard row: nodes per
+       level.
+    2. Each node's LUKS recovery key generated and on the emergency kit — its
+       fingerprint covering it — BEFORE any disk is touched: no step below runs while
+       the kit is not current, as `secrets-seal` already refuses.
+    3. LUKS at install (the preseed partitions `crypto`); an existing node is drained
+       and reinstalled, or re-encrypted offline — which, measured first.
+    4. B: Clevis, the TPM AND one Tang of two — nested, `sss` `t=2` over the TPM and an
+       inner `sss` `t=1` over the Tangs. ⚠️ Not the flat "two shares of three" this
+       plan first said: the two Tangs alone would open a disk taken out of its machine
+       and plugged in at home. One Tang on another node of the house, one on the VPS
+       answering the house's tunnel only, so a Tang down never stops a restart and no
+       node needs a Tang that needs it back; after a theft, deleting the Tangs' keys
+       makes the disk unreadable for good.
+    5. A: the UKI, its hook, the signed policy and the PCR 15 measurement, after
+       deciding the combination above. Secure Boot keys: the distribution's shim and
+       Microsoft's certificates kept — `sbctl` is not packaged, and a firmware whose
+       option ROMs are signed by Microsoft does not start its graphics without them;
+       the UKI and DKMS's modules signed by a MOK key, enrolled once at the console.
+    6. What breaks an unlock, handled before it happens: a dbx or firmware update
+       changes PCR 7 (`fwupd` says when one is pending: reseal right after, or
+       announce the recovery); a BIOS that resets its keys is seen in Setup Mode at
+       the next boot; a ZFS module unsigned under Secure Boot does not load — the
+       storage node's pool would stay away.
+    7. The running system: IOMMU on, Thunderbolt off where unused, kernel lockdown in
+       `confidentiality` where neither hibernation nor kexec is needed (Debian's
+       Secure Boot gives `integrity`); the firmware's password, USB and PXE boot off
+       — instructions, since no software sets them.
+  - **What no level protects**, said in `docs/security-model.md`: a flaw exploited in
+    a running service or in Homelabus; firmware implants (only Boot Guard or AMD PSB,
+    set at the factory, help); a VPS's provider; a compromised hypervisor. And once
+    booted the disk is open: the controller holds Docker's socket, which is root —
+    splitting it into a minimal privileged daemon behind a narrow API, the interface
+    unprivileged, is its own item. Backups are already encrypted before they leave.
+- ZFS native encryption, whose `zfs send -w` lets a remote site keep a copy it cannot
+  read.
 - The domain, the weakest point (every domain theft of 2024-2026 went through a
   registrar's support): a hidden Knot primary at home signs the zone, at least two
   secondaries serve it — the signing key never leaves the house; the simple level stays
