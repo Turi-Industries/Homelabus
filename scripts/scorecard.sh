@@ -66,9 +66,14 @@ else
     signed="${tag:-no tag}: no signature published"
 fi
 row "3 never stolen" "releases signed, with a verifiable provenance" "$signed" "every artifact"
-# The count `hlb-catalog/tests/secrets_as_files.rs` holds equal to the catalog's, by
-# `hlb_types::binding::carries_secret` — read from it rather than run, in milliseconds.
-in_env=$(grep -oE 'STILL_IN_AN_ENVIRONMENT: usize = [0-9]+' crates/hlb-catalog/tests/secrets_as_files.rs | grep -oE '[0-9]+$')
+# By `hlb_types::binding::carries_secret`. Once at zero `catalog validate` refuses one —
+# the gate holds the catalog to it, so the refusal being there IS the zero; until then,
+# the count `hlb-catalog/tests/secrets_as_files.rs` holds equal to the catalog's.
+if grep -q 'hands a secret through the environment' crates/hlb-catalog/src/lib.rs; then
+    in_env="0, refused by \`catalog validate\`"
+else
+    in_env=$(grep -sohE 'STILL_IN_AN_ENVIRONMENT: usize = [0-9]+' crates/hlb-catalog/tests/secrets_as_files.rs | grep -oE '[0-9]+$')
+fi
 row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
 row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted, the vault key a plain file)" "nothing readable"
 
