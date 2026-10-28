@@ -213,6 +213,7 @@ async fn dns(
     }
     let publishing = mail.domains_dns().await?;
     let servers = mail.dns_servers().await?;
+    let generation = mail.generation().await?;
     let provider = state.exposure().await?.and_then(|e| e.dns_provider);
     let mut wrong = Vec::new();
     for d in &domains {
@@ -228,13 +229,15 @@ async fn dns(
                 "  DKIM published and rotated by Stalwart, through {}",
                 s.kind
             ),
-            (None, Some(p)) => match hlb_engine::mail_dns::stalwart_dns_server(p, &[]) {
-                Ok(_) => println!(
-                    "  DKIM by hand until the next role pass publishes it through {p}: \
+            (None, Some(p)) => {
+                match hlb_engine::mail_dns::stalwart_dns_server(p, &[], generation) {
+                    Ok(_) => println!(
+                        "  DKIM by hand until the next role pass publishes it through {p}: \
                      hlb role sync --apply"
-                ),
-                Err(why) => println!("  DKIM by hand: {why}"),
-            },
+                    ),
+                    Err(why) => println!("  DKIM by hand: {why}"),
+                }
+            }
             (None, None) => println!(
                 "  DKIM by hand: the exposure names no DNS provider Stalwart could publish \
                  through, and keys are never rotated"

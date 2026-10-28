@@ -171,6 +171,7 @@ const OURS: &str = "Homelabus:";
 pub fn stalwart_dns_server(
     provider: &str,
     values: &[String],
+    generation: hlb_mail::Generation,
 ) -> Result<serde_json::Value, &'static str> {
     let secret = |i: usize| serde_json::json!({ "@type": "Value", "secret": values.get(i).cloned().unwrap_or_default() });
     let one = |kind: &str| serde_json::json!({ "@type": kind, "secret": secret(0) });
@@ -187,11 +188,15 @@ pub fn stalwart_dns_server(
             "applicationSecret": secret(2),
             "consumerKey": secret(3),
         }),
-        "porkbun" => serde_json::json!({
-            "@type": "Porkbun",
-            "apiKey": values.first().cloned().unwrap_or_default(),
-            "secretApiKey": secret(1),
-        }),
+        // 1.0 renamed both (`apiKeyId`, `secret`), and refuses the old names.
+        "porkbun" => {
+            let (key, secret_key) = generation.porkbun_keys();
+            serde_json::json!({
+                "@type": "Porkbun",
+                key: values.first().cloned().unwrap_or_default(),
+                secret_key: secret(1),
+            })
+        }
         // 🔴 DuckDNS keeps ONE TXT a name, on the name itself: a DKIM key published
         // through it would overwrite the certificate challenge's, and a duckdns.org
         // name has no MX of its own to receive mail by anyway.
@@ -244,9 +249,10 @@ pub async fn switch(
 /// nothing. MX, SPF and DMARC are the domain's — another provider may hold its mail or
 /// its web — and stay printed.
 ///
-/// 🔴 A publishing task that failed is not retried by Stalwart (0.16.26): a key the
-/// last reading found missing, on a domain published through Homelabus, is asked for
-/// again here.
+/// 🔴 A publishing task that failed is not retried by Stalwart 0.16: a key the last
+/// reading found missing, on a domain published through Homelabus, is asked for again
+/// here — unless a task is still pending, which on 1.0 includes one Stalwart retries
+/// itself (`Retry`, `Stalled`).
 pub async fn publish_dkim(
     state: &hlb_state::State,
     vault: &hlb_secrets::Vault,
@@ -263,7 +269,7 @@ pub async fn publish_dkim(
         return Ok(Vec::new());
     };
     let values = crate::ingress::dns_credentials(state, Some(vault), provider).await?;
-    let body = match stalwart_dns_server(name, &values) {
+    let body = match stalwart_dns_server(name, &values, mail.generation().await?) {
         Ok(b) => b,
         Err(why) => {
             tracing::info!(provider = name, "DKIM is published by hand: {why}");
@@ -474,9 +480,14 @@ mod tests {
 
     #[test]
     fn every_provider_the_ingress_offers_publishes_dkim_or_says_why_not() {
-        for p in hlb_ingress::dns::PROVIDERS {
+        for (p, g) in hlb_ingress::dns::PROVIDERS.iter().flat_map(|p| {
+            [
+                (p, hlb_mail::Generation::V016),
+                (p, hlb_mail::Generation::V1),
+            ]
+        }) {
             let values: Vec<String> = p.fields.iter().map(|f| format!("v-{}", f.name)).collect();
-            match stalwart_dns_server(p.name, &values) {
+            match stalwart_dns_server(p.name, &values, g) {
                 Ok(body) => {
                     assert!(body.get("@type").is_some(), "{}: {body}", p.name);
                     // Every credential reaches Stalwart, none twice and none lost.

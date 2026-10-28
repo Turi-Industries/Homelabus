@@ -98,11 +98,77 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Which of Stalwart's two schemas a server speaks.
+///
+/// 1.0 renamed settings Homelabus writes, and refuses the old name with `invalidPatch —
+/// Invalid key for object` under HTTP 200: an alias, a listener or a relay written
+/// under the other generation's name is simply not created. Every renamed field is a
+/// `match` on this, so a third generation breaks the build where a name must be chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Generation {
+    /// 0.16, the first with the JMAP registry (`x:Account/set`).
+    V016,
+    /// 1.0, a new store layout: a 0.16 store is migrated into it, never opened.
+    V1,
+}
+
+impl Generation {
+    /// Read from the JMAP session: 1.0 announces JMAP Object Metadata, 0.16.27 does
+    /// not. No version is served anywhere else — not `/api/account`, not a header.
+    fn of_session(session: &serde_json::Value) -> Result<Self> {
+        let caps = session
+            .get("capabilities")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                Error::Unexpected(format!("a JMAP session with no capabilities: {session}"))
+            })?;
+        Ok(if caps.contains_key(METADATA) {
+            Self::V1
+        } else {
+            Self::V016
+        })
+    }
+
+    /// `NetworkListener`'s implicit TLS.
+    fn implicit_tls(self) -> &'static str {
+        match self {
+            Self::V016 => "tlsImplicit",
+            Self::V1 => "implicitTls",
+        }
+    }
+
+    /// `SpamClassify`'s envelope: `(sender, recipients)`.
+    fn envelope(self) -> (&'static str, &'static str) {
+        match self {
+            Self::V016 => ("envFrom", "envRcptTo"),
+            Self::V1 => ("mailFrom", "rcptTo"),
+        }
+    }
+
+    /// `MtaRouteRelay`'s server.
+    pub fn relay_host(self) -> &'static str {
+        match self {
+            Self::V016 => "address",
+            Self::V1 => "host",
+        }
+    }
+
+    /// `DnsServerPorkbun`'s credentials: `(key, secret)`.
+    pub fn porkbun_keys(self) -> (&'static str, &'static str) {
+        match self {
+            Self::V016 => ("apiKey", "secretApiKey"),
+            Self::V1 => ("apiKeyId", "secret"),
+        }
+    }
+}
+
 /// The vendor capability, without which Stalwart rejects the `x:` methods.
 const CAPABILITY: &str = "urn:stalwart:jmap";
 const CORE: &str = "urn:ietf:params:jmap:core";
 /// `SieveScript/*` is refused as an "unknownMethod" without it in `using`.
 const SIEVE: &str = "urn:ietf:params:jmap:sieve";
+/// Announced by 1.0 and not by 0.16: how [`Generation`] is told.
+const METADATA: &str = "urn:ietf:params:jmap:metadata";
 
 /// A JMAP request.
 #[derive(Debug, Serialize)]
@@ -198,6 +264,8 @@ pub struct Stalwart {
     base_url: String,
     auth: Auth,
     http: reqwest::Client,
+    /// Asked once: a server does not change schema under a running client.
+    generation: std::sync::OnceLock<Generation>,
 }
 
 impl Stalwart {
@@ -212,6 +280,7 @@ impl Stalwart {
                 .pool_idle_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap_or_default(),
+            generation: std::sync::OnceLock::new(),
         }
     }
 
@@ -219,16 +288,51 @@ impl Stalwart {
         format!("{}/jmap/", self.base_url)
     }
 
-    async fn call(&self, method: &str, args: serde_json::Value) -> Result<serde_json::Value> {
-        let req = self
-            .http
-            .post(self.endpoint())
-            .json(&JmapRequest::one(method, args));
-
-        let req = match &self.auth {
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.auth {
             Auth::Basic { user, password } => req.basic_auth(user, Some(password)),
             Auth::Bearer(t) => req.bearer_auth(t),
-        };
+        }
+    }
+
+    /// Which schema the server speaks, read from its JMAP session the first time.
+    pub async fn generation(&self) -> Result<Generation> {
+        if let Some(g) = self.generation.get() {
+            return Ok(*g);
+        }
+        let context = "the JMAP session";
+        let resp = self
+            .authed(self.http.get(format!("{}/jmap/session", self.base_url)))
+            .send()
+            .await
+            .map_err(|source| Error::Http {
+                source,
+                context: context.into(),
+            })?;
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(Error::Unauthorized);
+        }
+        if !resp.status().is_success() {
+            return Err(Error::Api {
+                status: resp.status().as_u16(),
+                detail: context.into(),
+            });
+        }
+        let body = bounded(resp, MAX_BODY)
+            .await
+            .map_err(|e| Error::Unexpected(format!("unreadable session: {e}")))?;
+        let session: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| Error::Unexpected(format!("unreadable session: {e}")))?;
+        let g = Generation::of_session(&session)?;
+        Ok(*self.generation.get_or_init(|| g))
+    }
+
+    async fn call(&self, method: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+        let req = self.authed(
+            self.http
+                .post(self.endpoint())
+                .json(&JmapRequest::one(method, args)),
+        );
 
         let resp = req.send().await.map_err(|source| Error::Http {
             source,
@@ -1049,6 +1153,7 @@ impl Stalwart {
     /// it asked before the resolver changed would read the old refusal.
     pub async fn refused_blocklists(&self) -> Result<Vec<String>> {
         let (address, domain) = probe_names(fresh());
+        let (sender, recipients) = self.generation().await?.envelope();
         let message = format!(
             "From: probe@example.net\r\nTo: postmaster@example.org\r\n\
              Subject: blocklist probe\r\nMessage-ID: <probe@example.net>\r\n\
@@ -1063,9 +1168,9 @@ impl Stalwart {
                     "remoteIp": address,
                     "ehloDomain": "example.net",
                     "isTls": true,
-                    "envFrom": "probe@example.net",
+                    sender: "probe@example.net",
                     // A set: keyed by the address, `{"0": …}` is refused.
-                    "envRcptTo": { "postmaster@example.org": true },
+                    recipients: { "postmaster@example.org": true },
                 } } }),
             )
             .await?;
@@ -1419,9 +1524,11 @@ impl Stalwart {
 
     /// The publishing tasks of a domain, the latest first.
     ///
-    /// 🔴 One that failed is FAILED for good — 0.16.26 retries none: a provider down
+    /// 🔴 On 0.16 one that failed is FAILED for good — it retries none: a provider down
     /// the moment a domain is switched leaves its keys unpublished until something
-    /// asks again ([`Self::publish_again`]).
+    /// asks again ([`Self::publish_again`]). 1.0 retries a transient failure itself,
+    /// for ever (`Retry`, `Stalled` past `x:TaskManager.alertAfter`, 5 by default),
+    /// and keeps `Failed` for a permanent one.
     pub async fn dns_tasks(&self, domain_id: &str) -> Result<Vec<DnsTask>> {
         self.tasks(domain_id, "DnsManagement").await
     }
@@ -1534,17 +1641,21 @@ impl Stalwart {
         directory: &str,
         email: &str,
     ) -> Result<String> {
-        self.create(
-            "x:AcmeProvider/set",
-            serde_json::json!({
-                "challengeType": challenge,
-                "directory": directory,
-                // A set, like every map of 0.16: `{"0": …}` is refused, "invalid key".
-                "contact": { format!("mailto:{email}"): true },
-            }),
-            "the ACME account",
-        )
-        .await
+        let mut body = serde_json::json!({
+            "challengeType": challenge,
+            "directory": directory,
+            // A set, like every map of 0.16: `{"0": …}` is refused, "invalid key".
+            "contact": { format!("mailto:{email}"): true },
+        });
+        match self.generation().await? {
+            // Computed by 0.16, which refuses one given: "Cannot modify server set property".
+            Generation::V016 => {}
+            // 1.0 opens the account with the directory, then refuses to store it unnamed:
+            // `validationFailed`, with no description of its own to say why.
+            Generation::V1 => body["description"] = "Homelabus".into(),
+        }
+        self.create("x:AcmeProvider/set", body, "the ACME account")
+            .await
     }
 
     pub async fn destroy_acme_provider(&self, id: &str) -> Result<()> {
@@ -1725,7 +1836,7 @@ impl Stalwart {
     pub async fn add_submission(&self) -> Result<()> {
         self.create(
             "x:NetworkListener/set",
-            submission_listener_body(),
+            submission_listener_body(self.generation().await?),
             "the submission listener",
         )
         .await
@@ -1944,7 +2055,7 @@ pub struct DomainTls {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsTask {
     pub id: String,
-    /// `Pending`, `Failed`…
+    /// `Pending`, `Failed`; on 1.0 also `Retry`, `Stalled`.
     pub state: String,
     pub created_at: String,
     pub failure: Option<String>,
@@ -2061,7 +2172,7 @@ fn listens_on(args: &serde_json::Value, port: u16) -> bool {
     })
 }
 
-fn submission_listener_body() -> serde_json::Value {
+fn submission_listener_body(generation: Generation) -> serde_json::Value {
     serde_json::json!({
         "name": "submission",
         // A set, as every registry list: a map to `true`.
@@ -2070,7 +2181,8 @@ fn submission_listener_body() -> serde_json::Value {
         // 🔴 TLS is what lets an app authenticate at all: Stalwart offers PLAIN and
         // LOGIN only `if local_port != 25 && is_tls` (its default `saslMechanisms`).
         "useTls": true,
-        "tlsImplicit": false,
+        // Neither schema declares a default: said, STARTTLS is what 587 means.
+        generation.implicit_tls(): false,
     })
 }
 
@@ -2146,8 +2258,11 @@ fn account_body(
 }
 
 /// One alias, as Stalwart stores it.
+///
+/// Enabled by default, and left so: 0.16 calls the switch `enabled`, 1.0 `enable`, and
+/// either refuses the other's name.
 fn alias_entry(local: &str, domain_id: &str) -> serde_json::Value {
-    serde_json::json!({ "enabled": true, "name": local, "domainId": domain_id })
+    serde_json::json!({ "name": local, "domainId": domain_id })
 }
 
 /// A `/get` answer's objects.
@@ -2328,7 +2443,13 @@ mod tests {
                     }
                 };
                 let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
-                let (status, reply) = if path == "/jmap/" {
+                // The session the fakes were written from: 0.16's, no metadata.
+                let (status, reply) = if path == "/jmap/session" {
+                    (
+                        200,
+                        r#"{"capabilities":{"urn:ietf:params:jmap:core":{}}}"#.to_string(),
+                    )
+                } else if path == "/jmap/" {
                     let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
                     let call = &v["methodCalls"][0];
                     let method = call[0].as_str().unwrap_or("");
@@ -2603,12 +2724,35 @@ mod tests {
 
     #[test]
     fn submission_is_starttls_on_587() {
-        let b = submission_listener_body();
-        assert_eq!(b["bind"], serde_json::json!({ "[::]:587": true }));
-        assert_eq!(b["protocol"], "smtp");
-        // STARTTLS, not implicit TLS: what "587" means to every client library.
-        assert_eq!(b["useTls"], true);
-        assert_eq!(b["tlsImplicit"], false);
+        // Each generation under its own name: the other's is refused, the port not opened.
+        for (g, key) in [
+            (Generation::V016, "tlsImplicit"),
+            (Generation::V1, "implicitTls"),
+        ] {
+            let b = submission_listener_body(g);
+            assert_eq!(b["bind"], serde_json::json!({ "[::]:587": true }));
+            assert_eq!(b["protocol"], "smtp");
+            // STARTTLS, not implicit TLS: what "587" means to every client library.
+            assert_eq!(b["useTls"], true);
+            assert_eq!(b[key], false, "{g:?}: {b}");
+            assert_eq!(b.as_object().expect("object").len(), 5, "{g:?}: {b}");
+        }
+    }
+
+    #[test]
+    fn the_generation_is_read_from_the_session() {
+        // Trimmed from the real sessions of 0.16.27 and 1.0.0.
+        let v016 = serde_json::json!({ "capabilities": {
+            "urn:ietf:params:jmap:core": {}, "urn:ietf:params:jmap:mail": {} } });
+        let v1 = serde_json::json!({ "capabilities": {
+            "urn:ietf:params:jmap:core": {}, "urn:ietf:params:jmap:metadata": {} } });
+        assert_eq!(
+            Generation::of_session(&v016).expect("0.16"),
+            Generation::V016
+        );
+        assert_eq!(Generation::of_session(&v1).expect("1.0"), Generation::V1);
+        // An answer that is not a session is not taken for the older schema.
+        assert!(Generation::of_session(&serde_json::json!({})).is_err());
     }
 
     #[test]
@@ -2727,7 +2871,9 @@ mod tests {
         assert_eq!(a["0"]["name"], "contact");
         assert_eq!(a["0"]["domainId"], "d1");
         assert_eq!(a["1"]["name"], "info");
-        assert_eq!(a["0"]["enabled"], true);
+        // Nothing else: the enabled switch is named differently by 0.16 and 1.0, which
+        // refuse each other's, and both default it on.
+        assert_eq!(a["0"].as_object().expect("alias").len(), 2, "{b}");
     }
 
     #[test]

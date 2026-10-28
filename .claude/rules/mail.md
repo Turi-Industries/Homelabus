@@ -22,6 +22,18 @@ the first.
   server, and a failing `/set` still returns HTTP 200 — the failure lives in
   `notCreated`. **A filter condition carries only ONE property**: each key overwrites
   the previous, so you need an `AND` of separate conditions.
+- **🔴 1.0 renamed settings, and refuses the old name the way it refuses a typo**:
+  `invalidPatch — Invalid key for object`, under HTTP 200 — no alias, no 587, no
+  postmaster. An installed 0.16 stays 0.16 until migrated (a 1.0 refuses to open its
+  store), so `hlb-mail` speaks both: `Stalwart::generation` reads the JMAP session once
+  (1.0 announces `urn:ietf:params:jmap:metadata`; no version is served anywhere), and
+  every renamed field is a `match` on `Generation`. A field both default alike is left
+  out instead (an alias's `enabled`/`enable`). Found by diffing the two schemas
+  `stalwart-migrate` ships (`mapping/schema/`) against the crates' string literals:
+  249 names gone, 7 of them ours. `HLB_STALWART_IMAGE` runs the live suites on either.
+  Not in any diff: 1.0 opens an `x:AcmeProvider` with its directory, then refuses to
+  store it without a `description` — `validationFailed`, no reason — which 0.16
+  computes and refuses given ("Cannot modify server set property").
 - **JMAP `update` REPLACES the whole property.** There is no "add an alias" operation:
   writing a single alias would erase all the others, without raising an error. Hence
   read-modify-write — and two simultaneous updates would lose the first.
@@ -165,7 +177,9 @@ the first.
   switched to `dnsManagement: Automatic` with `publishRecords: {"dkim": true}` publishes
   the keys already active and rotates them every 90 days — but: (1) a publishing task
   that fails is FAILED for good, never retried, so a key the night reads missing is
-  asked for again (`publish_again`, a `DnsManagement` task made by hand); (2) over UDP
+  asked for again (`publish_again`, a `DnsManagement` task made by hand) — 1.0 retries
+  it itself, for ever (`Retry`, then `Stalled` after `x:TaskManager.alertAfter` = 5
+  attempts, backoff 1 min doubling to 6 h), so a task not `Failed` is left to it; (2) over UDP
   the RSA key's signed update, past 512 bytes, never reaches the server and the task
   counts as done; (3) at the switch the publishing races the rotation's scheduling,
   which rewrites each key — one read mid-rewrite is skipped, the RSA key one switch in
@@ -239,8 +253,8 @@ the first.
   URIBL still refused (measured 2026-10-20). `Stalwart::refused_blocklists` asks
   `x:Action/set` `ClassifySpam` — a message classified, nothing received — from a
   documentation address (loopback is skipped; PBL lists TEST-NET, a listing, not a
-  refusal), with a link to a domain nobody owns for the domain lists; `envRcptTo` is a
-  set keyed by address.
+  refusal), with a link to a domain nobody owns for the domain lists; the recipients
+  (`envRcptTo`, 1.0 `rcptTo`) are a set keyed by address.
   Read with the mail records every night, a notice per refusing list. The probe's
   address and linked domain are NEW each time: a refusal stays an hour in Stalwart's
   resolver cache (TTL 3600), and a probe asking the same names after a resolver change

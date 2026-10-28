@@ -347,6 +347,35 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
 - `target/` is 84 GB, 56 of them incremental caches: `cargo clean` returns them, at the
   price of a full rebuild — the owner's call, the desktop freezes under that I/O.
 
+### S. Stalwart 1.0 — the plan (decided 2026-10-27)
+
+Renovate proposed `v0.16.27 → v1.0.0` (#34). It is not a version bump: 1.0 has a new
+database layout — **a 1.0 server refuses to open a 0.16 store**, and the data moves only
+through `stalwart-migrate` into a NEW, empty store — and renamed settings that `hlb-mail`
+writes over JMAP. **Measured** on both images and on the two schemas Stalwart publishes
+(`stalwart-migrate`'s `mapping/schema/`), 249 properties removed or renamed, matched
+against every string literal of the crates driving Stalwart:
+
+| | Measured | Why it matters |
+|---|---|---|
+| **Boot** | the catalog's one-line `config.json` and `STALWART_RECOVERY_ADMIN` boot 1.0.0 as they boot 0.16.27: no setup page | nothing to change in the manifest's files |
+| **Renamed fields Homelabus writes** | `EmailAlias.enabled → enable`, `NetworkListener.tlsImplicit → implicitTls`, `SpamClassify.envFrom/envRcptTo → mailFrom/rcptTo`, `DnsServerPorkbun.apiKey/secretApiKey → apiKeyId/secret`, `MtaRouteRelay.address → host` | each is refused `invalidPatch — Invalid key for object` under HTTP 200: no alias, no submission port, no postmaster on 1.0 (3 of 5 `live_stalwart` tests fail) |
+| **Which one it is** | no version is served anywhere (`/api/account`, headers, logs); 1.0 announces `urn:ietf:params:jmap:metadata` in its session, 0.16.27 does not | the client has to ask before it writes a renamed field |
+| **Tasks** | `TaskStatus` gains `Retry` and `Stalled`; 1.0 retries a transient failure for ever (backoff 1 min doubling to 6 h; `Stalled` after `x:TaskManager.alertAfter` = 5), `Failed` meaning permanent — where 0.16 left every failure `Failed` for good | `publish_dkim` asks again only when no task is pending: right on both, a second task on 1.0 would duplicate Stalwart's own retry |
+
+**Decided on 2026-10-27**: an installed Stalwart stays on the major it was installed
+with until it is migrated on purpose; new installs get 1.0 once phase 4 lands. So
+`hlb-mail` speaks both for as long as a 0.16 can be installed somewhere.
+
+#### Phases
+
+| # | Phase | Ends when | Kill gate |
+|---|---|---|---|
+| 1 | ✅ **`hlb-mail` speaks 0.16 and 1.0** (2026-10-28) | the generation read once from the JMAP session, every renamed field written by an exhaustive `match` on it; `live_stalwart` and `live_mail` green on 0.16.27 AND on 1.0.0 (`HLB_STALWART_IMAGE`) | — |
+| 2 | **What 1.0 does differently** | each trap of `mail.md` measured on 1.0 (tasks, tracer, listeners bound at restart, SNI order, ACME, DKIM publishing) and the rule rewritten with the version it holds for | — |
+| 3 | **Migrating an installed Stalwart** | a procedure through `stalwart-migrate` (`prepare`, `run`, `run --final` with 0.16 stopped, `verify`), into a new volume, the old one kept for `rollback`; rehearsed on a COPY of the lab's volume and on an empty one, mail and aliases readable after | **the tool cannot run unattended in a container**: the procedure is a printed runbook instead of a verb |
+| 4 | **The catalog on 1.0** | new installs on `v1.0.0`; an upgrade from 0.16 REFUSED in place (it would start a server that refuses its store: mail down) and pointed at phase 3 | — |
+
 ### 0⁗. Fluxer, whole — the plan (decided 2026-10-26)
 
 Asked on 2026-10-26: Fluxer (a Discord-like chat, AGPL-3.0), completely working — text,

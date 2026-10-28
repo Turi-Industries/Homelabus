@@ -7,6 +7,9 @@
 //! ```sh
 //! cargo test -p hlb-mail --test live_stalwart -- --ignored --test-threads=1 --nocapture
 //! ```
+//!
+//! `HLB_STALWART_IMAGE` runs it against another release: both majors are driven while
+//! installed servers stay on the one they were installed with.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -17,6 +20,10 @@ const PORT: u16 = 18081;
 /// SMTP, where the banner and `EHLO` say Stalwart's name.
 const SMTP_PORT: u16 = 18025;
 const ADMIN_PASSWORD: &str = "a-test-admin-password-long-enough";
+
+fn image() -> String {
+    std::env::var("HLB_STALWART_IMAGE").unwrap_or_else(|_| "stalwartlabs/stalwart:v0.16".into())
+}
 
 fn docker(args: &[&str]) -> std::process::Output {
     std::process::Command::new("docker")
@@ -37,7 +44,7 @@ fn start() -> Stalwart {
         &format!("127.0.0.1:{SMTP_PORT}:25"),
         "-e",
         &format!("STALWART_RECOVERY_ADMIN=admin:{ADMIN_PASSWORD}"),
-        "stalwartlabs/stalwart:v0.16",
+        &image(),
     ]);
     assert!(
         out.status.success(),
@@ -99,6 +106,18 @@ fn stop() {
 async fn a_mailbox_is_provisioned_end_to_end() {
     let s = start();
     s.ping().await.expect("the admin is accepted");
+    // Every renamed field is written by what this says: read wrong, nothing is created.
+    let expected = if image().contains(":v0.16") {
+        hlb_mail::Generation::V016
+    } else {
+        hlb_mail::Generation::V1
+    };
+    assert_eq!(
+        s.generation().await.expect("session"),
+        expected,
+        "{}",
+        image()
+    );
 
     // A fresh server hosts no domain: the first mailbox creates it.
     let first = s
@@ -466,7 +485,7 @@ async fn an_app_account_sends_on_submission_as_itself_only() {
         &format!("127.0.0.1:{API}:8080"),
         "-e",
         &format!("STALWART_RECOVERY_ADMIN=admin:{ADMIN_PASSWORD}"),
-        "stalwartlabs/stalwart:v0.16",
+        &image(),
     ]);
     assert!(created.status.success(), "{created:?}");
     let dir = tempfile::tempdir().expect("tmp");

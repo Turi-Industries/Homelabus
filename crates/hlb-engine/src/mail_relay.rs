@@ -70,7 +70,7 @@ pub async fn current(mail: &hlb_mail::Stalwart) -> crate::Result<Option<Relay>> 
     }
     let text = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     Ok(Some(Relay {
-        host: text("address"),
+        host: text(mail.generation().await?.relay_host()),
         port: r.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
         implicit_tls: r
             .get("implicitTls")
@@ -96,13 +96,14 @@ pub async fn apply(mail: &hlb_mail::Stalwart, relay: &Relay, password: &str) -> 
         }),
     )
     .await?;
+    let host = mail.generation().await?.relay_host();
     mail.put_named(
         "MtaRoute",
         ROUTE,
         serde_json::json!({
             "@type": "Relay",
             "description": "Homelabus: every remote domain, through the relay",
-            "address": relay.host,
+            host: relay.host,
             "port": relay.port,
             "protocol": "smtp",
             "implicitTls": relay.implicit_tls,

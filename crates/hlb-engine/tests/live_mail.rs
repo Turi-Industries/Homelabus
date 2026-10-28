@@ -16,7 +16,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use hlb_mail::{Auth, Stalwart};
+use hlb_mail::{Auth, Generation, Stalwart};
 use hlb_state::{Certificates, Exposure, State};
 
 const CONTAINER: &str = "hlb-test-mail";
@@ -47,12 +47,15 @@ fn start() -> Stalwart {
 fn start_with(extra: &[&str], files: &[(&std::path::Path, &str)]) -> Stalwart {
     let _ = docker(&["rm", "-f", CONTAINER]);
     let m = catalog("_platform/stalwart");
-    let image = format!(
-        "{}:{}@{}",
-        m.spec.image.repo,
-        m.spec.image.tag,
-        m.spec.image.digest.as_deref().expect("pinned")
-    );
+    // `HLB_STALWART_IMAGE` tries another release before the catalog moves to it.
+    let image = std::env::var("HLB_STALWART_IMAGE").unwrap_or_else(|_| {
+        format!(
+            "{}:{}@{}",
+            m.spec.image.repo,
+            m.spec.image.tag,
+            m.spec.image.digest.as_deref().expect("pinned")
+        )
+    });
     let out = docker(
         &[
             "create",
@@ -743,7 +746,11 @@ async fn stalwart_takes_the_dns_server_of_every_provider_homelabus_maps() {
                     .map_or_else(|| format!("test-{}", f.name), str::to_string)
             })
             .collect();
-        let Ok(mut body) = hlb_engine::mail_dns::stalwart_dns_server(p.name, &values) else {
+        let Ok(mut body) = hlb_engine::mail_dns::stalwart_dns_server(
+            p.name,
+            &values,
+            s.generation().await.expect("generation"),
+        ) else {
             continue;
         };
         body["description"] = p.name.into();
@@ -872,8 +879,11 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         "its fingerprint followed"
     );
 
-    // A key the night found missing — Cloudflare refused the fake token — is asked for
-    // again, its failed task replaced.
+    // A key the night found missing — Cloudflare refused the fake token. 0.16 retries
+    // no task, so it is asked for again, its failed one replaced; 1.0 retries it itself
+    // (`Retry`, then `Stalled` past `x:TaskManager.alertAfter`), and a second task
+    // would only duplicate it.
+    let generation = s.generation().await.expect("generation");
     state
         .record_mail_records(&[MailRecord {
             domain: "example.org".into(),
@@ -886,26 +896,43 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         }])
         .await
         .expect("reading");
+    let settled = match generation {
+        Generation::V016 => "Failed",
+        Generation::V1 => "Retry",
+    };
     for _ in 0..30 {
         if s.dns_tasks(&mine)
             .await
             .expect("tasks")
             .iter()
-            .all(|t| t.state == "Failed")
+            .all(|t| t.state == settled)
         {
             break;
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+    let before = s.dns_tasks(&mine).await.expect("tasks");
     let retried = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, true)
         .await
         .expect("retried");
-    assert_eq!(retried, ["example.org: its DKIM keys published again"]);
     let tasks = s.dns_tasks(&mine).await.expect("tasks");
-    assert!(
-        tasks.iter().filter(|t| t.state == "Failed").count() <= 1,
-        "the failed ones before it removed: {tasks:?}"
-    );
+    match generation {
+        Generation::V016 => {
+            assert_eq!(retried, ["example.org: its DKIM keys published again"]);
+            assert!(
+                tasks.iter().filter(|t| t.state == "Failed").count() <= 1,
+                "the failed ones before it removed: {tasks:?}"
+            );
+        }
+        Generation::V1 => {
+            assert!(
+                before.iter().any(|t| t.state == "Retry"),
+                "1.0 retries a refused publication: {before:?}"
+            );
+            assert!(retried.is_empty(), "left to Stalwart: {retried:?}");
+            assert_eq!(tasks.len(), before.len(), "no second task: {tasks:?}");
+        }
+    }
     println!("✓ through the exposure's provider, once; its credential followed; retried");
     stop();
 }
