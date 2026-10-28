@@ -25,7 +25,7 @@ goals added, and eight phases to get there. **Measured** the same day:
 |---|---|
 | 1. deploy | `v0.2.0` has no release: the quick start begins with building thirty crates, then five commands. Time to a first app is measured nowhere |
 | 2. never lose | no record anywhere of which apps' restores were rehearsed; `hlb dr exercise` rehearses PostgreSQL's base backup |
-| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No disk is encrypted** (the preseed partitions `regular`, ZFS without its native encryption); the vault's key is a `0600` file beside the state; 51 catalog variables carry a secret through the environment, 9 through a `_FILE`; no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
+| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No disk is encrypted** (the preseed partitions `regular`, ZFS without its native encryption); the vault's key is a `0600` file beside the state; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
 | 4. no Rust | **0 of 12** apps went in without Rust in the same commit; of the last 12 commits completing an app, 8 touched Rust. No production code branches on an app's name |
 | 5. always available — the vital apps reachable while the house is down, or moving | no notion of a site, of an app's criticality, of a relay: the way in is a port forward on the house's router. Every service runs `replicas: 1` |
 | 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Trivy at update time only |
@@ -181,9 +181,14 @@ binary, it refused and installed nothing.
 
 **2. Never stolen.** Gate: a machine taken away from the lab boots to nothing readable;
 no secret in `docker inspect`.
-- Secrets as files: the 51 variables moved, then a test refusing a secret token
-  (`Token::is_secret`) in `env`. The vault's key sealed to the TPM by `systemd-creds`,
-  in memory only; Swarm's autolock.
+- ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
+  Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
+  reading the file before `exec` —, and `catalog validate` refusing a secret in an
+  environment, or a `/run/secrets` path the container does not mount. Proven on the lab:
+  15 apps upgraded, 167 mounted secrets found in no container's environment, `hlb
+  assert` green, and Fluxer used end to end — PocketID sign-in, a message, its search,
+  an attachment through the media proxy. Left: the vault's key sealed to the TPM by
+  `systemd-creds`, in memory only; Swarm's autolock.
 - LUKS with Clevis, two shares of three: the TPM, a Tang on another node of the house, a
   Tang on the VPS answering the house's tunnel only. A power cut reopens everything with
   the first two — no node may need one that needs it back; away from the house, nothing
