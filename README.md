@@ -98,7 +98,7 @@ apps online and inviting people takes a few more commands, all in
 
 🔴 **Keep the vault's master key safe.** `cluster init` creates it, and losing it makes
 every secret and every backup unrecoverable. Keep two copies offline: `hlb emergency
-kit` prints one.
+kit` prints one. Then `hlb secrets-seal` seals it to the machine's TPM, in memory only.
 
 ## How it compares
 

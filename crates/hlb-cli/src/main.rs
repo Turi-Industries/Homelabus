@@ -11,6 +11,7 @@ mod mail;
 mod relay;
 mod restore;
 mod roles;
+mod seal;
 mod termix;
 
 /// The catalog's YAML, carried in the binary by `build.rs`.
@@ -412,6 +413,15 @@ enum Command {
         controller_stopped: bool,
         /// Actually re-encrypt.
         #[arg(long, requires = "controller_stopped")]
+        apply: bool,
+    },
+
+    /// Seal the vault's master key to this machine: encrypted by systemd-creds with its
+    /// TPM and host key, unsealed into memory at each boot by `hlb-vault.service`, its
+    /// path left as a link there. Refused until the emergency kit is printed with
+    /// today's material — sealed, the key is lost with the machine. Preview by default.
+    SecretsSeal {
+        #[arg(long)]
         apply: bool,
     },
 
@@ -4434,7 +4444,8 @@ async fn reboot_and_wait(r: &dyn hlb_bootstrap::Runner) -> bool {
 /// 🔴 A new key beside an existing state is refused in every case: it cannot read one
 /// secret the state holds, and every later write would mix the two.
 fn open_vault(cli: &Cli) -> Result<Vault, Box<dyn std::error::Error>> {
-    if !cli.master_key.exists() {
+    // A sealed key not unsealed is present: `Vault::open` says how to unseal it.
+    if !hlb_secrets::key_present(&cli.master_key) {
         if cli.state_existed {
             return Err(format!(
                 "{} exists but its key {} does not: a new key could not read one of its \
@@ -4828,7 +4839,7 @@ pub(crate) async fn redeploy(
 /// Only when the state and the master key already exist: a command run on a machine
 /// with no installation must not create a vault as a side effect of looking.
 fn with_platform_access(mut cli: Cli) -> Cli {
-    if !cli.state.exists() || !cli.master_key.exists() {
+    if !cli.state.exists() || !hlb_secrets::key_present(&cli.master_key) {
         return cli;
     }
     let Ok(rt) = tokio::runtime::Runtime::new() else {
@@ -6862,6 +6873,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(emergency::run(&cli, cmd))
         }
 
+        Command::SecretsSeal { apply } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(seal::run(&cli, *apply))
+        }
+
         Command::Termix(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(termix::run(&cli, cmd))
@@ -8844,13 +8860,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 // file on disk is the old one — every service reading the vault fails,
                 // and the fix is a move nobody documented.
                 println!("\n🔴 The vault is now under the NEW key. Finish the procedure:");
+                // 🔴 A sealed key's path is a link into memory: moved, `.old` would be
+                // that link, and sealing the new key empties what it points at.
+                let sealed = hlb_secrets::sealed_target(&cli.master_key).is_some();
                 println!(
-                    "  1. mv {} {}.old",
+                    "  1. {} {} {}.old",
+                    if sealed { "cp" } else { "mv" },
                     cli.master_key.display(),
                     cli.master_key.display()
                 );
                 println!("  2. mv {} {}", new_key.display(), cli.master_key.display());
                 println!("  3. start the controller again (hlb scale {controller} 1 --apply), and the agents");
+                // Moved over the link, the new key is a plain file again.
+                if sealed {
+                    println!("  4. seal the new key: hlb secrets-seal --apply");
+                }
                 println!(
                     "\n⚠️  Keep {}.old until a restore has been verified: it is what \
                      opens the backups taken before today.",
@@ -9794,7 +9818,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let vault = open_vault(&cli)?;
                 let names = state.secret_names().await?;
 
-                println!("Master key : {}", cli.master_key.display());
+                match hlb_secrets::sealed_target(&cli.master_key) {
+                    Some(t) => println!(
+                        "Master key : {} — sealed to this machine, unsealed to {}",
+                        cli.master_key.display(),
+                        t.display()
+                    ),
+                    None => println!("Master key : {}", cli.master_key.display()),
+                }
                 println!("Public key : {}\n", vault.public_key());
 
                 if names.is_empty() {

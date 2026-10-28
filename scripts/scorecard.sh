@@ -75,7 +75,7 @@ else
     in_env=$(grep -sohE 'STILL_IN_AN_ENVIRONMENT: usize = [0-9]+' crates/hlb-catalog/tests/secrets_as_files.rs | grep -oE '[0-9]+$')
 fi
 row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
-row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted, the vault key a plain file)" "nothing readable"
+row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted; the vault key sealed to the TPM by \`hlb secrets-seal\`, Swarm's Raft keys in clear without autolock)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
 apps=0

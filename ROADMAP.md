@@ -25,7 +25,7 @@ goals added, and eight phases to get there. **Measured** the same day:
 |---|---|
 | 1. deploy | `v0.2.0` has no release: the quick start begins with building thirty crates, then five commands. Time to a first app is measured nowhere |
 | 2. never lose | no record anywhere of which apps' restores were rehearsed; `hlb dr exercise` rehearses PostgreSQL's base backup |
-| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No disk is encrypted** (the preseed partitions `regular`, ZFS without its native encryption); the vault's key is a `0600` file beside the state; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
+| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No disk is encrypted** (the preseed partitions `regular`, ZFS without its native encryption); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
 | 4. no Rust | **0 of 12** apps went in without Rust in the same commit; of the last 12 commits completing an app, 8 touched Rust. No production code branches on an app's name |
 | 5. always available — the vital apps reachable while the house is down, or moving | no notion of a site, of an app's criticality, of a relay: the way in is a port forward on the house's router. Every service runs `replicas: 1` |
 | 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Trivy at update time only |
@@ -187,8 +187,20 @@ no secret in `docker inspect`.
   environment, or a `/run/secrets` path the container does not mount. Proven on the lab:
   15 apps upgraded, 167 mounted secrets found in no container's environment, `hlb
   assert` green, and Fluxer used end to end — PocketID sign-in, a message, its search,
-  an attachment through the media proxy. Left: the vault's key sealed to the TPM by
-  `systemd-creds`, in memory only; Swarm's autolock.
+  an attachment through the media proxy.
+- ✅ The vault's key sealed — 2026-10-28: `hlb secrets-seal` seals it with
+  `systemd-creds` (TPM and host key; the host key alone, said, on a machine without
+  one), `hlb-vault.service` unseals it at boot into a `ramfs` before Docker starts, and
+  the key's path becomes a link there, so `hlb` and the controller's mount keep theirs.
+  Refused until the emergency kit is printed with today's material. The binding is
+  measured, not assumed: systemd 252 seals with no PCR and cannot unseal it, so PCR 7 is
+  used there, and a TPM whose libraries are missing gets `tpm2-tools` first. Proven on
+  the lab (deb1 given a swtpm TPM): sealed, rebooted, the controller back on its own;
+  the same disk booted without its TPM opened nothing — the unit failed, `hlb` named
+  the fix, Swarm refused to start the controller; the TPM given back, all returned.
+  Left: Swarm's autolock, its unlock key sealed the same way so a manager restarts
+  alone — today `hlb cluster autolock` keeps the key in the vault and nothing unlocks
+  at boot; sealing by default at `cluster init`, once the installer prints the kit.
 - LUKS with Clevis, two shares of three: the TPM, a Tang on another node of the house, a
   Tang on the VPS answering the house's tunnel only. A power cut reopens everything with
   the first two — no node may need one that needs it back; away from the house, nothing

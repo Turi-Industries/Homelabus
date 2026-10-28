@@ -111,11 +111,12 @@ plan around them.
 - **Disks are not encrypted.** A machine carried away from the house can be read. LUKS,
   unlocked by the node's TPM together with a Tang server on another node, is the next
   phase.
-- **The vault's key is a `0600` file next to the state.** Root on the controller node
-  can read it. It will be sealed to the TPM and kept in memory only.
-- **Most app secrets reach their container as environment variables** (51 of them, 9
-  through a `_FILE`). Anyone allowed to run `docker inspect` can read them. They are
-  moving to files, and a test will then refuse a secret in `env`.
+- **The vault's key is a `0600` file next to the state until you seal it.** `hlb
+  secrets-seal` seals it to the node's TPM and keeps it in memory only; root on that
+  node can still read it there, and a node carried away whole unseals it at boot until
+  its disks are encrypted.
+- **Swarm keeps its Raft keys in clear on every manager** unless autolock is on, and
+  then a restarted manager waits for a person to unlock it.
 - **Your domain is not watched.** There is no DNSSEC and no alert if the registrar
   record changes. A registrar with a registry lock is recommended.
 - **One maintainer.** No change is reviewed by a second person before it is merged.

@@ -10,8 +10,10 @@
 //!    can be decrypted. It must exist as two offline copies.
 //!
 //! Encryption at rest uses `age` (X25519 + ChaCha20-Poly1305). The key file is
-//! protected by POSIX permissions; the real defence against a stolen machine is disk
-//! encryption (LUKS), not this file.
+//! protected by POSIX permissions until `hlb secrets-seal` seals it to the machine:
+//! then its path is a link into the memory systemd unseals it to at boot
+//! ([`CREDENTIALS_DIR`]), and the disk holds it only encrypted. Against a machine
+//! carried away whole, the defence is still disk encryption.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -42,6 +44,14 @@ pub enum Error {
     )]
     KeyMissingBesideState { key: PathBuf },
 
+    #[error(
+        "the master key is sealed to this machine and not unsealed: {key} points at \
+         {unsealed}, which does not exist.\n  -> systemctl start hlb-vault.service \
+         (journalctl -u hlb-vault.service says why it failed); on another machine, the \
+         emergency kit's key in a file named by HLB_MASTER_KEY"
+    )]
+    NotUnsealed { key: PathBuf, unsealed: PathBuf },
+
     #[error("master key is unreadable: {0}")]
     MalformedKey(String),
 
@@ -56,6 +66,26 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Where systemd puts a unit's decrypted credentials: a `ramfs` only root reads, gone
+/// when the unit stops. A sealed key's path is a link into it.
+pub const CREDENTIALS_DIR: &str = "/run/credentials/";
+
+/// Something sits at the key's path: a key file, or the link a sealed key leaves there,
+/// unsealed or not.
+///
+/// 🔴 Not `Path::exists`, which follows the link: a sealed key whose unit has not run
+/// reads as no key at all, and beside a fresh state a new one would be made.
+pub fn key_present(path: impl AsRef<Path>) -> bool {
+    path.as_ref().symlink_metadata().is_ok()
+}
+
+/// Where a sealed key is unsealed to, when the key at `path` is one.
+pub fn sealed_target(path: impl AsRef<Path>) -> Option<PathBuf> {
+    std::fs::read_link(path)
+        .ok()
+        .filter(|t| t.starts_with(CREDENTIALS_DIR))
+}
 
 /// The vault: an `age` identity held in memory.
 pub struct Vault {
@@ -106,6 +136,12 @@ impl Vault {
     pub fn open(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
         if !path.exists() {
+            if let Some(unsealed) = sealed_target(path) {
+                return Err(Error::NotUnsealed {
+                    key: path.to_path_buf(),
+                    unsealed,
+                });
+            }
             return Err(Error::MissingKey(path.to_path_buf()));
         }
 
@@ -148,7 +184,7 @@ impl Vault {
     /// Opens the key if it exists, creates it otherwise.
     pub fn open_or_init(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
-        if path.exists() {
+        if key_present(path) {
             Self::open(path)
         } else {
             Self::init(path)
@@ -164,7 +200,7 @@ impl Vault {
     /// real one.
     pub fn open_for_state(key_path: impl AsRef<Path>, state_existed: bool) -> Result<Self> {
         let path = key_path.as_ref();
-        if path.exists() {
+        if key_present(path) {
             Self::open(path)
         } else if state_existed {
             Err(Error::KeyMissingBesideState {
@@ -352,6 +388,55 @@ mod tests {
         assert_eq!(a.decrypt(&ct).expect("decryption"), "value");
         let err = Vault::ephemeral().decrypt(&ct).unwrap_err();
         assert!(matches!(err, Error::Decrypt(_)), "{err}");
+    }
+
+    /// A link into a unit's credentials that does not resolve: the sealed key's unit
+    /// has not run. `/run/credentials/` itself is root's, so the test names a unit no
+    /// machine has.
+    fn link_to_a_sealed_key_not_unsealed(d: &tempfile::TempDir) -> PathBuf {
+        let key = d.path().join("hlb-master.key");
+        std::os::unix::fs::symlink(
+            "/run/credentials/hlb-test-never-started.service/hlb-master-key",
+            &key,
+        )
+        .expect("symlink");
+        key
+    }
+
+    #[test]
+    fn a_sealed_key_not_unsealed_is_said_never_replaced() {
+        let d = tmp();
+        let key = link_to_a_sealed_key_not_unsealed(&d);
+
+        let err = Vault::open(&key).unwrap_err();
+        assert!(matches!(err, Error::NotUnsealed { .. }), "{err}");
+        assert!(err.to_string().contains("hlb-vault.service"), "{err}");
+        // Beside a state, or with none: never a new key where the sealed one belongs.
+        for state_existed in [true, false] {
+            let err = Vault::open_for_state(&key, state_existed).unwrap_err();
+            assert!(matches!(err, Error::NotUnsealed { .. }), "{err}");
+        }
+        let err = Vault::open_or_init(&key).unwrap_err();
+        assert!(matches!(err, Error::NotUnsealed { .. }), "{err}");
+        assert!(
+            std::fs::read_link(&key).is_ok(),
+            "the link must be left as it was"
+        );
+        assert!(key_present(&key));
+        assert!(!key.exists(), "the very trap: exists() reads it as absent");
+    }
+
+    #[test]
+    fn a_link_elsewhere_is_no_sealed_key() {
+        let d = tmp();
+        let real = d.path().join("real.key");
+        let v = Vault::init(&real).expect("init");
+        let key = d.path().join("hlb-master.key");
+        std::os::unix::fs::symlink(&real, &key).expect("symlink");
+
+        assert_eq!(sealed_target(&key), None);
+        let reopened = Vault::open(&key).expect("a link to a key file opens it");
+        assert_eq!(reopened.public_key(), v.public_key());
     }
 
     #[test]

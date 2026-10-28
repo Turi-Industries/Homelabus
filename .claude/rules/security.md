@@ -210,6 +210,19 @@ the outside, which is the whole problem.
   no authentication) on every interface. The rules load with the interface (`PostUp`),
   `policy accept` and four ports only, so a mistake cannot cut SSH. And
   `--listen-addr` on init and join, or 2377 listens on `0.0.0.0`.
+- **A sealed vault key's path is a LINK into memory** (`hlb secrets-seal`,
+  `hlb_bootstrap::seal`): `/run/credentials/hlb-vault.service/`, a `ramfs` that exists
+  while the unit is active. `Path::exists` follows the link, so a key not yet unsealed
+  read as no key and a new one would have been made: `hlb_secrets::key_present`. And a
+  rekey's `mv key key.old` would move the link — `.old` pointing at memory that the
+  reseal empties — so a sealed key is COPIED out first.
+- **🔴 Measure the TPM binding, never assume it.** systemd 252 (Debian 12) seals with
+  `--tpm2-pcrs=` (no PCR) and then refuses to unseal it ("PCR bank invalid"); Debian
+  ships no TSS libraries, so `has-tpm2` says `+driver` and every seal fails "TPM2
+  support not installed" (`tpm2-tools` pulls them in); SeaBIOS answers `-firmware` over
+  a TPM that seals fine. `hlb secrets-seal` seals and unseals a throwaway value per
+  binding and keeps the first that comes back. Sealing is refused until the emergency
+  kit is current: sealed, the key dies with the board.
 - **`COPY . .` sends the master key to the daemon.** `web/hlb-master.key` exists; the
   `.dockerignore` refuses `**/*.key` first.
 
