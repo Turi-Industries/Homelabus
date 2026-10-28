@@ -267,7 +267,10 @@ spec:
         let catalog = stalwart("v1.0.0", "sha256:new", TO_STORAGE);
         // An upgrade alone is refused, and says the way rather than "remove and install".
         let refused = crate::upgrade::refusals(&old, &crate::upgrade::next(&old, &catalog));
-        assert!(refused[0].contains("`hlb mail migrate --apply`"), "{refused:?}");
+        assert!(
+            refused[0].contains("`hlb mail migrate --apply`"),
+            "{refused:?}"
+        );
         let copied = after_copy(&old);
         assert!(!crossing(&copied, &catalog));
         assert_eq!(

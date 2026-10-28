@@ -407,6 +407,18 @@ a recipient waiting over an hour is in the inbox by its domain:
 ./target/debug/hlb mail queue                # what waits, what the last attempt was told; exits 1 past an hour
 ```
 
+A Stalwart installed on 0.16 stays there: 1.0 refuses to open its store, so `hlb update`
+holds the move and `hlb upgrade` refuses it. `hlb mail migrate` copies the store into a
+new volume with `stalwart-migrate` while 0.16 serves, stops it for the last changes,
+compares every account and starts 1.0 on the copy. The 0.16 volume is never written:
+until 1.0 has served anyone, rolling back is starting 0.16 on it.
+
+```sh
+./target/debug/hlb update apply stalwart     # first, onto 0.16.27 by digest: the only 0.16 it migrates
+./target/debug/hlb mail migrate              # what it would do, and any question it cannot answer
+./target/debug/hlb mail migrate --apply
+```
+
 People's own clients meet Stalwart on 465 and 993 under its public name: a certificate
 under Homelabus's root for an internal exposure, one Stalwart requests from the
 exposure's ACME directory otherwise. The install and the nightly role pass see to it;

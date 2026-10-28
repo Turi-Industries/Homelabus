@@ -19,6 +19,12 @@ cleanly and is missing data.
   every installation that upgrades, and rehashing the chain to hide it is exactly what
   tampering does. Found while renaming French values on 2026-10-05: migration 0026
   renames the break-glass ids and leaves the log's old words where they are.
+- **🔴 An applied migration is never edited, not even a comment.** `sqlx` checksums the
+  whole file: one name changed in a comment of 0035 (the history rewrite of 2026-10-27)
+  made every build since refuse every state migrated before — "migration 35 was
+  previously applied but has been modified", the CLI and the controller alike. The lab's
+  row was set to the new checksum by hand on 2026-10-28, after checking the SQL was
+  byte-identical. A change of mind goes in a NEW migration.
 - **A PostgreSQL extension cannot be installed from SQL.** It must be in the server
   IMAGE, or `CREATE EXTENSION` fails with "is not available", which looks like a
   permissions problem. And it is **per-database**: installed on `postgres`, it succeeds

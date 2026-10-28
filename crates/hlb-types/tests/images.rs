@@ -25,6 +25,13 @@ fn restic_tag(s: &str) -> bool {
     s.starts_with("kind:")
 }
 
+/// A digest alone (`sha256:<hex>`, compared against what an installed app runs) has
+/// the shape of an image named `sha256`, and is no image.
+fn bare_digest(s: &str) -> bool {
+    s.strip_prefix("sha256:")
+        .is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// Is this literal shaped like an image reference — `name:tag`, with or without a
 /// registry and a path — rather than a URL or a `host:port`?
 fn image_shaped(s: &str) -> bool {
@@ -76,6 +83,7 @@ fn every_image_a_program_runs_is_pinned() {
         for value in split(production).1 {
             if !image_shaped(&value)
                 || restic_tag(&value)
+                || bare_digest(&value)
                 || NOT_IMAGES.iter().any(|(n, _)| *n == value)
             {
                 continue;
