@@ -52,7 +52,7 @@ spec:
     DB_POSTGRESDB_PORT: "{{ db.port }}"
     DB_POSTGRESDB_DATABASE: "{{ db.name }}"
     DB_POSTGRESDB_USER: "{{ db.user }}"
-    DB_POSTGRESDB_PASSWORD: "{{ db.password }}"
+    DB_POSTGRESDB_PASSWORD_FILE: /run/secrets/db-password
 
     # n8n builds its webhook URLs from this. Without these three lines it
     # announces "localhost:5678", which nothing outside can reach.
@@ -66,7 +66,7 @@ spec:
     N8N_SMTP_HOST: "{{ smtp.host }}"
     N8N_SMTP_PORT: "{{ smtp.port }}"
     N8N_SMTP_USER: "{{ smtp.user }}"
-    N8N_SMTP_PASS: "{{ smtp.password }}"
+    N8N_SMTP_PASS_FILE: /run/secrets/smtp-password
     # 🔴 Its default sender is empty, and its default `secure` is TRUE — TLS from the
     # first byte, which port 587 answers in clear before STARTTLS: "wrong version
     # number" on every mail. STARTTLS stays on by default.
@@ -118,3 +118,8 @@ spec:
         path: /rest/login
         body: '{"emailOrLdapLoginId":"{{ username }}","password":"{{ password }}"}'
         pointer: /data/id
+  files:
+    - path: /run/secrets/db-password
+      content: "{{ db.password }}"
+    - path: /run/secrets/smtp-password
+      content: "{{ smtp.password }}"

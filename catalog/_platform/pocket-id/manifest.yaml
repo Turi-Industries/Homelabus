@@ -45,13 +45,16 @@ spec:
     APP_URL: "https://{{ domain }}"
     # Behind Caddy: the client's address is in X-Forwarded-For.
     TRUST_PROXY: "true"
-    # Encrypts its signing keys at rest; v2 refuses to start without it.
-    ENCRYPTION_KEY: "{{ secret.encryption-key }}"
+    # Encrypts its signing keys at rest; v2 refuses to start without it. 🔴 Read as raw
+    # bytes, a final newline included: the key with one more byte decrypts nothing
+    # already stored ("failed to decrypt key"). The file below has none, as the
+    # variable had none.
+    ENCRYPTION_KEY_FILE: /run/secrets/encryption-key
     # The key Homelabus calls the API with (`pocket-id-api-key` in the vault), set at
     # install. Before v2.2 a person had to create one in the settings after signing in
     # by passkey, and nothing was provisioned until they did. It acts as a synthetic
     # administrator `/setup` does not count, so the first visitor still creates theirs.
-    STATIC_API_KEY: "{{ secret.api-key }}"
+    STATIC_API_KEY_FILE: /run/secrets/api-key
 
     # 🔴 Its settings come from here, and its settings screen is read-only: written in
     # its database, they were one admin session away from `allowUserSignups: open`,
@@ -63,7 +66,7 @@ spec:
     SMTP_PORT: "{{ smtp.port }}"
     SMTP_TLS: starttls
     SMTP_USER: "{{ smtp.user }}"
-    SMTP_PASSWORD: "{{ smtp.password }}"
+    SMTP_PASSWORD_FILE: /run/secrets/smtp-password
     SMTP_FROM: "{{ smtp.from }}"
     # A sign-in from a device it has not seen is mailed to the account's owner: the
     # one notice that a passkey or a session was taken.
@@ -72,6 +75,13 @@ spec:
     # signs in. Enrolment is a single-use link Homelabus hands over instead.
     EMAIL_ONE_TIME_ACCESS_AS_UNAUTHENTICATED_ENABLED: "false"
     EMAIL_ONE_TIME_ACCESS_AS_ADMIN_ENABLED: "false"
+  files:
+    - path: /run/secrets/encryption-key
+      content: "{{ secret.encryption-key }}"
+    - path: /run/secrets/api-key
+      content: "{{ secret.api-key }}"
+    - path: /run/secrets/smtp-password
+      content: "{{ smtp.password }}"
   assertions:
     - id: signups-closed
       holds: nobody creates a PocketID account without an invitation

@@ -64,13 +64,20 @@ spec:
         # Answered from its own zones: a house whose internet is down keeps a healthy
         # resolver, and Stalwart deployable.
         test: ["CMD", "drill", "@127.0.0.1", "localhost"]
-  env:
-    # 🔴 Without a configuration Stalwart boots into a setup page that whoever reaches
-    # first configures. With the file below it boots its services, and this pins the
-    # administrator — generated at install, read back from the vault by `hlb` and the
-    # controller to provision mailboxes.
-    STALWART_RECOVERY_ADMIN: "admin:{{ secret.admin-password }}"
+  # 🔴 Without a configuration Stalwart boots into a setup page that whoever reaches
+  # first configures. With the file below it boots its services, and
+  # `STALWART_RECOVERY_ADMIN` pins the administrator — generated at install, read back
+  # from the vault by `hlb` and the controller to provision mailboxes. Stalwart reads
+  # it from its environment only (1.0.0), so it is set here from its file, for the
+  # process alone: the service's own environment never holds it. Then the image's
+  # `Entrypoint` and `Cmd`, as they are.
+  command:
+    - /bin/sh
+    - -c
+    - STALWART_RECOVERY_ADMIN="admin:$(cat /run/secrets/admin-password)" exec /usr/local/bin/stalwart --config /etc/stalwart/config.json
   files:
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"
     # Stalwart reads only this: where its database lives. Everything else — domains,
     # accounts, listeners — is in that database and set over JMAP. Checked against
     # 0.16.26 and 1.0.0: with it, SMTP, SMTPS, IMAPS and ManageSieve listen from the

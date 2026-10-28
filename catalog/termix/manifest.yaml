@@ -48,7 +48,6 @@ spec:
     OIDC_TOKEN_URL: "{{ oidc.issuer }}/api/oidc/token"
     OIDC_USERINFO_URL: "{{ oidc.issuer }}/api/oidc/userinfo"
     OIDC_CLIENT_ID: "{{ oidc.client_id }}"
-    OIDC_CLIENT_SECRET: "{{ oidc.client_secret }}"
     OIDC_IDENTIFIER_PATH: sub
     OIDC_NAME_PATH: preferred_username
     # Its callback is built from the request: behind Caddy, always HTTPS.
@@ -123,6 +122,15 @@ spec:
       # the exposure itself.
       chain: [caddy-back]
       expose: private
+  # Termix reads the client's secret from its environment only (26.10.5): set from
+  # its file for the process alone, then the image's `Entrypoint` and `Cmd`.
+  command:
+    - /bin/sh
+    - -c
+    - OIDC_CLIENT_SECRET=$(cat /run/secrets/oidc-client-secret) exec docker-entrypoint.sh /entrypoint.sh
+  files:
+    - path: /run/secrets/oidc-client-secret
+      content: "{{ oidc.client_secret }}"
   security:
     readOnlyRootfs: false
     capAdd: [CHOWN, SETGID, SETUID]

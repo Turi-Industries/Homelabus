@@ -24,7 +24,7 @@ spec:
   # Vaultwarden only accepts a full URL for its database.
   env:
     # 🔴 `db.url` carries the password: it is a SECRET, despite looking like an address.
-    DATABASE_URL: "{{ db.url }}"
+    DATABASE_URL_FILE: /run/secrets/db-url
     DOMAIN: "https://{{ domain }}"
 
     # 🔴 Without SMTP_FROM, 1.37 refuses to START ("Both `SMTP_HOST` and `SMTP_FROM`
@@ -34,14 +34,14 @@ spec:
     SMTP_PORT: "{{ smtp.port }}"
     SMTP_SECURITY: starttls
     SMTP_USERNAME: "{{ smtp.user }}"
-    SMTP_PASSWORD: "{{ smtp.password }}"
+    SMTP_PASSWORD_FILE: /run/secrets/smtp-password
     SMTP_FROM: "{{ smtp.from }}"
     SMTP_FROM_NAME: Vaultwarden
 
     SSO_ENABLED: "true"
     SSO_AUTHORITY: "{{ oidc.issuer }}"
     SSO_CLIENT_ID: "{{ oidc.client_id }}"
-    SSO_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    SSO_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
     # 🔴 Never true: this vault is the way back in when PocketID is down.
     SSO_ONLY: "false"
     # A master password chosen on the first SSO sign-in is held to this, and an older
@@ -165,3 +165,12 @@ spec:
     # Twice the week: a release that loses a vault is the one loss nothing restores
     # in time.
     maturationDays: 14
+  files:
+    # 🔴 A variable beside its `_FILE` stops Vaultwarden at start: each secret is the
+    # file alone.
+    - path: /run/secrets/db-url
+      content: "{{ db.url }}"
+    - path: /run/secrets/smtp-password
+      content: "{{ smtp.password }}"
+    - path: /run/secrets/oidc-client-secret
+      content: "{{ oidc.client_secret }}"

@@ -28,8 +28,8 @@ use crate::{Error, Result};
 /// Stable and unique: re-enrolling under the same name fails, which is intended - two
 /// bouncers for one Caddy would make it impossible to know which is in service.
 ///
-/// ⚠️ The suffix of `BOUNCER_KEY_caddy` in CrowdSec's manifest, which registers it at
-/// start: the image names the bouncer after it.
+/// ⚠️ The suffix of the file `/run/secrets/BOUNCER_KEY_caddy` in CrowdSec's manifest,
+/// which registers it at start: the image names the bouncer after it.
 pub const BOUNCER_NAME: &str = "caddy";
 
 /// CrowdSec's service, as the catalog names it.
@@ -237,13 +237,15 @@ mod tests {
 
     #[test]
     fn the_bouncer_is_the_one_crowdsec_registers_at_start() {
-        // CrowdSec's image names the bouncer after the suffix of `BOUNCER_KEY_<name>`:
-        // a status reading another name would report it missing while it filters, and
-        // an enrolment under another would leave two, with no way to tell which serves.
+        // CrowdSec's image names the bouncer after the suffix of the file
+        // `/run/secrets/BOUNCER_KEY_<name>`: a status reading another name would report
+        // it missing while it filters, and an enrolment under another would leave two,
+        // with no way to tell which serves.
         let manifest = include_str!("../../../catalog/_platform/crowdsec/manifest.yaml");
         assert!(
             manifest.contains(&format!(
-                "BOUNCER_KEY_{BOUNCER_NAME}: \"{{{{ secret.bouncer-key }}}}\""
+                "- path: /run/secrets/BOUNCER_KEY_{BOUNCER_NAME}\n      \
+                 content: \"{{{{ secret.bouncer-key }}}}\""
             )),
             "{manifest}"
         );

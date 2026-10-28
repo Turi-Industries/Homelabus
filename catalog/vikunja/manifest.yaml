@@ -25,7 +25,7 @@ spec:
     VIKUNJA_DATABASE_HOST: "{{ db.host }}"
     VIKUNJA_DATABASE_DATABASE: "{{ db.name }}"
     VIKUNJA_DATABASE_USER: "{{ db.user }}"
-    VIKUNJA_DATABASE_PASSWORD: "{{ db.password }}"
+    VIKUNJA_DATABASE_PASSWORD_FILE: /run/secrets/db-password
 
     # Without it, the sharing links and the invitations point at localhost.
     VIKUNJA_SERVICE_PUBLICURL: "https://{{ domain }}/"
@@ -33,7 +33,7 @@ spec:
     # 🔴 Signs every session. Left unset, Vikunja draws a new one at every start
     # (`pkg/config/config.go`): each restart, each update, signed everyone out. Named
     # `service.secret` since 2.0, `jwtsecret` deprecated; the vault's secret kept.
-    VIKUNJA_SERVICE_SECRET: "{{ secret.jwt-secret }}"
+    VIKUNJA_SERVICE_SECRET_FILE: /run/secrets/jwt-secret
     # People come through PocketID, which creates their account at the first sign-in
     # whatever this says; the local sign-up form defaults to open. ⚠️ Local sign-in is
     # left on: PocketID never joins an existing local account (`getOrCreateUser`,
@@ -48,9 +48,16 @@ spec:
     VIKUNJA_MAILER_HOST: "{{ smtp.host }}"
     VIKUNJA_MAILER_PORT: "{{ smtp.port }}"
     VIKUNJA_MAILER_USERNAME: "{{ smtp.user }}"
-    VIKUNJA_MAILER_PASSWORD: "{{ smtp.password }}"
+    VIKUNJA_MAILER_PASSWORD_FILE: /run/secrets/smtp-password
     VIKUNJA_MAILER_FROMEMAIL: "{{ smtp.from }}"
   files:
+    # 🔴 A variable beside its `_FILE` wins over it: each secret is the file alone.
+    - path: /run/secrets/db-password
+      content: "{{ db.password }}"
+    - path: /run/secrets/jwt-secret
+      content: "{{ secret.jwt-secret }}"
+    - path: /run/secrets/smtp-password
+      content: "{{ smtp.password }}"
     # 🔴 `sso: native` created the client in PocketID; this is what tells Vikunja.
     # Since 2.0 its providers are a MAP keyed by id — the 0.24 list is refused, "wrong
     # format" in its log, and the sign-in button gone (rehearsed 2026-10-19). The key

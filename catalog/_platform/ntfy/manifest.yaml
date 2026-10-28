@@ -33,12 +33,19 @@ spec:
     # vault and given to ntfy as bcrypt hashes: `homelabus` publishes the
     # controller's alerts, `watchdog` the deadman's from another machine, `reader` is
     # what a phone subscribes with (`hlb secret-get ntfy-reader-password`). The
-    # declared ones are kept in this file, which ntfy rewrites from these at start.
+    # declared ones are kept in this file, which ntfy rewrites from them at start.
     NTFY_AUTH_FILE: /var/cache/ntfy/auth.db
     NTFY_AUTH_DEFAULT_ACCESS: deny-all
-    NTFY_AUTH_USERS: >-
-      homelabus:{{ secret.publisher-password:bcrypt }}:user,watchdog:{{ secret.watchdog-password:bcrypt }}:user,reader:{{ secret.reader-password:bcrypt }}:user
     NTFY_AUTH_ACCESS: "homelabus:*:write-only,watchdog:*:write-only,reader:*:read-only"
+  files:
+    # The accounts' hashes, which a hash cracked offline would open: in ntfy's own
+    # configuration file, read at its default path, since no variable takes a file.
+    - path: /etc/ntfy/server.yml
+      content: |
+        auth-users:
+          - "homelabus:{{ secret.publisher-password:bcrypt }}:user"
+          - "watchdog:{{ secret.watchdog-password:bcrypt }}:user"
+          - "reader:{{ secret.reader-password:bcrypt }}:user"
   ingress:
     # 🔴 Public, and deliberately so: an alert that only arrives from the VPN does not
     # arrive when the VPN is down — precisely the moment it matters. Its accounts, not

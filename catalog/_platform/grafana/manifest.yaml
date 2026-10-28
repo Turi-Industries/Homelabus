@@ -50,14 +50,14 @@ spec:
   env:
     # 🔴 Without it Grafana starts on admin/admin, on a page anyone on the network
     # reaches before you do.
-    GF_SECURITY_ADMIN_PASSWORD: "{{ secret.admin-password }}"
+    GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/admin-password
     GF_SERVER_ROOT_URL: "https://{{ domain }}"
     # `sso: native` provisions an OIDC client; these are what make Grafana use it.
     # Declared and not wired, the client would exist and nobody would sign in with it.
     GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
     GF_AUTH_GENERIC_OAUTH_NAME: "Pocket ID"
     GF_AUTH_GENERIC_OAUTH_CLIENT_ID: "{{ oidc.client_id }}"
-    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/oidc-client-secret
     GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
     GF_AUTH_GENERIC_OAUTH_AUTH_URL: "{{ oidc.issuer }}/authorize"
     GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "{{ oidc.issuer }}/api/oidc/token"
@@ -86,6 +86,11 @@ spec:
   # Grafana where. Provisioned, the source is read only — edited in the interface, it
   # would be overwritten at the next start without a word.
   files:
+    # The image's start reads each `GF_*__FILE` into the variable it names.
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"
+    - path: /run/secrets/oidc-client-secret
+      content: "{{ oidc.client_secret }}"
     - path: /etc/grafana/provisioning/datasources/homelabus.yaml
       content: |
         apiVersion: 1

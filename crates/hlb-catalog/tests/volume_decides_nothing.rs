@@ -93,21 +93,41 @@ fn a_forged_gitea_volume_runs_none_of_its_code() {
         .expect("the start script")
         .content;
     // Rebuilt at every start, app.ini holds only what the environment gives it: the
-    // keys that encrypt must be there, or Gitea falls back on a constant.
-    for key in [
-        "GITEA__security__SECRET_KEY",
-        "GITEA__security__INTERNAL_TOKEN",
-        "GITEA__oauth2__JWT_SECRET",
-        "GITEA__server__LFS_JWT_SECRET",
-    ] {
-        assert!(
-            m.spec
-                .env
-                .get(key)
-                .is_some_and(|v| v.contains("{{ secret.")),
-            "{key} is not from the vault"
-        );
-    }
+    // keys that encrypt must be there, or Gitea falls back on a constant. Each is a
+    // file the environment names, the vault's — given here as the test's own.
+    let keys = [
+        (
+            "GITEA__security__SECRET_KEY",
+            "Abcdefgh1234567890abcdefXYZ12345",
+        ),
+        (
+            "GITEA__security__INTERNAL_TOKEN",
+            "Zyxwvut0987654321zyxwvutABCDE123",
+        ),
+        (
+            "GITEA__oauth2__JWT_SECRET",
+            "Xz0LAn7SZbPUVMuj6SbTMNPtCt1Z-VzuOK2IM95esLk",
+        ),
+        (
+            "GITEA__server__LFS_JWT_SECRET",
+            "r5apulnCltEBzBNOXSMGU2T9LY9VDWqnOXdpSA-X2Sc",
+        ),
+    ];
+    let secret_files: Vec<(String, String, &str)> = keys
+        .iter()
+        .map(|(key, value)| {
+            let name = format!("{key}__FILE");
+            let path = m.spec.env.get(&name).unwrap_or_else(|| panic!("{name}"));
+            assert!(
+                m.spec
+                    .files
+                    .iter()
+                    .any(|f| &f.path == path && f.content.contains("{{ secret.")),
+                "{key} is not from the vault"
+            );
+            (name, path.clone(), *value)
+        })
+        .collect();
 
     let tag = std::process::id();
     let container = format!("hlb-gitea-vol-{tag}");
@@ -119,46 +139,50 @@ fn a_forged_gitea_volume_runs_none_of_its_code() {
     let start = dir.path().join("start.sh");
     std::fs::write(&start, script).expect("written");
     let mount = format!("{}:/run/hlb/gitea-start.sh:ro", start.display());
+    let mut secrets: Vec<String> = Vec::new();
+    for (i, (name, path, value)) in secret_files.iter().enumerate() {
+        let local = dir.path().join(format!("secret-{i}"));
+        std::fs::write(&local, value).expect("written");
+        secrets.extend([
+            "-e".to_string(),
+            format!("{name}={path}"),
+            "-v".to_string(),
+            format!("{}:{path}:ro", local.display()),
+        ]);
+    }
     let volume = format!("{}:/data", stand.volume);
     let start_gitea = |stand: &mut Stand| {
         let _ = Command::new("docker")
             .args(["rm", "-f", &container])
             .output();
-        run(
-            "docker",
-            &[
-                "run",
-                "-d",
-                "--name",
-                &container,
-                "-p",
-                "127.0.0.1::3000",
-                "-e",
-                "GITEA__security__INSTALL_LOCK=true",
-                "-e",
-                "GITEA__database__DB_TYPE=sqlite3",
-                "-e",
-                "GITEA__security__SECRET_KEY=Abcdefgh1234567890abcdefXYZ12345",
-                "-e",
-                "GITEA__security__INTERNAL_TOKEN=Zyxwvut0987654321zyxwvutABCDE123",
-                "-e",
-                "GITEA__oauth2__JWT_SECRET=Xz0LAn7SZbPUVMuj6SbTMNPtCt1Z-VzuOK2IM95esLk",
-                "-e",
-                "GITEA__server__LFS_JWT_SECRET=r5apulnCltEBzBNOXSMGU2T9LY9VDWqnOXdpSA-X2Sc",
-                "-e",
-                "HLB_OIDC_ISSUER=http://nowhere.invalid",
-                "-e",
-                "HLB_OIDC_CLIENT_ID=x",
-                "-v",
-                &volume,
-                "-v",
-                &mount,
-                &image,
-                "/usr/bin/entrypoint",
-                "bash",
-                "/run/hlb/gitea-start.sh",
-            ],
-        );
+        let mut args: Vec<&str> = vec![
+            "run",
+            "-d",
+            "--name",
+            &container,
+            "-p",
+            "127.0.0.1::3000",
+            "-e",
+            "GITEA__security__INSTALL_LOCK=true",
+            "-e",
+            "GITEA__database__DB_TYPE=sqlite3",
+            "-e",
+            "HLB_OIDC_ISSUER=http://nowhere.invalid",
+            "-e",
+            "HLB_OIDC_CLIENT_ID=x",
+            "-v",
+            &volume,
+            "-v",
+            &mount,
+        ];
+        args.extend(secrets.iter().map(String::as_str));
+        args.extend([
+            image.as_str(),
+            "/usr/bin/entrypoint",
+            "bash",
+            "/run/hlb/gitea-start.sh",
+        ]);
+        run("docker", &args);
         if !stand.containers.contains(&container) {
             stand.containers.push(container.clone());
         }
@@ -173,6 +197,18 @@ fn a_forged_gitea_volume_runs_none_of_its_code() {
 
     // A repository, as Gitea makes it.
     let port = start_gitea(&mut stand);
+    // The keys came in through their files, and none through the environment.
+    for (name, _, value) in &secret_files {
+        let key = name.rsplit("__").nth(1).expect("a key");
+        assert_eq!(
+            exec(
+                &container,
+                &format!("grep -c '^{key} *= *{value}$' /data/gitea/conf/app.ini")
+            ),
+            "1",
+            "{name}"
+        );
+    }
     let password = "Pa55word-long!";
     Command::new("docker")
         .args([

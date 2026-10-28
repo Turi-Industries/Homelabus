@@ -15,7 +15,7 @@ use hlb_types::binding::carries_secret;
 
 /// What is left. Lowered by each app moved; it only ever goes down, to zero — then this
 /// test becomes a refusal in `catalog validate`.
-const STILL_IN_AN_ENVIRONMENT: usize = 60;
+const STILL_IN_AN_ENVIRONMENT: usize = 21;
 
 /// Every variable of the catalog handing a container a secret, `app scope VARIABLE`,
 /// and how many variables were read in all.

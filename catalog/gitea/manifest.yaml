@@ -29,7 +29,7 @@ spec:
     GITEA__database__HOST: "{{ db.host }}:{{ db.port }}"
     GITEA__database__NAME: "{{ db.name }}"
     GITEA__database__USER: "{{ db.user }}"
-    GITEA__database__PASSWD: "{{ db.password }}"
+    GITEA__database__PASSWD__FILE: /run/secrets/db-password
 
     # Without ROOT_URL, Gitea builds its clone URLs from the container name.
     GITEA__server__ROOT_URL: "https://{{ domain }}/"
@@ -43,7 +43,7 @@ spec:
     GITEA__mailer__SMTP_ADDR: "{{ smtp.host }}"
     GITEA__mailer__SMTP_PORT: "{{ smtp.port }}"
     GITEA__mailer__USER: "{{ smtp.user }}"
-    GITEA__mailer__PASSWD: "{{ smtp.password }}"
+    GITEA__mailer__PASSWD__FILE: /run/secrets/smtp-password
     GITEA__mailer__FROM: "Gitea <{{ smtp.from }}>"
 
     # Configured by the variables above, so no installer: left unlocked, Gitea serves
@@ -55,10 +55,10 @@ spec:
     # leaves it, Gitea 1.27.3 encrypts with a constant written in its source
     # (`!#@FDEWREWR&*(`, `modules/setting/security.go`). Held here and not in app.ini,
     # they let the start below rebuild app.ini from nothing.
-    GITEA__security__SECRET_KEY: "{{ secret.secret-key }}"
-    GITEA__security__INTERNAL_TOKEN: "{{ secret.internal-token }}"
-    GITEA__oauth2__JWT_SECRET: "{{ secret.jwt-secret:base64url }}"
-    GITEA__server__LFS_JWT_SECRET: "{{ secret.lfs-jwt-secret:base64url }}"
+    GITEA__security__SECRET_KEY__FILE: /run/secrets/secret-key
+    GITEA__security__INTERNAL_TOKEN__FILE: /run/secrets/internal-token
+    GITEA__oauth2__JWT_SECRET__FILE: /run/secrets/jwt-secret
+    GITEA__server__LFS_JWT_SECRET__FILE: /run/secrets/lfs-jwt-secret
     # Accounts come through PocketID, whose people were invited: no local sign-up, and
     # the first person to sign in becomes the administrator. Closing sign-ups with
     # DISABLE_REGISTRATION would close PocketID's too.
@@ -117,6 +117,20 @@ spec:
   # its hooks and SSH keys again, from its database.
   command: [/usr/bin/entrypoint, bash, /run/hlb/gitea-start.sh]
   files:
+    # `environment-to-ini` (the image's `setup`, sourced by the start below) reads each
+    # `GITEA__<section>__<KEY>__FILE` into app.ini — the volume's, as the variables were.
+    - path: /run/secrets/db-password
+      content: "{{ db.password }}"
+    - path: /run/secrets/smtp-password
+      content: "{{ smtp.password }}"
+    - path: /run/secrets/secret-key
+      content: "{{ secret.secret-key }}"
+    - path: /run/secrets/internal-token
+      content: "{{ secret.internal-token }}"
+    - path: /run/secrets/jwt-secret
+      content: "{{ secret.jwt-secret:base64url }}"
+    - path: /run/secrets/lfs-jwt-secret
+      content: "{{ secret.lfs-jwt-secret:base64url }}"
     # A comment without a logo. A logo set later reaches Gitea with `hlb redeploy gitea`.
     - path: /run/hlb/logo.svg
       content: "{{ brand.logo }}"

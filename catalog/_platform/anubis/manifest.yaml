@@ -18,10 +18,13 @@ spec:
     TARGET: "http://caddy:8080"
     # Signs the pass a visitor earns. Generated once: left to Anubis, a new key at
     # every restart would send every visitor through the challenge again.
-    ED25519_PRIVATE_KEY_HEX: "{{ secret.signing-key:hex }}"
+    ED25519_PRIVATE_KEY_HEX_FILE: /run/secrets/signing-key
     DIFFICULTY: "4"
     # The visitor's address comes from Caddy's X-Real-IP, set on the way in.
     SERVE_ROBOTS_TXT: "false"
+  files:
+    - path: /run/secrets/signing-key
+      content: "{{ secret.signing-key:hex }}"
   security:
     # It listens above 1024 and writes nothing: the default hardening holds.
     readOnlyRootfs: true

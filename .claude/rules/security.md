@@ -359,6 +359,19 @@ the outside, which is the whole problem.
   which claims the bootstrap and burns the token, and its own token is the vault's
   (`FLUXER_SETUP_TOKEN`), so none is ever written to a log Homelabus shows.
 
+- **A secret reaches a container as a file, never through its environment** —
+  `docker inspect` shows a service's environment to anyone who reads the Swarm
+  (`hlb-catalog/tests/secrets_as_files.rs` counts what is left, held equal). A `files:`
+  entry `content: "{{ token }}"` on ONE quoted line: Swarm mounts it 0444, as written.
+  🔴 PocketID's `ENCRYPTION_KEY_FILE` and oauth2-proxy's two `_FILE`s keep a final
+  newline — one more byte decrypts nothing / a 33-byte cookie secret. 🔴 Garage refuses
+  a 0444 secret file without `allow_world_readable_secrets`. Vaultwarden, Vikunja, n8n
+  and Fluxer stop or misread when a variable AND its `_FILE` are both set. An image
+  reading its environment only (Stalwart, Termix, Bulwark's admin, Seafile) is started
+  by `sh -c 'X=$(cat /run/secrets/x) exec <its Entrypoint and Cmd>'`. ⚠️ A `docker
+  exec` — a job, `access.quota.apply` — gets the SERVICE's environment, not the
+  process's: it reads the file itself (Seafile's gc and quota).
+
 ## Invariants, encoded in tests
 
 - **Secure by default.** `read_only_rootfs`, `cap_drop: [ALL]`, `no_new_privileges`, no

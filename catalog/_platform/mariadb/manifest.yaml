@@ -48,7 +48,10 @@ spec:
   env:
     # 🔴 The image refuses to initialise without a root password or an explicit
     # "allow empty". Generated at install, kept in the vault.
-    MARIADB_ROOT_PASSWORD: "{{ secret.root-password }}"
+    MARIADB_ROOT_PASSWORD_FILE: /run/secrets/root-password
     # 🔴 Without it a new major starts healthy on its predecessor's data and skips
     # `mariadb-upgrade`: the system tables stay the old version's, and nothing says so.
     MARIADB_AUTO_UPGRADE: "1"
+  files:
+    - path: /run/secrets/root-password
+      content: "{{ secret.root-password }}"

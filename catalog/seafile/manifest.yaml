@@ -52,7 +52,6 @@ spec:
     SEAFILE_MYSQL_DB_HOST: "{{ db.host }}"
     SEAFILE_MYSQL_DB_PORT: "{{ db.port }}"
     SEAFILE_MYSQL_DB_USER: "{{ db.user }}"
-    SEAFILE_MYSQL_DB_PASSWORD: "{{ db.password }}"
 
     # ⚠️ Written literally, NOT via {{ db.name }}: with three databases the token
     # would be ambiguous. These names are a Seafile choice, not a topology fact.
@@ -66,7 +65,8 @@ spec:
     # 🔴 Seafile 13 refuses to start without it. Generated once into the vault and
     # never replaced: a new key invalidates every session mid-flight. Until 2026-10-17
     # a guide asked for it to be deposited, and nothing passed it to the container.
-    JWT_PRIVATE_KEY: "{{ secret.jwt-key }}"
+    # Read from `/run/secrets/jwt-key` by the start below, with the database's
+    # password and the administrator's.
 
     CACHE_PROVIDER: redis
     REDIS_HOST: "{{ cache.host }}"
@@ -102,7 +102,6 @@ spec:
     # began without them keeps its `me@example.com` until it is deleted, which the
     # assertion below reports.
     INIT_SEAFILE_ADMIN_EMAIL: "{{ smtp.from }}"
-    INIT_SEAFILE_ADMIN_PASSWORD: "{{ secret.admin-password }}"
 
     # ⚠️ Non-root refused here: the image drops privileges itself at startup, and
     # its non-root mode demands a 777 data directory it then creates as 755.
@@ -126,9 +125,23 @@ spec:
   # Homelabus owns and leaves every other one as it is.
   command: [/bin/bash, /run/hlb/seafile-start.sh]
   files:
+    - path: /run/secrets/db-password
+      content: "{{ db.password }}"
+    - path: /run/secrets/jwt-key
+      content: "{{ secret.jwt-key }}"
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"
     - path: /run/hlb/seafile-start.sh
       content: |
         set -e
+        # 🔴 The secrets, from their files, for this process and what it starts — never
+        # the service's environment, which `docker inspect` shows. Seafile reads all
+        # three from its environment only: its own `SEAFILE_SECRETS_FILE` is read by
+        # `enterpoint.sh`, after the creation below has needed the password.
+        SEAFILE_MYSQL_DB_PASSWORD=$(cat /run/secrets/db-password)
+        JWT_PRIVATE_KEY=$(cat /run/secrets/jwt-key)
+        INIT_SEAFILE_ADMIN_PASSWORD=$(cat /run/secrets/admin-password)
+        export SEAFILE_MYSQL_DB_PASSWORD JWT_PRIVATE_KEY INIT_SEAFILE_ADMIN_PASSWORD
         for d in /opt/seafile/seafile-server-*/seahub/seahub; do
           ln -sf /run/hlb/seahub_local_settings.py "$d/local_settings.py"
         done
@@ -221,7 +234,8 @@ spec:
             host=os.environ["SEAFILE_MYSQL_DB_HOST"],
             port=int(os.environ.get("SEAFILE_MYSQL_DB_PORT", "3306")),
             user=os.environ["SEAFILE_MYSQL_DB_USER"],
-            password=os.environ["SEAFILE_MYSQL_DB_PASSWORD"],
+            # A `docker exec` has the service's environment, which holds no secret.
+            password=open("/run/secrets/db-password").read(),
             database=os.environ.get("SEAFILE_MYSQL_DB_SEAHUB_DB_NAME", "seahub_db"),
         )
         with db.cursor() as c:
@@ -322,13 +336,26 @@ spec:
         SEAFILE_MYSQL_DB_HOST: "{{ db.host }}"
         SEAFILE_MYSQL_DB_PORT: "{{ db.port }}"
         SEAFILE_MYSQL_DB_USER: "{{ db.user }}"
-        SEAFILE_MYSQL_DB_PASSWORD: "{{ db.password }}"
         SEAFILE_MYSQL_DB_CCNET_DB_NAME: ccnet_db
         SEAFILE_MYSQL_DB_SEAFILE_DB_NAME: seafile_db
-        JWT_PRIVATE_KEY: "{{ secret.jwt-key }}"
         SEAFILE_LOG_TO_STDOUT: "true"
         NOTIFICATION_SERVER_LOG_LEVEL: info
         TIME_ZONE: "{{ timezone }}"
+      # The server reads its two secrets from its environment only (14.0.8): set from
+      # their files for the process alone, then the image's own `Cmd`.
+      command:
+        - /bin/sh
+        - -c
+        - >-
+          SEAFILE_MYSQL_DB_PASSWORD=$(cat /run/secrets/db-password)
+          JWT_PRIVATE_KEY=$(cat /run/secrets/jwt-key)
+          exec /opt/seafile/notification-server -c /opt/seafile
+          -l /shared/seafile/logs/notification-server.log
+      files:
+        - path: /run/secrets/db-password
+          content: "{{ db.password }}"
+        - path: /run/secrets/jwt-key
+          content: "{{ secret.jwt-key }}"
       memory: { reserve: 16M, limit: 128M }
       # No curl in the image: bash's own socket.
       healthcheck:
@@ -382,7 +409,12 @@ spec:
     - id: gc
       does: frees the blocks no library references, and history past its 90 days
       every: week
-      command: [/scripts/gc.sh]
+      # 🔴 `seaf-gc.sh` stops without `JWT_PRIVATE_KEY`, and a `docker exec` has the
+      # service's environment only, which holds no secret: given here from its file.
+      command:
+        - /bin/bash
+        - -c
+        - JWT_PRIVATE_KEY=$(cat /run/secrets/jwt-key) exec /scripts/gc.sh
   # The administrator made at the first start — the sync clients' way in too.
   recovery:
     - secret: admin-password

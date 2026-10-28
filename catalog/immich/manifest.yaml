@@ -69,7 +69,7 @@ spec:
     DB_PORT: "{{ db.port }}"
     DB_DATABASE_NAME: "{{ db.name }}"
     DB_USERNAME: "{{ db.user }}"
-    DB_PASSWORD: "{{ db.password }}"
+    DB_PASSWORD_FILE: /run/secrets/db-password
 
     REDIS_HOSTNAME: "{{ cache.host }}"
     REDIS_PORT: "{{ cache.port }}"
@@ -88,6 +88,8 @@ spec:
     # what Homelabus decides. Checked against the v3.1.0 image's own schema.
     IMMICH_CONFIG_FILE: /etc/immich/config.yaml
   files:
+    - path: /run/secrets/db-password
+      content: "{{ db.password }}"
     - path: /etc/immich/config.yaml
       content: |
         oauth:

@@ -34,7 +34,7 @@ pub struct PlatformAccess {
 }
 
 /// ntfy's declared accounts that publish, `(user, {{ secret.* }} name)`, as its
-/// manifest's `NTFY_AUTH_USERS` declares them.
+/// manifest's `auth-users` declares them.
 pub const NTFY_PUBLISHER: (&str, &str) = ("homelabus", "publisher-password");
 pub const NTFY_WATCHDOG: (&str, &str) = ("watchdog", "watchdog-password");
 
@@ -179,7 +179,7 @@ mod tests {
                 "{app} no longer declares {{{{ secret.{name} }}}}"
             );
         }
-        // ntfy is given the hash, as the account's own entry in NTFY_AUTH_USERS.
+        // ntfy is given the hash, as the account's own entry in `auth-users`.
         let ntfy = std::fs::read_to_string(format!("{root}/ntfy/manifest.yaml")).expect("ntfy");
         for (user, name) in [NTFY_PUBLISHER, NTFY_WATCHDOG] {
             assert!(

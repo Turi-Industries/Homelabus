@@ -50,11 +50,13 @@ spec:
   env:
     # The parser and the scenarios for Caddy's JSON access log.
     COLLECTIONS: "crowdsecurity/caddy"
+  files:
     # 🔴 The bouncer registers itself at start with this key, which Homelabus generated
     # into the vault (`crowdsec-bouncer-key`) and writes into Caddy's configuration:
-    # nobody runs `cscli` on CrowdSec's machine. Named `caddy` by the suffix.
-    BOUNCER_KEY_caddy: "{{ secret.bouncer-key }}"
-  files:
+    # nobody runs `cscli` on CrowdSec's machine. Named `caddy` by the file's suffix —
+    # the image reads `/run/secrets/BOUNCER_KEY_<name>` as it reads the variable.
+    - path: /run/secrets/BOUNCER_KEY_caddy
+      content: "{{ secret.bouncer-key }}"
     # What CrowdSec reads: the access log Caddy writes into its `logs` volume.
     - path: /etc/crowdsec/acquis.d/caddy.yaml
       content: |

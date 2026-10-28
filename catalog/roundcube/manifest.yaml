@@ -52,7 +52,6 @@ spec:
     ROUNDCUBEMAIL_DB_PORT: "{{ db.port }}"
     ROUNDCUBEMAIL_DB_NAME: "{{ db.name }}"
     ROUNDCUBEMAIL_DB_USER: "{{ db.user }}"
-    ROUNDCUBEMAIL_DB_PASSWORD: "{{ db.password }}"
 
     # 🔴 `managesieve` is the plugin that makes the sorting rules EDITABLE by the user.
     # Without it, the rules Homelabus generates exist at Stalwart but nobody can
@@ -81,3 +80,8 @@ spec:
       test: ["CMD-SHELL", "curl -fsS http://localhost/ >/dev/null || exit 1"]
   update:
     channel: minor
+  files:
+    # The image's start reads the database password from this path, and no
+    # variable names it.
+    - path: /run/secrets/roundcube_db_password
+      content: "{{ db.password }}"

@@ -37,10 +37,12 @@ spec:
     OAUTH2_PROXY_PROVIDER: "oidc"
     OAUTH2_PROXY_OIDC_ISSUER_URL: "{{ oidc.issuer }}"
     OAUTH2_PROXY_CLIENT_ID: "{{ oidc.client_id }}"
-    OAUTH2_PROXY_CLIENT_SECRET: "{{ oidc.client_secret }}"
+    # ⚠️ Read as they are, a final newline included: the cookie's would be 33 bytes,
+    # refused at start. The files below have none.
+    OAUTH2_PROXY_CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
     # Signs the session cookie. Generated once, kept in the vault: every replica must
     # share it, and a new one signs everybody out.
-    OAUTH2_PROXY_COOKIE_SECRET: "{{ secret.cookie-secret }}"
+    OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/secrets/cookie-secret
     OAUTH2_PROXY_COOKIE_SECURE: "true"
     # Its default is 127.0.0.1: Caddy, on the overlay, would never reach it.
     OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
@@ -63,3 +65,8 @@ spec:
     # PocketID hands out refresh tokens — a role taken away closes the door within
     # five, where the cookie's week would have kept it open.
     OAUTH2_PROXY_COOKIE_REFRESH: "5m"
+  files:
+    - path: /run/secrets/oidc-client-secret
+      content: "{{ oidc.client_secret }}"
+    - path: /run/secrets/cookie-secret
+      content: "{{ secret.cookie-secret }}"

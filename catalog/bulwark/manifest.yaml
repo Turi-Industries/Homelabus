@@ -40,10 +40,7 @@ spec:
     JMAP_SERVER_URL: "https://mail.{{ domain }}"
     TZ: "{{ timezone }}"
     # Signs its sessions; generated at install, kept in the vault.
-    SESSION_SECRET: "{{ secret.session-secret }}"
-    # Its own administration page (branding, policy). Without it, the first visitor
-    # to reach the setup page sets it.
-    ADMIN_PASSWORD: "{{ secret.admin-password }}"
+    SESSION_SECRET_FILE: /run/secrets/session-secret
     BULWARK_TELEMETRY: "off"
     # Next.js binds to $HOSTNAME, which Docker sets to the container's name: the probe
     # on localhost, and Caddy through the overlay alias, would meet a closed port.
@@ -81,3 +78,16 @@ spec:
         path: /api/admin/auth
         body: '{"password":"{{ password }}"}'
         pointer: /ok
+  # Its own administration page (branding, policy): without `ADMIN_PASSWORD`, the
+  # first visitor to reach the setup page sets it. Read from the environment only, at
+  # the first start (1.18.0): set from its file for the process alone, then the
+  # image's `Entrypoint` and `Cmd`.
+  command:
+    - /bin/sh
+    - -c
+    - ADMIN_PASSWORD=$(cat /run/secrets/admin-password) exec docker-entrypoint.sh node server.js
+  files:
+    - path: /run/secrets/session-secret
+      content: "{{ secret.session-secret }}"
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"

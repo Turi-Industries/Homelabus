@@ -68,4 +68,7 @@ spec:
   env:
     # 🔴 The image refuses to initialise without it. Generated at install, kept in the
     # vault; `hlb` and the controller build their admin URL from it.
-    POSTGRES_PASSWORD: "{{ secret.admin-password }}"
+    POSTGRES_PASSWORD_FILE: /run/secrets/admin-password
+  files:
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"

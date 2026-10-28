@@ -63,13 +63,14 @@ spec:
     # The metadata format changes between major versions, and the migration cannot be
     # reversed by an image rollback.
     channel: minor
-  env:
-    # Read from the environment, never from the file below: the plan carries the file,
-    # and only Swarm ever sees these. Garage wants exactly 32 bytes of hex for the RPC
-    # secret; every node of a Garage cluster must share it.
-    GARAGE_RPC_SECRET: "{{ secret.rpc-secret:hex }}"
-    GARAGE_ADMIN_TOKEN: "{{ secret.admin-token }}"
   files:
+    # Each secret a file of its own, named by `garage.toml` — which `docker exec garage`
+    # reads as the server does. Garage wants exactly 32 bytes of hex for the RPC secret;
+    # every node of a Garage cluster must share it.
+    - path: /run/secrets/rpc-secret
+      content: "{{ secret.rpc-secret:hex }}"
+    - path: /run/secrets/admin-token
+      content: "{{ secret.admin-token }}"
     # Garage takes the rest of its configuration from a file only — without one it
     # does not start.
     #
@@ -86,6 +87,10 @@ spec:
         db_engine = "lmdb"
         replication_factor = 1
         rpc_bind_addr = "[::]:3901"
+        rpc_secret_file = "/run/secrets/rpc-secret"
+        # 🔴 Garage refuses a secret file others may read, and Swarm mounts every file
+        # 0444: the container is Garage alone, so "others" is nobody.
+        allow_world_readable_secrets = true
 
         [s3_api]
         s3_region = "garage"
@@ -93,3 +98,4 @@ spec:
 
         [admin]
         api_bind_addr = "[::]:3903"
+        admin_token_file = "/run/secrets/admin-token"
