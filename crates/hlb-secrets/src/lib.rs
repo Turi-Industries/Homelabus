@@ -135,7 +135,9 @@ impl Vault {
     /// Loads an existing master key.
     pub fn open(key_path: impl AsRef<Path>) -> Result<Self> {
         let path = key_path.as_ref();
-        if !path.exists() {
+        // Not `exists()`, false on a permission refused too: told the unit failed, a
+        // person without sudo restarts a healthy one and searches its journal.
+        if std::fs::metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
             if let Some(unsealed) = sealed_target(path) {
                 return Err(Error::NotUnsealed {
                     key: path.to_path_buf(),
@@ -424,6 +426,24 @@ mod tests {
         );
         assert!(key_present(&key));
         assert!(!key.exists(), "the very trap: exists() reads it as absent");
+    }
+
+    #[test]
+    fn a_key_refused_by_permissions_is_said_so_never_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp();
+        let closed = d.path().join("closed");
+        Vault::init(closed.join("hlb-master.key")).expect("init");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let err = Vault::open(closed.join("hlb-master.key"));
+        let root = std::fs::read_dir(&closed).is_ok();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        if root {
+            return; // root reads through any mode: nothing to prove here.
+        }
+        let err = err.unwrap_err();
+        assert!(matches!(err, Error::Io { .. }), "{err}");
+        assert!(err.to_string().contains("ermission denied"), "{err}");
     }
 
     #[test]
