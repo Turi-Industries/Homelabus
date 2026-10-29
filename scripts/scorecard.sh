@@ -75,6 +75,8 @@ else
     in_env=$(grep -sohE 'STILL_IN_AN_ENVIRONMENT: usize = [0-9]+' crates/hlb-catalog/tests/secrets_as_files.rs | grep -oE '[0-9]+$')
 fi
 row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
+# A fact of each machine, not of the repository: the cluster says it, the code cannot.
+row "3 never stolen" "nodes per protection level (A verified boot … D a virtual machine)" "UNMEASURED — probe: \`hlb cluster status\` on the lab, a level per node (today nothing detects one)" "every manager and the controller's node at A or B"
 row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted; the vault key sealed to the TPM by \`hlb secrets-seal\`, Swarm's unlock key by \`hlb cluster autolock\`)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
