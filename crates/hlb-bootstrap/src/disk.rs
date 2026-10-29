@@ -120,15 +120,23 @@ pub fn thumbprint(jwk: &Value) -> Option<String> {
 /// The thumbprints of the signing keys among a Tang's key files, concatenated — the
 /// keys an advertisement is signed with, which `thp` names.
 pub fn signing_thumbprints(files: &str) -> Vec<String> {
-    let mut thps: Vec<String> = serde_json::Deserializer::from_str(files)
+    let keys: Vec<Value> = serde_json::Deserializer::from_str(files)
         .into_iter::<Value>()
         .filter_map(|k| k.ok())
+        .collect();
+    signing(&keys)
+}
+
+/// The thumbprints of the keys among `keys` that verify, sorted.
+fn signing(keys: &[Value]) -> Vec<String> {
+    let mut thps: Vec<String> = keys
+        .iter()
         .filter(|k| {
             k.get("key_ops")
                 .and_then(Value::as_array)
                 .is_some_and(|ops| ops.iter().any(|o| o == "verify"))
         })
-        .filter_map(|k| thumbprint(&k))
+        .filter_map(thumbprint)
         .collect();
     thps.sort();
     thps
@@ -163,50 +171,107 @@ pub fn device(crypttab: &str) -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub slot: u32,
-    /// Its Tangs' URLs, when it is the TPM AND Tangs shape this module writes; `None`
-    /// for any other — a TPM alone, a Tang alone, which open the disk without the other
-    /// factor.
-    pub tangs: Option<Vec<String>>,
+    /// Its Tangs, each with the signing key it advertised when the disk was bound, when
+    /// it is the TPM AND Tangs shape this module writes; `None` for any other — a TPM
+    /// alone, a Tang alone, which open the disk without the other factor.
+    pub tangs: Option<Vec<Tang>>,
 }
 
-/// `clevis luks list` read: `1: sss '{"t":2,…}'` per binding.
-pub fn parse_bindings(list: &str) -> Vec<Binding> {
-    list.lines()
-        .filter_map(|l| {
-            let (slot, rest) = l.split_once(':')?;
-            let slot = slot.trim().parse().ok()?;
-            let config = rest
-                .trim()
-                .strip_prefix("sss '")
-                .and_then(|c| c.strip_suffix('\''))
-                .and_then(|c| serde_json::from_str::<Value>(c).ok());
-            Some(Binding {
-                slot,
-                tangs: config.as_ref().and_then(ours),
-            })
+/// The Clevis bindings in `cryptsetup luksDump --dump-json-metadata`, read from their
+/// tokens. `clevis luks list` leaves each Tang's `thp` out (measured), so a Tang whose
+/// keys were remade at the same address looked bound; the token keeps the advertisement
+/// the disk was bound with. And it is read with Clevis not installed.
+pub fn parse_bindings(dump: &str) -> Vec<Binding> {
+    let Ok(v) = serde_json::from_str::<Value>(dump) else {
+        return Vec::new();
+    };
+    let tokens = v.get("tokens").and_then(Value::as_object);
+    let mut out: Vec<Binding> = tokens
+        .into_iter()
+        .flat_map(|t| t.values())
+        .filter(|t| t.get("type").and_then(Value::as_str) == Some("clevis"))
+        .flat_map(|t| {
+            let tangs = t
+                .pointer("/jwe/protected")
+                .and_then(Value::as_str)
+                .and_then(header)
+                .and_then(|h| ours(&h));
+            t.get("keyslots")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str()?.parse().ok())
+                .map(move |slot| Binding {
+                    slot,
+                    tangs: tangs.clone(),
+                })
+                .collect::<Vec<_>>()
         })
-        .collect()
+        .collect();
+    out.sort_by_key(|b| b.slot);
+    out
 }
 
-/// The Tangs' URLs of a configuration shaped as [`policy`] writes it. Clevis lists the
-/// TPM's pin back as an array, with what it filled in — and each Tang WITHOUT its `thp`
-/// (measured): a binding is known by its URLs.
-fn ours(config: &Value) -> Option<Vec<String>> {
-    let pins = config.get("pins")?.as_object()?;
-    if config.get("t")? != 2 || pins.len() != 2 || !pins.contains_key("tpm2") {
-        return None;
-    }
-    let inner = pins.get("sss")?;
-    let inner_pins = inner.get("pins")?.as_object()?;
-    if inner.get("t")? != 1 || inner_pins.len() != 1 {
-        return None;
-    }
-    let mut tangs: Vec<String> = inner_pins
-        .get("tang")?
+/// A JWE's protected header, decoded.
+fn header(protected: &str) -> Option<Value> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(protected.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The pin a header was made by, and that pin's part of it.
+fn pin(h: &Value) -> Option<(&str, &Value)> {
+    let c = h.get("clevis")?;
+    let name = c.get("pin")?.as_str()?;
+    Some((name, c.get(name)?))
+}
+
+/// An `sss` pin's threshold and the headers of its shares — each share a compact JWE.
+fn shares(sss: &Value) -> Option<(u64, Vec<Value>)> {
+    let jwes = sss
+        .get("jwe")?
         .as_array()?
         .iter()
-        .map(|t| Some(t.get("url")?.as_str()?.to_string()))
-        .collect::<Option<_>>()?;
+        .map(|j| header(j.as_str()?.split('.').next()?))
+        .collect::<Option<Vec<_>>>()?;
+    Some((sss.get("t")?.as_u64()?, jwes))
+}
+
+/// The Tangs of a binding shaped as [`policy`] writes it: `sss` t=2 over exactly the TPM
+/// and an inner `sss` t=1 over Tangs only.
+fn ours(h: &Value) -> Option<Vec<Tang>> {
+    let ("sss", outer) = pin(h)? else {
+        return None;
+    };
+    let (2, outer) = shares(outer)? else {
+        return None;
+    };
+    let names: Vec<&str> = outer.iter().filter_map(|s| Some(pin(s)?.0)).collect();
+    if outer.len() != 2 || !names.contains(&"tpm2") || !names.contains(&"sss") {
+        return None;
+    }
+    let inner = outer.iter().find_map(|s| match pin(s)? {
+        ("sss", c) => Some(c),
+        _ => None,
+    })?;
+    let (1, inner) = shares(inner)? else {
+        return None;
+    };
+    let mut tangs = inner
+        .iter()
+        .map(|s| {
+            let ("tang", c) = pin(s)? else {
+                return None;
+            };
+            let keys = c.pointer("/adv/keys")?.as_array()?;
+            let [thp] = signing(keys).try_into().ok()?;
+            Some(Tang {
+                url: c.get("url")?.as_str()?.to_string(),
+                thp,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
     tangs.sort();
     Some(tangs)
 }
@@ -252,7 +317,7 @@ pub fn plan(disk: &Disk, keys: Option<Keys>, tangs: &[Tang]) -> Result<Vec<Step>
             b.slot, disk.device, b.slot
         ));
     }
-    let mut wanted: Vec<String> = tangs.iter().map(|t| t.url.clone()).collect();
+    let mut wanted = tangs.to_vec();
     wanted.sort();
     let current = disk
         .bindings
@@ -432,21 +497,61 @@ mod tests {
 
     const DEV: &str = "/dev/disk/by-uuid/832b31e0";
 
-    fn tangs() -> Vec<Tang> {
-        vec![
-            Tang {
-                url: tang_url("10.77.0.11"),
-                thp: "aaa".into(),
-            },
-            Tang {
-                url: tang_url("10.77.0.12"),
-                thp: "bbb".into(),
-            },
-        ]
+    /// A Tang at `host` whose signing key's `x` is `x` — the thumbprint computed, as a
+    /// token's advertisement gives it back.
+    fn tang(host: &str, x: &str) -> Tang {
+        Tang {
+            url: tang_url(host),
+            thp: thumbprint(&signing_key(x)).expect("an EC key"),
+        }
     }
 
-    fn urls() -> Vec<String> {
-        tangs().into_iter().map(|t| t.url).collect()
+    fn signing_key(x: &str) -> Value {
+        json!({"kty": "EC", "crv": "P-521", "x": x, "y": "y", "key_ops": ["verify"]})
+    }
+
+    fn tangs() -> Vec<Tang> {
+        vec![tang("10.77.0.11", "a"), tang("10.77.0.12", "b")]
+    }
+
+    fn b64(v: &Value) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+    }
+
+    /// A share as `sss` holds it: a compact JWE, its header first.
+    fn compact(h: Value) -> Value {
+        Value::String(format!("{}..iv.ct.tag", b64(&h)))
+    }
+
+    // The shapes measured on enc1's token after `hlb node bind-disk` (Clevis 20).
+    fn tang_share(host: &str, x: &str) -> Value {
+        let derive =
+            json!({"kty": "EC", "crv": "P-521", "x": "d", "y": "e", "key_ops": ["deriveKey"]});
+        compact(
+            json!({"alg": "ECDH-ES", "kid": "k", "clevis": {"pin": "tang",
+            "tang": {"url": tang_url(host), "adv": {"keys": [signing_key(x), derive]}}}}),
+        )
+    }
+
+    fn tpm_share() -> Value {
+        compact(json!({"alg": "dir", "clevis": {"pin": "tpm2",
+            "tpm2": {"hash": "sha256", "key": "ecc", "pcr_bank": "sha256", "pcr_ids": "7"}}}))
+    }
+
+    fn sss(t: u64, shares: Vec<Value>) -> Value {
+        json!({"alg": "dir", "clevis": {"pin": "sss", "sss": {"t": t, "p": "p", "jwe": shares}}})
+    }
+
+    /// The metadata of a disk whose slot `slot` holds a binding of header `h`.
+    fn dump(slot: &str, h: &Value) -> String {
+        json!({"keyslots": {"1": {}, "2": {}}, "tokens": {"0": {"type": "clevis",
+            "keyslots": [slot], "jwe": {"protected": b64(h), "ciphertext": "c"}}}})
+        .to_string()
+    }
+
+    fn ours_on(hosts: &[(&str, &str)]) -> Value {
+        let tangs = hosts.iter().map(|(h, x)| tang_share(h, x)).collect();
+        sss(2, vec![tpm_share(), compact(sss(1, tangs))])
     }
 
     fn whats(steps: &[Step]) -> Vec<&str> {
@@ -494,30 +599,77 @@ mod tests {
         assert_eq!(p["t"], 2);
         assert_eq!(p["pins"]["tpm2"]["pcr_ids"], "7");
         assert_eq!(p["pins"]["sss"]["t"], 1);
-        assert_eq!(p["pins"]["sss"]["pins"]["tang"][1]["thp"], "bbb");
-        // What the policy writes, clevis lists back as ours.
-        assert_eq!(ours(&p), Some(urls()));
+        assert_eq!(
+            p["pins"]["sss"]["pins"]["tang"][1]["thp"],
+            tangs()[1].thp.as_str()
+        );
     }
 
     #[test]
-    fn a_binding_listed_by_clevis_is_read_back() {
-        // `clevis luks list` on enc1 after `hlb node bind-disk`: the TPM's pin filled in,
-        // and no Tang's `thp`, though the binding pinned each.
-        let list = r#"1: sss '{"t":2,"pins":{"tpm2":[{"hash":"sha256","key":"ecc","pcr_bank":"sha256","pcr_ids":"7"}],"sss":{"t":1,"pins":{"tang":[{"url":"http://10.77.0.12:7500"},{"url":"http://10.77.0.11:7500"}]}}}}'
-2: tpm2 '{"hash":"sha256","key":"ecc"}'"#;
-        let b = parse_bindings(list);
-        assert_eq!(b.len(), 2);
-        assert_eq!(b[0].tangs, Some(urls()));
-        assert_eq!(b[1].tangs, None, "a TPM alone is not ours");
+    fn a_binding_is_read_back_from_its_token_with_its_tangs_keys() {
+        let b = parse_bindings(&dump(
+            "2",
+            &ours_on(&[("10.77.0.12", "b"), ("10.77.0.11", "a")]),
+        ));
+        assert_eq!(
+            b,
+            vec![Binding {
+                slot: 2,
+                tangs: Some(tangs())
+            }]
+        );
     }
 
     #[test]
-    fn a_flat_two_of_three_is_not_ours() {
-        let flat: Value = serde_json::from_str(
-            r#"{"t":2,"pins":{"tpm2":{},"tang":[{"url":"u","thp":"t"},{"url":"v","thp":"w"}]}}"#,
-        )
-        .expect("JSON");
-        assert_eq!(ours(&flat), None);
+    fn a_binding_opening_with_one_factor_is_not_ours() {
+        let tpm_alone = json!({"alg": "dir", "clevis": {"pin": "tpm2", "tpm2": {}}});
+        let tang_alone = sss(1, vec![tang_share("10.77.0.11", "a")]);
+        // The flat "two of three" this plan first said: the Tangs alone open it.
+        let flat = sss(
+            2,
+            vec![
+                tpm_share(),
+                tang_share("10.77.0.11", "a"),
+                tang_share("10.77.0.12", "b"),
+            ],
+        );
+        // The outer threshold lowered to one: the TPM alone opens it.
+        let either = sss(
+            1,
+            vec![
+                tpm_share(),
+                compact(sss(1, vec![tang_share("10.77.0.11", "a")])),
+            ],
+        );
+        for h in [tpm_alone, tang_alone, flat, either] {
+            assert_eq!(parse_bindings(&dump("1", &h))[0].tangs, None, "{h}");
+        }
+    }
+
+    #[test]
+    fn a_token_that_is_not_clevis_binds_nothing() {
+        let d = r#"{"keyslots":{"1":{}},"tokens":{"0":{"type":"systemd-tpm2","keyslots":["1"]}}}"#;
+        assert!(parse_bindings(d).is_empty());
+    }
+
+    #[test]
+    fn a_tang_whose_keys_were_remade_is_bound_again() {
+        let disk = Disk {
+            device: DEV.into(),
+            keyslots: 2,
+            bindings: parse_bindings(&dump(
+                "1",
+                &ours_on(&[("10.77.0.11", "old"), ("10.77.0.12", "b")]),
+            )),
+        };
+        let keys = Keys {
+            passphrase: false,
+            recovery: true,
+        };
+        let steps = plan(&disk, Some(keys), &tangs()).expect("a plan");
+        let w = whats(&steps);
+        assert!(w.iter().any(|x| x.contains("bind the disk")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("of before")), "{w:?}");
     }
 
     #[test]
@@ -563,7 +715,7 @@ mod tests {
             keyslots: 2,
             bindings: vec![Binding {
                 slot: 1,
-                tangs: Some(urls()),
+                tangs: Some(tangs()),
             }],
         };
         let keys = Keys {
@@ -578,7 +730,7 @@ mod tests {
 
     #[test]
     fn a_binding_to_other_tangs_is_replaced_after_the_new_one() {
-        let mut old = urls();
+        let mut old = tangs();
         old.pop();
         let disk = Disk {
             device: DEV.into(),

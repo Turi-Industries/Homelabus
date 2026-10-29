@@ -401,8 +401,12 @@ no secret in `docker inspect`.
        by `node add`, bound by the verb with deb1 and deb2 as Tangs: reboots open alone
        in ~15 s, both Tangs stopped it waits, deb2's alone opens it, the kit's key opens
        it, a second `--apply` changes nothing. ⚠️ `clevis luks list` shows no `thp`: a
-       binding is recognised by its Tangs' URLs, so a Tang whose keys were remade at the
-       same address is not rebound. Left: `node preseed --encrypt` (the one-time
+       binding is read from its LUKS token, which keeps each Tang's advertisement, so a
+       Tang whose keys were remade at the same address is bound again — and read with
+       Clevis absent. ⚠️ Once, the proof refused: `clevis luks pass` gave 135 bytes that
+       opened nothing, while the disk kept opening alone at boot; after a reboot it gave
+       54 that open, run after run. Unexplained; the verb stopped before removing
+       anything, which is why the proof comes first. Left: `node preseed --encrypt` (the one-time
        passphrase into the vault as `luks-install-<node>`, which the verb reads — until
        then `--passphrase-stdin`), `dropbear-initramfs` for the typed recovery (decided),
        and a node's binding refreshed when a node joins or leaves the house.

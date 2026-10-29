@@ -347,26 +347,8 @@ async fn read_disk(runner: &dyn Runner) -> Result<std::result::Result<Disk, Stri
             dump.stderr.trim()
         )));
     };
-    // Clevis absent lists nothing, though a binding may be there: its tokens say so.
-    let list = runner
-        .run(&[
-            "clevis".into(),
-            "luks".into(),
-            "list".into(),
-            "-d".into(),
-            device.clone(),
-        ])
-        .await;
-    let bindings = match list {
-        Ok(o) if o.ok() => disk::parse_bindings(&o.stdout),
-        _ if dump.stdout.contains("\"clevis\"") => {
-            return Ok(Err(format!(
-                "{device} carries a Clevis token and Clevis is not installed to read it: \
-                 a binding Homelabus cannot see"
-            )))
-        }
-        _ => Vec::new(),
-    };
+    // From the tokens, not `clevis luks list`: they keep each Tang's key.
+    let bindings = disk::parse_bindings(&dump.stdout);
     Ok(Ok(Disk {
         device,
         keyslots,
