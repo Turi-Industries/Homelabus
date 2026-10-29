@@ -125,6 +125,13 @@ exported — Homelabus never bills.
   restored from its backup or moved first.
 - **No real node is encrypted before it can restart alone**: the preseed's encryption
   reaches the CLI with step 4's TPM and Tang binding, not before.
+- **Until the VPS, the Tangs live on the house's other nodes**: encryption from two
+  nodes, a one-node house refused until the VPS's Tang. After a whole-house power cut
+  the recovery key is typed on ONE node and the others open in cascade, as each Tang
+  comes back.
+- **The recovery key is typed over SSH into the initrd** (`dropbear-initramfs`, the
+  house's network only), so a node without a screen can be opened; the console works
+  too. Its host key lies in clear on `/boot`, which the preview says.
 
 #### The phases
 
@@ -368,7 +375,23 @@ no secret in `docker inspect`.
        and plugged in at home. One Tang on another node of the house, one on the VPS
        answering the house's tunnel only, so a Tang down never stops a restart and no
        node needs a Tang that needs it back; after a theft, deleting the Tangs' keys
-       makes the disk unreadable for good.
+       makes the disk unreadable for good. Measured on the lab, enc1 (Debian 13.7,
+       Clevis 20 with `clevis-initramfs`, `clevis-tpm2`; two Tangs on the lab bridge):
+       Debian's own initramfs-tools does it, no dracut — the hook brings DHCP up in
+       the initrd and the disk opens alone in ~5 s of kernel time. Both Tangs down: it
+       waits at the prompt, and opens 14 s after ONE comes back, nobody typing — Clevis
+       retries in a loop. Same disk on another TPM, both Tangs up: refused, the
+       recovery key opens it. The recovery key added by `luksAddKey`, the install slot
+       killed, `update-initramfs -u`, reboot: opens alone; `clevis luks regen` rebinds
+       unattended in 1 s. Binding on PCR 7 only — the TPM itself is the point at B, and
+       a firmware update moving PCR 0/2 would otherwise lock the node. ⚠️ **The initrd
+       has plain IP, no WireGuard**: the VPS's Tang answers the public internet,
+       filtered to the house's address (the VPS reads it from the tunnel's endpoint) —
+       a WireGuard key in the initrd sits in clear on `/boot`, so a stolen machine
+       would carry its own way in. ⚠️ **Tangs only on encrypted nodes deadlock a cold
+       start**: after a power cut each waits for the other's Tang, which runs only
+       once it is open. ⚠️ `clevis luks bind -y` trusts any advertisement: `hlb` makes
+       the Tangs' keys, so it pins their thumbprints (`thp`).
     5. A: the UKI, its hook, the signed policy and the PCR 15 measurement, after
        deciding the combination above. Secure Boot keys: the distribution's shim and
        Microsoft's certificates kept — `sbctl` is not packaged, and a firmware whose
