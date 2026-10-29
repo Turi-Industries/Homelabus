@@ -362,7 +362,18 @@ printed) opens it. Level A — a boot nobody can alter, inside the house — is 
     its failure is loud: a missed reseal waits for the kit's key, it opens nothing more.
     Its costs are Homelabus's to carry: the reseal hook on every initrd, kernel and
     command line, and the keyfile slot, known to `bind-disk` beside the binding and the
-    recovery key.
+    recovery key. 🔴 And two holes initramfs-tools leaves, the class of CVE-2026-32606 (a
+    root swapped in by whoever holds the machine, run while the PCRs still read the
+    initrd's): nothing extends PCR 11 on leaving the initrd, and its `panic` drops to a
+    root shell AFTER the disk is open — a signed command line forbids `break=`, not that.
+    Both closed and measured on enc3 the same night: an `init-bottom` script extends PCR
+    11 with `leave-initrd` (digests written in — the initrd has no `sha384sum`, and the
+    first try failed on it) or panics, and `panic=10` on the UKI's command line makes a
+    panic reboot. Booted, PCR 11 is exactly `leave-initrd:sysinit:ready`'s prediction and
+    the system can no longer unseal its own binding, Tang answering; the barrier failing,
+    the disk open, it rebooted — under GRUB's command line, the same failure gave
+    `(initramfs)`. The reseal reads PCR 7 only from a UKI boot (`StubInfo` set): from
+    GRUB's it would bind the value the UKI never sees.
   - **The best protected machine carries what matters** (owner's question,
     2026-10-28). A stolen node gives up different things: a Swarm manager holds the
     whole Raft log — every app's secrets; the controller's node holds the vault's key
