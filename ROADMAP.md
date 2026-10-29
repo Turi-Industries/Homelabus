@@ -357,6 +357,12 @@ printed) opens it. Level A — a boot nobody can alter, inside the house — is 
     5 s later. A machine stolen whole runs decrypted to a login prompt, its apps never
     started — what it gives up is the running system's surface (step 7) and its memory.
     No SSH at boot either, needed only after a PCR 7 change or a broken UKI.
+    **Decided 2026-10-29: (a).** It alone meets the gate as written — a machine taken
+    away boots to nothing readable —, keeps initramfs-tools and the SSH at boot, and
+    its failure is loud: a missed reseal waits for the kit's key, it opens nothing more.
+    Its costs are Homelabus's to carry: the reseal hook on every initrd, kernel and
+    command line, and the keyfile slot, known to `bind-disk` beside the binding and the
+    recovery key.
   - **The best protected machine carries what matters** (owner's question,
     2026-10-28). A stolen node gives up different things: a Swarm manager holds the
     whole Raft log — every app's secrets; the controller's node holds the vault's key
