@@ -1,6 +1,7 @@
 //! The emergency kit: what restores the vault, and therefore cannot live in it — the
-//! master key, the backup repository's password, how to reach each destination, and
-//! Swarm's unlock key when autolock is on — on one sheet of paper, with the restic commands that bring Homelabus's state back
+//! master key, the backup repository's password, how to reach each destination,
+//! Swarm's unlock key when autolock is on, and each encrypted disk's recovery key — on
+//! one sheet of paper, with the restic commands that bring Homelabus's state back
 //! without Homelabus.
 //!
 //! ## 🔴 A kit printed before a change restores nothing
@@ -23,6 +24,11 @@ use crate::{credentials, load_destinations, Result, RESTIC_PASSWORD_SECRET};
 /// vault holding the other copy may be on that manager.
 pub const SWARM_UNLOCK_SECRET: &str = "swarm-unlock-key";
 
+/// A node's disk recovery key is the secret of this prefix and the node's name, made by
+/// [`recovery_key`] when that disk is about to be encrypted — never earlier, so the kit
+/// goes stale only then.
+pub const LUKS_RECOVERY_PREFIX: &str = "luks-recovery-";
+
 /// One destination, as the kit prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
@@ -40,6 +46,8 @@ pub struct Kit {
     pub destinations: Vec<Destination>,
     /// `None` while autolock is off: a manager then asks for no key.
     pub swarm_unlock: Option<String>,
+    /// `(node, key)`, by node: empty while no disk is encrypted.
+    pub luks: Vec<(String, String)>,
     pub fingerprint: String,
 }
 
@@ -48,6 +56,7 @@ struct Material {
     restic: Option<String>,
     destinations: Vec<Destination>,
     swarm_unlock: Option<String>,
+    luks: Vec<(String, String)>,
 }
 
 /// The kit's material, without creating anything.
@@ -60,6 +69,16 @@ async fn material(state: &State, vault: &Vault) -> Result<Material> {
         Some(ct) => Some(vault.decrypt(&ct)?),
         None => None,
     };
+    // `secret_names` is ordered by name: the fingerprint does not move with the query.
+    let mut luks = Vec::new();
+    for (name, _) in state.secret_names().await? {
+        let Some(node) = name.strip_prefix(LUKS_RECOVERY_PREFIX) else {
+            continue;
+        };
+        if let Some(ct) = state.secret(&name).await? {
+            luks.push((node.to_string(), vault.decrypt(&ct)?));
+        }
+    }
     let mut destinations = Vec::new();
     for d in load_destinations(state).await? {
         destinations.push(Destination {
@@ -72,7 +91,26 @@ async fn material(state: &State, vault: &Vault) -> Result<Material> {
         restic,
         destinations,
         swarm_unlock,
+        luks,
     })
+}
+
+/// `node`'s disk recovery key, made and stored the first time — by the preview of the
+/// verb that encrypts it, which then refuses until a kit printed since carries it.
+/// `true` when it was made now.
+pub async fn recovery_key(state: &State, vault: &Vault, node: &str) -> Result<(String, bool)> {
+    let name = format!("{LUKS_RECOVERY_PREFIX}{node}");
+    if let Some(ct) = state.secret(&name).await? {
+        return Ok((vault.decrypt(&ct)?, false));
+    }
+    let key = hlb_secrets::recovery_key();
+    let ct = vault.encrypt(&key)?;
+    let purpose = format!("disk recovery key of {node}");
+    if !state.store_secret_if_absent(&name, &ct, &purpose).await? {
+        // Made meanwhile by another run: that one is the key the disk will know.
+        return Box::pin(recovery_key(state, vault, node)).await;
+    }
+    Ok((key, true))
 }
 
 /// What a kit printed now would carry, as a fingerprint.
@@ -83,6 +121,7 @@ pub async fn fingerprint(state: &State, vault: &Vault) -> Result<String> {
         m.restic.as_deref(),
         &m.destinations,
         m.swarm_unlock.as_deref(),
+        &m.luks,
     ))
 }
 
@@ -93,6 +132,7 @@ pub fn fingerprint_of(
     restic: Option<&str>,
     destinations: &[Destination],
     swarm_unlock: Option<&str>,
+    luks: &[(String, String)],
 ) -> String {
     let mut h = Sha256::new();
     for part in [public_key, restic.unwrap_or("")] {
@@ -111,6 +151,14 @@ pub fn fingerprint_of(
         h.update(b"swarm-unlock\0");
         h.update(k.as_bytes());
     }
+    // Likewise: nothing hashed until a disk is encrypted.
+    for (node, key) in luks {
+        h.update(b"luks-recovery\0");
+        for part in [node, key] {
+            h.update(part.as_bytes());
+            h.update([0]);
+        }
+    }
     h.finalize()
         .iter()
         .take(8)
@@ -127,11 +175,13 @@ pub async fn read(state: &State, vault: &Vault) -> Result<Kit> {
             m.restic.as_deref(),
             &m.destinations,
             m.swarm_unlock.as_deref(),
+            &m.luks,
         ),
         master_key: vault.secret_key(),
         restic_password: m.restic,
         destinations: m.destinations,
         swarm_unlock: m.swarm_unlock,
+        luks: m.luks,
     })
 }
 
@@ -197,12 +247,31 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
     line("5. Each app's own administrator is in Vaultwarden, collection \"Server\": it");
     line("   comes back with the state and its volume, and opens with an owner's");
     line("   master password — which is on no sheet.");
+    // Numbered as printed: a house without autolock has no 6. to skip.
+    let mut n = 5;
     if let Some(k) = &kit.swarm_unlock {
+        n += 1;
         line("");
-        line("6. Swarm's unlock key — a manager that cannot unseal its own copy, its");
+        line(&format!(
+            "{n}. Swarm's unlock key — a manager that cannot unseal its own copy, its"
+        ));
         line("   board replaced or its disk moved, waits for it: `docker swarm unlock`.");
         line("");
         line(&format!("   {k}"));
+    }
+    if !kit.luks.is_empty() {
+        n += 1;
+        line("");
+        line(&format!(
+            "{n}. Each encrypted disk's recovery key — typed at the boot prompt when the"
+        ));
+        line("   disk does not open by itself (its TPM replaced, its Tang out of reach),");
+        line("   or given to `cryptsetup open` from another machine:");
+        for (node, key) in &kit.luks {
+            line("");
+            line(&format!("   {node}"));
+            line(&format!("     {key}"));
+        }
     }
     s
 }
@@ -222,7 +291,16 @@ mod tests {
     #[test]
     fn the_fingerprint_moves_with_anything_the_kit_holds() {
         let of = |public, restic, credentials: &str, unlock| {
-            fingerprint_of(public, restic, &[dest(Some(credentials))], unlock)
+            fingerprint_of(public, restic, &[dest(Some(credentials))], unlock, &[])
+        };
+        let luks = |key: &str| {
+            fingerprint_of(
+                "age1pub",
+                Some("pw"),
+                &[dest(Some("AK:SK"))],
+                None,
+                &[("deb1".to_string(), key.to_string())],
+            )
         };
         let base = of("age1pub", Some("pw"), "AK:SK", None);
         assert_eq!(base.len(), 16);
@@ -232,7 +310,8 @@ mod tests {
             of("age1other", Some("pw"), "AK:SK", None),
             of("age1pub", Some("pw2"), "AK:SK", None),
             of("age1pub", Some("pw"), "AK:SK2", None),
-            fingerprint_of("age1pub", Some("pw"), &[], None),
+            fingerprint_of("age1pub", Some("pw"), &[], None, &[]),
+            luks("cbdefghi"),
             of("age1pub", None, "AK:SK", None),
             unlocked.clone(),
             of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-b")),
@@ -246,6 +325,26 @@ mod tests {
             unlocked,
             of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-b"))
         );
+        assert_ne!(luks("cbdefghi"), luks("cbdefghj"));
+    }
+
+    #[tokio::test]
+    async fn a_recovery_key_is_made_once_and_stales_the_kit_that_lacks_it() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let vault = Vault::init(d.path().join("k")).expect("vault");
+        let state = State::in_memory().await.expect("state");
+        let printed = fingerprint(&state, &vault).await.expect("fingerprint");
+
+        let (key, made) = recovery_key(&state, &vault, "deb1").await.expect("made");
+        assert!(made);
+        assert_eq!(
+            recovery_key(&state, &vault, "deb1").await.expect("again"),
+            (key.clone(), false),
+            "a second preview must not change the key the disk will know"
+        );
+        assert_ne!(printed, fingerprint(&state, &vault).await.expect("now"));
+        let kit = read(&state, &vault).await.expect("kit");
+        assert_eq!(kit.luks, vec![("deb1".to_string(), key)]);
     }
 
     #[test]
@@ -270,7 +369,7 @@ mod tests {
             .collect();
         assert_eq!(
             before,
-            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))], None)
+            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))], None, &[])
         );
     }
 
@@ -281,6 +380,10 @@ mod tests {
             restic_password: Some("repo-pw".into()),
             destinations: vec![dest(Some("AKIA:shh"))],
             swarm_unlock: Some("SWMKEY-1-unlock".into()),
+            luks: vec![(
+                "a-storage-node-with-a-long-name".into(),
+                "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv".into(),
+            )],
             fingerprint: "0123456789abcdef".into(),
         };
         let sheet = render(&kit, "Turi Industries", "2026-10-18 17:00 UTC");
@@ -293,6 +396,9 @@ mod tests {
             "0123456789abcdef",
             "--tag app:hlb,db:state",
             "SWMKEY-1-unlock",
+            "a-storage-node-with-a-long-name",
+            "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv",
+            "7. Each encrypted disk's recovery key",
         ] {
             assert!(sheet.contains(needed), "{needed} missing from:\n{sheet}");
         }

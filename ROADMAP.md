@@ -333,7 +333,11 @@ no secret in `docker inspect`.
        preview of the verb that encrypts a node's disk, never earlier (decided
        2026-10-29): no key for a node never encrypted, and the kit goes stale only
        when one is — a key made at `node add` would stale it at every node, and a
-       stale kit refuses the next manager of a locked cluster.
+       stale kit refuses the next manager of a locked cluster. ✅ The kit's side,
+       2026-10-29: `kit::recovery_key` makes a node's key once (systemd's modhex form,
+       256 bits) into `luks-recovery-<node>`, the sheet prints each under its node,
+       and the fingerprint covers them only once one exists — every kit printed before
+       stays current. Its caller is step 3's verb.
     3. LUKS at install (the preseed partitions `crypto`); an existing node is drained
        and reinstalled, or re-encrypted offline — which, measured first.
     4. B: Clevis, the TPM AND one Tang of two — nested, `sss` `t=2` over the TPM and an

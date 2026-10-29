@@ -292,6 +292,26 @@ pub fn generate_password(len: usize) -> String {
     }
 }
 
+/// A disk recovery key in systemd's form — 256 bits as eight dash-joined groups of
+/// eight "modhex" characters, which read the same on any keyboard layout, the way the
+/// boot prompt has to be typed into. `systemd-cryptsetup` and `cryptsetup` take it as
+/// an ordinary passphrase.
+pub fn recovery_key() -> String {
+    const MODHEX: &[u8; 16] = b"cbdefghijklnrtuv";
+    let mut bytes = [0u8; 32];
+    fill_random(&mut bytes);
+    let chars: Vec<char> = bytes
+        .iter()
+        .flat_map(|b| [b >> 4, b & 0x0f])
+        .map(|n| MODHEX[usize::from(n)] as char)
+        .collect();
+    chars
+        .chunks(8)
+        .map(|c| c.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Fills a buffer using the system's cryptographic generator.
 ///
 /// 🔴 `rand::rng()` rather than a clock-seeded generator: a predictable access token
@@ -444,6 +464,18 @@ mod tests {
         let err = err.unwrap_err();
         assert!(matches!(err, Error::Io { .. }), "{err}");
         assert!(err.to_string().contains("ermission denied"), "{err}");
+    }
+
+    #[test]
+    fn a_recovery_key_is_systemds_form_and_never_twice_the_same() {
+        let k = recovery_key();
+        let groups: Vec<&str> = k.split('-').collect();
+        assert_eq!(groups.len(), 8, "{k}");
+        for g in groups {
+            assert_eq!(g.len(), 8, "{k}");
+            assert!(g.chars().all(|c| "cbdefghijklnrtuv".contains(c)), "{k}");
+        }
+        assert_ne!(k, recovery_key());
     }
 
     #[test]
