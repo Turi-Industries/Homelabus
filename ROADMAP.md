@@ -323,6 +323,40 @@ printed) opens it. Level A — a boot nobody can alter, inside the house — is 
     the signed policy alone and Tang required one level up, for the vault key and
     Swarm's unlock key — a machine stolen whole boots to a login prompt, its apps
     never start, and what it gives up is what a running, locked-down system leaks.
+    ✅ Measured 2026-10-29 on enc3 (Debian 13.7, systemd 257, OVMF with Secure Boot
+    enforced, swtpm): shim, then a UKI signed by a MOK enrolled in MokManager, named
+    `grubx64.efi` in its own ESP directory — shim ignored a second stage given as a load
+    option and started GRUB. The base: `systemd-measure` predicts the booted PCR 11
+    exactly, replayed from the event log — but initramfs-tools runs no systemd and
+    extends no phase, so its initrd sees the value of NO phase, and the booted system
+    adds `sysinit` and `ready`. 🔴 PCR 7 records which certificate verified the second
+    stage: `75677d…` booted by GRUB, `f7095b…` by the UKI — a policy enrolled from a GRUB
+    boot refused the UKI ("Operation not permitted"). Moving a node from B to A costs one
+    boot opened by the kit's key, unless PCR 7 is predicted.
+    **(a)** Clevis, PCR 7 read and PCR 11 predicted, nested with a Tang as B: binds in
+    8 s; opens alone, reachable 16–21 s after the reboot; a UKI changed and not resealed
+    stays closed with the Tang answering, GRUB too. 🔴 The reseal cannot go through the
+    binding it replaces — the booted system's PCR 11 is past the initrd's — nor through
+    the volume key, a `logon` key in the kernel's keyring root cannot read: it needs a
+    third slot, a keyfile on the encrypted root. Every initrd rebuild (any package's
+    trigger), kernel or command line reseals before the next reboot, or that reboot waits
+    for the kit's key over `ssh -p 2222`.
+    **(b)** `systemd-cryptenroll`, PCR 7 and the signed PCR 11 policy and a PIN: needs
+    systemd in the initrd — dracut (initramfs-tools' `cryptroot` hook copies no token
+    plugin), which replaces initramfs-tools and with it `dropbear-initramfs`: no SSH at
+    boot. A PIN at every boot, on the console; a wrong one refused (swtpm locks after 3,
+    for 1000 s), reachable 15 s after the right one. No reboot without a person: goal 5's
+    patch applied with nobody there is out.
+    **(c)** The same policy without a PIN, and Tang one level up: the disk opens alone in
+    0.4 s in the initrd (16 s to SSH), the volume measured into PCR 15; a new initrd and
+    command line signed by the same key open with NO reseal; GRUB, a MOK-signed UKI whose
+    policy another key signed, and the booted system itself (`--token-only`: the
+    signature covers `enter-initrd` only) do not. A key encrypted to the TPM (PCR 7 and
+    15, stable across boots) AND a Tang, opened by a unit restarted every 5 s: the Tang
+    down, the disk opened and the key did not, 7 tries in 45 s; the Tang back, it opened
+    5 s later. A machine stolen whole runs decrypted to a login prompt, its apps never
+    started — what it gives up is the running system's surface (step 7) and its memory.
+    No SSH at boot either, needed only after a PCR 7 change or a broken UKI.
   - **The best protected machine carries what matters** (owner's question,
     2026-10-28). A stolen node gives up different things: a Swarm manager holds the
     whole Raft log — every app's secrets; the controller's node holds the vault's key
