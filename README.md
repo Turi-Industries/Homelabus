@@ -121,8 +121,8 @@ one if you need a large catalog today, or a project with more than one maintaine
 ## Security
 
 What Homelabus defends against, what it has to trust and what it does not protect yet
-is in [the security model](docs/security-model.md). A machine carried away from the
-house can be read today: disk encryption comes next.
+is in [the security model](docs/security-model.md). A node installed encrypted opens its
+disk only at home; one installed before must be reinstalled to get there.
 
 ## Status
 

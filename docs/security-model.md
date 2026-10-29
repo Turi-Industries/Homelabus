@@ -54,6 +54,19 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 - **The metrics relay answers an allowlist of prefixes**, not arbitrary PromQL. An open
   relay would give the map of the installation to anyone with a `viewer` token.
 
+### Someone who carries a machine away
+
+- **Its disk opens only at home.** A node installed with `hlb node preseed --encrypt`
+  and bound by `hlb node bind-disk` opens its disk with its TPM AND one of the house's
+  Tangs, on up to three other nodes. Out of every Tang's reach it waits for the
+  emergency kit's recovery key; in another machine its disk opens with nothing.
+- **Where the firmware allows it, nobody inside the house alters its boot either.**
+  With Secure Boot, a TPM and systemd 257, `hlb node verify-boot` boots a kernel image
+  signed by the node's own key and seals the disk to the measurements that image
+  produces. GRUB, a changed initrd or command line, or a root swapped in after the
+  initrd opens nothing. Every new initrd is resealed before the next reboot; a missed
+  reseal makes that boot wait for the kit's key, it never opens more.
+
 ### Whoever holds your backups
 
 - **Backups are encrypted by restic before they leave the house.** A storage provider
@@ -108,9 +121,10 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 These are measured in the [roadmap](../ROADMAP.md) and closed in this order. Until then,
 plan around them.
 
-- **Disks are not encrypted.** A machine carried away from the house can be read. LUKS,
-  unlocked by the node's TPM together with a Tang server on another node, is the next
-  phase.
+- **A disk is encrypted only where the node was installed so.** An existing node is
+  drained and reinstalled to get there. A bound node without Secure Boot, or on
+  Debian 12, verifies no boot: whoever has it inside the house, a Tang answering, gets
+  a root shell at boot. A virtual machine's host reads its memory whatever is bound.
 - **The vault's key is a `0600` file next to the state until you seal it.** `hlb
   secrets-seal` seals it to the node's TPM and keeps it in memory only; root on that
   node can still read it there, and a node carried away whole unseals it at boot until

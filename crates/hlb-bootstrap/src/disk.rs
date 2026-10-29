@@ -100,6 +100,48 @@ const PROOF: &str = "for s in $(clevis luks list -d \"$1\" | cut -d: -f1); do \
 clevis luks pass -d \"$1\" -s \"$s\" | cryptsetup open --test-passphrase --key-slot \"$s\" \
 --key-file - \"$1\" && exit 0; done; exit 1";
 
+/// The Tangs one binding names, at most. Each carries its advertisement into the token,
+/// 2.3 KiB a Tang: with the recovery, reseal and binding slots, three filled 11 139 of
+/// the 12 288 bytes a default LUKS2 header holds, and four did not fit (enc3).
+pub const MAX_TANGS: usize = 3;
+
+/// Binds `$1` to the Clevis policy `$3`, its new slot added with the key file `$2`, IN
+/// PLACE of the bindings in slots `$4…`. Two tokens carrying their Tangs' advertisements
+/// outgrow LUKS2's 12 KiB of metadata (6.7 KiB each with two Tangs, measured on enc3), so
+/// `clevis luks bind` beside the old one fails. The new token takes the old one's place
+/// in ONE header write: before it the old binding opens the disk, after it the new one.
+pub const REBIND: &str = r#"set -eu
+dev=$1 key=$2 cfg=$3
+shift 3
+# Clevis's own: 40 bytes, a slot with a cheap KDF — the key is random, not typed.
+new=$(jose jwk gen --input='{"kty":"oct","bytes":40}' --output=- \
+  | jose fmt --json=- --object --get k --unquote=-)
+jwe=$(printf '%s' "$new" | clevis encrypt sss "$cfg")
+used=$(cryptsetup luksDump "$dev" | sed -n 's/^  \([0-9][0-9]*\): luks2$/\1/p')
+slot=0
+while printf '%s\n' $used | grep -qx "$slot"; do slot=$((slot + 1)); done
+printf '%s' "$new" | cryptsetup luksAddKey --batch-mode --force-password --key-file "$key" \
+  --key-slot "$slot" --pbkdf pbkdf2 --pbkdf-force-iterations 1000 "$dev"
+token=$(printf '{"type":"clevis","keyslots":["%s"],"jwe":%s}' "$slot" \
+  "$(jose jwe fmt --input="$jwe")")
+old=
+if [ $# -gt 0 ]; then
+  old=$(cryptsetup luksDump "$dev" | grep -E -B1 "^[[:space:]]+Keyslot:[[:space:]]+$1\$" \
+    | sed -n 's/^[[:space:]]*\([0-9][0-9]*\): clevis$/\1/p')
+fi
+if ! printf '%s' "$token" \
+  | cryptsetup token import ${old:+--token-id "$old" --token-replace} "$dev"; then
+  cryptsetup luksKillSlot --key-file "$key" "$dev" "$slot"
+  exit 1
+fi
+# The key file proves another slot still opens it; `--batch-mode` alone reads stdin.
+if [ $# -gt 0 ]; then
+  cryptsetup luksKillSlot --key-file "$key" "$dev" "$1"
+  shift
+fi
+for s in "$@"; do clevis luks unbind -f -d "$dev" -s "$s"; done
+"#;
+
 /// A Tang, as a binding names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tang {
@@ -402,6 +444,12 @@ pub fn plan(
                 .into(),
         );
     }
+    if tangs.len() > MAX_TANGS {
+        return Err(format!(
+            "{} Tangs named, {MAX_TANGS} at most: the disk's header has no room for more",
+            tangs.len()
+        ));
+    }
     if let Some(b) = disk.bindings.iter().find(|b| b.tangs.is_none()) {
         return Err(format!(
             "slot {} holds a Clevis binding Homelabus did not make: it opens the disk \
@@ -513,7 +561,29 @@ pub fn plan(
             "seal the disk to the boot AND the new Tangs",
             s(&[crate::boot::TOOL]),
         ));
-    } else if !current {
+    } else if current {
+        // Beside the binding wanted, one to Tangs since replaced goes.
+        for b in disk
+            .bindings
+            .iter()
+            .filter(|b| b.tangs.as_deref() != Some(wanted.as_slice()))
+        {
+            steps.push(run(
+                Phase::Configuration,
+                "remove the binding to the Tangs of before",
+                s(&[
+                    "clevis",
+                    "luks",
+                    "unbind",
+                    "-f",
+                    "-d",
+                    dev,
+                    "-s",
+                    &b.slot.to_string(),
+                ]),
+            ));
+        }
+    } else if disk.bindings.is_empty() {
         steps.push(run(
             Phase::Configuration,
             "bind the disk to this TPM AND one of the house's Tangs",
@@ -529,30 +599,19 @@ pub fn plan(
                 &policy(tangs),
             ]),
         ));
-    }
-    // A binding to Tangs since replaced: the new one is in place before it goes. At
-    // level A `hlb-uki` removes it, and the booted system cannot open the disk through
-    // a binding sealed to the initrd's PCRs: no proof either.
-    for b in disk
-        .bindings
-        .iter()
-        .filter(|b| !disk.verified && b.tangs.as_deref() != Some(wanted.as_slice()))
-    {
+    } else {
+        let mut argv = s(&["sh", "-c", REBIND, "sh", dev, STAGED_RECOVERY]);
+        argv.push(policy(tangs));
+        argv.extend(disk.bindings.iter().map(|b| b.slot.to_string()));
         steps.push(run(
             Phase::Configuration,
-            "remove the binding to the Tangs of before",
-            s(&[
-                "clevis",
-                "luks",
-                "unbind",
-                "-f",
-                "-d",
-                dev,
-                "-s",
-                &b.slot.to_string(),
-            ]),
+            "bind the disk to this TPM AND one of the house's Tangs, in place of the \
+             binding to the Tangs of before",
+            argv,
         ));
     }
+    // At level A the booted system cannot open the disk through a binding sealed to
+    // the initrd's PCRs: no proof from here.
     if !disk.verified {
         steps.push(run(
             Phase::Configuration,
@@ -876,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn a_binding_to_other_tangs_is_replaced_after_the_new_one() {
+    fn a_binding_to_other_tangs_is_replaced_in_place_never_beside() {
         let mut old = tangs();
         old.pop();
         let disk = Disk {
@@ -894,16 +953,51 @@ mod tests {
             reseal: false,
         };
         let steps = plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan");
-        let w = whats(&steps);
-        let bind = w
+        let bind: Vec<&Step> = steps
             .iter()
-            .position(|x| x.contains("bind the disk"))
-            .expect("bind");
-        let unbind = w
-            .iter()
-            .position(|x| x.contains("of before"))
-            .expect("unbind");
-        assert!(bind < unbind, "{w:?}");
+            .filter(|s| s.what.contains("bind the disk"))
+            .collect();
+        assert_eq!(bind.len(), 1, "{:?}", whats(&steps));
+        let Action::Run(argv) = &bind[0].action else {
+            panic!("a command")
+        };
+        assert!(argv.iter().any(|a| a == REBIND), "{argv:?}");
+        assert_eq!(argv.last().map(String::as_str), Some("1"), "{argv:?}");
+        // No `clevis luks bind` beside it: two tokens do not fit the header.
+        assert!(!steps.iter().any(|s| matches!(&s.action,
+            Action::Run(a) if a.iter().any(|x| x == "bind" || x == "unbind"))));
+    }
+
+    #[test]
+    fn beside_the_binding_wanted_a_stale_one_is_removed() {
+        let mut old = tangs();
+        old.pop();
+        let disk = Disk {
+            device: DEV.into(),
+            keyslots: 3,
+            bindings: vec![
+                Binding {
+                    slot: 1,
+                    tangs: Some(old),
+                },
+                Binding {
+                    slot: 2,
+                    tangs: Some(tangs()),
+                },
+            ],
+            verified: false,
+        };
+        let keys = Keys {
+            passphrase: false,
+            recovery: true,
+            reseal: false,
+        };
+        let w = whats(&plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan")).join(" | ");
+        assert!(
+            w.contains("remove the binding to the Tangs of before"),
+            "{w}"
+        );
+        assert!(!w.contains("bind the disk"), "{w}");
     }
 
     #[test]
@@ -941,6 +1035,21 @@ mod tests {
     #[test]
     fn no_tang_is_refused() {
         assert!(plan(&fresh(), None, &[], KEYS).is_err());
+    }
+
+    #[test]
+    fn more_tangs_than_the_header_holds_are_refused() {
+        let mut four = tangs();
+        while four.len() <= MAX_TANGS {
+            let n = four.len();
+            four.push(Tang {
+                url: tang_url(&format!("10.77.0.{}", 20 + n)),
+                thp: format!("thp-{n}"),
+            });
+        }
+        let e = plan(&fresh(), None, &four, KEYS).expect_err("refused");
+        assert!(e.contains("no room"), "{e}");
+        assert!(plan(&fresh(), None, &four[..MAX_TANGS], KEYS).is_ok());
     }
 
     #[test]

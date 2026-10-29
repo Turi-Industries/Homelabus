@@ -265,7 +265,8 @@ the machine can reach: the line under it says whether its disk is encrypted yet.
 
 A disk the installer encrypted asks for its passphrase at every boot until it is bound:
 `node bind-disk` makes the house's other nodes Tangs (port 7500, their keys pinned),
-binds the disk to its TPM AND one of them, enrols the node's recovery key and takes the
+binds the disk to its TPM AND one of them (three at most: the disk's header holds no
+more), enrols the node's recovery key and takes the
 install passphrase out. Refused while the printed kit lacks that key, and on a one-node
 house — the disk would open for whoever carries the machine away. When no Tang answers,
 the kit's key is typed at the console or over SSH at boot (`ssh -p 2222`, root's keys,

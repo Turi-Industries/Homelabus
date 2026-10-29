@@ -498,7 +498,7 @@ newest=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | 
 [ -n \"${1:-}\" ] && [ \"$1\" != \"$newest\" ] && exit 0
 if ! /usr/local/sbin/hlb-uki >&2; then
   : > /var/lib/hlb/boot/reseal-failed
-  echo \"hlb-uki: NOT RESEALED - the next boot waits for the kit's recovery key (ssh -p 2222).\" >&2
+  echo \"hlb-uki: NOT RESEALED - the next boot runs the image of before, or waits for the kit's recovery key (ssh -p 2222).\" >&2
   echo \"hlb-uki: run /usr/local/sbin/hlb-uki by hand before rebooting.\" >&2
 fi
 exit 0
@@ -513,14 +513,15 @@ pub fn tool(device: &str) -> String {
         .replace("@ESP@", ESP_DIR)
         .replace("@LABEL@", ENTRY_LABEL)
         .replace("@STUB_INFO@", STUB_INFO)
+        .replace("@REBIND@", crate::disk::REBIND.trim_end())
 }
 
 const TOOL_TEMPLATE: &str = r#"#!/bin/bash
 # Written by Homelabus (`hlb node verify-boot`): the newest kernel's signed image (UKI),
 # and the disk sealed to the PCRs it will boot with, AND a Tang.
-#   hlb-uki              build, seal, install — nothing when already sealed to it
-#   hlb-uki entry next   boot the UKI once, at the next boot
-#   hlb-uki entry first  boot the UKI first, always
+#   hlb-uki: build, seal, install — nothing when already sealed to it.
+#   hlb-uki entry next: boot the UKI once, at the next boot.
+#   hlb-uki entry first: boot the UKI first, always.
 # Exit 0: sealed. 2: installed but NOT sealed — no PCR 7 read from a UKI boot yet, so
 # the next boot waits for the kit's key. 1: anything else.
 set -euo pipefail
@@ -638,12 +639,15 @@ digest=$(python3 -c 'import base64, sys
 print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1] + sys.argv[2])).decode().rstrip("="))' \
   "$p7" "$p11")
 old=$(clevis luks list -d "$dev" | cut -d : -f 1 || true)
-clevis luks bind -d "$dev" -k "$dir/reseal.key" sss \
-  "$(sed "s/@PCR_DIGEST@/$digest/" "$dir/policy.json")"
-# The new binding first, then the image it opens, then the one it replaces: cut short
-# anywhere, one of them still opens what is installed.
+cat > "$work/rebind" <<'REBIND'
+@REBIND@
+REBIND
+# The binding first, then the image it opens: a failed rebind leaves the image and the
+# binding of before, which still open each other. Cut short between the two, the next
+# boot waits for the kit's key — two bindings do not fit the header side by side.
+sh "$work/rebind" "$dev" "$dir/reseal.key" \
+  "$(sed "s/@PCR_DIGEST@/$digest/" "$dir/policy.json")" $old
 install_uki
-for s in $old; do clevis luks unbind -d "$dev" -s "$s" -f; done
 printf '%s\n' "$want" > "$dir/sealed.new"
 mv -f "$dir/sealed.new" "$dir/sealed"
 rm -f "$dir/reseal-failed"
@@ -712,6 +716,7 @@ mod tests {
     fn the_generated_scripts_parse() {
         parses("bash", &tool("/dev/vda3"));
         parses("sh", HOOK_CONTENT);
+        parses("sh", crate::disk::REBIND);
         parses("sh", &barrier());
         parses("sh", BARRIER_HOOK_CONTENT);
         for step in setup_steps("/dev/vda3", &tangs(), "root=/x ro")
@@ -742,7 +747,14 @@ mod tests {
     fn the_tool_names_this_disk_and_leaves_no_placeholder_but_the_digest() {
         let t = tool("/dev/disk/by-uuid/05388f4a");
         assert!(t.contains("dev=/dev/disk/by-uuid/05388f4a\n"));
-        for p in ["@DIR@", "@DEVICE@", "@ESP@", "@LABEL@", "@STUB_INFO@"] {
+        for p in [
+            "@DIR@",
+            "@DEVICE@",
+            "@ESP@",
+            "@LABEL@",
+            "@STUB_INFO@",
+            "@REBIND@",
+        ] {
             assert!(!t.contains(p), "{p} left in");
         }
         // The one placeholder left is the policy's, which the tool fills itself.

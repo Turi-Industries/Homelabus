@@ -233,6 +233,11 @@ the outside, which is the whole problem.
   preview: unsealed, it runs until its first restart and then stays locked. And
   `docker node demote` tells nobody: `cluster autolock` visits the workers too, and
   takes back a copy left on one.
+- **🔴 Two Clevis bindings do not fit one LUKS2 header.** Each token carries its Tangs'
+  advertisements, 2.3 KiB a Tang, and a default header holds 12 KiB of metadata: a
+  `clevis luks bind` beside the binding it replaces fails "Error saving metadata". A
+  binding is replaced IN PLACE (`hlb_bootstrap::disk::REBIND`: the new slot, then
+  `token import --token-replace`, then the old slot), and names three Tangs at most.
 - **`COPY . .` sends the master key to the daemon.** `web/hlb-master.key` exists; the
   `.dockerignore` refuses `**/*.key` first.
 

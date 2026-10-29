@@ -238,6 +238,14 @@ pub async fn run(
         }
         Stage::Seal => {
             println!("Stage 4 of 4: booted by its UKI — the disk sealed to this boot.");
+            // Left by the initrd hook, which never fails a package: said nowhere else.
+            if !apply && exists(boot::RESEAL_FAILED).await? {
+                println!(
+                    "\n⚠️  The last reseal, after a new initrd, failed: the next boot runs the"
+                );
+                println!("   image of before, or waits for the kit's recovery key. --apply runs");
+                println!("   it again.");
+            }
             let steps = boot::seal_steps(&disk.device);
             if !apply {
                 preview(&steps);
@@ -262,7 +270,8 @@ pub async fn run(
                 println!("    {}", t.url);
             }
             println!("  Every new kernel or initrd is resealed by `hlb-uki` before the next");
-            println!("  boot; a reseal that fails says so, and that boot waits for the kit's key.");
+            println!("  boot; a reseal that fails says so, and that boot runs the image of before");
+            println!("  or waits for the kit's key.");
         }
     }
     Ok(ExitCode::SUCCESS)

@@ -41,12 +41,14 @@ pub async fn run(
         eprintln!("🔴 no node \"{node}\" in the cluster — see `hlb cluster status`.");
         return Ok(ExitCode::FAILURE);
     };
-    let mut others: Vec<String> = nodes
-        .iter()
-        .map(|n| n.hostname.clone())
-        .filter(|n| *n != target.hostname)
-        .collect();
-    others.sort();
+    let others = tang_candidates(
+        nodes
+            .iter()
+            .map(|n| n.hostname.clone())
+            .filter(|n| *n != target.hostname)
+            .collect(),
+        &target.disk_tangs,
+    );
     // Decided 2026-10-29: until the VPS, the Tangs live on the house's other nodes.
     if others.is_empty() {
         eprintln!(
@@ -171,8 +173,16 @@ pub async fn run(
         println!("  {}. read its signing keys, to pin them", steps.len() + 1);
         // Their keys are read at --apply; until then a Tang already in the binding is
         // taken as unchanged, or every preview of a bound disk would announce a rebind.
+        if tang_runners.len() > disk::MAX_TANGS {
+            println!(
+                "  The first {} that answer are bound — the disk's header holds no more;",
+                disk::MAX_TANGS
+            );
+            println!("  the others stand in for one that does not.");
+        }
         let expected: Vec<Tang> = tang_runners
             .iter()
+            .take(disk::MAX_TANGS)
             .map(|(_, address, _)| {
                 let url = disk::tang_url(address);
                 let thp = disk
@@ -231,6 +241,10 @@ pub async fn run(
     };
 
     for (name, address, r) in &tang_runners {
+        if tangs.len() == disk::MAX_TANGS {
+            println!("\n{name}: not needed, {} Tangs answered", disk::MAX_TANGS);
+            continue;
+        }
         println!("\n{name}:");
         let steps = Provision {
             steps: disk::tang_steps(),
@@ -382,6 +396,13 @@ pub async fn install_passphrase(cli: &Cli, node: &str) -> Result<String> {
     Ok(passphrase)
 }
 
+/// The nodes to try as Tangs, in order: those the binding names already, so a disk
+/// bound again keeps them and nothing is rebound for nothing, then the others by name.
+fn tang_candidates(mut others: Vec<String>, bound: &[String]) -> Vec<String> {
+    others.sort_by_key(|n| (!bound.contains(n), n.clone()));
+    others
+}
+
 /// A bound node whose Tangs a join or a departure changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebind {
@@ -397,7 +418,11 @@ pub fn rebinds(nodes: &[NodeInfo], joined: Option<&str>, gone: Option<&str>) -> 
         .iter()
         .filter(|n| !n.disk_tangs.is_empty())
         .filter(|n| Some(n.hostname.as_str()) != joined && Some(n.hostname.as_str()) != gone)
-        .filter(|n| joined.is_some() || gone.is_some_and(|g| n.disk_tangs.iter().any(|t| t == g)))
+        // A disk holding all the Tangs its header has room for gains nothing by a join.
+        .filter(|n| {
+            (joined.is_some() && n.disk_tangs.len() < disk::MAX_TANGS)
+                || gone.is_some_and(|g| n.disk_tangs.iter().any(|t| t == g))
+        })
         .map(|n| Rebind {
             node: n.hostname.clone(),
             left: n
@@ -627,6 +652,32 @@ mod tests {
             .map(|r| r.node)
             .collect();
         assert_eq!(r, ["enc1", "enc2"]);
+    }
+
+    #[test]
+    fn a_join_leaves_a_disk_with_a_full_header_alone() {
+        let mut h = house();
+        h.push(node("enc3", &["deb1", "deb2", "enc1"]));
+        h.push(node("deb3", &[]));
+        let r: Vec<String> = rebinds(&h, Some("deb3"), None)
+            .into_iter()
+            .map(|r| r.node)
+            .collect();
+        assert_eq!(r, ["enc1", "enc2"]);
+        // A departure from it is still said.
+        assert_eq!(rebinds(&h, None, Some("enc1"))[0].node, "enc3");
+    }
+
+    #[test]
+    fn the_tangs_bound_already_are_tried_first() {
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            tang_candidates(
+                names(&["enc2", "deb1", "enc1", "deb2"]),
+                &names(&["enc2", "deb2"])
+            ),
+            names(&["deb2", "enc2", "deb1", "enc1"])
+        );
     }
 
     #[test]

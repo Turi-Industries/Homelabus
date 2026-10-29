@@ -219,7 +219,17 @@ preseed file opens nothing since. Then: rebooted at home, it opens alone; both T
 of reach, two minutes later nothing is mounted and only the initrd's SSH answers, and
 it opens 16 s after ONE Tang comes back; its disk on another TPM with both Tangs up
 stays closed, and the kit's key typed over `ssh -p 2222` (the fingerprint the verb
-printed) opens it. Level A — a boot nobody can alter, inside the house — is step 5.
+printed) opens it.
+✅ Passed at level A the same night, by the verbs alone on a UEFI VM (enc3, Debian
+13.7, OVMF with Secure Boot enforced, swtpm): `node bind-disk` at B, then `node
+verify-boot` four times — the node's key handed to shim and enrolled in MokManager with
+the one-time password it printed, the UKI installed and booted once (opened by the kit's
+key over `ssh -p 2222`), then the disk sealed to it and the UKI put first. Rebooted, it
+opens alone in 38 s; after `update-initramfs -u` the hook reseals and it opens alone in
+35 s; both Tangs stopped it waits, and opens 18 s after one comes back; GRUB chosen in
+the firmware's boot manager, both Tangs up, it waits — two minutes, nothing mounted —
+and the kit's key opens it; `bind-disk` run again at A, from that GRUB boot, reseals to
+three Tangs, and the third alone opens it.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
   reading the file before `exec` —, and `catalog validate` refusing a secret in an
@@ -292,10 +302,10 @@ printed) opens it. Level A — a boot nobody can alter, inside the house — is 
     and `cluster autolock`, never quietly the host key alone: `--host-only` says so.
   - **Four levels**, each one sentence and never above what was detected:
     **A — verified boot, disk bound to the network**: UEFI, Secure Boot, TPM 2.0,
-    systemd ≥ 257 — a signed UKI built by a `kernel-install` hook, the TPM bound to
-    PCR 7 and a SIGNED PCR 11 policy (a new kernel needs no reseal), unsealed in the
-    initrd phase only, the volume measured into PCR 15 (`tpm2-measure-pcr=yes`, the
-    fix for CVE-2026-32606), and Tang. **B — disk bound to the network, boot not
+    systemd ≥ 257 — a UKI signed by the node's own MOK, rebuilt after every initrd;
+    Clevis bound to PCR 7 and the PCR 11 predicted for that UKI, AND a Tang, resealed
+    before the next boot; PCR 11 extended on leaving the initrd and `panic=10`, so a
+    root swapped in after it (the class of CVE-2026-32606) unseals nothing. **B — disk bound to the network, boot not
     verified**: a TPM 2.0 on systemd 252 (Debian 12, RHEL 9) or without Secure Boot —
     Clevis, the TPM and a Tang both required; the initrd and GRUB's command
     line are neither signed nor measured, so whoever has the machine INSIDE the house
@@ -482,11 +492,25 @@ printed) opens it. Level A — a boot nobody can alter, inside the house — is 
        each disk the departed node's Tang opened — red, exit 1, for one left with none
        (measured with a dummy peer). The lab's Caddy "internal error" was `lab.hlb.test`
        bare, a name no site has; every app's name answers.
-    5. A: the UKI, its hook, the signed policy and the PCR 15 measurement, after
-       deciding the combination above. Secure Boot keys: the distribution's shim and
-       Microsoft's certificates kept — `sbctl` is not packaged, and a firmware whose
-       option ROMs are signed by Microsoft does not start its graphics without them;
-       the UKI and DKMS's modules signed by a MOK key, enrolled once at the console.
+    5. ✅ A, option (a) — 2026-10-29 (`hlb_bootstrap::boot`, `hlb node verify-boot`):
+       a MOK made on the node and imported under a one-time password in letters an
+       AZERTY and a QWERTY keyboard type alike; the UKI built by `ukify`, signed by
+       it, named `grubx64.efi` beside a copy of shim in `EFI/hlb`; Clevis bound to
+       PCR 7, read from a UKI boot, and the PCR 11 `systemd-measure` predicts, AND a
+       Tang; `hlb-uki` run by an initramfs `post-update.d` hook that never fails dpkg
+       but leaves a mark `verify-boot` reads; the barrier and `panic=10`. The stage is
+       read from the node at each run (shim's MokList, `StubInfo`). Secure Boot keys:
+       the distribution's shim and Microsoft's certificates kept — `sbctl` is not
+       packaged, and a firmware whose option ROMs are signed by Microsoft does not
+       start its graphics without them. 🔴 Two Clevis bindings do not fit side by side:
+       each token carries its Tangs' advertisements, 2.3 KiB a Tang, in the 12 KiB of
+       metadata a default LUKS2 header holds — the reseal's `clevis luks bind` beside
+       the old binding failed "Error saving metadata to LUKS2 header", as `bind-disk`
+       moving two Tangs at B would have. The new binding takes the old token's place in
+       ONE header write (`token import --token-replace`), the old slot killed after:
+       before it the old binding opens the disk, after it the new one. And three Tangs
+       at most (11 139 of 12 288 bytes; four do not fit), those the binding names
+       first. Left: DKMS's modules signed by the MOK (enc3 has none).
     6. What breaks an unlock, handled before it happens: a dbx or firmware update
        changes PCR 7 (`fwupd` says when one is pending: reseal right after, or
        announce the recovery); a BIOS that resets its keys is seen in Setup Mode at
