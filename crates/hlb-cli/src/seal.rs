@@ -1,14 +1,20 @@
 //! `hlb secrets-seal`: the vault's master key sealed to this machine
-//! (`hlb_bootstrap::seal`), its path left as a link to the memory it is unsealed to.
+//! (`hlb_bootstrap::seal`), its path left as a link to the memory it is unsealed to. And
+//! `hlb cluster autolock`, whose unlock key is sealed the same way
+//! (`hlb_bootstrap::unlock`).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hlb_api::breakglass::EMERGENCY_KIT;
+use hlb_backup_run::kit::SWARM_UNLOCK_SECRET;
 use hlb_bootstrap::provision::{self, Provision};
-use hlb_bootstrap::seal::{self, Binding, Probe};
-use hlb_bootstrap::{LocalRunner, Runner};
+use hlb_bootstrap::seal::{self, Binding, Probe, Sealer};
+use hlb_bootstrap::{unlock, LocalRunner, Runner};
+use hlb_orchestrator::cluster::NodeRole;
+use hlb_orchestrator::Orchestrator;
 use hlb_secrets::Vault;
+use hlb_state::State;
 
 use crate::{open_state, open_vault, Cli, ACTOR_ROLE};
 
@@ -29,57 +35,13 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
 
     // 🔴 Sealed to a TPM, the key dies with the machine's board: the printed kit is
     // then its only copy, and one printed before today's material restores nothing.
-    let now = hlb_backup_run::kit::fingerprint(&state, &vault).await?;
-    if state.breakglass_note(EMERGENCY_KIT).await?.as_deref() != Some(now.as_str()) {
-        eprintln!("🔴 No emergency kit printed with today's material: not sealed.");
-        eprintln!("   Sealed to this machine, the key is lost with it; the kit is then the");
-        eprintln!("   only copy. Print it, keep it away from the cluster, then run this again:");
-        eprintln!("     hlb emergency kit");
+    if !kit_is_current(&state, &vault).await? {
         return Ok(ExitCode::FAILURE);
     }
-
     let runner = LocalRunner;
-    if !runner
-        .run(&["systemd-creds".into(), "--version".into()])
-        .await?
-        .ok()
-    {
-        eprintln!("🔴 This machine has no systemd-creds (systemd 250 or later): not sealed.");
-        return Ok(ExitCode::FAILURE);
-    }
-    let os = runner
-        .read_file("/etc/os-release")
-        .await?
-        .unwrap_or_default();
-    let install_libraries = hlb_bootstrap::Distro::parse(&os)
-        .map(|d| d.package_manager().install_command(&[seal::TPM_PACKAGE]));
-    let mut probe = probe(&runner).await?;
-    if probe == Probe::MissingLibraries {
-        let Some(install) = install_libraries else {
-            eprintln!("🔴 This machine has a TPM systemd cannot use, and its distribution");
-            eprintln!(
-                "   is not identified: install {} by hand, then run this again.",
-                seal::TPM_PACKAGE
-            );
-            return Ok(ExitCode::FAILURE);
-        };
-        if !apply {
-            println!("This machine has a TPM systemd cannot use yet: it lacks the TPM's");
-            println!("libraries. Would install them first —");
-            println!("  {}", install.join(" "));
-            println!("— then seal the vault's master key with the TPM.\n\n  Re-run with --apply.");
-            return Ok(ExitCode::SUCCESS);
-        }
-        println!("  install the TPM's libraries ({})", seal::TPM_PACKAGE);
-        if !runner.run(&install).await?.ok() {
-            eprintln!("🔴 installing {} failed: not sealed.", seal::TPM_PACKAGE);
-            return Ok(ExitCode::FAILURE);
-        }
-        probe = self::probe(&runner).await?;
-    }
-    let Probe::Sealer(sealer) = probe else {
-        eprintln!("🔴 the TPM is still unusable with its libraries installed: not sealed.");
-        return Ok(ExitCode::FAILURE);
+    let sealer = match sealer(&runner, apply, "the vault's master key").await? {
+        Ready::Sealer(s) => s,
+        Ready::Done(code) => return Ok(code),
     };
     // Sealed again — after a rekey — the key is read through the link.
     let steps = Provision {
@@ -146,6 +108,246 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     println!("   The file's blocks stay on the disk until overwritten; only disk");
     println!("   encryption, or a rekey after sealing, makes an old image of it useless.");
     Ok(ExitCode::SUCCESS)
+}
+
+/// `hlb cluster autolock`: Swarm's Raft log encrypted at rest, its key in the vault and
+/// on the kit, then sealed to this manager so a restart unlocks it alone.
+pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Result<ExitCode> {
+    let state = open_state(cli).await?;
+
+    if !orch.autolock_enabled().await? {
+        if !apply {
+            println!("Would enable encryption at rest for Swarm secrets.");
+            println!();
+            println!("  What it changes: after a restart, every manager demands the unlock");
+            println!("  key before starting again. Run this again once it is on, the kit");
+            println!("  printed with the key: it seals the key to this machine, which then");
+            println!("  unlocks itself after each start of Docker.");
+            println!();
+            println!("  🔴 The key goes to the vault and onto the emergency kit. If both");
+            println!("  disappear with the machine, the cluster is not recovered.");
+            println!();
+            println!("  Re-run with --apply.");
+            return Ok(ExitCode::SUCCESS);
+        }
+        let key = orch.enable_autolock().await?;
+        let vault = open_vault(cli)?;
+        let ct = vault.encrypt(&key)?;
+        state
+            .store_secret_if_absent(SWARM_UNLOCK_SECRET, &ct, "Swarm unlock after restart")
+            .await?;
+        state
+            .audit("cli", ACTOR_ROLE, "cluster-autolock", "swarm", "ok", None)
+            .await?;
+        println!("✓ Autolock active. Key recorded in the vault.");
+        println!();
+        println!("  Until it is sealed, a restarted manager waits for `docker swarm unlock`.");
+        println!("  The emergency kit does not hold the key yet: print it, keep it away from");
+        println!("  the cluster, then seal the key to this machine:");
+        println!("    hlb emergency kit");
+        println!("    hlb cluster autolock --apply");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let Some(ct) = state.secret(SWARM_UNLOCK_SECRET).await? else {
+        // 🔴 The worst possible state: encrypted, but the key is nowhere. On the next
+        // full restart the cluster stays locked and its secrets are lost for good.
+        println!("✓ Autolock is already active.");
+        println!();
+        println!("🔴 But the unlock key is NOT in the vault.");
+        println!("   Retrieve it now and keep it offline:");
+        println!("     docker swarm unlock-key");
+        return Ok(ExitCode::FAILURE);
+    };
+    let vault = open_vault(cli)?;
+    let key = vault.decrypt(&ct)?;
+    let runner = LocalRunner;
+    // A key rotated by hand leaves the vault's stale: sealed, it would unlock nothing.
+    let live = runner
+        .run(&[
+            "docker".into(),
+            "swarm".into(),
+            "unlock-key".into(),
+            "-q".into(),
+        ])
+        .await?;
+    if live.stdout.trim() != key.trim() {
+        eprintln!("🔴 The vault's unlock key is not the Swarm's — rotated by hand? Not sealed.");
+        eprintln!("   Put the live one in the vault, print the kit, then run this again:");
+        eprintln!(
+            "     docker swarm unlock-key -q | hlb secret-set {SWARM_UNLOCK_SECRET} --rotate"
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let others = other_managers(orch).await?;
+    let sealed = runner
+        .run(&["test".into(), "-f".into(), unlock::CREDENTIAL.into()])
+        .await?
+        .ok();
+    if sealed && !apply {
+        println!("✓ Autolock is active, its key sealed to this machine:");
+        println!(
+            "  {} unlocks the Swarm after each start of Docker.",
+            unlock::UNIT
+        );
+        say_other_managers(&others);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Sealed to a TPM, this copy dies with the board: the kit holds the one that does not.
+    if !kit_is_current(&state, &vault).await? {
+        return Ok(ExitCode::FAILURE);
+    }
+    let sealer = match sealer(&runner, apply, "Swarm's unlock key").await? {
+        Ready::Sealer(s) => s,
+        Ready::Done(code) => return Ok(code),
+    };
+    let steps = Provision {
+        steps: unlock::steps(sealer),
+        notes: Vec::new(),
+    };
+
+    if !apply {
+        println!("Autolock is active. Would seal its unlock key to this machine, with");
+        println!("  {}.\n", sealer.describe());
+        println!(
+            "  0. the key, from the vault, into {} (memory)",
+            unlock::STAGED
+        );
+        for (i, s) in steps.steps.iter().enumerate() {
+            println!("  {}. {}", i + 1, s.describe());
+        }
+        println!(
+            "\n  After each start of Docker, {} hands it to",
+            unlock::UNIT
+        );
+        println!("  `docker swarm unlock`. If it cannot be unsealed — a TPM replaced — the");
+        println!("  manager waits for that command, the kit's key on its standard input.");
+        say_other_managers(&others);
+        println!("\n  Re-run with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    runner.write_file(unlock::STAGED, &key).await?;
+    let done = provision::execute(&runner, &steps, |s| println!("  {}", s.what)).await;
+    // Whatever failed, the key leaves no copy outside the vault and its credential.
+    let _ = runner
+        .run(&["rm".into(), "-f".into(), unlock::STAGED.into()])
+        .await;
+    if let Err(e) = done {
+        eprintln!("🔴 {e}");
+        return Ok(ExitCode::FAILURE);
+    }
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "swarm-unlock-seal",
+            "swarm",
+            "ok",
+            Some(sealer.as_str()),
+        )
+        .await?;
+    println!("\n✓ Sealed with {}.", sealer.describe());
+    println!(
+        "  {} unlocks the Swarm after each start of Docker.",
+        unlock::UNIT
+    );
+    say_other_managers(&others);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The managers besides the one this talks to: each needs its own sealed copy.
+async fn other_managers(orch: &impl Orchestrator) -> Result<Vec<String>> {
+    let here = orch.local_node().await?;
+    Ok(orch
+        .nodes()
+        .await?
+        .into_iter()
+        .filter(|n| n.role == NodeRole::Manager && Some(&n.id) != here.as_ref())
+        .map(|n| n.hostname)
+        .collect())
+}
+
+fn say_other_managers(others: &[String]) {
+    if others.is_empty() {
+        return;
+    }
+    println!("\n⚠️  Sealed on this machine only. After a restart, these managers wait for");
+    println!(
+        "   `docker swarm unlock` and the kit's key: {}",
+        others.join(", ")
+    );
+}
+
+/// Is the kit in the drawer the one printed with today's material? Says why not.
+async fn kit_is_current(state: &State, vault: &Vault) -> Result<bool> {
+    let now = hlb_backup_run::kit::fingerprint(state, vault).await?;
+    if state.breakglass_note(EMERGENCY_KIT).await?.as_deref() == Some(now.as_str()) {
+        return Ok(true);
+    }
+    eprintln!("🔴 No emergency kit printed with today's material: not sealed.");
+    eprintln!("   Sealed to this machine, the key is lost with it; the kit is then the");
+    eprintln!("   only copy. Print it, keep it away from the cluster, then run this again:");
+    eprintln!("     hlb emergency kit");
+    Ok(false)
+}
+
+enum Ready {
+    Sealer(Sealer),
+    /// Nothing to seal with yet: what was said, and how the command ends.
+    Done(ExitCode),
+}
+
+/// What this machine can seal `what` with — its TPM's libraries installed first, with
+/// `apply`, when systemd lacks them.
+async fn sealer(runner: &LocalRunner, apply: bool, what: &str) -> Result<Ready> {
+    if !runner
+        .run(&["systemd-creds".into(), "--version".into()])
+        .await?
+        .ok()
+    {
+        eprintln!("🔴 This machine has no systemd-creds (systemd 250 or later): not sealed.");
+        return Ok(Ready::Done(ExitCode::FAILURE));
+    }
+    let os = runner
+        .read_file("/etc/os-release")
+        .await?
+        .unwrap_or_default();
+    let install_libraries = hlb_bootstrap::Distro::parse(&os)
+        .map(|d| d.package_manager().install_command(&[seal::TPM_PACKAGE]));
+    let mut probe = probe(runner).await?;
+    if probe == Probe::MissingLibraries {
+        let Some(install) = install_libraries else {
+            eprintln!("🔴 This machine has a TPM systemd cannot use, and its distribution");
+            eprintln!(
+                "   is not identified: install {} by hand, then run this again.",
+                seal::TPM_PACKAGE
+            );
+            return Ok(Ready::Done(ExitCode::FAILURE));
+        };
+        if !apply {
+            println!("This machine has a TPM systemd cannot use yet: it lacks the TPM's");
+            println!("libraries. Would install them first —");
+            println!("  {}", install.join(" "));
+            println!("— then seal {what} with the TPM.\n\n  Re-run with --apply.");
+            return Ok(Ready::Done(ExitCode::SUCCESS));
+        }
+        println!("  install the TPM's libraries ({})", seal::TPM_PACKAGE);
+        if !runner.run(&install).await?.ok() {
+            eprintln!("🔴 installing {} failed: not sealed.", seal::TPM_PACKAGE);
+            return Ok(Ready::Done(ExitCode::FAILURE));
+        }
+        probe = self::probe(runner).await?;
+    }
+    match probe {
+        Probe::Sealer(s) => Ok(Ready::Sealer(s)),
+        Probe::MissingLibraries => {
+            eprintln!("🔴 the TPM is still unusable with its libraries installed: not sealed.");
+            Ok(Ready::Done(ExitCode::FAILURE))
+        }
+    }
 }
 
 /// The driver, then each binding tried in turn: what this machine can seal with.

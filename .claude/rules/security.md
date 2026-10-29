@@ -223,6 +223,12 @@ the outside, which is the whole problem.
   a TPM that seals fine. `hlb secrets-seal` seals and unseals a throwaway value per
   binding and keeps the first that comes back. Sealing is refused until the emergency
   kit is current: sealed, the key dies with the board.
+- **Swarm's unlock unit must NOT remain active** (`hlb_bootstrap::unlock`). Docker's
+  next start pulls it in through `WantedBy=docker.service`, and a start job on an
+  active unit runs nothing: a restarted daemon would stay locked behind a green unit.
+  As a plain `oneshot` it reruns on every start — a restart, a crash, a boot (measured
+  on deb1) — and its credential directory is gone once the unlock returns. Its key is
+  sealed per manager: Swarm's key is the cluster's, a TPM is the machine's.
 - **`COPY . .` sends the master key to the daemon.** `web/hlb-master.key` exists; the
   `.dockerignore` refuses `**/*.key` first.
 

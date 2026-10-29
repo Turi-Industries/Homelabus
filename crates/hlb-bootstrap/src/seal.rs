@@ -170,7 +170,7 @@ impl Sealer {
                 "this machine's TPM, bound to its Secure Boot policy (PCR 7), and its host \
                  key: a disk taken out of it opens nothing. This systemd cannot seal \
                  without a PCR, so a firmware or dbx update leaves the key sealed at the \
-                 next boot: the kit's key opens the vault, and this command seals it again"
+                 next boot: the kit's copy stands in until this command seals it again"
             }
             Self::HostOnly => {
                 "this machine's host key alone — it has no TPM. The host key sits on the \
@@ -181,46 +181,63 @@ impl Sealer {
     }
 }
 
-/// The steps that seal the key at `key` and unseal it now, as at every boot. Sealing
-/// again — after a rekey — replaces the credential and restarts the unit.
-pub fn steps(key: &str, sealer: Sealer) -> Vec<Step> {
-    let run = |what: &str, argv: &[&str]| Step {
+fn run(what: &str, argv: &[&str]) -> Step {
+    Step {
         phase: Phase::Services,
         what: what.to_string(),
         action: Action::Run(argv.iter().map(|s| s.to_string()).collect()),
-    };
-    let staged = format!("{CREDENTIAL}.hlb-new");
+    }
+}
+
+/// The steps that encrypt the file at `source` into `credential`, under `name` — the
+/// name a unit must load it by. Sealing again replaces the credential whole.
+pub fn encrypt(name: &str, credential: &str, source: &str, sealer: Sealer) -> Vec<Step> {
+    let staged = format!("{credential}.hlb-new");
     let with_key = format!("--with-key={}", sealer.with_key());
-    let name = format!("--name={NAME}");
+    let name = format!("--name={name}");
     let mut encrypt = vec!["systemd-creds", "encrypt", &name, &with_key];
     encrypt.extend(sealer.pcrs());
-    encrypt.extend([key, &staged]);
+    encrypt.extend([source, &staged]);
     vec![
         run(
             "a directory only root enters",
             &["install", "-d", "-m", "0700", "/var/lib/hlb"],
         ),
-        // The key travels by its path, never by its value: a command line is readable by
-        // every user of the machine.
-        run("seal the key", &encrypt),
+        // The secret travels by its path, never by its value: a command line is readable
+        // by every user of the machine.
+        run("seal it", &encrypt),
         run(
             "put the credential in place",
-            &["mv", "-f", &staged, CREDENTIAL],
+            &["mv", "-f", &staged, credential],
         ),
+    ]
+}
+
+/// The unit file at `path`, then systemd told about it and the unit enabled.
+pub fn enable(unit: &str, path: &str, content: &str) -> Vec<Step> {
+    vec![
         Step {
             phase: Phase::Configuration,
             what: "the unit that unseals it at boot".to_string(),
             action: Action::Install {
-                path: UNIT_PATH.to_string(),
-                content: UNIT_CONTENT.to_string(),
+                path: path.to_string(),
+                content: content.to_string(),
                 mode: 0o644,
             },
         },
         run("read the unit", &["systemctl", "daemon-reload"]),
-        run("unseal it at every boot", &["systemctl", "enable", UNIT]),
-        // `restart`, not `start`: sealed again, an active unit still holds the old key.
-        run("unseal it now", &["systemctl", "restart", UNIT]),
+        run("unseal it at every boot", &["systemctl", "enable", unit]),
     ]
+}
+
+/// The steps that seal the key at `key` and unseal it now, as at every boot. Sealing
+/// again — after a rekey — replaces the credential and restarts the unit.
+pub fn steps(key: &str, sealer: Sealer) -> Vec<Step> {
+    let mut steps = encrypt(NAME, CREDENTIAL, key, sealer);
+    steps.extend(enable(UNIT, UNIT_PATH, UNIT_CONTENT));
+    // `restart`, not `start`: sealed again, an active unit still holds the old key.
+    steps.push(run("unseal it now", &["systemctl", "restart", UNIT]));
+    steps
 }
 
 #[cfg(test)]

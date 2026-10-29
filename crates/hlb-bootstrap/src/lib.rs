@@ -20,6 +20,7 @@
 //! | [`zfs`] | read the pools, decide what to do about them | ✅ entirely |
 //! | [`preseed`] | render a Debian preseed for an automated netinst | ✅ entirely |
 //! | [`seal`] | the vault's key sealed to the machine, unsealed into memory | ✅ entirely |
+//! | [`unlock`] | Swarm's unlock key sealed to a manager, handed to Docker | ✅ entirely |
 //!
 //! The separation is deliberate: the logic that decides is independent of the one that
 //! executes. So the whole line of reasoning - "an old Debian with a Docker that is too
@@ -37,6 +38,7 @@ pub mod preseed;
 pub mod provision;
 pub mod runner;
 pub mod seal;
+pub mod unlock;
 pub mod updates;
 pub mod zfs;
 

@@ -525,7 +525,9 @@ enum ClusterCmd {
     },
     /// Nodes, roles, tiers and quorum health.
     Status,
-    /// 🔴 Encrypt Swarm secrets at rest. The key goes to the vault.
+    /// 🔴 Encrypt Swarm secrets at rest. The key goes to the vault and the emergency kit;
+    /// run again once on, it is sealed to this manager, which then unlocks itself after
+    /// each start of Docker.
     Autolock {
         #[arg(long)]
         apply: bool,
@@ -1979,9 +1981,6 @@ fn write_pem(path: &std::path::Path, content: &str) -> std::io::Result<()> {
         std::fs::write(path, content)
     }
 }
-
-/// Name of the secret holding the Swarm unlock key.
-const SECRET_AUTOLOCK: &str = "swarm-unlock-key";
 
 /// Point-in-time restore.
 ///
@@ -10812,63 +10811,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     // Handled above, before connecting.
                     ClusterCmd::Init { .. } => unreachable!(),
 
-                    ClusterCmd::Autolock { apply } => {
-                        let state = open_state(&cli).await?;
-
-                        if orch.autolock_enabled().await? {
-                            println!("✓ Autolock is already active.");
-                            if state.secret(SECRET_AUTOLOCK).await?.is_none() {
-                                // 🔴 The worst possible state: encrypted, but the key is
-                                // nowhere. On the next full restart the cluster stays
-                                // locked and its secrets are permanently unreadable.
-                                println!();
-                                println!("🔴 But the unlock key is NOT in the vault.");
-                                println!("   Retrieve it now and keep it offline:");
-                                println!("     docker swarm unlock-key");
-                                return Ok(ExitCode::FAILURE);
-                            }
-                            return Ok(ExitCode::SUCCESS);
-                        }
-
-                        if !apply {
-                            println!("Would enable encryption at rest for Swarm secrets.");
-                            println!();
-                            println!("  What it changes: after a restart, every manager demands");
-                            println!("  the unlock key before starting again. A cluster that");
-                            println!("  reboots on its own at night no longer comes back alone.");
-                            println!();
-                            println!("  🔴 The key goes to the vault AND is shown once. Write it");
-                            println!("  down offline: if the vault disappears with the machine,");
-                            println!("  it is the only way to recover the cluster.");
-                            println!();
-                            println!("  Re-run with --apply.");
-                            return Ok(ExitCode::SUCCESS);
-                        }
-
-                        let key = orch.enable_autolock().await?;
-                        let vault = open_vault(&cli)?;
-                        let ct = vault.encrypt(&key)?;
-                        state
-                            .store_secret_if_absent(
-                                SECRET_AUTOLOCK,
-                                &ct,
-                                "Swarm unlock after restart",
-                            )
-                            .await?;
-                        state
-                            .audit("cli", ACTOR_ROLE, "cluster-autolock", "swarm", "ok", None)
-                            .await?;
-
-                        println!("✓ Autolock active. Key recorded in the vault.");
-                        println!();
-                        println!("🔴 WRITE THIS KEY DOWN OFFLINE — it is never shown again:");
-                        println!();
-                        println!("    {key}");
-                        println!();
-                        println!("Without it, a restarted manager stays locked and the");
-                        println!("cluster's secrets are unrecoverable.");
-                        Ok(ExitCode::SUCCESS)
-                    }
+                    ClusterCmd::Autolock { apply } => seal::autolock(&cli, &orch, *apply).await,
 
                     ClusterCmd::Status => {
                         let nodes = orch.nodes().await?;

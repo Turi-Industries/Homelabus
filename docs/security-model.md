@@ -115,8 +115,10 @@ plan around them.
   secrets-seal` seals it to the node's TPM and keeps it in memory only; root on that
   node can still read it there, and a node carried away whole unseals it at boot until
   its disks are encrypted.
-- **Swarm keeps its Raft keys in clear on every manager** unless autolock is on, and
-  then a restarted manager waits for a person to unlock it.
+- **Swarm keeps its Raft keys in clear on every manager** unless autolock is on. `hlb
+  cluster autolock` then seals the unlock key to the manager it runs on, which unlocks
+  itself after each start of Docker; any other manager waits for a person and the
+  kit's key.
 - **Your domain is not watched.** There is no DNSSEC and no alert if the registrar
   record changes. A registrar with a registry lock is recommended.
 - **One maintainer.** No change is reviewed by a second person before it is merged.

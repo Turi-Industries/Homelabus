@@ -1,6 +1,6 @@
 //! The emergency kit: what restores the vault, and therefore cannot live in it — the
-//! master key, the backup repository's password, and how to reach each destination —
-//! on one sheet of paper, with the restic commands that bring Homelabus's state back
+//! master key, the backup repository's password, how to reach each destination, and
+//! Swarm's unlock key when autolock is on — on one sheet of paper, with the restic commands that bring Homelabus's state back
 //! without Homelabus.
 //!
 //! ## 🔴 A kit printed before a change restores nothing
@@ -18,6 +18,11 @@ use hlb_state::State;
 
 use crate::{credentials, load_destinations, Result, RESTIC_PASSWORD_SECRET};
 
+/// Swarm's unlock key, stored by `hlb cluster autolock`. On the kit because a manager
+/// that cannot unseal its copy — a board replaced, its disk moved — stays locked, and the
+/// vault holding the other copy may be on that manager.
+pub const SWARM_UNLOCK_SECRET: &str = "swarm-unlock-key";
+
 /// One destination, as the kit prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
@@ -33,33 +38,51 @@ pub struct Kit {
     /// `None` while no backup has ever run: the password is made by the first.
     pub restic_password: Option<String>,
     pub destinations: Vec<Destination>,
+    /// `None` while autolock is off: a manager then asks for no key.
+    pub swarm_unlock: Option<String>,
     pub fingerprint: String,
 }
 
-/// The repository password and the destinations, without creating anything.
-async fn material(state: &State, vault: &Vault) -> Result<(Option<String>, Vec<Destination>)> {
+/// What the kit holds besides the master key.
+struct Material {
+    restic: Option<String>,
+    destinations: Vec<Destination>,
+    swarm_unlock: Option<String>,
+}
+
+/// The kit's material, without creating anything.
+async fn material(state: &State, vault: &Vault) -> Result<Material> {
     let restic = match state.secret(RESTIC_PASSWORD_SECRET).await? {
         Some(ct) => Some(vault.decrypt(&ct)?),
         None => None,
     };
-    let mut out = Vec::new();
+    let swarm_unlock = match state.secret(SWARM_UNLOCK_SECRET).await? {
+        Some(ct) => Some(vault.decrypt(&ct)?),
+        None => None,
+    };
+    let mut destinations = Vec::new();
     for d in load_destinations(state).await? {
-        out.push(Destination {
+        destinations.push(Destination {
             credentials: credentials(state, vault, &d).await?,
             name: d.name,
             location: d.location,
         });
     }
-    Ok((restic, out))
+    Ok(Material {
+        restic,
+        destinations,
+        swarm_unlock,
+    })
 }
 
 /// What a kit printed now would carry, as a fingerprint.
 pub async fn fingerprint(state: &State, vault: &Vault) -> Result<String> {
-    let (restic, destinations) = material(state, vault).await?;
+    let m = material(state, vault).await?;
     Ok(fingerprint_of(
         &vault.public_key(),
-        restic.as_deref(),
-        &destinations,
+        m.restic.as_deref(),
+        &m.destinations,
+        m.swarm_unlock.as_deref(),
     ))
 }
 
@@ -69,6 +92,7 @@ pub fn fingerprint_of(
     public_key: &str,
     restic: Option<&str>,
     destinations: &[Destination],
+    swarm_unlock: Option<&str>,
 ) -> String {
     let mut h = Sha256::new();
     for part in [public_key, restic.unwrap_or("")] {
@@ -81,6 +105,12 @@ pub fn fingerprint_of(
             h.update([0]);
         }
     }
+    // Hashed only when there is one: the kits printed before autolock existed hold
+    // everything a house without it needs, and stay current.
+    if let Some(k) = swarm_unlock {
+        h.update(b"swarm-unlock\0");
+        h.update(k.as_bytes());
+    }
     h.finalize()
         .iter()
         .take(8)
@@ -90,16 +120,18 @@ pub fn fingerprint_of(
 
 /// The kit, as printed now.
 pub async fn read(state: &State, vault: &Vault) -> Result<Kit> {
-    let (restic_password, destinations) = material(state, vault).await?;
+    let m = material(state, vault).await?;
     Ok(Kit {
         fingerprint: fingerprint_of(
             &vault.public_key(),
-            restic_password.as_deref(),
-            &destinations,
+            m.restic.as_deref(),
+            &m.destinations,
+            m.swarm_unlock.as_deref(),
         ),
         master_key: vault.secret_key(),
-        restic_password,
-        destinations,
+        restic_password: m.restic,
+        destinations: m.destinations,
+        swarm_unlock: m.swarm_unlock,
     })
 }
 
@@ -165,6 +197,13 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
     line("5. Each app's own administrator is in Vaultwarden, collection \"Server\": it");
     line("   comes back with the state and its volume, and opens with an owner's");
     line("   master password — which is on no sheet.");
+    if let Some(k) = &kit.swarm_unlock {
+        line("");
+        line("6. Swarm's unlock key — a manager that cannot unseal its own copy, its");
+        line("   board replaced or its disk moved, waits for it: `docker swarm unlock`.");
+        line("");
+        line(&format!("   {k}"));
+    }
     s
 }
 
@@ -182,24 +221,57 @@ mod tests {
 
     #[test]
     fn the_fingerprint_moves_with_anything_the_kit_holds() {
-        let base = fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))]);
+        let of = |public, restic, credentials: &str, unlock| {
+            fingerprint_of(public, restic, &[dest(Some(credentials))], unlock)
+        };
+        let base = of("age1pub", Some("pw"), "AK:SK", None);
         assert_eq!(base.len(), 16);
-        assert_eq!(
-            base,
-            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))])
-        );
+        assert_eq!(base, of("age1pub", Some("pw"), "AK:SK", None));
+        let unlocked = of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-a"));
         for other in [
-            fingerprint_of("age1other", Some("pw"), &[dest(Some("AK:SK"))]),
-            fingerprint_of("age1pub", Some("pw2"), &[dest(Some("AK:SK"))]),
-            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK2"))]),
-            fingerprint_of("age1pub", Some("pw"), &[]),
-            fingerprint_of("age1pub", None, &[dest(Some("AK:SK"))]),
+            of("age1other", Some("pw"), "AK:SK", None),
+            of("age1pub", Some("pw2"), "AK:SK", None),
+            of("age1pub", Some("pw"), "AK:SK2", None),
+            fingerprint_of("age1pub", Some("pw"), &[], None),
+            of("age1pub", None, "AK:SK", None),
+            unlocked.clone(),
+            of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-b")),
         ] {
             assert_ne!(
                 base, other,
                 "a kit printed before this change restores nothing"
             );
         }
+        assert_ne!(
+            unlocked,
+            of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-b"))
+        );
+    }
+
+    #[test]
+    fn a_kit_printed_before_autolock_existed_stays_current_without_it() {
+        // The fingerprint every kit printed until 2026-10-29 carries.
+        let mut h = Sha256::new();
+        for part in [
+            "age1pub",
+            "pw",
+            "offsite",
+            "s3:https://s3.example.org/hlb",
+            "AK:SK",
+        ] {
+            h.update(part.as_bytes());
+            h.update([0]);
+        }
+        let before: String = h
+            .finalize()
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            before,
+            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))], None)
+        );
     }
 
     #[test]
@@ -208,6 +280,7 @@ mod tests {
             master_key: "AGE-SECRET-KEY-1TEST".into(),
             restic_password: Some("repo-pw".into()),
             destinations: vec![dest(Some("AKIA:shh"))],
+            swarm_unlock: Some("SWMKEY-1-unlock".into()),
             fingerprint: "0123456789abcdef".into(),
         };
         let sheet = render(&kit, "Turi Industries", "2026-10-18 17:00 UTC");
@@ -219,6 +292,7 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY=shh",
             "0123456789abcdef",
             "--tag app:hlb,db:state",
+            "SWMKEY-1-unlock",
         ] {
             assert!(sheet.contains(needed), "{needed} missing from:\n{sheet}");
         }

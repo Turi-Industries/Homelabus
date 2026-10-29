@@ -209,9 +209,18 @@ no secret in `docker inspect`.
   the lab (deb1 given a swtpm TPM): sealed, rebooted, the controller back on its own;
   the same disk booted without its TPM opened nothing — the unit failed, `hlb` named
   the fix, Swarm refused to start the controller; the TPM given back, all returned.
-  Left: Swarm's autolock, its unlock key sealed the same way so a manager restarts
-  alone — today `hlb cluster autolock` keeps the key in the vault and nothing unlocks
-  at boot; sealing by default at `cluster init`, once the installer prints the kit.
+  Left: sealing by default at `cluster init`, once the installer prints the kit.
+- ✅ Swarm's unlock key sealed — 2026-10-29: `hlb cluster autolock` puts the key in
+  the vault and on the emergency kit (its fingerprint covers it only when there is
+  one, so a kit printed without autolock stays current), then, run again once the kit
+  is printed, seals it to the manager it runs on; `hlb-swarm-unlock.service` hands it
+  to `docker swarm unlock` after every start of Docker and keeps it in memory for that
+  one command. Refused when the vault's key is not the Swarm's live one. Proven on the
+  lab (deb1, TPM, PCR 7): Docker restarted, killed and the machine rebooted — each time
+  locked, then active within two seconds, the controller back on its own; the unit
+  disabled, the Swarm stayed locked and the kit's key opened it. Left: the other
+  managers — sealed over SSH by the same steps, `--host` as `node add` takes it — and
+  `node add --role manager` sealing a manager it adds.
 - **Each machine its protection level — detected, never declared** (owner's request,
   2026-10-28: every kind of machine will be met, and the best protected should carry
   what matters). What can be reached depends on the firmware, the TPM and the systemd
