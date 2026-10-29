@@ -563,6 +563,24 @@ enum NodeCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Read a node's protection level again — after its firmware, TPM or system
+    /// changed — and label it with what was found. Preview by default.
+    ///
+    /// The level is detected, never set: a level typed by hand is the one a stolen
+    /// machine contradicts.
+    Protection {
+        /// Node name, as shown by `hlb cluster status`.
+        node: String,
+        /// SSH host, when the mesh has none recorded for this node.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Upgrade a node whole — system, kernel, Docker — then reboot it if it needs
     /// it, after moving its services away. One node at a time. Preview by default.
     ///
@@ -3129,6 +3147,119 @@ async fn reboot_pending(r: &dyn hlb_bootstrap::Runner) -> Option<bool> {
 /// Activating a node whose Docker is still restarting hands Swarm a node that accepts
 /// tasks and cannot run them.
 #[allow(clippy::too_many_arguments)]
+/// How to reach a node of the cluster: this machine, `--host`, or the SSH address the
+/// mesh recorded — with the cluster's key, written under `dir`, which must outlive the
+/// runner. `None` when no address is known.
+async fn reach_node(
+    state: &State,
+    vault: &Vault,
+    hostname: &str,
+    host: Option<&str>,
+    user: Option<&str>,
+    port: Option<u16>,
+    dir: &std::path::Path,
+) -> Result<Option<Box<dyn hlb_bootstrap::Runner>>, Box<dyn std::error::Error>> {
+    if hostname == local_hostname().await {
+        return Ok(Some(Box::new(hlb_bootstrap::LocalRunner)));
+    }
+    let mesh = load_mesh(state, vault).await?;
+    let kp = cluster_ssh_key(state, vault).await?;
+    let key_path = write_temporary_key(dir, &kp.private)?;
+    let recorded = mesh
+        .get(hostname)
+        .and_then(|p| p.ssh.clone())
+        .map(|t| parse_ssh_target(&t));
+    Ok(match (host, recorded) {
+        (Some(h), _) => Some(build_runner(Some(h), user, port, key_path.to_str())),
+        (None, Some((h, u, p))) => Some(build_runner(Some(&h), u.as_deref(), p, key_path.to_str())),
+        (None, None) => None,
+    })
+}
+
+/// Reads a node's protection level again and labels it with what was found.
+async fn node_protection(
+    cli: &Cli,
+    node: &str,
+    host: Option<&str>,
+    user: Option<&str>,
+    port: Option<u16>,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let state = open_state(cli).await?;
+    let vault = open_vault(cli)?;
+    let orch = SwarmOrchestrator::connect().await?;
+    let Some(target) = orch
+        .nodes()
+        .await?
+        .into_iter()
+        .find(|n| n.hostname == node || n.id == node)
+    else {
+        eprintln!("🔴 no node \"{node}\" in the cluster — see `hlb cluster status`.");
+        return Ok(ExitCode::FAILURE);
+    };
+    let tmp = tempfile::tempdir()?;
+    let Some(runner) = reach_node(
+        &state,
+        &vault,
+        &target.hostname,
+        host,
+        user,
+        port,
+        tmp.path(),
+    )
+    .await?
+    else {
+        eprintln!(
+            "🔴 no SSH address recorded for {}: pass --host.",
+            target.hostname
+        );
+        return Ok(ExitCode::FAILURE);
+    };
+
+    println!("Machine: {}\n", target.hostname);
+    let signals = hlb_bootstrap::observe::protection(runner.as_ref()).await?;
+    print_protection(&signals);
+    let level = hlb_bootstrap::protection::assess(&signals).level;
+
+    let was = target.protection.as_deref();
+    if !apply {
+        println!();
+        match was {
+            Some(w) if w == level.as_str() => {
+                println!("Labelled {w} already — nothing would change.");
+                return Ok(ExitCode::SUCCESS);
+            }
+            Some(w) => println!("Would label it {} (labelled {w}).", level.as_str()),
+            None => println!("Would label it {}.", level.as_str()),
+        }
+        println!("\n  Re-run with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    orch.label_node(
+        &target.id,
+        hlb_orchestrator::cluster::LABEL_PROTECTION,
+        level.as_str(),
+    )
+    .await?;
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "node-protection",
+            &target.hostname,
+            "ok",
+            Some(level.as_str()),
+        )
+        .await?;
+    println!(
+        "\n✓ {} -> protection level {}",
+        target.hostname,
+        level.as_str()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn node_upgrade(
     cli: &Cli,
     node: &str,
@@ -3171,31 +3302,24 @@ async fn node_upgrade(
         }
     }
 
-    // How to reach it: this machine, the SSH address the mesh recorded, or --host.
-    let local = local_hostname().await;
-    let is_local = target.hostname == local;
-    let mesh = load_mesh(&state, &vault).await?;
-    let kp = cluster_ssh_key(&state, &vault).await?;
+    let is_local = target.hostname == local_hostname().await;
     let tmp = tempfile::tempdir()?;
-    let key_path = write_temporary_key(tmp.path(), &kp.private)?;
-    let runner: Box<dyn hlb_bootstrap::Runner> = if is_local {
-        Box::new(hlb_bootstrap::LocalRunner)
-    } else {
-        let recorded = mesh
-            .get(&target.hostname)
-            .and_then(|p| p.ssh.clone())
-            .map(|t| parse_ssh_target(&t));
-        match (host, recorded) {
-            (Some(h), _) => build_runner(Some(h), user, port, key_path.to_str()),
-            (None, Some((h, u, p))) => build_runner(Some(&h), u.as_deref(), p, key_path.to_str()),
-            (None, None) => {
-                eprintln!(
-                    "🔴 no SSH address recorded for {}: pass --host.",
-                    target.hostname
-                );
-                return Ok(ExitCode::FAILURE);
-            }
-        }
+    let Some(runner) = reach_node(
+        &state,
+        &vault,
+        &target.hostname,
+        host,
+        user,
+        port,
+        tmp.path(),
+    )
+    .await?
+    else {
+        eprintln!(
+            "🔴 no SSH address recorded for {}: pass --host.",
+            target.hostname
+        );
+        return Ok(ExitCode::FAILURE);
     };
 
     let os = runner
@@ -3760,6 +3884,9 @@ async fn cluster_init(
     for c in &report.checks {
         println!("  {}", c.describe());
     }
+    let protection = hlb_bootstrap::observe::protection(&local).await?;
+    println!();
+    print_protection(&protection);
     if args.apply && !report.can_proceed() {
         eprintln!("\n🔴 fix the blocking points above first — nothing was changed.");
         return Ok(ExitCode::FAILURE);
@@ -3862,6 +3989,16 @@ async fn cluster_init(
             .await?;
         println!("✓ failure domain {d}");
     }
+    if let Some(n) = &me {
+        let level = hlb_bootstrap::protection::assess(&protection).level;
+        orch.label_node(
+            &n.id,
+            hlb_orchestrator::cluster::LABEL_PROTECTION,
+            level.as_str(),
+        )
+        .await?;
+        println!("✓ protection level {}", level.as_str());
+    }
     if let (Some(n), true) = (&me, args.storage_node) {
         orch.label_node(&n.id, hlb_orchestrator::cluster::LABEL_STORAGE, "true")
             .await?;
@@ -3934,6 +4071,9 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     for c in &report.checks {
         println!("  {}", c.describe());
     }
+    println!();
+    let protection = hlb_bootstrap::observe::protection(first.as_ref()).await?;
+    print_protection(&protection);
     println!();
 
     if !report.can_proceed() {
@@ -4267,6 +4407,16 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
             println!("     hlb node tier {name} --set heavy --apply");
         }
     }
+    if let Some(n) = &joined {
+        let level = hlb_bootstrap::protection::assess(&protection).level;
+        orch.label_node(
+            &n.id,
+            hlb_orchestrator::cluster::LABEL_PROTECTION,
+            level.as_str(),
+        )
+        .await?;
+        println!("protection level {} set", level.as_str());
+    }
     if let (Some(n), Some(d)) = (&joined, failure_domain) {
         orch.label_node(&n.id, hlb_orchestrator::cluster::LABEL_FAILURE_DOMAIN, d)
             .await?;
@@ -4339,6 +4489,28 @@ fn build_runner(
             }
             Box::new(r)
         }
+    }
+}
+
+/// The level a machine can reach, why not higher, and whether its disk is encrypted yet.
+fn print_protection(signals: &hlb_bootstrap::protection::Signals) {
+    let a = hlb_bootstrap::protection::assess(signals);
+    println!(
+        "Protection: can reach {} — {}",
+        a.level.as_str(),
+        a.level.describe()
+    );
+    for why in &a.held_back {
+        println!("  · {why}");
+    }
+    for w in &a.warnings {
+        println!("  ⚠️  {w}");
+    }
+    // The level is a ceiling: until the disk is encrypted, a stolen one reads as is.
+    match signals.root_encrypted {
+        Some(true) => println!("  · its root is encrypted"),
+        Some(false) => println!("  · its root is NOT encrypted: a disk taken away reads as is"),
+        None => println!("  · whether its root is encrypted could not be read"),
     }
 }
 
@@ -10951,16 +11123,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             hlb_api::plural(nodes.len() as u64, "node", "nodes")
                         );
                         println!(
-                            "{:<20} {:<9} {:<8} {:<8} MEMORY",
-                            "NODE", "ROLE", "STATE", "TIER"
+                            "{:<20} {:<9} {:<8} {:<8} {:<11} MEMORY",
+                            "NODE", "ROLE", "STATE", "TIER", "PROTECTION"
                         );
                         for n in &nodes {
                             println!(
-                                "{:<20} {:<9} {:<8} {:<8} {}",
+                                "{:<20} {:<9} {:<8} {:<8} {:<11} {}",
                                 format!("{}{}", n.hostname, if n.is_leader { " ★" } else { "" }),
                                 n.role.as_str(),
                                 if n.is_ready() { "ready" } else { &n.status },
                                 n.tier.as_deref().unwrap_or("—"),
+                                n.protection.as_deref().unwrap_or("—"),
                                 n.memory_mb
                                     .map(|m| format!("{m} MB"))
                                     .unwrap_or_else(|| "?".into()),
@@ -11002,6 +11175,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 sans_tier.join(", ")
                             );
                             println!("   hlb node tier <node>  to derive it from its memory.");
+                        }
+
+                        // Not read is not protected: a node nobody looked at must show.
+                        let unread: Vec<&str> = nodes
+                            .iter()
+                            .filter(|n| n.protection.is_none())
+                            .map(|n| n.hostname.as_str())
+                            .collect();
+                        if !unread.is_empty() {
+                            println!("\n⚠️  protection level never read: {}", unread.join(", "));
+                            println!("   hlb node protection <node> --apply");
                         }
 
                         Ok(if quorum.needs_attention() {
@@ -11073,6 +11257,25 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         user.as_deref(),
                         *port,
                         *accept_downtime,
+                        *apply,
+                    )
+                    .await;
+                }
+
+                if let NodeCmd::Protection {
+                    node,
+                    host,
+                    user,
+                    port,
+                    apply,
+                } = cmd
+                {
+                    return node_protection(
+                        &cli,
+                        node,
+                        host.as_deref(),
+                        user.as_deref(),
+                        *port,
                         *apply,
                     )
                     .await;
@@ -11261,6 +11464,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     ),
                     // Handled above.
                     NodeCmd::Tier { .. }
+                    | NodeCmd::Protection { .. }
                     | NodeCmd::Prune { .. }
                     | NodeCmd::Add { .. }
                     | NodeCmd::Preseed { .. }
@@ -11278,6 +11482,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 if matches!(cmd, NodeCmd::Check { .. }) {
+                    println!();
+                    print_protection(&hlb_bootstrap::observe::protection(runner.as_ref()).await?);
                     println!();
                     if report.can_proceed() {
                         println!("✓ this machine can host a node.");

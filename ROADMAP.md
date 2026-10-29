@@ -239,11 +239,27 @@ no secret in `docker inspect`.
   DKMS (3.0.10, 3.2.2) signs modules with a MOK key of its own, which a person enrols
   once at the console. Today `hlb` detects none of this: `node add` reads memory, disk
   and kernel, nothing reads the firmware, and a manager is chosen by count alone.
-  - **Detection**: UEFI (`/sys/firmware/efi`), the TPM (`has-tpm2`'s `+driver`, then a
-    sealed round trip — `hlb secrets-seal` showed a TPM can answer every probe and
-    still not seal), Secure Boot (`mokutil --sb-state`), `systemd-detect-virt`, the
-    systemd version and the tools present, the DKMS modules (ZFS). Read by the agent,
-    shown by `node list`, `node add`'s preview and the interface.
+  - ✅ **Detection** — 2026-10-29 (`hlb_bootstrap::protection`): UEFI
+    (`/sys/firmware/efi`), the TPM (`has-tpm2`'s `+driver`, then the sealed round trip
+    `hlb secrets-seal` already ran — a TPM can answer every probe and still not seal;
+    run as anyone but root it is "not tried", never "absent"), Secure Boot (the
+    `SecureBoot` variable itself, which `mokutil` reads — no package needed),
+    `systemd-detect-virt`, the systemd version, the DKMS modules (warned under Secure
+    Boot), and whether the root sits on a `crypt` device. Not the tools: systemd 257
+    carries everything A needs, and a tool not installed yet is the step's to install.
+    A signal not read counts as absent — a machine that cannot say it is not virtual is
+    D. Shown by `node check`, `cluster init` and `node add` (both label the node
+    `hlb.protection`), `hlb node protection <node>` reads it again over the mesh's SSH
+    address and relabels it, and `cluster status` has a column, a node never read
+    named under it. The level is a ceiling, said as "can reach": the line under it
+    says whether the root is encrypted. Proven on the lab: deb1 (SeaBIOS, a TPM that
+    seals, systemd 252) and deb2 (no TPM, DKMS `zfs`) both D, kvm, roots not
+    encrypted — the same as the signals read by hand. Not read by the agent: the trial
+    seals as root on the host, which the agent's container is not; the label is what
+    the controller reads. Left: the interface's nodes screen; a VM naming a node of the
+    house as its host (the lower of the two — the VM's own signals are read and not
+    shown yet); `tpm2-tools` at provisioning where `+driver` says a TPM 2.0 is there,
+    since without it Debian's TPM reads C.
   - **Four levels**, each one sentence and never above what was detected:
     **A — verified boot, disk bound to the network**: UEFI, Secure Boot, TPM 2.0,
     systemd ≥ 257 — a signed UKI built by a `kernel-install` hook, the TPM bound to

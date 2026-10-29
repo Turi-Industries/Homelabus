@@ -152,6 +152,7 @@ mod tests {
             status: "ready".into(),
             availability: "active".into(),
             tier: None,
+            protection: None,
             is_leader: false,
             memory_mb: None,
             failure_domain: None,

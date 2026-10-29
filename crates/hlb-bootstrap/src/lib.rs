@@ -19,6 +19,7 @@
 //! | [`runner`] | execute, locally or over SSH | partly |
 //! | [`zfs`] | read the pools, decide what to do about them | ✅ entirely |
 //! | [`preseed`] | render a Debian preseed for an automated netinst | ✅ entirely |
+//! | [`protection`] | a machine's protection level, from its firmware, TPM and systemd | ✅ entirely |
 //! | [`seal`] | the vault's key sealed to the machine, unsealed into memory | ✅ entirely |
 //! | [`unlock`] | Swarm's unlock key sealed to a manager, handed to Docker | ✅ entirely |
 //!
@@ -35,6 +36,7 @@ pub mod mesh;
 pub mod observe;
 pub mod preflight;
 pub mod preseed;
+pub mod protection;
 pub mod provision;
 pub mod runner;
 pub mod seal;

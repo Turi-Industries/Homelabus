@@ -1455,6 +1455,10 @@ impl Orchestrator for SwarmOrchestrator {
                         .map(|a| format!("{a:?}").to_lowercase())
                         .unwrap_or_else(|| "unknown".into()),
                     tier: spec.labels.as_ref().and_then(|l| l.get("tier").cloned()),
+                    protection: spec
+                        .labels
+                        .as_ref()
+                        .and_then(|l| l.get(cluster::LABEL_PROTECTION).cloned()),
                     // 🔴 Read from the label, never guessed: Swarm does not know two
                     // VMs share hardware. `None` means undeclared, and that must be
                     // VISIBLE rather than let anyone assume the node is isolated.

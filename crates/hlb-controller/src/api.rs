@@ -3148,6 +3148,7 @@ pub(crate) mod tests {
                         status: "ready".into(),
                         availability: (*availability).to_string(),
                         tier: None,
+                        protection: None,
                         is_leader: false,
                         memory_mb: None,
                         failure_domain: None,

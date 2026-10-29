@@ -151,6 +151,100 @@ pub async fn facts(runner: &dyn Runner, distro: &Distro) -> Result<Facts> {
     })
 }
 
+/// What the TPM can seal with: the driver, then each binding tried in turn. A
+/// throwaway value is sealed and unsealed in memory; nothing on the machine changes.
+pub async fn tpm(runner: &dyn Runner) -> Result<crate::seal::Probe> {
+    let has = runner
+        .run(&["systemd-creds".into(), "has-tpm2".into()])
+        .await?;
+    trials(runner, crate::seal::has_driver(&has.stdout)).await
+}
+
+async fn trials(runner: &dyn Runner, driver: bool) -> Result<crate::seal::Probe> {
+    use crate::seal::{self, Binding};
+    let mut trials = Vec::new();
+    if driver {
+        for b in Binding::ALL {
+            let o = runner.run(&seal::trial(b)).await?;
+            let ok = o.ok();
+            trials.push((b, if ok { Ok(()) } else { Err(o.stderr) }));
+            if ok {
+                break;
+            }
+        }
+    }
+    Ok(seal::decide(driver, &trials))
+}
+
+/// Everything a protection level is read from. Changes nothing.
+pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signals> {
+    use crate::protection as p;
+    let sh = |script: &str| vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+    // A missing binary is an error from the runner; here it is a signal not read.
+    let read = |o: Result<crate::runner::Output>| o.ok().filter(|o| o.ok()).map(|o| o.stdout);
+
+    let uefi = runner
+        .run(&sh("test -d /sys/firmware/efi"))
+        .await
+        .is_ok_and(|o| o.ok());
+    let secure_boot = read(
+        runner
+            .run(&sh(
+                "od -An -tu1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+            ))
+            .await,
+    )
+    .and_then(|o| p::parse_secure_boot(&o));
+
+    let has_tpm2 = runner
+        .run(&["systemd-creds".into(), "has-tpm2".into()])
+        .await
+        .ok()
+        // `has-tpm2` exits non-zero whenever something is missing, and still prints.
+        .map(|o| o.stdout);
+    let root = is_root(runner).await?;
+    let probe = match &has_tpm2 {
+        Some(h) if root && crate::seal::has_driver(h) => Some(trials(runner, true).await?),
+        _ => None,
+    };
+    let version_major = runner
+        .read_file("/sys/class/tpm/tpm0/tpm_version_major")
+        .await?;
+
+    let virt = runner
+        .run(&["systemd-detect-virt".into()])
+        .await
+        .ok()
+        .map(|o| (o.stdout.clone(), o.ok()));
+
+    let systemd = read(runner.run(&["systemctl".into(), "--version".into()]).await)
+        .and_then(|o| p::parse_systemd_version(&o));
+    let dkms = read(runner.run(&["dkms".into(), "status".into()]).await)
+        .map(|o| p::parse_dkms(&o))
+        .unwrap_or_default();
+    let root_encrypted = read(
+        runner
+            .run(&sh("lsblk -nso TYPE \"$(findmnt -nvo SOURCE /)\""))
+            .await,
+    )
+    .map(|o| p::parse_root_types(&o));
+
+    Ok(p::Signals {
+        uefi,
+        secure_boot,
+        tpm: p::tpm(
+            root,
+            has_tpm2.as_deref(),
+            probe.as_ref(),
+            version_major.as_deref(),
+        ),
+        virt: p::parse_virt(virt.as_ref().map(|(o, ok)| (o.as_str(), *ok))),
+        systemd,
+        dkms,
+        root_encrypted,
+    })
+}
+
 /// Is `contrib` configured for this release? Read from the sources themselves —
 /// `--no-release-info` answers before any index was downloaded.
 async fn debian_contrib(runner: &dyn Runner, codename: &str) -> Result<bool> {

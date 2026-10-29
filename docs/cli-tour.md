@@ -249,6 +249,19 @@ kernel asks for it:
 ./target/debug/hlb node prune                        # the images no container uses
 ```
 
+Each machine's protection level — what a stolen one would give up — is read from its
+firmware, TPM and systemd, never declared: `node check`, `cluster init` and `node add`
+show it, the last two label the node, and `cluster status` lists it. A, a verified boot
+and the disk bound to the network; B, the disk bound to the TPM and the network, boot
+not verified (every Debian 12); C, no TPM that seals; D, a virtual machine. It is what
+the machine can reach: the line under it says whether its disk is encrypted yet.
+
+```sh
+./target/debug/hlb node check 192.168.1.11           # the level, nothing changed
+./target/debug/hlb node protection worker-1          # read again — preview
+./target/debug/hlb node protection worker-1 --apply  # and labelled
+```
+
 `cluster init`, `node add` and `node upgrade` also cap the system journal (500 MB, a
 month) and harden the kernel (`/etc/sysctl.d/90-homelabus.conf`: no redirects, eBPF
 and kernel addresses for root only) — neither touches forwarding or `rp_filter`, which

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use hlb_api::breakglass::EMERGENCY_KIT;
 use hlb_backup_run::kit::SWARM_UNLOCK_SECRET;
 use hlb_bootstrap::provision::{self, Provision};
-use hlb_bootstrap::seal::{self, Binding, Probe, Sealer};
+use hlb_bootstrap::seal::{self, Probe, Sealer};
 use hlb_bootstrap::{unlock, LocalRunner, Runner};
 use hlb_orchestrator::cluster::NodeRole;
 use hlb_orchestrator::Orchestrator;
@@ -502,7 +502,7 @@ async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
         .unwrap_or_default();
     let install_libraries = hlb_bootstrap::Distro::parse(&os)
         .map(|d| d.package_manager().install_command(&[seal::TPM_PACKAGE]));
-    let mut probe = probe(runner).await?;
+    let mut probe = hlb_bootstrap::observe::tpm(runner).await?;
     if probe == Probe::MissingLibraries {
         let Some(install) = install_libraries else {
             eprintln!("🔴 This machine has a TPM systemd cannot use, and its distribution");
@@ -524,7 +524,7 @@ async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
             eprintln!("🔴 installing {} failed: not sealed.", seal::TPM_PACKAGE);
             return Ok(Ready::Refused);
         }
-        probe = self::probe(runner).await?;
+        probe = hlb_bootstrap::observe::tpm(runner).await?;
     }
     match probe {
         Probe::Sealer(s) => Ok(Ready::Sealer(s)),
@@ -533,26 +533,6 @@ async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
             Ok(Ready::Refused)
         }
     }
-}
-
-/// The driver, then each binding tried in turn: what this machine can seal with.
-async fn probe(runner: &dyn Runner) -> Result<Probe> {
-    let has = runner
-        .run(&["systemd-creds".into(), "has-tpm2".into()])
-        .await?;
-    let driver = seal::has_driver(&has.stdout);
-    let mut trials = Vec::new();
-    if driver {
-        for b in Binding::ALL {
-            let o = runner.run(&seal::trial(b)).await?;
-            let ok = o.ok();
-            trials.push((b, if ok { Ok(()) } else { Err(o.stderr) }));
-            if ok {
-                break;
-            }
-        }
-    }
-    Ok(seal::decide(driver, &trials))
 }
 
 /// Replaces `key` by a link to `target` in one rename: interrupted, the key is either

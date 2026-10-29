@@ -35,6 +35,8 @@ pub struct NodeInfo {
     pub availability: String,
     /// The declared tier, when it is set.
     pub tier: Option<String>,
+    /// The protection level detected on the machine (`A`…`D`), when it was read.
+    pub protection: Option<String>,
     pub is_leader: bool,
     pub memory_mb: Option<u64>,
     /// 🔴 The **failure domain**: the physical hardware, not the logical machine.
@@ -233,6 +235,11 @@ pub fn anti_affinity_violations(
 /// neither Swarm nor the agent can infer - knowing two VMs run on the same server
 /// means knowing the machine room.
 pub const LABEL_FAILURE_DOMAIN: &str = "hlb.failureDomain";
+
+/// The Swarm label carrying the protection level detected on the machine — written by
+/// `hlb node add` and `hlb node protection`, never typed: a level declared by hand is
+/// the one a stolen machine contradicts.
+pub const LABEL_PROTECTION: &str = "hlb.protection";
 
 /// The label of the node carrying the pool: where a volume bound under the storage
 /// root exists, and nowhere else.
@@ -637,6 +644,7 @@ mod tests {
             status: "ready".into(),
             availability: "active".into(),
             tier: None,
+            protection: None,
             is_leader: false,
             memory_mb: Some(8192),
             failure_domain: domain.map(str::to_string),
@@ -807,6 +815,7 @@ mod tests {
             status: status.into(),
             availability: availability.into(),
             tier: None,
+            protection: None,
             is_leader: false,
             memory_mb: None,
             failure_domain: None,
@@ -982,6 +991,7 @@ mod tests {
             status: "Ready".into(),
             availability: "active".into(),
             tier: Some("heavy".into()),
+            protection: None,
             is_leader: true,
             memory_mb: Some(16384),
             failure_domain: None,
