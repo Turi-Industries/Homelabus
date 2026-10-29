@@ -120,6 +120,11 @@ exported — Homelabus never bills.
   that verb's preview, which refuses until the kit printed carries it.
 - **A TPM that answers and seals nothing is a refusal**, never the host key alone in
   silence; `--host-only` seals without it, said by the preview.
+- **An existing node is encrypted by a drained reinstall**, never re-encrypted in
+  place; it lands on Debian 13 in the same pass, and a node holding data has it
+  restored from its backup or moved first.
+- **No real node is encrypted before it can restart alone**: the preseed's encryption
+  reaches the CLI with step 4's TPM and Tang binding, not before.
 
 #### The phases
 
@@ -337,9 +342,26 @@ no secret in `docker inspect`.
        2026-10-29: `kit::recovery_key` makes a node's key once (systemd's modhex form,
        256 bits) into `luks-recovery-<node>`, the sheet prints each under its node,
        and the fingerprint covers them only once one exists — every kit printed before
-       stays current. Its caller is step 3's verb.
+       stays current. Its caller is step 4's verb, which replaces the install
+       passphrase with it.
     3. LUKS at install (the preseed partitions `crypto`); an existing node is drained
-       and reinstalled, or re-encrypted offline — which, measured first.
+       and reinstalled (decided 2026-10-29). Measured on the lab, Debian 13.7: the
+       netinst with `crypto` asks nothing and installs in 200 s — `/boot` apart in
+       clear, LUKS2 argon2id, LVM, swap encrypted — erasing the disk first at no
+       visible cost on 20 GB (a sequential write of the disk: it is on), and the
+       installed system keeps no copy of the passphrase, `/var/log/installer`
+       included. Re-encrypting in place works (`cryptsetup reencrypt --encrypt`, 48 s
+       for 30 GB, file system intact) but cannot boot: the nodes have no `/boot` apart,
+       and Debian 13's GRUB opens neither argon2 nor a TPM — swap turned into `/boot`
+       and a chroot repair from a rescue system, which `hlb` cannot drive. ✅
+       2026-10-29: `preseed::PreseedConfig::install_passphrase` renders it — a
+       one-time passphrase, never the recovery key, since the preseed is left on a
+       USB stick or a web server. ⚠️ **Debian 13's initramfs ignores `tpm2-device`**
+       ("ignoring unknown option", measured): an encrypted node asks at its console
+       at every boot until step 4, so the CLI flag waits for it (decided
+       2026-10-29). Step 4's verb takes the install passphrase out: it enrols the
+       recovery key (`kit::recovery_key`, refused until the kit is current) and the
+       binding, then wipes the install slot.
     4. B: Clevis, the TPM AND one Tang of two — nested, `sss` `t=2` over the TPM and an
        inner `sss` `t=1` over the Tangs. ⚠️ Not the flat "two shares of three" this
        plan first said: the two Tangs alone would open a disk taken out of its machine

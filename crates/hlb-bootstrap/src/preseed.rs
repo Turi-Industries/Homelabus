@@ -46,7 +46,18 @@ pub enum PreseedError {
          would cut the installer's command short and leave the machine with no key"
     )]
     KeyNotPlain,
+    /// debconf reads a value to the end of its line, and the console asks for it again
+    /// at every boot until the disk is bound: letters, digits and '-' survive both.
+    #[error(
+        "the install passphrase must be at least {MIN_PASSPHRASE} letters, digits or '-': \
+         it opens the disk until its recovery key and binding replace it"
+    )]
+    WeakPassphrase,
 }
+
+/// The installer accepts any passphrase once `weak_passphrase` is answered, so the
+/// floor is kept here.
+pub const MIN_PASSPHRASE: usize = 24;
 
 /// What a preseed needs to be generated safely.
 #[derive(Debug, Clone)]
@@ -60,6 +71,12 @@ pub struct PreseedConfig {
     pub ssh_authorized_key: String,
     /// Debian mirror hostname. `None` uses the official one.
     pub mirror: Option<String>,
+    /// `Some`: the system disk is encrypted at install — LUKS2 under LVM, `/boot` apart
+    /// and in clear, since Debian 13's GRUB opens neither argon2 nor a TPM. A one-time
+    /// passphrase, NEVER the node's recovery key: this file travels on a USB stick or
+    /// over HTTP, and is left there. The installed system keeps no copy of it (measured
+    /// on the lab, `/var/log/installer` included).
+    pub install_passphrase: Option<String>,
 }
 
 /// Renders the preseed file, or refuses when the disk is not safely named.
@@ -82,9 +99,35 @@ pub fn generate(cfg: &PreseedConfig) -> Result<String, PreseedError> {
     if cfg.ssh_authorized_key.contains(['\'', '"', '\\', '$', '`']) {
         return Err(PreseedError::KeyNotPlain);
     }
+    let plain = |p: &String| {
+        p.len() >= MIN_PASSPHRASE && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    if cfg.install_passphrase.as_ref().is_some_and(|p| !plain(p)) {
+        return Err(PreseedError::WeakPassphrase);
+    }
 
     let mirror = cfg.mirror.as_deref().unwrap_or("deb.debian.org");
     let disk = &cfg.disk_by_id;
+    let partitioning = match &cfg.install_passphrase {
+        None => "d-i partman-auto/method string regular\n".to_string(),
+        Some(passphrase) => format!(
+            "\
+d-i partman-auto/method string crypto
+d-i partman-auto-lvm/guided_size string max
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-md/device_remove_md boolean true
+# Erased: the disk of a node reinstalled to be encrypted held its databases and the
+# Raft log in clear, readable under LUKS until overwritten. A sequential write of the
+# whole disk; on an SSD it does not reach the blocks the controller remapped.
+d-i partman-auto-crypto/erase_disks boolean true
+d-i partman-crypto/passphrase string {passphrase}
+d-i partman-crypto/passphrase-again string {passphrase}
+d-i partman-crypto/weak_passphrase boolean true
+"
+        ),
+    };
 
     Ok(format!(
         "\
@@ -116,8 +159,7 @@ d-i partman-auto/disk string {disk}
 d-i partman/early_command string \\
     d=\"$(readlink -f {disk})\" && test -b \"$d\" && \\
     debconf-set partman-auto/disk \"$d\" && debconf-set grub-installer/bootdev \"$d\"
-d-i partman-auto/method string regular
-d-i partman-auto/choose_recipe select atomic
+{partitioning}d-i partman-auto/choose_recipe select atomic
 d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
@@ -158,6 +200,7 @@ d-i preseed/late_command string \\
         domain = cfg.domain,
         mirror = mirror,
         disk = disk,
+        partitioning = partitioning,
         ssh_key = cfg.ssh_authorized_key.trim(),
     ))
 }
@@ -173,6 +216,7 @@ mod tests {
             disk_by_id: "/dev/disk/by-id/ata-Samsung_SSD_1TB_S1234".into(),
             ssh_authorized_key: "ssh-ed25519 AAAAC3... op@laptop".into(),
             mirror: None,
+            install_passphrase: None,
         }
     }
 
@@ -291,7 +335,60 @@ mod tests {
         // debconf reads this file, and it gets pasted into terminals and read over SSH
         // on a machine whose locale is not set up yet: plain ASCII is what survives
         // all three.
+        for c in [cfg(), encrypted()] {
+            let out = generate(&c).expect("valid config");
+            assert!(out.is_ascii(), "preseed output must stay plain ASCII");
+        }
+    }
+
+    fn encrypted() -> PreseedConfig {
+        PreseedConfig {
+            install_passphrase: Some("k7Hq-2mVx-9RtL-4wPz-8nBc-3Jd".into()),
+            ..cfg()
+        }
+    }
+
+    #[test]
+    fn no_passphrase_leaves_the_disk_unencrypted_and_says_nothing_of_luks() {
         let out = generate(&cfg()).expect("valid config");
-        assert!(out.is_ascii(), "preseed output must stay plain ASCII");
+        assert!(out.contains("d-i partman-auto/method string regular\n"));
+        assert!(!out.contains("partman-crypto"));
+    }
+
+    #[test]
+    fn a_passphrase_encrypts_the_disk_without_a_question_asked() {
+        // Measured on the lab (Debian 13.7 netinst): each line below is one the
+        // installer otherwise stops on, and an unattended install waits forever.
+        let out = generate(&encrypted()).expect("valid config");
+        for line in [
+            "d-i partman-auto/method string crypto",
+            "d-i partman-lvm/confirm boolean true",
+            "d-i partman-lvm/confirm_nooverwrite boolean true",
+            "d-i partman-crypto/passphrase string k7Hq-2mVx-9RtL-4wPz-8nBc-3Jd",
+            "d-i partman-crypto/passphrase-again string k7Hq-2mVx-9RtL-4wPz-8nBc-3Jd",
+            "d-i partman-crypto/weak_passphrase boolean true",
+            "d-i partman-auto-crypto/erase_disks boolean true",
+        ] {
+            assert!(out.contains(&format!("{line}\n")), "missing: {line}");
+        }
+        assert!(!out.contains("method string regular"));
+        // The disk is still the one named, resolved on the machine.
+        assert!(out.contains("debconf-set partman-auto/disk \"$d\""));
+    }
+
+    #[test]
+    fn a_passphrase_that_would_break_its_line_or_be_guessed_is_refused() {
+        for bad in [
+            "short-but-plain",
+            "twenty-four chars with spaces",
+            "k7Hq-2mVx-9RtL-4wPz-8nBc-3Jd\nd-i partman/confirm boolean false",
+            "k7Hq$2mVx-9RtL-4wPz-8nBc-3Jdx",
+        ] {
+            let c = PreseedConfig {
+                install_passphrase: Some(bad.into()),
+                ..cfg()
+            };
+            assert_eq!(generate(&c), Err(PreseedError::WeakPassphrase), "{bad:?}");
+        }
     }
 }

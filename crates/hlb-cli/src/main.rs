@@ -11409,6 +11409,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             disk_by_id: disk.clone(),
                             ssh_authorized_key: ssh_key.clone(),
                             mirror: mirror.clone(),
+                            // No flag before the disk can be bound to its TPM and Tang:
+                            // Debian 13's initramfs ignores `tpm2-device`, and an
+                            // encrypted node would wait at its console after every reboot.
+                            install_passphrase: None,
                         });
                     return match out {
                         Ok(text) => {
