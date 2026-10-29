@@ -3149,6 +3149,7 @@ pub(crate) mod tests {
                         availability: (*availability).to_string(),
                         tier: None,
                         protection: None,
+                        disk_tangs: Vec::new(),
                         is_leader: false,
                         memory_mb: None,
                         failure_domain: None,

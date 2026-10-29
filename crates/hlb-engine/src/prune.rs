@@ -153,6 +153,7 @@ mod tests {
             availability: "active".into(),
             tier: None,
             protection: None,
+            disk_tangs: Vec::new(),
             is_leader: false,
             memory_mb: None,
             failure_domain: None,

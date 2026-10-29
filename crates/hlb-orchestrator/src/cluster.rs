@@ -37,6 +37,9 @@ pub struct NodeInfo {
     pub tier: Option<String>,
     /// The protection level detected on the machine (`A`…`D`), when it was read.
     pub protection: Option<String>,
+    /// The nodes whose Tangs open this node's disk at boot (`hlb.disk.tangs`, written
+    /// by `hlb node bind-disk`); empty when it is not bound.
+    pub disk_tangs: Vec<String>,
     pub is_leader: bool,
     pub memory_mb: Option<u64>,
     /// 🔴 The **failure domain**: the physical hardware, not the logical machine.
@@ -240,6 +243,11 @@ pub const LABEL_FAILURE_DOMAIN: &str = "hlb.failureDomain";
 /// `hlb node add` and `hlb node protection`, never typed: a level declared by hand is
 /// the one a stolen machine contradicts.
 pub const LABEL_PROTECTION: &str = "hlb.protection";
+
+/// The Swarm label naming, comma-separated, the nodes whose Tangs open a node's disk —
+/// written by `hlb node bind-disk`, read when a node joins or leaves, since the
+/// binding pins each Tang and none follows the house by itself.
+pub const LABEL_DISK_TANGS: &str = "hlb.disk.tangs";
 
 /// The label of the node carrying the pool: where a volume bound under the storage
 /// root exists, and nowhere else.
@@ -645,6 +653,7 @@ mod tests {
             availability: "active".into(),
             tier: None,
             protection: None,
+            disk_tangs: Vec::new(),
             is_leader: false,
             memory_mb: Some(8192),
             failure_domain: domain.map(str::to_string),
@@ -816,6 +825,7 @@ mod tests {
             availability: availability.into(),
             tier: None,
             protection: None,
+            disk_tangs: Vec::new(),
             is_leader: false,
             memory_mb: None,
             failure_domain: None,
@@ -992,6 +1002,7 @@ mod tests {
             availability: "active".into(),
             tier: Some("heavy".into()),
             protection: None,
+            disk_tangs: Vec::new(),
             is_leader: true,
             memory_mb: Some(16384),
             failure_domain: None,

@@ -716,6 +716,10 @@ enum NodeCmd {
         /// Debian mirror hostname. Defaults to the official one.
         #[arg(long)]
         mirror: Option<String>,
+        /// Encrypt the system disk, under a one-time passphrase kept in the vault until
+        /// `hlb node bind-disk` takes it out — the TPM and the house's Tangs then open it.
+        #[arg(long)]
+        encrypt: bool,
     },
 }
 
@@ -4476,6 +4480,15 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     println!();
     println!("{host} is part of the cluster.");
     println!("  hlb cluster status");
+    if protection.root_encrypted == Some(true) {
+        println!("  hlb node bind-disk {name} --apply   # its disk opened at boot by the house");
+    }
+    let nodes = orch.nodes().await?;
+    disk::print_rebinds(
+        &disk::rebinds(&nodes, Some(name.as_str()), None),
+        Some(name.as_str()),
+        None,
+    );
     if !sealed {
         eprintln!();
         eprintln!("🔴 Swarm's unlock key is NOT sealed to it: at its next restart it stays");
@@ -8767,7 +8780,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 return Ok(ExitCode::FAILURE);
                             }
                         };
-                        if orch.nodes().await?.iter().any(|n| n.hostname == *node) {
+                        let nodes = orch.nodes().await?;
+                        if nodes.iter().any(|n| n.hostname == *node) {
                             eprintln!("🔴 {node} is still a node of the Swarm. Once it has left");
                             eprintln!("   (`docker swarm leave` there), remove it, then run this again:");
                             eprintln!("     docker node rm {node}");
@@ -8786,7 +8800,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 );
                             }
                             println!("\n  Its address is free for the next node.");
-                            println!("  Re-run with --apply.");
+                            disk::print_rebinds(
+                                &disk::rebinds(&nodes, None, Some(node)),
+                                None,
+                                Some(node),
+                            );
+                            println!("\n  Re-run with --apply.");
                             return Ok(ExitCode::SUCCESS);
                         }
                         save_mesh(&state, &vault, &mesh).await?;
@@ -8805,11 +8824,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                        // After the mesh: whoever reads this must not stop at the tunnels.
+                        let orphaned = disk::print_rebinds(
+                            &disk::rebinds(&nodes, None, Some(node)),
+                            None,
+                            Some(node),
+                        );
                         if failed > 0 {
                             println!("\n  Those still list {node} until `hlb mesh sync --apply` reaches them.");
                             return Ok(ExitCode::FAILURE);
                         }
-                        Ok(ExitCode::SUCCESS)
+                        Ok(if orphaned {
+                            ExitCode::FAILURE
+                        } else {
+                            ExitCode::SUCCESS
+                        })
                     }
 
                     MeshCmd::Sync { apply } => {
@@ -11447,8 +11476,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     disk,
                     ssh_key,
                     mirror,
+                    encrypt,
                 } = cmd
                 {
+                    let install_passphrase = if *encrypt {
+                        Some(disk::install_passphrase(&cli, hostname).await?)
+                    } else {
+                        None
+                    };
                     let out =
                         hlb_bootstrap::preseed::generate(&hlb_bootstrap::preseed::PreseedConfig {
                             hostname: hostname.clone(),
@@ -11456,14 +11491,22 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             disk_by_id: disk.clone(),
                             ssh_authorized_key: ssh_key.clone(),
                             mirror: mirror.clone(),
-                            // No flag before the disk can be bound to its TPM and Tang:
-                            // Debian 13's initramfs ignores `tpm2-device`, and an
-                            // encrypted node would wait at its console after every reboot.
-                            install_passphrase: None,
+                            install_passphrase,
                         });
                     return match out {
                         Ok(text) => {
                             print!("{text}");
+                            if *encrypt {
+                                // stderr: stdout is the file the installer reads.
+                                eprintln!(
+                                    "⚠️  The disk's passphrase is in this file, in clear: once"
+                                );
+                                eprintln!(
+                                    "   installed, add the node, then take it out of the disk:"
+                                );
+                                eprintln!("     hlb node add <host> --apply");
+                                eprintln!("     hlb node bind-disk {hostname} --apply");
+                            }
                             Ok(ExitCode::SUCCESS)
                         }
                         Err(e) => {

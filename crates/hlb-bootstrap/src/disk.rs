@@ -25,6 +25,16 @@
 //! The TPM itself is what B binds to; a firmware update moving PCR 0 or 2 would leave
 //! the node at its prompt after a reboot nobody is watching.
 //!
+//! ## The recovery key, typed from elsewhere
+//!
+//! When no Tang answers — the whole house cut — the kit's key is typed on one node. Its
+//! console may be a cellar away, so `dropbear-initramfs` listens at boot on
+//! [`UNLOCK_PORT`], to root's keys only, each forced to `cryptroot-unlock`: measured on
+//! enc1, the key piped into `ssh -p 2222` opened the disk while Clevis's loop kept
+//! asking the Tangs, and with a Tang up the disk opened alone as before. Dropbear has
+//! its own host key, in clear in the initrd on `/boot`: whoever holds the machine can
+//! copy it and pose as the node at boot — which is why its fingerprint is printed.
+//!
 //! ## 🔴 A Tang is pinned by its thumbprint
 //!
 //! `clevis luks bind -y` trusts whatever answers the advertisement. Homelabus installs
@@ -41,6 +51,20 @@ use crate::provision::{Action, Phase, Step};
 /// What the bound node needs — `clevis-luks` pulls `clevis` in, `clevis-tpm2` the TPM's
 /// libraries.
 pub const PACKAGES: [&str; 3] = ["clevis-luks", "clevis-initramfs", "clevis-tpm2"];
+/// What lets the recovery key be typed over the network at boot.
+pub const UNLOCK_PACKAGE: &str = "dropbear-initramfs";
+/// Off 22, so a client's `known_hosts` keeps the system's key and the initrd's apart.
+pub const UNLOCK_PORT: u16 = 2222;
+pub const UNLOCK_CONF: &str = "/etc/dropbear/initramfs/dropbear.conf";
+pub const UNLOCK_KEYS: &str = "/etc/dropbear/initramfs/authorized_keys";
+/// The initrd's host key, whose fingerprint a person checks before typing.
+pub const UNLOCK_HOST_KEY: &str = "/etc/dropbear/initramfs/dropbear_ed25519_host_key";
+// `-s` no password, `-j -k` no forwarding: the one thing done there is unlocking.
+const UNLOCK_CONF_CONTENT: &str = "\
+# Written by Homelabus: the kit's recovery key, typed over SSH at boot. Nothing else.
+DROPBEAR_OPTIONS=\"-p 2222 -s -j -k\"
+";
+const UNLOCK_COMMAND: &str = "/usr/bin/cryptroot-unlock";
 pub const TANG_PACKAGE: &str = "tang";
 /// Debian's `tangd.socket` listens on 80, which Caddy takes on the ingress node.
 pub const TANG_PORT: u16 = 7500;
@@ -64,10 +88,11 @@ pub const STAGED_PASSPHRASE: &str = "/run/hlb-luks-passphrase";
 pub const STAGED_RECOVERY: &str = "/run/hlb-luks-recovery";
 
 /// Opens the disk with each Clevis binding in turn, as the initrd will: `$1` is the
-/// device. The binding is proven before the passphrase goes.
+/// device. The binding is proven before the passphrase goes — through ITS slot, or a
+/// token decrypting to another slot's key (the passphrase's) would pass for it.
 const PROOF: &str = "for s in $(clevis luks list -d \"$1\" | cut -d: -f1); do \
-clevis luks pass -d \"$1\" -s \"$s\" | cryptsetup open --test-passphrase --key-file - \"$1\" \
-&& exit 0; done; exit 1";
+clevis luks pass -d \"$1\" -s \"$s\" | cryptsetup open --test-passphrase --key-slot \"$s\" \
+--key-file - \"$1\" && exit 0; done; exit 1";
 
 /// A Tang, as a binding names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -282,6 +307,58 @@ pub fn parse_keyslots(dump: &str) -> Option<usize> {
     Some(v.get("keyslots")?.as_object()?.len())
 }
 
+/// The keys allowed to type the recovery key at boot, from root's `authorized_keys`:
+/// each forced to `cryptroot-unlock`, and only those root lets in unconditionally or
+/// with forwarding taken away. A key carrying a value (`from=`, `command=`) is kept to
+/// some other purpose, which unlocking the disk is not — and dropbear refuses an
+/// option it does not know with the whole line.
+pub fn unlock_keys(authorized: &str) -> String {
+    const PLAIN: [&str; 6] = [
+        "restrict",
+        "no-agent-forwarding",
+        "no-port-forwarding",
+        "no-X11-forwarding",
+        "no-pty",
+        "no-user-rc",
+    ];
+    let mut out = String::new();
+    for line in authorized.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let Some(at) = words.iter().position(|w| is_key_type(w)) else {
+            continue;
+        };
+        let options = &words[..at];
+        if options.len() > 1
+            || options
+                .iter()
+                .flat_map(|o| o.split(','))
+                .any(|o| !PLAIN.contains(&o))
+        {
+            continue;
+        }
+        let Some(blob) = words.get(at + 1) else {
+            continue;
+        };
+        out.push_str(&format!(
+            "restrict,command=\"{UNLOCK_COMMAND}\" {} {blob}",
+            words[at]
+        ));
+        if let Some(comment) = words.get(at + 2) {
+            out.push(' ');
+            out.push_str(comment);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn is_key_type(w: &str) -> bool {
+    w.starts_with("ssh-") || w.starts_with("ecdsa-sha2-") || w.starts_with("sk-")
+}
+
 /// What the disk holds, read without a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Disk {
@@ -300,8 +377,14 @@ pub struct Keys {
 
 /// The steps that bind `disk` to its TPM AND one of `tangs`, enrol the recovery key and
 /// take the passphrase out. `keys` is `None` in a preview, which shows every step.
+/// `unlock` is [`unlock_keys`]' file; empty, nobody can type the key but at the console.
 /// `Err` is a refusal, worded for a person.
-pub fn plan(disk: &Disk, keys: Option<Keys>, tangs: &[Tang]) -> Result<Vec<Step>, String> {
+pub fn plan(
+    disk: &Disk,
+    keys: Option<Keys>,
+    tangs: &[Tang],
+    unlock: &str,
+) -> Result<Vec<Step>, String> {
     if tangs.is_empty() {
         return Err(
             "no Tang to bind to: the disk would open with its TPM alone, so a \
@@ -362,6 +445,34 @@ pub fn plan(disk: &Disk, keys: Option<Keys>, tangs: &[Tang]) -> Result<Vec<Step>
             PackageManager::Apt.install_command(&PACKAGES),
         ),
     ];
+    if !unlock.is_empty() {
+        // After the package, whose conffile this replaces: written before, dpkg would
+        // ask about it, and nobody answers an unattended install.
+        steps.push(run(
+            Phase::Packages,
+            "SSH at boot, to type the recovery key",
+            PackageManager::Apt.install_command(&[UNLOCK_PACKAGE]),
+        ));
+        for (what, path, content, mode) in [
+            (
+                "its port, no password",
+                UNLOCK_CONF,
+                UNLOCK_CONF_CONTENT,
+                0o644,
+            ),
+            ("root's keys, to unlock only", UNLOCK_KEYS, unlock, 0o600),
+        ] {
+            steps.push(Step {
+                phase: Phase::Configuration,
+                what: format!("SSH at boot: {what}"),
+                action: Action::Install {
+                    path: path.to_string(),
+                    content: content.to_string(),
+                    mode,
+                },
+            });
+        }
+    }
     if !keys.is_some_and(|k| k.recovery) {
         steps.push(run(
             Phase::Configuration,
@@ -496,6 +607,7 @@ mod tests {
     use super::*;
 
     const DEV: &str = "/dev/disk/by-uuid/832b31e0";
+    const KEYS: &str = "restrict,command=\"/usr/bin/cryptroot-unlock\" ssh-ed25519 AAAA me\n";
 
     /// A Tang at `host` whose signing key's `x` is `x` — the thumbprint computed, as a
     /// token's advertisement gives it back.
@@ -666,7 +778,7 @@ mod tests {
             passphrase: false,
             recovery: true,
         };
-        let steps = plan(&disk, Some(keys), &tangs()).expect("a plan");
+        let steps = plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan");
         let w = whats(&steps);
         assert!(w.iter().any(|x| x.contains("bind the disk")), "{w:?}");
         assert!(w.iter().any(|x| x.contains("of before")), "{w:?}");
@@ -689,7 +801,7 @@ mod tests {
 
     #[test]
     fn a_fresh_disk_is_bound_proven_then_its_passphrase_goes() {
-        let steps = plan(&fresh(), None, &tangs()).expect("a plan");
+        let steps = plan(&fresh(), None, &tangs(), KEYS).expect("a plan");
         let w = whats(&steps);
         let pos = |s: &str| w.iter().position(|x| x.contains(s)).expect(s);
         assert!(pos("recovery key") < pos("bind the disk"));
@@ -701,7 +813,7 @@ mod tests {
     #[test]
     fn no_secret_reaches_a_command_line() {
         // The secrets go by their staged paths; the policy carries thumbprints only.
-        for step in plan(&fresh(), None, &tangs()).expect("a plan") {
+        for step in plan(&fresh(), None, &tangs(), KEYS).expect("a plan") {
             if let Action::Run(argv) = &step.action {
                 assert!(!argv.iter().any(|a| a.contains("lab-enc1")), "{argv:?}");
             }
@@ -722,9 +834,9 @@ mod tests {
             passphrase: false,
             recovery: true,
         };
-        let w = whats(&plan(&disk, Some(keys), &tangs()).expect("a plan")).join(" | ");
+        let w = whats(&plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan")).join(" | ");
         assert!(!w.contains("bind the disk"), "{w}");
-        assert!(!w.contains("recovery key"), "{w}");
+        assert!(!w.contains("enrol the kit's recovery key"), "{w}");
         assert!(!w.contains("passphrase out"), "{w}");
     }
 
@@ -744,7 +856,7 @@ mod tests {
             passphrase: false,
             recovery: true,
         };
-        let steps = plan(&disk, Some(keys), &tangs()).expect("a plan");
+        let steps = plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan");
         let w = whats(&steps);
         let bind = w
             .iter()
@@ -767,10 +879,10 @@ mod tests {
             passphrase: true,
             recovery: true,
         };
-        let e = plan(&disk, Some(keys), &tangs()).expect_err("refused");
+        let e = plan(&disk, Some(keys), &tangs(), KEYS).expect_err("refused");
         assert!(e.contains("does not know"), "{e}");
         // Untried, both secrets may be there: three slots refuse before them.
-        assert!(plan(&disk, None, &tangs()).is_err());
+        assert!(plan(&disk, None, &tangs(), KEYS).is_err());
     }
 
     #[test]
@@ -783,13 +895,13 @@ mod tests {
                 tangs: None,
             }],
         };
-        let e = plan(&disk, None, &tangs()).expect_err("refused");
+        let e = plan(&disk, None, &tangs(), KEYS).expect_err("refused");
         assert!(e.contains("second factor"), "{e}");
     }
 
     #[test]
     fn no_tang_is_refused() {
-        assert!(plan(&fresh(), None, &[]).is_err());
+        assert!(plan(&fresh(), None, &[], KEYS).is_err());
     }
 
     #[test]
@@ -798,7 +910,36 @@ mod tests {
             passphrase: false,
             recovery: false,
         };
-        assert!(plan(&fresh(), Some(keys), &tangs()).is_err());
+        assert!(plan(&fresh(), Some(keys), &tangs(), KEYS).is_err());
+    }
+
+    #[test]
+    fn root_s_keys_are_kept_to_unlocking_the_disk() {
+        // enc1's root file, its three shapes: plain, a comment, forwarding taken away.
+        let root = "ssh-ed25519 AAAA1 lab\n\
+# a note\n\
+no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc ssh-ed25519 AAAA2 homelabus\n\
+from=\"10.0.0.5\" ssh-ed25519 AAAA3 termix\n\
+command=\"/usr/bin/backup\" ssh-rsa AAAA4 backup\n";
+        let keys = unlock_keys(root);
+        assert_eq!(
+            keys,
+            "restrict,command=\"/usr/bin/cryptroot-unlock\" ssh-ed25519 AAAA1 lab\n\
+restrict,command=\"/usr/bin/cryptroot-unlock\" ssh-ed25519 AAAA2 homelabus\n"
+        );
+        assert_eq!(unlock_keys("# nobody\n"), "");
+    }
+
+    #[test]
+    fn ssh_at_boot_is_configured_after_its_package_and_before_the_initrd() {
+        let steps = plan(&fresh(), None, &tangs(), KEYS).expect("a plan");
+        let w = whats(&steps);
+        let pos = |s: &str| w.iter().position(|x| x.contains(s)).expect(s);
+        assert!(pos("SSH at boot, to type") < pos("SSH at boot: root's keys"));
+        assert!(pos("SSH at boot: root's keys") < pos("rebuild the initrd"));
+        assert!(UNLOCK_CONF_CONTENT.contains(&format!("-p {UNLOCK_PORT} -s -j -k")));
+        let none = plan(&fresh(), None, &tangs(), "").expect("a plan");
+        assert!(!whats(&none).iter().any(|x| x.contains("SSH at boot")));
     }
 
     #[test]

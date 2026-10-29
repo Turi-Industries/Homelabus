@@ -9,7 +9,7 @@ use hlb_bootstrap::disk::{self, Disk, Keys, Tang};
 use hlb_bootstrap::protection::Tpm;
 use hlb_bootstrap::provision::{self, Provision};
 use hlb_bootstrap::Runner;
-use hlb_orchestrator::Orchestrator;
+use hlb_orchestrator::{cluster, NodeInfo, Orchestrator};
 
 use crate::{open_state, open_vault, Cli, ACTOR_ROLE};
 
@@ -108,8 +108,13 @@ pub async fn run(
         disk.keyslots,
         disk.bindings.len()
     );
+    let authorized = runner
+        .read_file("/root/.ssh/authorized_keys")
+        .await?
+        .unwrap_or_default();
+    let unlock = disk::unlock_keys(&authorized);
     // Refused now rather than after the Tangs are installed for nothing.
-    if let Err(why) = disk::plan(&disk, None, &[placeholder()]) {
+    if let Err(why) = disk::plan(&disk, None, &[placeholder()], &unlock) {
         eprintln!("🔴 {why}");
         return Ok(ExitCode::FAILURE);
     }
@@ -163,7 +168,22 @@ pub async fn run(
             println!("  {}. {}", i + 1, s.describe());
         }
         println!("  {}. read its signing keys, to pin them", steps.len() + 1);
-        let steps = disk::plan(&disk, None, &[placeholder()])?;
+        // Their keys are read at --apply; until then a Tang already in the binding is
+        // taken as unchanged, or every preview of a bound disk would announce a rebind.
+        let expected: Vec<Tang> = tang_runners
+            .iter()
+            .map(|(_, address, _)| {
+                let url = disk::tang_url(address);
+                let thp = disk
+                    .bindings
+                    .iter()
+                    .flat_map(|b| b.tangs.iter().flatten())
+                    .find(|t| t.url == url)
+                    .map_or_else(|| placeholder().thp, |t| t.thp.clone());
+                Tang { url, thp }
+            })
+            .collect();
+        let steps = disk::plan(&disk, None, &expected, &unlock)?;
         println!("\nThen on {}:", target.hostname);
         for (i, s) in steps.iter().enumerate() {
             println!("  {}. {}", i + 1, s.what);
@@ -175,6 +195,17 @@ pub async fn run(
         println!("   answering, can still get a shell at boot. And after a power cut of");
         println!("   the whole house, the recovery key is typed on one node — the others open");
         println!("   as its Tang comes back.");
+        if unlock.is_empty() {
+            println!("\n⚠️  root has no key that may unlock it: the recovery key is typed at its");
+            println!("   console only.");
+        } else {
+            println!(
+                "\n  The recovery key can be typed over SSH at boot, port {}: dropbear's",
+                disk::UNLOCK_PORT
+            );
+            println!("  host key lies in clear on /boot — whoever holds the machine can pose");
+            println!("  as it. Check the fingerprint printed at the end before typing.");
+        }
         println!("\n  Re-run with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -206,10 +237,13 @@ pub async fn run(
             .await?;
         // One signing key, or the pin would name a key the next rotation drops.
         match disk::signing_thumbprints(&keys.stdout).as_slice() {
-            [thp] => tangs.push(Tang {
-                url: disk::tang_url(address),
-                thp: thp.clone(),
-            }),
+            [thp] => tangs.push((
+                name.clone(),
+                Tang {
+                    url: disk::tang_url(address),
+                    thp: thp.clone(),
+                },
+            )),
             other => eprintln!(
                 "  ⚠️  {} signing keys found, one expected: left out",
                 other.len()
@@ -221,8 +255,17 @@ pub async fn run(
         return Ok(ExitCode::FAILURE);
     }
 
+    let (holders, tangs): (Vec<String>, Vec<Tang>) = tangs.into_iter().unzip();
     println!("\n{}:", target.hostname);
-    let outcome = bind(runner, &disk, &recovery, passphrase.as_deref(), &tangs).await;
+    let outcome = bind(
+        runner,
+        &disk,
+        &recovery,
+        passphrase.as_deref(),
+        &tangs,
+        &unlock,
+    )
+    .await;
     // Whatever happened, neither secret stays on the node.
     let _ = runner
         .run(&[
@@ -236,6 +279,23 @@ pub async fn run(
         eprintln!("  🔴 {e}");
         eprintln!("     Run this again: what is done is skipped.");
         return Ok(ExitCode::FAILURE);
+    }
+    // Out of the disk now (or never in it): kept, it would be a key to nothing that
+    // still reads as one.
+    let install = format!("{INSTALL_PASSPHRASE_PREFIX}{}", target.hostname);
+    if state.secret(&install).await?.is_some() {
+        state.forget_secret(&install).await?;
+        println!("  the install passphrase, forgotten by the vault");
+    }
+    // Read back when a node joins or leaves: the binding pins these Tangs, and nothing
+    // else knows which disk depends on which node.
+    let label = holders.join(",");
+    if let Err(e) = orch
+        .label_node(&target.id, cluster::LABEL_DISK_TANGS, &label)
+        .await
+    {
+        eprintln!("  ⚠️  bound, but its Tangs are not recorded on the node ({e}): a node");
+        eprintln!("     leaving will not say this disk needs binding again. Run this again.");
     }
     let detail = tangs
         .iter()
@@ -260,7 +320,126 @@ pub async fn run(
         println!("    {}", t.url);
     }
     println!("  Otherwise, the recovery key printed on the kit under its name.");
+    if !unlock.is_empty() {
+        let fingerprint = runner
+            .run(&[
+                "dropbearkey".into(),
+                "-y".into(),
+                "-f".into(),
+                disk::UNLOCK_HOST_KEY.into(),
+            ])
+            .await?;
+        let address = mesh
+            .get(&target.hostname)
+            .and_then(|p| p.endpoint.as_deref().map(endpoint_host))
+            .or_else(|| host.map(str::to_string))
+            .unwrap_or_else(|| "<its address>".into());
+        println!("  Typed from elsewhere, once it waits at boot:");
+        println!("    ssh -p {} root@{address}", disk::UNLOCK_PORT);
+        match fingerprint
+            .stdout
+            .lines()
+            .find_map(|l| l.strip_prefix("Fingerprint: "))
+        {
+            Some(f) => println!("  where it must show the key {f} — note it now."),
+            None => println!("  ⚠️  its host key could not be read: check it at the console."),
+        }
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The one-time passphrase `hlb node preseed --encrypt` installs `node`'s disk under:
+/// the vault's when there is one, so a preseed rendered twice installs under the same
+/// passphrase, and `bind-disk` reads what the disk was really made with.
+pub async fn install_passphrase(cli: &Cli, node: &str) -> Result<String> {
+    let state = open_state(cli).await?;
+    let vault = open_vault(cli)?;
+    let name = format!("{INSTALL_PASSPHRASE_PREFIX}{node}");
+    if let Some(ct) = state.secret(&name).await? {
+        return Ok(vault.decrypt(&ct)?);
+    }
+    // The recovery key's shape — letters and dashes the preseed carries unquoted — but
+    // never the key itself: this one is written into a file left on a USB stick.
+    let passphrase = hlb_secrets::recovery_key();
+    let purpose = format!("install passphrase of {node}'s disk, until bind-disk");
+    if !state
+        .store_secret_if_absent(&name, &vault.encrypt(&passphrase)?, &purpose)
+        .await?
+    {
+        return Box::pin(install_passphrase(cli, node)).await;
+    }
+    state
+        .audit("cli", ACTOR_ROLE, "node-preseed-encrypt", node, "ok", None)
+        .await?;
+    Ok(passphrase)
+}
+
+/// A bound node whose Tangs a join or a departure changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rebind {
+    pub node: String,
+    /// Its Tangs still in the house; empty when the departure took the last one.
+    pub left: Vec<String>,
+}
+
+/// The bound nodes to bind again once `joined` joined (a Tang more to hold) or `gone`
+/// left (one fewer). Sorted, so the advice reads the same on every run.
+pub fn rebinds(nodes: &[NodeInfo], joined: Option<&str>, gone: Option<&str>) -> Vec<Rebind> {
+    let mut out: Vec<Rebind> = nodes
+        .iter()
+        .filter(|n| !n.disk_tangs.is_empty())
+        .filter(|n| Some(n.hostname.as_str()) != joined && Some(n.hostname.as_str()) != gone)
+        .filter(|n| joined.is_some() || gone.is_some_and(|g| n.disk_tangs.iter().any(|t| t == g)))
+        .map(|n| Rebind {
+            node: n.hostname.clone(),
+            left: n
+                .disk_tangs
+                .iter()
+                .filter(|t| Some(t.as_str()) != gone)
+                .cloned()
+                .collect(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.node.cmp(&b.node));
+    out
+}
+
+/// Says which disks to bind again; `true` when one is left with no Tang at all.
+pub fn print_rebinds(rebinds: &[Rebind], joined: Option<&str>, gone: Option<&str>) -> bool {
+    if rebinds.is_empty() {
+        return false;
+    }
+    let mut orphaned = false;
+    println!();
+    for r in rebinds {
+        if r.left.is_empty() {
+            orphaned = true;
+            eprintln!(
+                "🔴 {}'s disk opened with the Tang of {} alone: at its next boot it",
+                r.node,
+                gone.unwrap_or("?")
+            );
+            eprintln!("   waits for the kit's recovery key, typed at its console.");
+        } else if let Some(g) = gone {
+            println!(
+                "⚠️  {}'s disk opens with {} still, and with {g}'s Tang wherever that",
+                r.node,
+                r.left.join(", ")
+            );
+            println!("   machine now answers, until it is bound again.");
+        } else if let Some(j) = joined {
+            println!(
+                "  · {}'s disk opens with {}: {j} can hold a Tang for it too.",
+                r.node,
+                r.left.join(", ")
+            );
+        }
+    }
+    println!("  Bind again, to the Tangs of the house as it is now:");
+    for r in rebinds {
+        println!("    hlb node bind-disk {} --apply", r.node);
+    }
+    orphaned
 }
 
 /// The secrets staged, tried, and the steps they leave run.
@@ -270,6 +449,7 @@ async fn bind(
     recovery: &str,
     passphrase: Option<&str>,
     tangs: &[Tang],
+    unlock: &str,
 ) -> std::result::Result<(), String> {
     let e = |e: hlb_bootstrap::runner::Error| e.to_string();
     runner
@@ -318,7 +498,7 @@ async fn bind(
         recovery: recovery_opens,
     };
     let steps = Provision {
-        steps: disk::plan(disk, Some(keys), tangs)?,
+        steps: disk::plan(disk, Some(keys), tangs, unlock)?,
         notes: Vec::new(),
     };
     provision::execute(runner, &steps, |s| println!("  {}", s.what))
@@ -378,6 +558,78 @@ fn placeholder() -> Tang {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(name: &str, tangs: &[&str]) -> NodeInfo {
+        NodeInfo {
+            id: format!("id-{name}"),
+            hostname: name.into(),
+            role: cluster::NodeRole::Worker,
+            status: "ready".into(),
+            availability: "active".into(),
+            tier: None,
+            protection: None,
+            disk_tangs: tangs.iter().map(|s| s.to_string()).collect(),
+            is_leader: false,
+            memory_mb: None,
+            failure_domain: None,
+            data: Vec::new(),
+            ingress: false,
+            addr: None,
+        }
+    }
+
+    fn house() -> Vec<NodeInfo> {
+        vec![
+            node("deb1", &[]),
+            node("deb2", &[]),
+            node("enc1", &["deb1", "deb2"]),
+            node("enc2", &["deb2"]),
+        ]
+    }
+
+    #[test]
+    fn a_node_leaving_names_the_disks_its_tang_opened() {
+        let r = rebinds(&house(), None, Some("deb2"));
+        assert_eq!(
+            r,
+            vec![
+                Rebind {
+                    node: "enc1".into(),
+                    left: vec!["deb1".into()]
+                },
+                Rebind {
+                    node: "enc2".into(),
+                    left: Vec::new()
+                },
+            ]
+        );
+        assert!(rebinds(&house(), None, Some("deb3")).is_empty());
+    }
+
+    #[test]
+    fn a_node_joining_names_every_bound_disk_but_its_own() {
+        let mut h = house();
+        h.push(node("deb3", &["deb1"]));
+        let r: Vec<String> = rebinds(&h, Some("deb3"), None)
+            .into_iter()
+            .map(|r| r.node)
+            .collect();
+        assert_eq!(r, ["enc1", "enc2"]);
+    }
+
+    #[test]
+    fn a_disk_left_with_no_tang_is_red() {
+        assert!(print_rebinds(
+            &rebinds(&house(), None, Some("deb2")),
+            None,
+            Some("deb2")
+        ));
+        assert!(!print_rebinds(
+            &rebinds(&house(), None, Some("deb1")),
+            None,
+            Some("deb1")
+        ));
+    }
 
     #[test]
     fn a_tang_is_reached_at_its_endpoint_host() {

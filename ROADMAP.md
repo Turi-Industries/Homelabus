@@ -25,7 +25,7 @@ goals added, and eight phases to get there. **Measured** the same day:
 |---|---|
 | 1. deploy | `v0.2.0` has no release: the quick start begins with building thirty crates, then five commands. Time to a first app is measured nowhere |
 | 2. never lose | no record anywhere of which apps' restores were rehearsed; `hlb dr exercise` rehearses PostgreSQL's base backup |
-| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No disk is encrypted** (the preseed partitions `regular`, ZFS without its native encryption); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
+| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No real node's disk is encrypted yet** (`node preseed --encrypt` installs one LUKS under a one-time passphrase that `node bind-disk` replaces with the TPM AND a Tang, measured on the lab; ZFS without its native encryption); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
 | 4. no Rust | **0 of 12** apps went in without Rust in the same commit; of the last 12 commits completing an app, 8 touched Rust. No production code branches on an app's name |
 | 5. always available — the vital apps reachable while the house is down, or moving | no notion of a site, of an app's criticality, of a relay: the way in is a port forward on the house's router. Every service runs `replicas: 1` |
 | 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Trivy at update time only |
@@ -124,7 +124,7 @@ exported — Homelabus never bills.
   place; it lands on Debian 13 in the same pass, and a node holding data has it
   restored from its backup or moved first.
 - **No real node is encrypted before it can restart alone**: the preseed's encryption
-  reaches the CLI with step 4's TPM and Tang binding, not before.
+  reached the CLI (`--encrypt`) with step 4's TPM and Tang binding, not before.
 - **Until the VPS, the Tangs live on the house's other nodes**: encryption from two
   nodes, a one-node house refused until the VPS's Tang. After a whole-house power cut
   the recovery key is typed on ONE node and the others open in cascade, as each Tang
@@ -365,8 +365,9 @@ no secret in `docker inspect`.
        one-time passphrase, never the recovery key, since the preseed is left on a
        USB stick or a web server. ⚠️ **Debian 13's initramfs ignores `tpm2-device`**
        ("ignoring unknown option", measured): an encrypted node asks at its console
-       at every boot until step 4, so the CLI flag waits for it (decided
-       2026-10-29). Step 4's verb takes the install passphrase out: it enrols the
+       at every boot until step 4, so the CLI flag waited for it (decided
+       2026-10-29; `hlb node preseed --encrypt` since, its passphrase in the vault as
+       `luks-install-<node>`, the same on a second render). Step 4's verb takes the install passphrase out: it enrols the
        recovery key (`kit::recovery_key`, refused until the kit is current) and the
        binding, then wipes the install slot.
     4. B: Clevis, the TPM AND one Tang of two — nested, `sss` `t=2` over the TPM and an
@@ -405,11 +406,22 @@ no secret in `docker inspect`.
        Tang whose keys were remade at the same address is bound again — and read with
        Clevis absent. ⚠️ Once, the proof refused: `clevis luks pass` gave 135 bytes that
        opened nothing, while the disk kept opening alone at boot; after a reboot it gave
-       54 that open, run after run. Unexplained; the verb stopped before removing
-       anything, which is why the proof comes first. Left: `node preseed --encrypt` (the one-time
-       passphrase into the vault as `luks-install-<node>`, which the verb reads — until
-       then `--passphrase-stdin`), `dropbear-initramfs` for the typed recovery (decided),
-       and a node's binding refreshed when a node joins or leaves the house.
+       54 that open, run after run. Not reproduced since (five boots, fifteen proofs,
+       the same session's sequence replayed); the verb stopped before removing
+       anything, which is why the proof comes first — and it now opens the disk through
+       the binding's OWN slot (`--key-slot`), where a token decrypting to another slot's
+       key passed. ✅ 2026-10-29 evening, the leftovers: `node preseed --encrypt` (the
+       passphrase into the vault, forgotten once bind-disk has taken it out);
+       `dropbear-initramfs` on port 2222 (`-s -j -k`), root's keys forced to
+       `cryptroot-unlock` — those with a `from=` or `command=` left out — measured on
+       enc1: the kit's key piped into `ssh -p 2222` opened the disk while Clevis's loop
+       kept asking the stopped Tangs, a Tang up it opens alone as before, port 2222 is
+       gone once booted, and the verb prints the initrd's host key fingerprint (in clear
+       on `/boot`, its preview says so). Bound nodes are labelled `hlb.disk.tangs`;
+       `node add` names each bound disk a new node could hold a Tang for, `mesh remove`
+       each disk the departed node's Tang opened — red, exit 1, for one left with none
+       (measured with a dummy peer). The lab's Caddy "internal error" was `lab.hlb.test`
+       bare, a name no site has; every app's name answers.
     5. A: the UKI, its hook, the signed policy and the PCR 15 measurement, after
        deciding the combination above. Secure Boot keys: the distribution's shim and
        Microsoft's certificates kept — `sbctl` is not packaged, and a firmware whose

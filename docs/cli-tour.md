@@ -267,7 +267,9 @@ A disk the installer encrypted asks for its passphrase at every boot until it is
 `node bind-disk` makes the house's other nodes Tangs (port 7500, their keys pinned),
 binds the disk to its TPM AND one of them, enrols the node's recovery key and takes the
 install passphrase out. Refused while the printed kit lacks that key, and on a one-node
-house — the disk would open for whoever carries the machine away.
+house — the disk would open for whoever carries the machine away. When no Tang answers,
+the kit's key is typed at the console or over SSH at boot (`ssh -p 2222`, root's keys,
+the fingerprint it printed). `node add` and `mesh remove` name the disks to bind again.
 
 ```sh
 ./target/debug/hlb node bind-disk worker-1           # what would change — the key made
@@ -468,6 +470,8 @@ Preparing a new machine ahead of time — printed, never written to disk:
 ./target/debug/hlb node preseed nas-02 --domain example.org \
     --disk /dev/disk/by-id/ata-Samsung_SSD_1TB_S1234 \
     --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
+./target/debug/hlb node preseed nas-02 --disk /dev/disk/by-id/ata-Samsung_SSD_1TB_S1234 \
+    --ssh-key "$(cat ~/.ssh/id_ed25519.pub)" --encrypt   # LUKS, until bind-disk
 ```
 
 The environment variables that decide where volumes land, and the traps that go with
