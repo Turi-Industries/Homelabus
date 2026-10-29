@@ -10,10 +10,11 @@
 //!
 //! ## Why the systemd version decides A, and not the tools
 //!
-//! A needs `ukify`, a signed PCR 11 policy and cryptsetup's `tpm2-measure-pcr`.
-//! Measured 2026-10-28: Debian 12 (systemd 252) has none of them, not even in
-//! backports; Debian 13 (257) has all three. A tool not installed yet is installed by
-//! the step that uses it, so reading its presence would only say what is not done.
+//! A (`boot`) builds a signed kernel image with `ukify` and predicts the PCR 11 it
+//! produces with `systemd-measure`, then binds Clevis to it AND a Tang. Measured
+//! 2026-10-28: Debian 12 (systemd 252) has no `ukify`, not even in backports; Debian 13
+//! (257) has it. A tool not installed yet is installed by the step that uses it, so
+//! reading its presence would only say what is not done.
 
 /// The first systemd with everything level A uses.
 pub const SYSTEMD_FOR_A: u32 = 257;
@@ -52,7 +53,8 @@ impl Level {
         match self {
             Self::A => {
                 "verified boot, disk bound to the network: a signed kernel, the disk \
-                 opened by the TPM in the boot's own phase and by a Tang of the house"
+                 opened by the TPM at that kernel's PCRs, in its initrd only, and by a \
+                 Tang of the house"
             }
             Self::B => {
                 "disk bound to the network, boot not verified: the TPM and a Tang of the \
@@ -186,8 +188,8 @@ fn boot_shortfall(s: &Signals) -> Vec<String> {
     match s.systemd {
         Some(v) if v >= SYSTEMD_FOR_A => {}
         Some(v) => why.push(format!(
-            "systemd {v}: no signed kernel image, no signed PCR policy, no volume \
-             measurement — systemd {SYSTEMD_FOR_A} has them (Debian 13)"
+            "systemd {v}: no `ukify` to build a signed kernel image — systemd \
+             {SYSTEMD_FOR_A} has it (Debian 13)"
         )),
         None => why.push("no systemd version read".to_string()),
     }

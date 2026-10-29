@@ -22,12 +22,14 @@
 //! | [`protection`] | a machine's protection level, from its firmware, TPM and systemd | ✅ entirely |
 //! | [`seal`] | the vault's key sealed to the machine, unsealed into memory | ✅ entirely |
 //! | [`unlock`] | Swarm's unlock key sealed to a manager, handed to Docker | ✅ entirely |
+//! | [`boot`] | level A: a signed kernel image, the disk resealed to its PCRs | ✅ entirely |
 //!
 //! The separation is deliberate: the logic that decides is independent of the one that
 //! executes. So the whole line of reasoning - "an old Debian with a Docker that is too
 //! old and a clock out of sync" - is testable without provisioning a VM.
 
 pub mod access;
+pub mod boot;
 pub mod deps;
 pub mod disk;
 pub mod distro;

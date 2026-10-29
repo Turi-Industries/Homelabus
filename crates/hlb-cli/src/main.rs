@@ -14,6 +14,7 @@ mod restore;
 mod roles;
 mod seal;
 mod termix;
+mod verify_boot;
 
 /// The catalog's YAML, carried in the binary by `build.rs`.
 mod carried_catalog {
@@ -610,6 +611,25 @@ enum NodeCmd {
         /// a disk encrypted by hand.
         #[arg(long)]
         passphrase_stdin: bool,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Verify a node's boot (level A): a kernel image signed by a key of its own, and
+    /// the disk `bind-disk` bound resealed to the PCRs it boots with. Preview by
+    /// default.
+    ///
+    /// Run it once per stage, each read from the node: the key handed to shim, enrolled
+    /// at the console, the image booted once (opened by the kit's key), then sealed.
+    VerifyBoot {
+        /// Node name, as shown by `hlb cluster status`.
+        node: String,
+        /// SSH host, when the mesh has none recorded for this node.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long)]
         apply: bool,
     },
@@ -11355,6 +11375,27 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .await;
                 }
 
+                if let NodeCmd::VerifyBoot {
+                    node,
+                    host,
+                    user,
+                    port,
+                    apply,
+                } = cmd
+                {
+                    let orch = SwarmOrchestrator::connect().await?;
+                    return verify_boot::run(
+                        &cli,
+                        &orch,
+                        node,
+                        host.as_deref(),
+                        user.as_deref(),
+                        *port,
+                        *apply,
+                    )
+                    .await;
+                }
+
                 if let NodeCmd::Protection {
                     node,
                     host,
@@ -11577,6 +11618,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     NodeCmd::Tier { .. }
                     | NodeCmd::Protection { .. }
                     | NodeCmd::BindDisk { .. }
+                    | NodeCmd::VerifyBoot { .. }
                     | NodeCmd::Prune { .. }
                     | NodeCmd::Add { .. }
                     | NodeCmd::Preseed { .. }

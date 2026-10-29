@@ -40,6 +40,12 @@
 //! `clevis luks bind -y` trusts whatever answers the advertisement. Homelabus installs
 //! the Tangs, so it reads their signing keys on their nodes and pins them (`thp`): a
 //! wrong thumbprint is refused before anything is written (measured).
+//!
+//! ## At level A the binding is `boot`'s
+//!
+//! Sealed to the boot's PCRs, which the booted system has left behind, it can neither be
+//! made nor proven from here: the policy gets the new Tangs and `hlb-uki` reseals, through
+//! the key slot of its own this module counts beside the binding and the recovery key.
 
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -365,6 +371,8 @@ pub struct Disk {
     pub device: String,
     pub keyslots: usize,
     pub bindings: Vec<Binding>,
+    /// Level A's policy is on the node (`boot::POLICY`): its binding is `hlb-uki`'s.
+    pub verified: bool,
 }
 
 /// Which of the two secrets open the disk — tried on the node, so known only when
@@ -373,6 +381,8 @@ pub struct Disk {
 pub struct Keys {
     pub passphrase: bool,
     pub recovery: bool,
+    /// Level A's reseal key (`boot::RESEAL_KEY`).
+    pub reseal: bool,
 }
 
 /// The steps that bind `disk` to its TPM AND one of `tangs`, enrol the recovery key and
@@ -409,7 +419,9 @@ pub fn plan(
     // Every slot is a binding, the passphrase or the recovery key; until they are tried
     // both may still be there.
     let known = disk.bindings.len()
-        + keys.map_or(2, |k| usize::from(k.passphrase) + usize::from(k.recovery));
+        + keys.map_or(2 + usize::from(disk.verified), |k| {
+            usize::from(k.passphrase) + usize::from(k.recovery) + usize::from(k.reseal)
+        });
     if disk.keyslots > known {
         return Err(format!(
             "{} holds {} key slots, of which Homelabus knows {known}: a key it does not \
@@ -487,7 +499,21 @@ pub fn plan(
             ]),
         ));
     }
-    if !current {
+    if disk.verified {
+        // The rebuild below runs the reseal through its hook, which never fails a
+        // package; the reseal is then run again for its verdict.
+        steps.extend(crate::boot::policy_steps(tangs));
+        steps.push(run(
+            Phase::Configuration,
+            "rebuild the initrd, which opens the disk",
+            s(&["update-initramfs", "-u", "-k", "all"]),
+        ));
+        steps.push(run(
+            Phase::Services,
+            "seal the disk to the boot AND the new Tangs",
+            s(&[crate::boot::TOOL]),
+        ));
+    } else if !current {
         steps.push(run(
             Phase::Configuration,
             "bind the disk to this TPM AND one of the house's Tangs",
@@ -504,11 +530,13 @@ pub fn plan(
             ]),
         ));
     }
-    // A binding to Tangs since replaced: the new one is in place before it goes.
+    // A binding to Tangs since replaced: the new one is in place before it goes. At
+    // level A `hlb-uki` removes it, and the booted system cannot open the disk through
+    // a binding sealed to the initrd's PCRs: no proof either.
     for b in disk
         .bindings
         .iter()
-        .filter(|b| b.tangs.as_deref() != Some(wanted.as_slice()))
+        .filter(|b| !disk.verified && b.tangs.as_deref() != Some(wanted.as_slice()))
     {
         steps.push(run(
             Phase::Configuration,
@@ -525,16 +553,18 @@ pub fn plan(
             ]),
         ));
     }
-    steps.push(run(
-        Phase::Configuration,
-        "rebuild the initrd, which opens the disk",
-        s(&["update-initramfs", "-u", "-k", "all"]),
-    ));
-    steps.push(run(
-        Phase::Services,
-        "open the disk through the binding, as at boot",
-        s(&["sh", "-c", PROOF, "sh", dev]),
-    ));
+    if !disk.verified {
+        steps.push(run(
+            Phase::Configuration,
+            "rebuild the initrd, which opens the disk",
+            s(&["update-initramfs", "-u", "-k", "all"]),
+        ));
+        steps.push(run(
+            Phase::Services,
+            "open the disk through the binding, as at boot",
+            s(&["sh", "-c", PROOF, "sh", dev]),
+        ));
+    }
     if keys.is_none_or(|k| k.passphrase) {
         // Not `-q`: cryptsetup then refuses to remove a disk's last key.
         steps.push(run(
@@ -675,6 +705,7 @@ mod tests {
             device: DEV.into(),
             keyslots: 1,
             bindings: Vec::new(),
+            verified: false,
         }
     }
 
@@ -773,10 +804,12 @@ mod tests {
                 "1",
                 &ours_on(&[("10.77.0.11", "old"), ("10.77.0.12", "b")]),
             )),
+            verified: false,
         };
         let keys = Keys {
             passphrase: false,
             recovery: true,
+            reseal: false,
         };
         let steps = plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan");
         let w = whats(&steps);
@@ -829,10 +862,12 @@ mod tests {
                 slot: 1,
                 tangs: Some(tangs()),
             }],
+            verified: false,
         };
         let keys = Keys {
             passphrase: false,
             recovery: true,
+            reseal: false,
         };
         let w = whats(&plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan")).join(" | ");
         assert!(!w.contains("bind the disk"), "{w}");
@@ -851,10 +886,12 @@ mod tests {
                 slot: 1,
                 tangs: Some(old),
             }],
+            verified: false,
         };
         let keys = Keys {
             passphrase: false,
             recovery: true,
+            reseal: false,
         };
         let steps = plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan");
         let w = whats(&steps);
@@ -878,6 +915,7 @@ mod tests {
         let keys = Keys {
             passphrase: true,
             recovery: true,
+            reseal: false,
         };
         let e = plan(&disk, Some(keys), &tangs(), KEYS).expect_err("refused");
         assert!(e.contains("does not know"), "{e}");
@@ -894,6 +932,7 @@ mod tests {
                 slot: 1,
                 tangs: None,
             }],
+            verified: false,
         };
         let e = plan(&disk, None, &tangs(), KEYS).expect_err("refused");
         assert!(e.contains("second factor"), "{e}");
@@ -909,6 +948,7 @@ mod tests {
         let keys = Keys {
             passphrase: false,
             recovery: false,
+            reseal: false,
         };
         assert!(plan(&fresh(), Some(keys), &tangs(), KEYS).is_err());
     }
@@ -955,5 +995,46 @@ restrict,command=\"/usr/bin/cryptroot-unlock\" ssh-ed25519 AAAA2 homelabus\n"
         assert!(TANG_DROPIN_CONTENT.contains("ListenStream=\n"));
         assert!(TANG_DROPIN_CONTENT.contains(&format!("ListenStream={TANG_PORT}\n")));
         assert_eq!(tang_url("10.0.0.2"), "http://10.0.0.2:7500");
+    }
+
+    #[test]
+    fn at_level_a_the_reseal_rebinds_and_its_key_is_a_slot_homelabus_knows() {
+        let mut old = tangs();
+        old.pop();
+        let disk = Disk {
+            device: DEV.into(),
+            keyslots: 3,
+            bindings: vec![Binding {
+                slot: 3,
+                tangs: Some(old),
+            }],
+            verified: true,
+        };
+        let keys = Keys {
+            passphrase: false,
+            recovery: true,
+            reseal: true,
+        };
+        let w = whats(&plan(&disk, Some(keys), &tangs(), KEYS).expect("a plan")).join(" | ");
+        assert!(
+            w.contains("binding's policy") && w.contains("seal the disk to the boot"),
+            "{w}"
+        );
+        // Sealed to PCRs the booted system has left: neither bound nor proven from here.
+        assert!(!w.contains("bind the disk to this TPM"), "{w}");
+        assert!(!w.contains("open the disk through"), "{w}");
+        assert!(!w.contains("of before"), "{w}");
+        // Untried in a preview, the reseal key counts there too: a binding and three
+        // secrets that may be there are four slots at A, one too many at B.
+        let four = Disk {
+            keyslots: 4,
+            ..disk
+        };
+        assert!(plan(&four, None, &tangs(), KEYS).is_ok());
+        let b = Disk {
+            verified: false,
+            ..four
+        };
+        assert!(plan(&b, None, &tangs(), KEYS).is_err());
     }
 }

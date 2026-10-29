@@ -5,6 +5,7 @@
 use std::process::ExitCode;
 
 use hlb_backup_run::kit;
+use hlb_bootstrap::boot;
 use hlb_bootstrap::disk::{self, Disk, Keys, Tang};
 use hlb_bootstrap::protection::Tpm;
 use hlb_bootstrap::provision::{self, Provision};
@@ -190,10 +191,17 @@ pub async fn run(
         }
         println!("\n  The kit's recovery key and the disk's passphrase reach it through");
         println!("  standard input into memory, never a command line.");
-        // Level A's verified boot is step 5 of the plan; until then every node is here.
-        println!("\n⚠️  Boot is not verified: whoever has the machine INSIDE the house, a Tang");
-        println!("   answering, can still get a shell at boot. And after a power cut of");
-        println!("   the whole house, the recovery key is typed on one node — the others open");
+        if disk.verified {
+            println!("\n  Boot verified (level A): `hlb-uki` reseals the disk to the boot AND the");
+            println!("  Tangs above, with no Tang needing to answer. After a power cut of the");
+        } else {
+            println!(
+                "\n⚠️  Boot is not verified: whoever has the machine INSIDE the house, a Tang"
+            );
+            println!("   answering, can still get a shell at boot (`hlb node verify-boot`).");
+            println!("   And after a power cut of the");
+        }
+        println!("   whole house, the recovery key is typed on one node — the others open");
         println!("   as its Tang comes back.");
         if unlock.is_empty() {
             println!("\n⚠️  root has no key that may unlock it: the recovery key is typed at its");
@@ -471,6 +479,7 @@ async fn bind(
         .await
         .map_err(e)?
         .ok();
+    let reseal_opens = disk.verified && runner.run(&opens(boot::RESEAL_KEY)).await.map_err(e)?.ok();
     let passphrase_opens = match passphrase {
         Some(p) => {
             runner
@@ -496,6 +505,7 @@ async fn bind(
     let keys = Keys {
         passphrase: passphrase_opens,
         recovery: recovery_opens,
+        reseal: reseal_opens,
     };
     let steps = Provision {
         steps: disk::plan(disk, Some(keys), tangs, unlock)?,
@@ -507,7 +517,7 @@ async fn bind(
 }
 
 /// What the disk holds, read without a secret. `Ok(Err)` is a refusal.
-async fn read_disk(runner: &dyn Runner) -> Result<std::result::Result<Disk, String>> {
+pub(crate) async fn read_disk(runner: &dyn Runner) -> Result<std::result::Result<Disk, String>> {
     let crypttab = runner.read_file("/etc/crypttab").await?.unwrap_or_default();
     let device = match disk::device(&crypttab) {
         Ok(d) => d,
@@ -529,15 +539,17 @@ async fn read_disk(runner: &dyn Runner) -> Result<std::result::Result<Disk, Stri
     };
     // From the tokens, not `clevis luks list`: they keep each Tang's key.
     let bindings = disk::parse_bindings(&dump.stdout);
+    let verified = runner.read_file(boot::POLICY).await?.is_some();
     Ok(Ok(Disk {
         device,
         keyslots,
         bindings,
+        verified,
     }))
 }
 
 /// `10.0.0.2:51820` → `10.0.0.2`; `[fd00::2]:51820` → `fd00::2`.
-fn endpoint_host(endpoint: &str) -> String {
+pub(crate) fn endpoint_host(endpoint: &str) -> String {
     if let Some(rest) = endpoint.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest).to_string();
     }

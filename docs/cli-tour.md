@@ -277,6 +277,20 @@ the fingerprint it printed). `node add` and `mesh remove` name the disks to bind
 ./target/debug/hlb node bind-disk worker-1 --apply
 ```
 
+Bound, a node whose firmware has Secure Boot, a TPM and systemd 257 (Debian 13) reaches
+level A with `node verify-boot`: a kernel image (UKI) signed by a key of the node's own,
+booted by shim, and the binding resealed to the PCRs that image produces — `hlb-uki`,
+run after every `update-initramfs`, before the next reboot. Run once per stage, each
+read from the node: the key made and handed to shim (a one-time password to type at the
+console, in MokManager), the UKI installed and booted once — that boot opened by the
+kit's key over `ssh -p 2222`, since only a boot through it reads its PCR 7 —, then the
+disk sealed to it and the UKI first. GRUB opens nothing afterwards; `bind-disk` reseals.
+
+```sh
+./target/debug/hlb node verify-boot worker-1           # which stage, and what it does
+./target/debug/hlb node verify-boot worker-1 --apply   # then reboot, as it says; again
+```
+
 `cluster init`, `node add` and `node upgrade` also cap the system journal (500 MB, a
 month) and harden the kernel (`/etc/sysctl.d/90-homelabus.conf`: no redirects, eBPF
 and kernel addresses for root only) — neither touches forwarding or `rp_filter`, which
