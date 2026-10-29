@@ -391,7 +391,21 @@ no secret in `docker inspect`.
        would carry its own way in. ⚠️ **Tangs only on encrypted nodes deadlock a cold
        start**: after a power cut each waits for the other's Tang, which runs only
        once it is open. ⚠️ `clevis luks bind -y` trusts any advertisement: `hlb` makes
-       the Tangs' keys, so it pins their thumbprints (`thp`).
+       the Tangs' keys, so it pins their thumbprints (`thp`). ✅ 2026-10-29: `hlb node
+       bind-disk` (`hlb_bootstrap::disk`) makes the house's other nodes Tangs (port
+       7500 — Debian's package starts one on 80 as it installs, Caddy's port, so the
+       drop-in goes first), pins their signing keys, enrols the kit's recovery key,
+       binds, rebuilds the initrd, opens the disk through the binding, then removes the
+       install passphrase; refused while the kit lacks the key, on a one-node house, on
+       a slot or a Clevis binding it does not know. On the lab, enc1 (Debian 13) joined
+       by `node add`, bound by the verb with deb1 and deb2 as Tangs: reboots open alone
+       in ~15 s, both Tangs stopped it waits, deb2's alone opens it, the kit's key opens
+       it, a second `--apply` changes nothing. ⚠️ `clevis luks list` shows no `thp`: a
+       binding is recognised by its Tangs' URLs, so a Tang whose keys were remade at the
+       same address is not rebound. Left: `node preseed --encrypt` (the one-time
+       passphrase into the vault as `luks-install-<node>`, which the verb reads — until
+       then `--passphrase-stdin`), `dropbear-initramfs` for the typed recovery (decided),
+       and a node's binding refreshed when a node joins or leaves the house.
     5. A: the UKI, its hook, the signed policy and the PCR 15 measurement, after
        deciding the combination above. Secure Boot keys: the distribution's shim and
        Microsoft's certificates kept — `sbctl` is not packaged, and a firmware whose

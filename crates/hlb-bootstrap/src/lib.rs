@@ -29,6 +29,7 @@
 
 pub mod access;
 pub mod deps;
+pub mod disk;
 pub mod distro;
 pub mod docker;
 pub mod host;

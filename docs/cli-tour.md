@@ -263,6 +263,18 @@ the machine can reach: the line under it says whether its disk is encrypted yet.
 ./target/debug/hlb node protection worker-1 --apply  # and labelled
 ```
 
+A disk the installer encrypted asks for its passphrase at every boot until it is bound:
+`node bind-disk` makes the house's other nodes Tangs (port 7500, their keys pinned),
+binds the disk to its TPM AND one of them, enrols the node's recovery key and takes the
+install passphrase out. Refused while the printed kit lacks that key, and on a one-node
+house — the disk would open for whoever carries the machine away.
+
+```sh
+./target/debug/hlb node bind-disk worker-1           # what would change — the key made
+./target/debug/hlb emergency kit                     # printed with it
+./target/debug/hlb node bind-disk worker-1 --apply
+```
+
 `cluster init`, `node add` and `node upgrade` also cap the system journal (500 MB, a
 month) and harden the kernel (`/etc/sysctl.d/90-homelabus.conf`: no redirects, eBPF
 and kernel addresses for root only) — neither touches forwarding or `rp_filter`, which

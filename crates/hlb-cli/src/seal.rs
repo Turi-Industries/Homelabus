@@ -480,7 +480,7 @@ pub(crate) async fn seal_new_manager(
 }
 
 /// Is the kit in the drawer the one printed with today's material?
-async fn kit_current(state: &State, vault: &Vault) -> Result<bool> {
+pub(crate) async fn kit_current(state: &State, vault: &Vault) -> Result<bool> {
     let now = hlb_backup_run::kit::fingerprint(state, vault).await?;
     Ok(state.breakglass_note(EMERGENCY_KIT).await?.as_deref() == Some(now.as_str()))
 }

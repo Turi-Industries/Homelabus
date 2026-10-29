@@ -9,7 +9,9 @@ description = "Distribution detection, dependencies and bootstrap prechecks."
 [dependencies]
 tempfile = "3"
 async-trait.workspace = true
+base64 = "0.23"
 serde_json.workspace = true
+sha2 = "0.11"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "fs", "io-util"] }
 tracing.workspace = true

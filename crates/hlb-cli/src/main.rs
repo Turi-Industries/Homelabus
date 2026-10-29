@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+mod disk;
 mod emergency;
 mod exposure;
 mod mail;
@@ -586,6 +587,29 @@ enum NodeCmd {
         user: Option<String>,
         #[arg(long)]
         port: Option<u16>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Bind a node's encrypted disk to its TPM AND one of the house's Tangs, so it
+    /// opens alone at boot — then take the install passphrase out, the kit's recovery
+    /// key in its place. Preview by default.
+    ///
+    /// The Tangs go on the house's other nodes. Refused while the emergency kit printed
+    /// does not carry the node's recovery key.
+    BindDisk {
+        /// Node name, as shown by `hlb cluster status`.
+        node: String,
+        /// SSH host, when the mesh has none recorded for this node.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// The disk's current passphrase on standard input, when the vault holds none —
+        /// a disk encrypted by hand.
+        #[arg(long)]
+        passphrase_stdin: bool,
         #[arg(long)]
         apply: bool,
     },
@@ -2920,7 +2944,7 @@ async fn cluster_ssh_key(
 /// diverge.
 const MESH_TOPOLOGY: &str = "mesh-topology";
 
-async fn load_mesh(
+pub(crate) async fn load_mesh(
     state: &State,
     vault: &Vault,
 ) -> Result<hlb_mesh::MeshConfig, Box<dyn std::error::Error>> {
@@ -3044,7 +3068,7 @@ fn ssh_target(host: &str, user: Option<&str>, port: Option<u16>) -> String {
     s
 }
 
-fn parse_ssh_target(t: &str) -> (String, Option<String>, Option<u16>) {
+pub(crate) fn parse_ssh_target(t: &str) -> (String, Option<String>, Option<u16>) {
     let (user, rest) = match t.split_once('@') {
         Some((u, r)) => (Some(u.to_string()), r),
         None => (None, t),
@@ -11279,6 +11303,29 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .await;
                 }
 
+                if let NodeCmd::BindDisk {
+                    node,
+                    host,
+                    user,
+                    port,
+                    passphrase_stdin,
+                    apply,
+                } = cmd
+                {
+                    let orch = SwarmOrchestrator::connect().await?;
+                    return disk::run(
+                        &cli,
+                        &orch,
+                        node,
+                        host.as_deref(),
+                        user.as_deref(),
+                        *port,
+                        *passphrase_stdin,
+                        *apply,
+                    )
+                    .await;
+                }
+
                 if let NodeCmd::Protection {
                     node,
                     host,
@@ -11486,6 +11533,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     // Handled above.
                     NodeCmd::Tier { .. }
                     | NodeCmd::Protection { .. }
+                    | NodeCmd::BindDisk { .. }
                     | NodeCmd::Prune { .. }
                     | NodeCmd::Add { .. }
                     | NodeCmd::Preseed { .. }
