@@ -237,8 +237,8 @@ no secret in `docker inspect`.
   knows no `tpm2-measure-pcr`; Debian 13 (257) has both, a signed `systemd-boot` and
   `pcrlock`; Clevis, Tang and `dropbear-initramfs` are in both; `sbctl` in neither;
   DKMS (3.0.10, 3.2.2) signs modules with a MOK key of its own, which a person enrols
-  once at the console. Today `hlb` detects none of this: `node add` reads memory, disk
-  and kernel, nothing reads the firmware, and a manager is chosen by count alone.
+  once at the console. Then, `hlb` detected none of this; a manager is still chosen by
+  count alone.
   - ✅ **Detection** — 2026-10-29 (`hlb_bootstrap::protection`): UEFI
     (`/sys/firmware/efi`), the TPM (`has-tpm2`'s `+driver`, then the sealed round trip
     `hlb secrets-seal` already ran — a TPM can answer every probe and still not seal;
@@ -316,8 +316,8 @@ no secret in `docker inspect`.
   - **The order, each step proven on the lab** — QEMU with OVMF (Debian's `ovmf`
     carries variables with Microsoft's keys enrolled) and swtpm, so Secure Boot, the
     TPM and the PCRs are real; `vm.sh` boots SeaBIOS today:
-    1. Detection and the level shown, nothing changed; a scorecard row: nodes per
-       level.
+    1. ✅ Detection and the level shown, nothing changed; a scorecard row: nodes per
+       level (2026-10-29).
     2. Each node's LUKS recovery key generated and on the emergency kit — its
        fingerprint covering it — BEFORE any disk is touched: no step below runs while
        the kit is not current, as `secrets-seal` already refuses.
