@@ -1788,6 +1788,14 @@ enum MeshCmd {
     },
     /// The mesh nodes and their addresses.
     List,
+    /// Take a node out of the mesh — a machine gone, or reinstalled under another name —
+    /// and push every other node its configuration without it. Refused while the node
+    /// is in the Swarm. Preview by default.
+    Remove {
+        node: String,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3977,6 +3985,22 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     if let seal::NewManager::Refused(why) = &unlock {
         eprintln!("🔴 Not joined as a manager: {why}.");
         return Ok(ExitCode::FAILURE);
+    }
+
+    // 🔴 An address another peer holds would get that peer's tunnel pushed over this
+    // machine's own, at every push: refused before anything is touched.
+    let recorded = load_mesh(&state, &vault).await?;
+    let joining = hostname_of(first.as_ref()).await.unwrap_or_default();
+    for address in [Some(host), endpoint].into_iter().flatten() {
+        if let Some(p) = recorded.held_by(address, &joining) {
+            eprintln!(
+                "🔴 The mesh records {} at {address}: a machine gone, or this one under",
+                p.name
+            );
+            eprintln!("   another name. Nothing was touched. If it is gone, take it out first:");
+            eprintln!("     hlb mesh remove {} --apply", p.name);
+            return Ok(ExitCode::FAILURE);
+        }
     }
 
     if !apply {
@@ -8510,6 +8534,70 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         println!("   know this new peer, or it stays unreachable from them.");
                         println!("     hlb mesh sync --apply");
                         println!("   `hlb node add` does all of this on its own.");
+                        Ok(ExitCode::SUCCESS)
+                    }
+
+                    MeshCmd::Remove { node, apply } => {
+                        let Some(peer) = mesh.get(node).cloned() else {
+                            eprintln!("Node \"{node}\" is not in the mesh.");
+                            return Ok(ExitCode::FAILURE);
+                        };
+                        if *node == local_hostname().await {
+                            eprintln!("🔴 {node} is this machine: its tunnels carry this command.");
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        // Out of the mesh, a node still in the Swarm loses its tunnels:
+                        // its tasks stop reaching the overlay, and nothing says why.
+                        let orch = match SwarmOrchestrator::connect().await {
+                            Ok(o) => o,
+                            Err(e) => {
+                                eprintln!("🔴 Swarm unreachable ({e}): whether {node} is still a");
+                                eprintln!("   node of it cannot be told. Not removed.");
+                                return Ok(ExitCode::FAILURE);
+                            }
+                        };
+                        if orch.nodes().await?.iter().any(|n| n.hostname == *node) {
+                            eprintln!("🔴 {node} is still a node of the Swarm. Once it has left");
+                            eprintln!("   (`docker swarm leave` there), remove it, then run this again:");
+                            eprintln!("     docker node rm {node}");
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        mesh.remove_node(node);
+                        if !apply {
+                            println!("Would take {node} ({}) out of the mesh:", peer.mesh_ip);
+                            println!("  its private key forgotten, and every other node told:");
+                            for p in mesh.peers() {
+                                println!(
+                                    "  {:<15} {}  {}",
+                                    p.mesh_ip.to_string(),
+                                    p.name,
+                                    p.ssh.as_deref().unwrap_or("(this machine, or by hand)")
+                                );
+                            }
+                            println!("\n  Its address is free for the next node.");
+                            println!("  Re-run with --apply.");
+                            return Ok(ExitCode::SUCCESS);
+                        }
+                        save_mesh(&state, &vault, &mesh).await?;
+                        state.forget_secret(&format!("mesh-key-{node}")).await?;
+                        state
+                            .audit("cli", ACTOR_ROLE, "mesh-remove", node, "ok", None)
+                            .await?;
+                        println!("✓ {node} taken out of the mesh. The others, told:");
+                        let mut failed = 0;
+                        for (n, r) in sync_mesh(&state, &vault, &mesh, &[]).await? {
+                            match r {
+                                Ok(()) => println!("  ✓ {n}"),
+                                Err(e) => {
+                                    failed += 1;
+                                    println!("  🔴 {n}: {e}");
+                                }
+                            }
+                        }
+                        if failed > 0 {
+                            println!("\n  Those still list {node} until `hlb mesh sync --apply` reaches them.");
+                            return Ok(ExitCode::FAILURE);
+                        }
                         Ok(ExitCode::SUCCESS)
                     }
 

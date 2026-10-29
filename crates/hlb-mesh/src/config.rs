@@ -176,9 +176,45 @@ impl MeshConfig {
         }
     }
 
+    /// The peer other than `name` already recorded at `host`, by its endpoint or by the
+    /// SSH address configurations are pushed to.
+    ///
+    /// 🔴 Two peers at one address are one machine with two configurations: every push
+    /// writes both there, in turn, and the last one wins — a new node took the tunnel of
+    /// a dead peer recorded at its address (found on the lab, 2026-10-29).
+    pub fn held_by(&self, host: &str, name: &str) -> Option<&Peer> {
+        let host = host_of(host);
+        self.peers.values().find(|p| {
+            p.name != name
+                && [p.endpoint.as_deref(), p.ssh.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|a| host_of(a) == host)
+        })
+    }
+
+    /// Takes a node out. Its address is free for the next node: the others drop the
+    /// node from their configurations at the next push.
+    pub fn remove_node(&mut self, name: &str) -> Option<Peer> {
+        self.peers.remove(name)
+    }
+
     /// The mesh addresses of every node - what Swarm must listen on.
     pub fn advertise_addr_for(&self, node: &str) -> Option<String> {
         self.peers.get(node).map(|p| p.mesh_ip.to_string())
+    }
+}
+
+/// The host in `user@host:port`, `host:port` or `[v6]:port`, each part optional.
+pub fn host_of(address: &str) -> &str {
+    let rest = address.rsplit_once('@').map_or(address, |(_, h)| h);
+    if let Some(v6) = rest.strip_prefix('[') {
+        return v6.split_once(']').map_or(v6, |(h, _)| h);
+    }
+    // Two colons or more: a bare IPv6 address, with no port.
+    match rest.split_once(':') {
+        Some((h, p)) if !p.contains(':') => h,
+        _ => rest,
     }
 }
 
@@ -406,6 +442,69 @@ mod tests {
             m.add_node("one-too-many", "k", None),
             Err(Error::AddressPoolExhausted(..))
         ));
+    }
+}
+
+#[cfg(test)]
+mod address_tests {
+    use super::*;
+
+    fn lab() -> MeshConfig {
+        let mut m = MeshConfig::default();
+        m.add_node("arch1", "k1", Some("10.77.0.13".into()))
+            .expect("arch1");
+        m.add_node("deb2", "k2", None).expect("deb2");
+        let mut peers: Vec<_> = m.peers().cloned().collect();
+        for p in &mut peers {
+            p.ssh = Some(format!(
+                "root@10.77.0.{}:22",
+                if p.name == "deb2" { 12 } else { 13 }
+            ));
+        }
+        MeshConfig::from_peers([10, 42, 0], 51820, peers)
+    }
+
+    #[test]
+    fn an_address_another_peer_holds_is_named() {
+        let m = lab();
+        // A fresh machine given a dead peer's address.
+        assert_eq!(
+            m.held_by("10.77.0.13", "bare1").map(|p| p.name.as_str()),
+            Some("arch1")
+        );
+        // Held through its SSH address alone: deb2 has no endpoint.
+        assert_eq!(
+            m.held_by("10.77.0.12", "bare1").map(|p| p.name.as_str()),
+            Some("deb2")
+        );
+        // A node's own address is its own.
+        assert!(m.held_by("10.77.0.13", "arch1").is_none());
+        assert!(m.held_by("10.77.0.17", "bare2").is_none());
+    }
+
+    #[test]
+    fn the_host_is_read_out_of_every_address_shape() {
+        for (address, host) in [
+            ("10.77.0.13", "10.77.0.13"),
+            ("root@10.77.0.13", "10.77.0.13"),
+            ("root@10.77.0.13:2222", "10.77.0.13"),
+            ("deb1.lan:22", "deb1.lan"),
+            ("[fd00::13]:22", "fd00::13"),
+            ("root@[fd00::13]", "fd00::13"),
+            ("fd00::13", "fd00::13"),
+        ] {
+            assert_eq!(host_of(address), host, "{address}");
+        }
+    }
+
+    #[test]
+    fn a_removed_node_leaves_every_configuration() {
+        let mut m = lab();
+        assert!(m.remove_node("arch1").is_some());
+        assert!(m.remove_node("arch1").is_none());
+        let conf = m.render_for("deb2", "private").expect("deb2");
+        assert!(!conf.contains("arch1") && !conf.contains("k1"), "{conf}");
+        assert!(m.held_by("10.77.0.13", "bare1").is_none());
     }
 }
 

@@ -1147,14 +1147,14 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 
 ### 4. The rest, in decreasing order of interest
 
-- **🔴 Two mesh peers recorded at one SSH address overwrite each other's tunnel.**
-  Found 2026-10-29: the lab's mesh still records `arch1`, a VM long gone, at
-  10.77.0.13; `node add` of a fresh VM at that address pushed arch1's WireGuard
-  configuration onto it, over its own, and stopped only at the tunnel check — nothing
-  joined. `node add` should refuse an address another peer holds, and a peer needs a
-  way out of the mesh (`hlb mesh remove`, to write): the lab carries four dead ones
-  (`alp1`, `arch1`, `nas02`, `suse1`), and every `mesh sync` fails on them.
-
+- ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
+  and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
+  10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration
+  over its own. `node add` now refuses an address another peer holds, by endpoint or
+  SSH address, before touching anything, and `hlb mesh remove` takes a peer out —
+  refused while it is still a Swarm node — and tells every other node. Proven on the
+  lab: refused at arch1's address; the four dead peers removed, `mesh sync` succeeding
+  there for the first time; the same `node add` then passing.
 - **`hlb replication failover`** ran on a real pair on 2026-10-17: status, the
   decision, and the printed procedure — whose fencing was undone by the reconciliation
   it recommended, and whose apps never reached the new primary; both rewritten and run

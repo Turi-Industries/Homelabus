@@ -21,7 +21,8 @@ pub mod config;
 pub mod keys;
 
 pub use config::{
-    firewall_rules, provision_node, MeshConfig, Peer, CONFIG_PATH, FIREWALL_PATH, INTERFACE,
+    firewall_rules, host_of, provision_node, MeshConfig, Peer, CONFIG_PATH, FIREWALL_PATH,
+    INTERFACE,
 };
 pub use keys::KeyPair;
 
