@@ -228,7 +228,11 @@ the outside, which is the whole problem.
   active unit runs nothing: a restarted daemon would stay locked behind a green unit.
   As a plain `oneshot` it reruns on every start — a restart, a crash, a boot (measured
   on deb1) — and its credential directory is gone once the unlock returns. Its key is
-  sealed per manager: Swarm's key is the cluster's, a TPM is the machine's.
+  sealed per manager: Swarm's key is the cluster's, a TPM is the machine's. A manager
+  `node add` joins into a locked cluster is sealed in the same run, or refused at
+  preview: unsealed, it runs until its first restart and then stays locked. And
+  `docker node demote` tells nobody: `cluster autolock` visits the workers too, and
+  takes back a copy left on one.
 - **`COPY . .` sends the master key to the daemon.** `web/hlb-master.key` exists; the
   `.dockerignore` refuses `**/*.key` first.
 

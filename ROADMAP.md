@@ -222,9 +222,13 @@ no secret in `docker inspect`.
   rebooted — each time locked, then active within two seconds, the controller back on
   its own; the unit disabled, the Swarm stayed locked and the kit's key opened it. deb2
   promoted, sealed over SSH with its host key alone, and BOTH managers rebooted at once:
-  each unlocked itself, quorum back, controller, PostgreSQL and Caddy 1/1. Left: `node
-  add --role manager` sealing the manager it adds, and a demotion removing its copy — a
-  worker keeps a credential it never uses.
+  each unlocked itself, quorum back, controller, PostgreSQL and Caddy 1/1. `node add
+  --role manager` into a locked cluster seals the key right after the join, and is
+  refused at preview when it could not (the kit stale, the key not in the vault): a
+  manager joined unsealed runs until its first restart, then stays locked. A worker
+  still holding the key — demoted by `docker node demote`, which tells nobody — has it
+  removed by the same `cluster autolock`. Proven on the lab: a bare VM added as a
+  manager, sealed, rebooted and back alone; demoted, its copy found and removed.
 - **Each machine its protection level — detected, never declared** (owner's request,
   2026-10-28: every kind of machine will be met, and the best protected should carry
   what matters). What can be reached depends on the firmware, the TPM and the systemd
@@ -1142,6 +1146,14 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 (`tests/maria_roundtrip.rs`): every one had failed until then.
 
 ### 4. The rest, in decreasing order of interest
+
+- **🔴 Two mesh peers recorded at one SSH address overwrite each other's tunnel.**
+  Found 2026-10-29: the lab's mesh still records `arch1`, a VM long gone, at
+  10.77.0.13; `node add` of a fresh VM at that address pushed arch1's WireGuard
+  configuration onto it, over its own, and stopped only at the tunnel check — nothing
+  joined. `node add` should refuse an address another peer holds, and a peer needs a
+  way out of the mesh (`hlb mesh remove`, to write): the lab carries four dead ones
+  (`alp1`, `arch1`, `nas02`, `suse1`), and every `mesh sync` fails on them.
 
 - **`hlb replication failover`** ran on a real pair on 2026-10-17: status, the
   decision, and the printed procedure — whose fencing was undone by the reconciliation

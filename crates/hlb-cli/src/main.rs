@@ -3968,6 +3968,17 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
         .map(hlb_orchestrator::cluster::tier_for_memory)
         .map(|t| t.to_string());
 
+    // 🔴 A manager joined unsealed into a locked cluster runs fine until its first
+    // restart, and then stays locked: refused before anything is touched.
+    let unlock = match (&orch, role_final == "manager") {
+        (Some(o), true) => seal::for_new_manager(o, &state, &vault).await?,
+        _ => seal::NewManager::Unlocked,
+    };
+    if let seal::NewManager::Refused(why) = &unlock {
+        eprintln!("🔴 Not joined as a manager: {why}.");
+        return Ok(ExitCode::FAILURE);
+    }
+
     if !apply {
         println!("Would join this machine to the cluster:");
         println!(
@@ -4008,6 +4019,11 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
                 println!("     multi-homed machine, the other nodes would try to reach an");
                 println!("     unreachable IP.");
             }
+        }
+        if let seal::NewManager::Seal(_) = &unlock {
+            println!();
+            println!("  autolock: on — Swarm's unlock key is sealed to it once joined, so it");
+            println!("            restarts alone.");
         }
         if storage_node {
             println!();
@@ -4193,6 +4209,12 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
         return Ok(ExitCode::FAILURE);
     }
     println!("joined the Swarm as {role_final}");
+    let sealed = match &unlock {
+        seal::NewManager::Seal(k) => {
+            seal::seal_new_manager(ours.as_ref(), &name, k, &state, &vault).await?
+        }
+        _ => true,
+    };
 
     // -- 6. Labels, once the node is visible -----------------------------------
     // Swarm takes a moment to publish a node that just joined.
@@ -4242,6 +4264,13 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     println!();
     println!("{host} is part of the cluster.");
     println!("  hlb cluster status");
+    if !sealed {
+        eprintln!();
+        eprintln!("🔴 Swarm's unlock key is NOT sealed to it: at its next restart it stays");
+        eprintln!("   locked until someone unlocks it. Seal it now:");
+        eprintln!("     hlb cluster autolock --apply");
+        return Ok(ExitCode::FAILURE);
+    }
     Ok(ExitCode::SUCCESS)
 }
 

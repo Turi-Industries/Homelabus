@@ -163,18 +163,17 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
     };
     let vault = open_vault(cli)?;
     let key = vault.decrypt(&ct)?;
-    let mut managers: Vec<String> = orch
+    let mut nodes: Vec<(String, NodeRole)> = orch
         .nodes()
         .await?
         .into_iter()
-        .filter(|n| n.role == NodeRole::Manager)
-        .map(|n| n.hostname)
+        .map(|n| (n.hostname, n.role))
         .collect();
-    managers.sort();
+    nodes.sort_by(|a, b| a.0.cmp(&b.0));
     let here = crate::local_hostname().await;
-    // The cluster's SSH key only when a manager is elsewhere: it is made on first use.
+    // The cluster's SSH key only when a node is elsewhere: it is made on first use.
     let mut reach = None;
-    if managers.iter().any(|m| *m != here) {
+    if nodes.iter().any(|(n, _)| *n != here) {
         let kp = crate::cluster_ssh_key(&state, &vault).await?;
         let dir = tempfile::tempdir()?;
         let path = crate::write_temporary_key(dir.path(), &kp.private)?;
@@ -185,8 +184,9 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
     let mut kit = None;
     let mut failed = false;
     let mut to_apply = false;
-    for m in &managers {
-        println!("{m}:");
+    let mut to_seal = false;
+    for (m, role) in &nodes {
+        let manager = *role == NodeRole::Manager;
         let runner: Box<dyn Runner> = if *m == here {
             Box::new(LocalRunner)
         } else {
@@ -201,12 +201,29 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
             });
             let Some(r) = recorded else {
                 // Joined by hand: nothing says how to reach it.
-                println!("  ⚠️  no SSH address recorded: not sealed. After a restart it waits for");
-                println!("     `docker swarm unlock` and the kit's key.");
+                println!("{m}:");
+                if manager {
+                    println!("  ⚠️  no SSH address recorded: not sealed. After a restart it waits");
+                    println!("     for `docker swarm unlock` and the kit's key.");
+                } else {
+                    println!("  · a worker with no SSH address recorded: not checked for a key");
+                    println!("    left from a time it was a manager.");
+                }
                 continue;
             };
             r
         };
+        if !manager {
+            // Demoted by `docker node demote`, which tells nobody: its copy is found here.
+            match withdraw(&*runner, m, apply, &state).await {
+                Ok(Withdrawal::Nothing) => {}
+                Ok(Withdrawal::Would) => to_apply = true,
+                Ok(Withdrawal::Done) => {}
+                Err(e) => println!("{m}:\n  ⚠️  a worker out of reach, not checked: {e}"),
+            }
+            continue;
+        }
+        println!("{m}:");
         // One manager out of reach leaves the others to seal.
         let sealing = match seal_unlock(&*runner, &key, apply, &mut kit, &state, &vault).await {
             Ok(s) => s,
@@ -218,7 +235,7 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         };
         match sealing {
             Sealing::Sealed => println!("  ✓ sealed: it unlocks itself after each start of Docker"),
-            Sealing::Would => to_apply = true,
+            Sealing::Would => to_seal = true,
             Sealing::Done(sealer) => {
                 state
                     .audit(
@@ -238,15 +255,58 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
     if failed {
         return Ok(ExitCode::FAILURE);
     }
-    if to_apply {
+    if to_seal {
         println!(
             "\nAfter each start of Docker, {} hands the key to `docker swarm",
             unlock::UNIT
         );
         println!("unlock`. If it cannot be unsealed — a TPM replaced — the manager waits for that");
-        println!("command, the kit's key on its standard input.\n\n  Re-run with --apply.");
+        println!("command, the kit's key on its standard input.");
+    }
+    if to_apply || to_seal {
+        println!("\n  Re-run with --apply.");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+enum Withdrawal {
+    Nothing,
+    Would,
+    Done,
+}
+
+/// The key taken off a worker that holds it, said only when it does.
+async fn withdraw(
+    runner: &dyn Runner,
+    name: &str,
+    apply: bool,
+    state: &State,
+) -> Result<Withdrawal> {
+    // Out of reach is an error from the runner, never a "no".
+    let held = runner
+        .run(&["test".into(), "-f".into(), unlock::CREDENTIAL.into()])
+        .await?;
+    if !held.ok() {
+        return Ok(Withdrawal::Nothing);
+    }
+    println!("{name}:");
+    let steps = Provision {
+        steps: unlock::removal(),
+        notes: Vec::new(),
+    };
+    if !apply {
+        println!("  a worker now, still holding Swarm's unlock key: would remove it");
+        for (i, s) in steps.steps.iter().enumerate() {
+            println!("  {}. {}", i + 1, s.describe());
+        }
+        return Ok(Withdrawal::Would);
+    }
+    provision::execute(runner, &steps, |s| println!("  {}", s.what)).await?;
+    state
+        .audit("cli", ACTOR_ROLE, "swarm-unlock-withdraw", name, "ok", None)
+        .await?;
+    println!("  ✓ a worker now: its copy of the unlock key removed");
+    Ok(Withdrawal::Done)
 }
 
 enum Sealing {
@@ -331,6 +391,77 @@ async fn seal_unlock(
         return Ok(Sealing::Refused);
     }
     Ok(Sealing::Done(sealer))
+}
+
+/// What a manager joining this cluster needs to restart alone.
+pub(crate) enum NewManager {
+    /// Autolock is off: nothing to seal.
+    Unlocked,
+    /// Sealed with this key once joined.
+    Seal(String),
+    /// Why it cannot be: joined anyway, it would stay locked at its first restart.
+    Refused(String),
+}
+
+pub(crate) async fn for_new_manager(
+    orch: &impl Orchestrator,
+    state: &State,
+    vault: &Vault,
+) -> Result<NewManager> {
+    if !orch.autolock_enabled().await? {
+        return Ok(NewManager::Unlocked);
+    }
+    let Some(ct) = state.secret(SWARM_UNLOCK_SECRET).await? else {
+        return Ok(NewManager::Refused(
+            "autolock is on and its unlock key is not in the vault — `hlb cluster autolock` \
+             says what to do"
+                .into(),
+        ));
+    };
+    let now = hlb_backup_run::kit::fingerprint(state, vault).await?;
+    if state.breakglass_note(EMERGENCY_KIT).await?.as_deref() != Some(now.as_str()) {
+        return Ok(NewManager::Refused(
+            "autolock is on, and its key is sealed to a manager only while the emergency kit \
+             is today's — print it first: `hlb emergency kit`"
+                .into(),
+        ));
+    }
+    Ok(NewManager::Seal(vault.decrypt(&ct)?))
+}
+
+/// The unlock key sealed to a manager just joined. Says what happened; `false` when it
+/// is not sealed.
+pub(crate) async fn seal_new_manager(
+    runner: &dyn Runner,
+    name: &str,
+    key: &str,
+    state: &State,
+    vault: &Vault,
+) -> Result<bool> {
+    // The kit was found current before anything was touched.
+    let mut kit = Some(true);
+    let sealing = match seal_unlock(runner, key, true, &mut kit, state, vault).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  🔴 {e}");
+            Sealing::Refused
+        }
+    };
+    let Sealing::Done(sealer) = sealing else {
+        return Ok(false);
+    };
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "swarm-unlock-seal",
+            name,
+            "ok",
+            Some(sealer.as_str()),
+        )
+        .await?;
+    println!("Swarm's unlock key sealed to it ({})", sealer.as_str());
+    Ok(true)
 }
 
 /// Is the kit in the drawer the one printed with today's material? Says why not.

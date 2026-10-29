@@ -58,6 +58,24 @@ pub fn steps(sealer: Sealer) -> Vec<Step> {
     steps
 }
 
+/// The steps that take the key off a machine that is no longer a manager: a worker is
+/// never locked, and a copy it never uses is one more to steal.
+pub fn removal() -> Vec<Step> {
+    let run = |what: &str, argv: &[&str]| Step {
+        phase: Phase::Services,
+        what: what.to_string(),
+        action: Action::Run(argv.iter().map(|s| s.to_string()).collect()),
+    };
+    vec![
+        run("stop handing it to Docker", &["systemctl", "disable", UNIT]),
+        run(
+            "remove the unit and the credential",
+            &["rm", "-f", UNIT_PATH, CREDENTIAL],
+        ),
+        run("forget the unit", &["systemctl", "daemon-reload"]),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +126,19 @@ mod tests {
         };
         assert!(at(CREDENTIAL) < at("rm"));
         assert!(STAGED.starts_with("/run/"), "never on a disk");
+    }
+
+    #[test]
+    fn a_removal_takes_away_what_the_seal_put_in_place() {
+        let argv: Vec<String> = removal()
+            .into_iter()
+            .flat_map(|s| match s.action {
+                Action::Run(a) => a,
+                Action::Install { path, .. } => vec![path],
+            })
+            .collect();
+        for put in [UNIT, UNIT_PATH, CREDENTIAL] {
+            assert!(argv.iter().any(|a| a == put), "{put} left behind: {argv:?}");
+        }
     }
 }
