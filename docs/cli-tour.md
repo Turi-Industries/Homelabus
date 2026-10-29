@@ -202,7 +202,8 @@ PostgreSQL runs — a base backup does not open on another libc:
 ./target/debug/hlb config appearance --name "Turi Industries" --apply
 ./target/debug/hlb config timezone Europe/Paris --apply   # before Seafile: read at its first start
 ./target/debug/hlb secrets-rekey --new-key /tmp/new.key   # --controller-stopped --apply; a running one is refused
-./target/debug/hlb secrets-seal       # sealed to this machine's TPM; refused until `hlb emergency kit` is current
+sudo ./target/debug/hlb secrets-seal  # sealed to this machine's TPM; refused until `hlb emergency kit` is current
+sudo ./target/debug/hlb secrets-seal --host-only --apply  # a TPM that seals nothing: refused without this
 ```
 
 ## A new fleet, from bare machines

@@ -42,6 +42,7 @@ impl Dependency {
             "smartmontools" => Probe::Binary("smartctl"),
             "nfs-server" => Probe::Binary("exportfs"),
             "nfs-client" => Probe::Binary("mount.nfs"),
+            "tpm2-tools" => Probe::Binary("tpm2_getcap"),
             "ntp" => Probe::Clock,
             "ca-certificates" => Probe::Package,
             n => Probe::Binary(n),
@@ -161,6 +162,15 @@ pub const STORAGE: &[Dependency] = &[
     },
 ];
 
+/// What a machine whose TPM 2.0 driver is loaded needs on top: systemd seals with a TPM
+/// only through these libraries, and without them the node reads C where it can reach B.
+pub const TPM: &[Dependency] = &[Dependency {
+    name: crate::seal::TPM_PACKAGE,
+    reason: "the libraries systemd seals with the TPM through",
+    min_version: None,
+    required: false,
+}];
+
 /// What was observed on the machine, for one dependency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Presence {
@@ -251,7 +261,7 @@ impl DependencyPlan {
 ///
 /// `observed` maps the canonical name to the detected version (`None` means absent).
 pub fn plan(distro: &Distro, observed: &[(&str, Option<String>)]) -> DependencyPlan {
-    plan_for(distro, observed, false)
+    plan_for(distro, observed, false, false)
 }
 
 /// Same, for a node that will carry the storage.
@@ -263,14 +273,13 @@ pub fn plan_for(
     distro: &Distro,
     observed: &[(&str, Option<String>)],
     storage: bool,
+    tpm: bool,
 ) -> DependencyPlan {
     let pm = distro.package_manager();
 
-    let wanted: Vec<&Dependency> = if storage {
-        BASE.iter().chain(STORAGE.iter()).collect()
-    } else {
-        BASE.iter().collect()
-    };
+    let storage = STORAGE.iter().filter(|_| storage);
+    let tpm = TPM.iter().filter(|_| tpm);
+    let wanted: Vec<&Dependency> = BASE.iter().chain(storage).chain(tpm).collect();
 
     let decisions = wanted
         .into_iter()
@@ -412,19 +421,36 @@ mod tests {
             .map(|d| (d.name, None))
             .collect();
 
-        let plain = plan_for(&d, &observed, false);
+        let plain = plan_for(&d, &observed, false, false);
         assert!(
             !plain.to_install().iter().any(|p| p.contains("zfs")),
             "ZFS on an ordinary node: {:?}",
             plain.to_install()
         );
 
-        let storage = plan_for(&d, &observed, true);
+        let storage = plan_for(&d, &observed, true, false);
         assert!(
             storage.to_install().contains(&"zfsutils-linux"),
             "the storage node did not get ZFS: {:?}",
             storage.to_install()
         );
+    }
+
+    #[test]
+    fn a_tpm_brings_its_libraries_and_no_tpm_brings_none() {
+        // Without them Debian's systemd cannot seal, and a node that reaches B reads C.
+        let d = debian();
+        let observed: Vec<(&str, Option<String>)> = BASE
+            .iter()
+            .chain(TPM.iter())
+            .map(|d| (d.name, None))
+            .collect();
+        assert!(!plan_for(&d, &observed, false, false)
+            .to_install()
+            .contains(&"tpm2-tools"));
+        assert!(plan_for(&d, &observed, false, true)
+            .to_install()
+            .contains(&"tpm2-tools"));
     }
 
     #[test]

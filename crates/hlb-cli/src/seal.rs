@@ -20,7 +20,7 @@ use crate::{open_state, open_vault, Cli, ACTOR_ROLE};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
+pub async fn run(cli: &Cli, apply: bool, host_only: bool) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
     // The link goes where the key is named, not where a link already there points.
@@ -32,6 +32,16 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         println!("  unsealed into memory at boot by {}.", seal::UNIT);
         return Ok(ExitCode::SUCCESS);
     }
+    if let Some(file) = linked_elsewhere(&key) {
+        eprintln!(
+            "🔴 {} is a link to {}: not sealed.",
+            key.display(),
+            file.display()
+        );
+        eprintln!("   Sealing replaces the link, and would leave that file — the key, in clear.");
+        eprintln!("   Name the file itself in HLB_MASTER_KEY, then run this again.");
+        return Ok(ExitCode::FAILURE);
+    }
 
     // 🔴 Sealed to a TPM, the key dies with the machine's board: the printed kit is
     // then its only copy, and one printed before today's material restores nothing.
@@ -39,7 +49,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     let runner = LocalRunner;
-    let sealer = match sealer(&runner, apply, "the vault's master key").await? {
+    let sealer = match sealer(&runner, apply, host_only, "the vault's master key").await? {
         Ready::Sealer(s) => s,
         Ready::Previewed => return Ok(ExitCode::SUCCESS),
         Ready::Refused => return Ok(ExitCode::FAILURE),
@@ -114,7 +124,12 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
 /// `hlb cluster autolock`: Swarm's Raft log encrypted at rest, its key in the vault and
 /// on the kit, then sealed to each manager — this one directly, the others over the SSH
 /// address the mesh recorded — so a restart unlocks it alone.
-pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Result<ExitCode> {
+pub async fn autolock(
+    cli: &Cli,
+    orch: &impl Orchestrator,
+    apply: bool,
+    host_only: bool,
+) -> Result<ExitCode> {
     let state = open_state(cli).await?;
 
     if !orch.autolock_enabled().await? {
@@ -134,14 +149,15 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         }
         let key = orch.enable_autolock().await?;
         let vault = open_vault(cli)?;
-        let ct = vault.encrypt(&key)?;
-        state
-            .store_secret_if_absent(SWARM_UNLOCK_SECRET, &ct, "Swarm unlock after restart")
-            .await?;
+        let replaced = record_unlock_key(&state, &vault, &key).await?;
         state
             .audit("cli", ACTOR_ROLE, "cluster-autolock", "swarm", "ok", None)
             .await?;
         println!("✓ Autolock active. Key recorded in the vault.");
+        if replaced {
+            println!("  It replaces one left from an autolock turned off since, which unlocks");
+            println!("  nothing now: a kit printed before today holds that one.");
+        }
         println!();
         println!("  Until it is sealed, a restarted manager waits for `docker swarm unlock`.");
         println!("  The emergency kit does not hold the key yet: print it, keep it away from");
@@ -170,15 +186,8 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         .map(|n| (n.hostname, n.role))
         .collect();
     nodes.sort_by(|a, b| a.0.cmp(&b.0));
-    let here = crate::local_hostname().await;
-    // The cluster's SSH key only when a node is elsewhere: it is made on first use.
-    let mut reach = None;
-    if nodes.iter().any(|(n, _)| *n != here) {
-        let kp = crate::cluster_ssh_key(&state, &vault).await?;
-        let dir = tempfile::tempdir()?;
-        let path = crate::write_temporary_key(dir.path(), &kp.private)?;
-        reach = Some((crate::load_mesh(&state, &vault).await?, dir, path));
-    }
+    // Holds the cluster's SSH key while the runners reaching other nodes live.
+    let dir = tempfile::tempdir()?;
 
     // Each manager's credential dies with its board: the kit holds the copy that does not.
     let mut kit = None;
@@ -187,31 +196,19 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
     let mut to_seal = false;
     for (m, role) in &nodes {
         let manager = *role == NodeRole::Manager;
-        let runner: Box<dyn Runner> = if *m == here {
-            Box::new(LocalRunner)
-        } else {
-            let recorded = reach.as_ref().and_then(|(mesh, _, path)| {
-                let (h, u, p) = crate::parse_ssh_target(mesh.get(m)?.ssh.as_ref()?);
-                Some(crate::build_runner(
-                    Some(&h),
-                    u.as_deref(),
-                    p,
-                    path.to_str(),
-                ))
-            });
-            let Some(r) = recorded else {
-                // Joined by hand: nothing says how to reach it.
-                println!("{m}:");
-                if manager {
-                    println!("  ⚠️  no SSH address recorded: not sealed. After a restart it waits");
-                    println!("     for `docker swarm unlock` and the kit's key.");
-                } else {
-                    println!("  · a worker with no SSH address recorded: not checked for a key");
-                    println!("    left from a time it was a manager.");
-                }
-                continue;
-            };
-            r
+        let Some(runner) =
+            crate::reach_node(&state, &vault, m, None, None, None, dir.path()).await?
+        else {
+            // Joined by hand: nothing says how to reach it.
+            println!("{m}:");
+            if manager {
+                println!("  ⚠️  no SSH address recorded: not sealed. After a restart it waits");
+                println!("     for `docker swarm unlock` and the kit's key.");
+            } else {
+                println!("  · a worker with no SSH address recorded: not checked for a key");
+                println!("    left from a time it was a manager.");
+            }
+            continue;
         };
         if !manager {
             // Demoted by `docker node demote`, which tells nobody: its copy is found here.
@@ -225,14 +222,15 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         }
         println!("{m}:");
         // One manager out of reach leaves the others to seal.
-        let sealing = match seal_unlock(&*runner, &key, apply, &mut kit, &state, &vault).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("  🔴 {e}");
-                failed = true;
-                continue;
-            }
-        };
+        let sealing =
+            match seal_unlock(&*runner, &key, apply, host_only, &mut kit, &state, &vault).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("  🔴 {e}");
+                    failed = true;
+                    continue;
+                }
+            };
         match sealing {
             Sealing::Sealed => println!("  ✓ sealed: it unlocks itself after each start of Docker"),
             Sealing::Would => to_seal = true,
@@ -282,7 +280,11 @@ async fn withdraw(
     apply: bool,
     state: &State,
 ) -> Result<Withdrawal> {
-    // Out of reach is an error from the runner, never a "no".
+    // Out of reach is an error from the runner, never a "no" — and so is a user who
+    // cannot see into `/var/lib/hlb`, which `test -f` would answer "no" for.
+    if !hlb_bootstrap::observe::is_root(runner).await? {
+        return Err(NOT_ROOT.into());
+    }
     let held = runner
         .run(&["test".into(), "-f".into(), unlock::CREDENTIAL.into()])
         .await?;
@@ -324,10 +326,15 @@ async fn seal_unlock(
     runner: &dyn Runner,
     key: &str,
     apply: bool,
+    host_only: bool,
     kit: &mut Option<bool>,
     state: &State,
     vault: &Vault,
 ) -> Result<Sealing> {
+    if !hlb_bootstrap::observe::is_root(runner).await? {
+        eprintln!("  🔴 {NOT_ROOT}: not sealed.");
+        return Ok(Sealing::Refused);
+    }
     // A key rotated by hand leaves the vault's stale: sealed, it would unlock nothing.
     let live = runner
         .run(&[
@@ -337,6 +344,15 @@ async fn seal_unlock(
             "-q".into(),
         ])
         .await?;
+    // Failed, its empty output would read as a key rotated by hand — and the fix below,
+    // run where it fails, would rotate the vault's good key to nothing.
+    if !live.ok() {
+        eprintln!(
+            "  🔴 `docker swarm unlock-key` failed ({}): not sealed.",
+            live.stderr.trim()
+        );
+        return Ok(Sealing::Refused);
+    }
     if live.stdout.trim() != key.trim() {
         eprintln!("  🔴 the vault's unlock key is not the Swarm's — rotated by hand? Not sealed.");
         eprintln!("     Put the live one in the vault, print the kit, then run this again:");
@@ -360,7 +376,7 @@ async fn seal_unlock(
     if !current {
         return Ok(Sealing::Refused);
     }
-    let sealer = match self::sealer(runner, apply, "Swarm's unlock key").await? {
+    let sealer = match self::sealer(runner, apply, host_only, "Swarm's unlock key").await? {
         Ready::Sealer(s) => s,
         Ready::Previewed => return Ok(Sealing::Would),
         Ready::Refused => return Ok(Sealing::Refused),
@@ -418,8 +434,7 @@ pub(crate) async fn for_new_manager(
                 .into(),
         ));
     };
-    let now = hlb_backup_run::kit::fingerprint(state, vault).await?;
-    if state.breakglass_note(EMERGENCY_KIT).await?.as_deref() != Some(now.as_str()) {
+    if !kit_current(state, vault).await? {
         return Ok(NewManager::Refused(
             "autolock is on, and its key is sealed to a manager only while the emergency kit \
              is today's — print it first: `hlb emergency kit`"
@@ -440,7 +455,7 @@ pub(crate) async fn seal_new_manager(
 ) -> Result<bool> {
     // The kit was found current before anything was touched.
     let mut kit = Some(true);
-    let sealing = match seal_unlock(runner, key, true, &mut kit, state, vault).await {
+    let sealing = match seal_unlock(runner, key, true, false, &mut kit, state, vault).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("  🔴 {e}");
@@ -464,10 +479,15 @@ pub(crate) async fn seal_new_manager(
     Ok(true)
 }
 
-/// Is the kit in the drawer the one printed with today's material? Says why not.
-async fn kit_is_current(state: &State, vault: &Vault) -> Result<bool> {
+/// Is the kit in the drawer the one printed with today's material?
+async fn kit_current(state: &State, vault: &Vault) -> Result<bool> {
     let now = hlb_backup_run::kit::fingerprint(state, vault).await?;
-    if state.breakglass_note(EMERGENCY_KIT).await?.as_deref() == Some(now.as_str()) {
+    Ok(state.breakglass_note(EMERGENCY_KIT).await?.as_deref() == Some(now.as_str()))
+}
+
+/// [`kit_current`], saying why not.
+async fn kit_is_current(state: &State, vault: &Vault) -> Result<bool> {
+    if kit_current(state, vault).await? {
         return Ok(true);
     }
     eprintln!("🔴 No emergency kit printed with today's material: not sealed.");
@@ -486,8 +506,13 @@ enum Ready {
 }
 
 /// What this machine can seal `what` with — its TPM's libraries installed first, with
-/// `apply`, when systemd lacks them.
-async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
+/// `apply`, when systemd lacks them. A TPM that refuses is a refusal, unless `host_only`.
+async fn sealer(runner: &dyn Runner, apply: bool, host_only: bool, what: &str) -> Result<Ready> {
+    // Anyone but root fails every trial, and would read as a TPM that refuses.
+    if !hlb_bootstrap::observe::is_root(runner).await? {
+        eprintln!("🔴 {NOT_ROOT}: not sealed.");
+        return Ok(Ready::Refused);
+    }
     if !runner
         .run(&["systemd-creds".into(), "--version".into()])
         .await?
@@ -532,7 +557,49 @@ async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
             eprintln!("🔴 the TPM is still unusable with its libraries installed: not sealed.");
             Ok(Ready::Refused)
         }
+        Probe::Refuses(_) if host_only => {
+            println!("  this machine's TPM seals nothing: the host key alone, as asked");
+            Ok(Ready::Sealer(Sealer::HostOnly))
+        }
+        Probe::Refuses(why) => {
+            eprintln!("🔴 This machine has a TPM, and it sealed nothing: not sealed.");
+            if !why.is_empty() {
+                eprintln!("   {why}");
+            }
+            eprintln!(
+                "   Look at the firmware's TPM settings and `systemd-creds has-tpm2`, or seal"
+            );
+            eprintln!("   with the host key alone — which a stolen disk opens — by --host-only.");
+            Ok(Ready::Refused)
+        }
     }
+}
+
+const NOT_ROOT: &str = "reached as another user than root, which can neither read Swarm's \
+                        key, nor see a sealed one, nor seal";
+
+/// The file a key path links to, when it is a link but not a sealed key: the file stays
+/// where it is when the link is replaced.
+fn linked_elsewhere(key: &Path) -> Option<PathBuf> {
+    if hlb_secrets::sealed_target(key).is_some() {
+        return None;
+    }
+    std::fs::read_link(key).ok()
+}
+
+/// The key autolock was just enabled with, into the vault over any older one — left
+/// from an autolock turned off by hand, it unlocks nothing and the kit would print it.
+/// `true` when one was replaced.
+async fn record_unlock_key(state: &State, vault: &Vault, key: &str) -> Result<bool> {
+    let ct = vault.encrypt(key)?;
+    if state
+        .store_secret_if_absent(SWARM_UNLOCK_SECRET, &ct, "Swarm unlock after restart")
+        .await?
+    {
+        return Ok(false);
+    }
+    state.rotate_secret(SWARM_UNLOCK_SECRET, &ct).await?;
+    Ok(true)
 }
 
 /// Replaces `key` by a link to `target` in one rename: interrupted, the key is either
@@ -567,5 +634,36 @@ mod tests {
             .map(|e| e.expect("entry").file_name())
             .collect();
         assert_eq!(left.len(), 2, "nothing staged left behind: {left:?}");
+    }
+
+    #[test]
+    fn a_key_linked_to_a_file_elsewhere_is_named_never_sealed_over() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let real = d.path().join("real.key");
+        Vault::init(&real).expect("init");
+        let key = d.path().join("hlb-master.key");
+        std::os::unix::fs::symlink(&real, &key).expect("symlink");
+        assert_eq!(linked_elsewhere(&key), Some(real.clone()));
+        assert_eq!(linked_elsewhere(&real), None, "a file is sealed in place");
+    }
+
+    #[tokio::test]
+    async fn a_new_autolock_key_replaces_one_left_in_the_vault() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let vault = Vault::init(d.path().join("k")).expect("vault");
+        let state = State::in_memory().await.expect("state");
+
+        assert!(!record_unlock_key(&state, &vault, "SWMKEY-1-old")
+            .await
+            .expect("stored"));
+        assert!(record_unlock_key(&state, &vault, "SWMKEY-1-new")
+            .await
+            .expect("replaced"));
+        let ct = state
+            .secret(SWARM_UNLOCK_SECRET)
+            .await
+            .expect("read")
+            .expect("there");
+        assert_eq!(vault.decrypt(&ct).expect("decrypt"), "SWMKEY-1-new");
     }
 }

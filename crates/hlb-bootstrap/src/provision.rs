@@ -788,7 +788,7 @@ mod tests {
     }
 
     fn storage(d: &Distro, facts: &Facts) -> std::result::Result<Provision, String> {
-        plan(d, &deps::plan_for(d, &all_present(), true), facts)
+        plan(d, &deps::plan_for(d, &all_present(), true, false), facts)
     }
 
     fn kernel(release: &str) -> Facts {

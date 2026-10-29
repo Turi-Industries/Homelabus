@@ -50,7 +50,11 @@ pub async fn dependencies(
 ) -> Result<Vec<(&'static str, Option<String>)>> {
     let pm = distro.package_manager();
     let mut out = Vec::new();
-    for dep in crate::deps::BASE.iter().chain(crate::deps::STORAGE.iter()) {
+    for dep in crate::deps::BASE
+        .iter()
+        .chain(crate::deps::STORAGE)
+        .chain(crate::deps::TPM)
+    {
         let present = match dep.probe() {
             Probe::Binary(bin) => binary_exists(runner, bin).await?,
             Probe::Package => package_installed(runner, pm, dep.package_for(pm)).await?,
@@ -176,6 +180,14 @@ async fn trials(runner: &dyn Runner, driver: bool) -> Result<crate::seal::Probe>
     Ok(seal::decide(driver, &trials))
 }
 
+/// Whether a TPM 2.0's driver is loaded — what makes its libraries worth installing.
+pub async fn tpm_driver(runner: &dyn Runner) -> bool {
+    runner
+        .run(&["systemd-creds".into(), "has-tpm2".into()])
+        .await
+        .is_ok_and(|o| o.status != 127 && crate::seal::has_driver(&o.stdout))
+}
+
 /// Everything a protection level is read from. Changes nothing.
 pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signals> {
     use crate::protection as p;
@@ -200,7 +212,9 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
         .run(&["systemd-creds".into(), "has-tpm2".into()])
         .await
         .ok()
-        // `has-tpm2` exits non-zero whenever something is missing, and still prints.
+        // `has-tpm2` exits non-zero whenever something is missing, and still prints —
+        // but 127 is the shell's "no such command", which SSH returns as an answer.
+        .filter(|o| o.status != 127)
         .map(|o| o.stdout);
     let root = is_root(runner).await?;
     let probe = match &has_tpm2 {
@@ -392,7 +406,9 @@ pub fn parse_timedatectl_synced(out: &str) -> Option<bool> {
         .map(|v| v.trim() == "yes")
 }
 
-async fn is_root(runner: &dyn Runner) -> Result<bool> {
+/// Whether `runner` acts as root: a TPM, `/run` and `/var/lib/hlb` refuse anyone else,
+/// so a "no" read as anyone else says nothing.
+pub async fn is_root(runner: &dyn Runner) -> Result<bool> {
     let out = runner.run(&["id".into(), "-u".into()]).await?;
     Ok(out.first_line().as_deref() == Some("0"))
 }
@@ -531,6 +547,16 @@ mod tests {
         // An older version may not expose this field: concluding nothing beats
         // assuming the clock is fine.
         assert_eq!(parse_timedatectl_synced("Timezone=UTC\n"), None);
+    }
+
+    #[tokio::test]
+    async fn a_systemd_creds_missing_over_ssh_is_a_tpm_not_tried_never_absent() {
+        // SSH answers a missing command with exit 127, where the local runner errs:
+        // read as an empty `has-tpm2`, a machine with a TPM would be sent to its firmware.
+        let r = Scripted(vec![("id -u", "0\n")]);
+        let signals = protection(&r).await.expect("observed");
+        assert_eq!(signals.tpm, crate::protection::Tpm::Untried);
+        assert!(!tpm_driver(&r).await);
     }
 
     #[tokio::test]

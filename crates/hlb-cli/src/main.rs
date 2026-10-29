@@ -423,6 +423,10 @@ enum Command {
     SecretsSeal {
         #[arg(long)]
         apply: bool,
+        /// Where the TPM seals nothing, seal with the host key alone — which a disk
+        /// taken away opens. Refused otherwise.
+        #[arg(long)]
+        host_only: bool,
     },
 
     /// Store a secret in the vault. The value is read from STANDARD INPUT.
@@ -531,6 +535,10 @@ enum ClusterCmd {
     Autolock {
         #[arg(long)]
         apply: bool,
+        /// Where a manager's TPM seals nothing, seal with its host key alone — which a
+        /// disk taken away opens. Refused otherwise.
+        #[arg(long)]
+        host_only: bool,
     },
     /// The command to run on a machine to join it.
     JoinCommand {
@@ -3140,17 +3148,10 @@ async fn reboot_pending(r: &dyn hlb_bootstrap::Runner) -> Option<bool> {
     .and_then(|o| hlb_bootstrap::updates::reboot_required(&o.stdout))
 }
 
-/// Upgrades one node whole, drained, and reboots it when its kernel asks for it.
-///
-/// The order is the point: drain, wait until its tasks have actually LEFT, upgrade,
-/// reboot, wait until Swarm sees it ready again, and only then put it back in service.
-/// Activating a node whose Docker is still restarting hands Swarm a node that accepts
-/// tasks and cannot run them.
-#[allow(clippy::too_many_arguments)]
 /// How to reach a node of the cluster: this machine, `--host`, or the SSH address the
 /// mesh recorded — with the cluster's key, written under `dir`, which must outlive the
 /// runner. `None` when no address is known.
-async fn reach_node(
+pub(crate) async fn reach_node(
     state: &State,
     vault: &Vault,
     hostname: &str,
@@ -3260,6 +3261,13 @@ async fn node_protection(
     Ok(ExitCode::SUCCESS)
 }
 
+/// Upgrades one node whole, drained, and reboots it when its kernel asks for it.
+///
+/// The order is the point: drain, wait until its tasks have actually LEFT, upgrade,
+/// reboot, wait until Swarm sees it ready again, and only then put it back in service.
+/// Activating a node whose Docker is still restarting hands Swarm a node that accepts
+/// tasks and cannot run them.
+#[allow(clippy::too_many_arguments)]
 async fn node_upgrade(
     cli: &Cli,
     node: &str,
@@ -3901,6 +3909,9 @@ async fn cluster_init(
     if !provision_machine(&local, &distro, args.storage_node, args.apply, false).await? {
         return Ok(ExitCode::FAILURE);
     }
+    // Read again for the label: provisioning brings a TPM's libraries, without which a
+    // node that reaches B reads C.
+    let protection = hlb_bootstrap::observe::protection(&local).await?;
 
     let mut mesh = load_mesh(&state, &vault).await?;
     let tier = obs
@@ -4257,6 +4268,9 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     if !provision_machine(ours.as_ref(), &distro, storage_node, true, true).await? {
         return Ok(ExitCode::FAILURE);
     }
+    // Read again for the label: provisioning brings a TPM's libraries, without which a
+    // node that reaches B reads C.
+    let protection = hlb_bootstrap::observe::protection(ours.as_ref()).await?;
 
     let Some(orch) = orch else {
         eprintln!("🔴 Swarm unreachable locally: cannot obtain a token.");
@@ -4532,7 +4546,8 @@ async fn provision_machine(
     use hlb_bootstrap::provision;
 
     let seen = hlb_bootstrap::observe::dependencies(runner, distro).await?;
-    let deps = hlb_bootstrap::deps::plan_for(distro, &seen, storage);
+    let tpm = hlb_bootstrap::observe::tpm_driver(runner).await;
+    let deps = hlb_bootstrap::deps::plan_for(distro, &seen, storage, tpm);
     let facts = hlb_bootstrap::observe::facts(runner, distro).await?;
 
     println!("Dependencies:");
@@ -7097,9 +7112,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(emergency::run(&cli, cmd))
         }
 
-        Command::SecretsSeal { apply } => {
+        Command::SecretsSeal { apply, host_only } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(seal::run(&cli, *apply))
+            rt.block_on(seal::run(&cli, *apply, *host_only))
         }
 
         Command::Termix(cmd) => {
@@ -11100,7 +11115,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     // Handled above, before connecting.
                     ClusterCmd::Init { .. } => unreachable!(),
 
-                    ClusterCmd::Autolock { apply } => seal::autolock(&cli, &orch, *apply).await,
+                    ClusterCmd::Autolock { apply, host_only } => {
+                        seal::autolock(&cli, &orch, *apply, *host_only).await
+                    }
 
                     ClusterCmd::Status => {
                         let nodes = orch.nodes().await?;

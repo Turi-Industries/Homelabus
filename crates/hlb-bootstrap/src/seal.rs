@@ -93,6 +93,9 @@ pub enum Probe {
     Sealer(Sealer),
     /// A TPM is there, and systemd lacks its libraries.
     MissingLibraries,
+    /// A TPM is there and every trial failed, for this last reason. Never quietly the
+    /// host key alone: that opens with the disk, and the person believed in the TPM.
+    Refuses(String),
 }
 
 /// A TPM's driver is loaded: worth trying. The `firmware` line is not read — it says
@@ -117,7 +120,12 @@ pub fn decide(driver: bool, trials: &[(Binding, Result<(), String>)]) -> Probe {
     {
         return Probe::MissingLibraries;
     }
-    Probe::Sealer(Sealer::HostOnly)
+    let why = trials
+        .last()
+        .and_then(|(_, r)| r.as_ref().err())
+        .map(|e| e.trim().to_string())
+        .unwrap_or_default();
+    Probe::Refuses(why)
 }
 
 /// What [`MissingLibraries`](Probe::MissingLibraries) installs.
@@ -173,8 +181,8 @@ impl Sealer {
                  next boot: the kit's copy stands in until this command seals it again"
             }
             Self::HostOnly => {
-                "this machine's host key alone — it has no TPM. The host key sits on the \
-                 same disk: a credential copied alone opens nothing, the disk itself does \
+                "this machine's host key alone — no TPM seals here. The host key sits on \
+                 the same disk: a credential copied alone opens nothing, the disk itself does \
                  until it is encrypted"
             }
         }
@@ -320,8 +328,8 @@ mod tests {
             ),
         ];
         assert_eq!(decide(true, &no_libraries), Probe::MissingLibraries);
-        let broken = [(Binding::Unbound, fail("x")), (Binding::Pcr7, fail("y"))];
-        assert_eq!(decide(true, &broken), Probe::Sealer(Sealer::HostOnly));
+        let broken = [(Binding::Unbound, fail("x")), (Binding::Pcr7, fail("y\n"))];
+        assert_eq!(decide(true, &broken), Probe::Refuses("y".into()));
         assert_eq!(decide(false, &newer), Probe::Sealer(Sealer::HostOnly));
     }
 

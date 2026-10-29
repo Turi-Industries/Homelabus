@@ -236,7 +236,7 @@ pub fn tpm(
     match probe {
         Some(Probe::Sealer(Sealer::HostAndTpm(_))) => Tpm::Seals,
         Some(Probe::MissingLibraries) => Tpm::MissingLibraries,
-        Some(Probe::Sealer(Sealer::HostOnly)) | None => Tpm::Refuses,
+        Some(Probe::Sealer(Sealer::HostOnly) | Probe::Refuses(_)) | None => Tpm::Refuses,
     }
 }
 
