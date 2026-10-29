@@ -258,8 +258,10 @@ no secret in `docker inspect`.
     seals as root on the host, which the agent's container is not; the label is what
     the controller reads. Left: the interface's nodes screen; a VM naming a node of the
     house as its host (the lower of the two — the VM's own signals are read and not
-    shown yet); `tpm2-tools` at provisioning where `+driver` says a TPM 2.0 is there,
-    since without it Debian's TPM reads C.
+    shown yet). ✅ `tpm2-tools` installed at provisioning where `+driver` says a TPM
+    2.0 is there, and the level read again after it — without them Debian's TPM read
+    C (2026-10-29). A TPM that answers and seals nothing is refused by `secrets-seal`
+    and `cluster autolock`, never quietly the host key alone: `--host-only` says so.
   - **Four levels**, each one sentence and never above what was detected:
     **A — verified boot, disk bound to the network**: UEFI, Secure Boot, TPM 2.0,
     systemd ≥ 257 — a signed UKI built by a `kernel-install` hook, the TPM bound to
