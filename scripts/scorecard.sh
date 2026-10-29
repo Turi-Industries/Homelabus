@@ -77,7 +77,7 @@ fi
 row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
 # A fact of each machine, not of the repository: the cluster says it, the code cannot.
 row "3 never stolen" "nodes per protection level (A verified boot … D a virtual machine)" "UNMEASURED — probe: \`hlb cluster status\` on the lab, a level per node (lab, 2026-10-29: deb1 and deb2 at D, virtual machines)" "every manager and the controller's node at A or B"
-row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tang (today: disks unencrypted; the vault key sealed to the TPM by \`hlb secrets-seal\`, Swarm's unlock key by \`hlb cluster autolock\`)" "nothing readable"
+row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tangs (lab, 2026-10-29: enc2, Debian 13, from \`node preseed --encrypt\` to \`node bind-disk\` — away from both Tangs, nothing mounted after 2 min, the initrd's SSH alone answering; its disk on another TPM, Tangs up, closed; the kit's key opens it. Level B: boot is not verified yet)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
 apps=0

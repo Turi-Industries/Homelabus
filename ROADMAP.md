@@ -211,6 +211,15 @@ binary, it refused and installed nothing.
 
 **2. Never stolen.** Gate: a machine taken away from the lab boots to nothing readable;
 no secret in `docker inspect`.
+✅ Passed at level B, 2026-10-29, by the verbs alone on a fresh VM (enc2, Debian 13.7):
+`node preseed --encrypt` rendered the file, the netinst installed from it unattended in
+208 s, `node add` joined it, `node bind-disk` bound it to its TPM AND deb1's or deb2's
+Tang and took the install passphrase out of the disk and of the vault — the one in the
+preseed file opens nothing since. Then: rebooted at home, it opens alone; both Tangs out
+of reach, two minutes later nothing is mounted and only the initrd's SSH answers, and
+it opens 16 s after ONE Tang comes back; its disk on another TPM with both Tangs up
+stays closed, and the kit's key typed over `ssh -p 2222` (the fingerprint the verb
+printed) opens it. Level A — a boot nobody can alter, inside the house — is step 5.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
   reading the file before `exec` —, and `catalog validate` refusing a secret in an
