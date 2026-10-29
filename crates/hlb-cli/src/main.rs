@@ -526,7 +526,7 @@ enum ClusterCmd {
     /// Nodes, roles, tiers and quorum health.
     Status,
     /// 🔴 Encrypt Swarm secrets at rest. The key goes to the vault and the emergency kit;
-    /// run again once on, it is sealed to this manager, which then unlocks itself after
+    /// run again once on, it is sealed to each manager, which then unlocks itself after
     /// each start of Docker.
     Autolock {
         #[arg(long)]

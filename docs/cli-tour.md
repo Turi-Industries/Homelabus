@@ -212,7 +212,7 @@ In order. Every line previews without `--apply`.
 ```sh
 ./target/debug/hlb node deps                 # what this machine lacks, and what would run
 sudo ./target/debug/hlb cluster init --endpoint 192.168.1.10 --apply
-./target/debug/hlb cluster autolock --apply  # then `hlb emergency kit`, and again: sealed here
+./target/debug/hlb cluster autolock --apply  # then `hlb emergency kit`, and again: sealed on each manager
 ./target/debug/hlb node add 192.168.1.11 --identity ~/.ssh/id_ed25519 \
     --failure-domain rack-a --apply
 ./target/debug/hlb mesh sync --apply         # a node that missed a peer

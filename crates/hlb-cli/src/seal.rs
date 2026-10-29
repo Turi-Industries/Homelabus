@@ -41,7 +41,8 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let runner = LocalRunner;
     let sealer = match sealer(&runner, apply, "the vault's master key").await? {
         Ready::Sealer(s) => s,
-        Ready::Done(code) => return Ok(code),
+        Ready::Previewed => return Ok(ExitCode::SUCCESS),
+        Ready::Refused => return Ok(ExitCode::FAILURE),
     };
     // Sealed again — after a rekey — the key is read through the link.
     let steps = Provision {
@@ -111,7 +112,8 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
 }
 
 /// `hlb cluster autolock`: Swarm's Raft log encrypted at rest, its key in the vault and
-/// on the kit, then sealed to this manager so a restart unlocks it alone.
+/// on the kit, then sealed to each manager — this one directly, the others over the SSH
+/// address the mesh recorded — so a restart unlocks it alone.
 pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Result<ExitCode> {
     let state = open_state(cli).await?;
 
@@ -121,7 +123,7 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
             println!();
             println!("  What it changes: after a restart, every manager demands the unlock");
             println!("  key before starting again. Run this again once it is on, the kit");
-            println!("  printed with the key: it seals the key to this machine, which then");
+            println!("  printed with the key: it seals the key to each manager, which then");
             println!("  unlocks itself after each start of Docker.");
             println!();
             println!("  🔴 The key goes to the vault and onto the emergency kit. If both");
@@ -143,7 +145,7 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         println!();
         println!("  Until it is sealed, a restarted manager waits for `docker swarm unlock`.");
         println!("  The emergency kit does not hold the key yet: print it, keep it away from");
-        println!("  the cluster, then seal the key to this machine:");
+        println!("  the cluster, then seal the key to each manager:");
         println!("    hlb emergency kit");
         println!("    hlb cluster autolock --apply");
         return Ok(ExitCode::SUCCESS);
@@ -161,7 +163,111 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
     };
     let vault = open_vault(cli)?;
     let key = vault.decrypt(&ct)?;
-    let runner = LocalRunner;
+    let mut managers: Vec<String> = orch
+        .nodes()
+        .await?
+        .into_iter()
+        .filter(|n| n.role == NodeRole::Manager)
+        .map(|n| n.hostname)
+        .collect();
+    managers.sort();
+    let here = crate::local_hostname().await;
+    // The cluster's SSH key only when a manager is elsewhere: it is made on first use.
+    let mut reach = None;
+    if managers.iter().any(|m| *m != here) {
+        let kp = crate::cluster_ssh_key(&state, &vault).await?;
+        let dir = tempfile::tempdir()?;
+        let path = crate::write_temporary_key(dir.path(), &kp.private)?;
+        reach = Some((crate::load_mesh(&state, &vault).await?, dir, path));
+    }
+
+    // Each manager's credential dies with its board: the kit holds the copy that does not.
+    let mut kit = None;
+    let mut failed = false;
+    let mut to_apply = false;
+    for m in &managers {
+        println!("{m}:");
+        let runner: Box<dyn Runner> = if *m == here {
+            Box::new(LocalRunner)
+        } else {
+            let recorded = reach.as_ref().and_then(|(mesh, _, path)| {
+                let (h, u, p) = crate::parse_ssh_target(mesh.get(m)?.ssh.as_ref()?);
+                Some(crate::build_runner(
+                    Some(&h),
+                    u.as_deref(),
+                    p,
+                    path.to_str(),
+                ))
+            });
+            let Some(r) = recorded else {
+                // Joined by hand: nothing says how to reach it.
+                println!("  ⚠️  no SSH address recorded: not sealed. After a restart it waits for");
+                println!("     `docker swarm unlock` and the kit's key.");
+                continue;
+            };
+            r
+        };
+        // One manager out of reach leaves the others to seal.
+        let sealing = match seal_unlock(&*runner, &key, apply, &mut kit, &state, &vault).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  🔴 {e}");
+                failed = true;
+                continue;
+            }
+        };
+        match sealing {
+            Sealing::Sealed => println!("  ✓ sealed: it unlocks itself after each start of Docker"),
+            Sealing::Would => to_apply = true,
+            Sealing::Done(sealer) => {
+                state
+                    .audit(
+                        "cli",
+                        ACTOR_ROLE,
+                        "swarm-unlock-seal",
+                        m,
+                        "ok",
+                        Some(sealer.as_str()),
+                    )
+                    .await?;
+                println!("  ✓ sealed with {}", sealer.as_str());
+            }
+            Sealing::Refused => failed = true,
+        }
+    }
+    if failed {
+        return Ok(ExitCode::FAILURE);
+    }
+    if to_apply {
+        println!(
+            "\nAfter each start of Docker, {} hands the key to `docker swarm",
+            unlock::UNIT
+        );
+        println!("unlock`. If it cannot be unsealed — a TPM replaced — the manager waits for that");
+        println!("command, the kit's key on its standard input.\n\n  Re-run with --apply.");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+enum Sealing {
+    /// Already: with `--apply` it is sealed again all the same.
+    Sealed,
+    /// Previewed.
+    Would,
+    Done(Sealer),
+    /// Said why.
+    Refused,
+}
+
+/// Swarm's unlock key sealed to the manager `runner` reaches.
+async fn seal_unlock(
+    runner: &dyn Runner,
+    key: &str,
+    apply: bool,
+    kit: &mut Option<bool>,
+    state: &State,
+    vault: &Vault,
+) -> Result<Sealing> {
     // A key rotated by hand leaves the vault's stale: sealed, it would unlock nothing.
     let live = runner
         .run(&[
@@ -172,45 +278,39 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         ])
         .await?;
     if live.stdout.trim() != key.trim() {
-        eprintln!("🔴 The vault's unlock key is not the Swarm's — rotated by hand? Not sealed.");
-        eprintln!("   Put the live one in the vault, print the kit, then run this again:");
+        eprintln!("  🔴 the vault's unlock key is not the Swarm's — rotated by hand? Not sealed.");
+        eprintln!("     Put the live one in the vault, print the kit, then run this again:");
         eprintln!(
-            "     docker swarm unlock-key -q | hlb secret-set {SWARM_UNLOCK_SECRET} --rotate"
+            "       docker swarm unlock-key -q | hlb secret-set {SWARM_UNLOCK_SECRET} --rotate"
         );
-        return Ok(ExitCode::FAILURE);
+        return Ok(Sealing::Refused);
     }
-
-    let others = other_managers(orch).await?;
     let sealed = runner
         .run(&["test".into(), "-f".into(), unlock::CREDENTIAL.into()])
         .await?
         .ok();
     if sealed && !apply {
-        println!("✓ Autolock is active, its key sealed to this machine:");
-        println!(
-            "  {} unlocks the Swarm after each start of Docker.",
-            unlock::UNIT
-        );
-        say_other_managers(&others);
-        return Ok(ExitCode::SUCCESS);
+        return Ok(Sealing::Sealed);
     }
-
-    // Sealed to a TPM, this copy dies with the board: the kit holds the one that does not.
-    if !kit_is_current(&state, &vault).await? {
-        return Ok(ExitCode::FAILURE);
+    // Asked once: a stale kit is said once, and refuses every manager.
+    let current = match *kit {
+        Some(c) => c,
+        None => *kit.insert(kit_is_current(state, vault).await?),
+    };
+    if !current {
+        return Ok(Sealing::Refused);
     }
-    let sealer = match sealer(&runner, apply, "Swarm's unlock key").await? {
+    let sealer = match self::sealer(runner, apply, "Swarm's unlock key").await? {
         Ready::Sealer(s) => s,
-        Ready::Done(code) => return Ok(code),
+        Ready::Previewed => return Ok(Sealing::Would),
+        Ready::Refused => return Ok(Sealing::Refused),
     };
     let steps = Provision {
         steps: unlock::steps(sealer),
         notes: Vec::new(),
     };
-
     if !apply {
-        println!("Autolock is active. Would seal its unlock key to this machine, with");
-        println!("  {}.\n", sealer.describe());
+        println!("  would seal its unlock key with {}.", sealer.describe());
         println!(
             "  0. the key, from the vault, into {} (memory)",
             unlock::STAGED
@@ -218,67 +318,19 @@ pub async fn autolock(cli: &Cli, orch: &impl Orchestrator, apply: bool) -> Resul
         for (i, s) in steps.steps.iter().enumerate() {
             println!("  {}. {}", i + 1, s.describe());
         }
-        println!(
-            "\n  After each start of Docker, {} hands it to",
-            unlock::UNIT
-        );
-        println!("  `docker swarm unlock`. If it cannot be unsealed — a TPM replaced — the");
-        println!("  manager waits for that command, the kit's key on its standard input.");
-        say_other_managers(&others);
-        println!("\n  Re-run with --apply.");
-        return Ok(ExitCode::SUCCESS);
+        return Ok(Sealing::Would);
     }
-
-    runner.write_file(unlock::STAGED, &key).await?;
-    let done = provision::execute(&runner, &steps, |s| println!("  {}", s.what)).await;
+    runner.write_file(unlock::STAGED, key).await?;
+    let done = provision::execute(runner, &steps, |s| println!("  {}", s.what)).await;
     // Whatever failed, the key leaves no copy outside the vault and its credential.
     let _ = runner
         .run(&["rm".into(), "-f".into(), unlock::STAGED.into()])
         .await;
     if let Err(e) = done {
-        eprintln!("🔴 {e}");
-        return Ok(ExitCode::FAILURE);
+        eprintln!("  🔴 {e}");
+        return Ok(Sealing::Refused);
     }
-    state
-        .audit(
-            "cli",
-            ACTOR_ROLE,
-            "swarm-unlock-seal",
-            "swarm",
-            "ok",
-            Some(sealer.as_str()),
-        )
-        .await?;
-    println!("\n✓ Sealed with {}.", sealer.describe());
-    println!(
-        "  {} unlocks the Swarm after each start of Docker.",
-        unlock::UNIT
-    );
-    say_other_managers(&others);
-    Ok(ExitCode::SUCCESS)
-}
-
-/// The managers besides the one this talks to: each needs its own sealed copy.
-async fn other_managers(orch: &impl Orchestrator) -> Result<Vec<String>> {
-    let here = orch.local_node().await?;
-    Ok(orch
-        .nodes()
-        .await?
-        .into_iter()
-        .filter(|n| n.role == NodeRole::Manager && Some(&n.id) != here.as_ref())
-        .map(|n| n.hostname)
-        .collect())
-}
-
-fn say_other_managers(others: &[String]) {
-    if others.is_empty() {
-        return;
-    }
-    println!("\n⚠️  Sealed on this machine only. After a restart, these managers wait for");
-    println!(
-        "   `docker swarm unlock` and the kit's key: {}",
-        others.join(", ")
-    );
+    Ok(Sealing::Done(sealer))
 }
 
 /// Is the kit in the drawer the one printed with today's material? Says why not.
@@ -296,20 +348,22 @@ async fn kit_is_current(state: &State, vault: &Vault) -> Result<bool> {
 
 enum Ready {
     Sealer(Sealer),
-    /// Nothing to seal with yet: what was said, and how the command ends.
-    Done(ExitCode),
+    /// Its TPM's libraries would be installed first: said.
+    Previewed,
+    /// Said why.
+    Refused,
 }
 
 /// What this machine can seal `what` with — its TPM's libraries installed first, with
 /// `apply`, when systemd lacks them.
-async fn sealer(runner: &LocalRunner, apply: bool, what: &str) -> Result<Ready> {
+async fn sealer(runner: &dyn Runner, apply: bool, what: &str) -> Result<Ready> {
     if !runner
         .run(&["systemd-creds".into(), "--version".into()])
         .await?
         .ok()
     {
         eprintln!("🔴 This machine has no systemd-creds (systemd 250 or later): not sealed.");
-        return Ok(Ready::Done(ExitCode::FAILURE));
+        return Ok(Ready::Refused);
     }
     let os = runner
         .read_file("/etc/os-release")
@@ -325,19 +379,19 @@ async fn sealer(runner: &LocalRunner, apply: bool, what: &str) -> Result<Ready> 
                 "   is not identified: install {} by hand, then run this again.",
                 seal::TPM_PACKAGE
             );
-            return Ok(Ready::Done(ExitCode::FAILURE));
+            return Ok(Ready::Refused);
         };
         if !apply {
             println!("This machine has a TPM systemd cannot use yet: it lacks the TPM's");
             println!("libraries. Would install them first —");
             println!("  {}", install.join(" "));
             println!("— then seal {what} with the TPM.\n\n  Re-run with --apply.");
-            return Ok(Ready::Done(ExitCode::SUCCESS));
+            return Ok(Ready::Previewed);
         }
         println!("  install the TPM's libraries ({})", seal::TPM_PACKAGE);
         if !runner.run(&install).await?.ok() {
             eprintln!("🔴 installing {} failed: not sealed.", seal::TPM_PACKAGE);
-            return Ok(Ready::Done(ExitCode::FAILURE));
+            return Ok(Ready::Refused);
         }
         probe = self::probe(runner).await?;
     }
@@ -345,13 +399,13 @@ async fn sealer(runner: &LocalRunner, apply: bool, what: &str) -> Result<Ready> 
         Probe::Sealer(s) => Ok(Ready::Sealer(s)),
         Probe::MissingLibraries => {
             eprintln!("🔴 the TPM is still unusable with its libraries installed: not sealed.");
-            Ok(Ready::Done(ExitCode::FAILURE))
+            Ok(Ready::Refused)
         }
     }
 }
 
 /// The driver, then each binding tried in turn: what this machine can seal with.
-async fn probe(runner: &LocalRunner) -> Result<Probe> {
+async fn probe(runner: &dyn Runner) -> Result<Probe> {
     let has = runner
         .run(&["systemd-creds".into(), "has-tpm2".into()])
         .await?;

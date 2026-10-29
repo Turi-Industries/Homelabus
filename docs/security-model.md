@@ -116,9 +116,9 @@ plan around them.
   node can still read it there, and a node carried away whole unseals it at boot until
   its disks are encrypted.
 - **Swarm keeps its Raft keys in clear on every manager** unless autolock is on. `hlb
-  cluster autolock` then seals the unlock key to the manager it runs on, which unlocks
-  itself after each start of Docker; any other manager waits for a person and the
-  kit's key.
+  cluster autolock` then seals the unlock key to each manager, over the SSH address the
+  mesh recorded, and each unlocks itself after every start of Docker; a manager
+  joined by hand, with no address recorded, waits for a person and the kit's key.
 - **Your domain is not watched.** There is no DNSSEC and no alert if the registrar
   record changes. A registrar with a registry lock is recommended.
 - **One maintainer.** No change is reviewed by a second person before it is merged.
