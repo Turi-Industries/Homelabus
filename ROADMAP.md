@@ -399,6 +399,14 @@ three Tangs, and the third alone opens it.
     running, nothing is rescheduled until it returns. Decided 2026-10-28: asked each
     time, both costs shown, no default. The constraint on vital apps dies if a
     two-node house on the lab cannot schedule them under it: then a warning only.
+    ✅ The manager's role, 2026-10-30 (`protection::advise_role`, `manager_warning`):
+    `node add` reads the managers' `hlb.protection` labels; a C or D machine is never
+    proposed, and where the count asks for a third manager on one, no role is derived
+    and both costs are said; a manager below the best manager's level, or a weak one
+    imposed, is warned. Left: `cluster init` cannot compare (no other machine yet),
+    `cluster join-command` sees no machine, `cluster status` does not warn of a weak
+    manager already there; `hlb controller move` and the vital apps' constraint wait
+    for phase 3's criticality. Not run on the lab.
   - **Debian 12 caps a node at B; nodes move to Debian 13** (decided 2026-10-28). The
     preseed and the lab install Debian 12 alone today (`vm.sh`'s only Debian image):
     the preseed, Docker's and ZFS's sources for trixie, the lab's image, and an

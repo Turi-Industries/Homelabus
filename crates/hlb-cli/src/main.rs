@@ -4371,21 +4371,32 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
         None => Vec::new(),
     };
     let profile = hlb_orchestrator::ClusterProfile::for_node_count(nodes.len() + 1);
-    let managers = nodes
+    let managers: Vec<Option<hlb_bootstrap::protection::Level>> = nodes
         .iter()
         .filter(|n| n.role == hlb_orchestrator::NodeRole::Manager)
-        .count();
-    let role_final = role.map(|r| r.to_string()).unwrap_or_else(|| {
-        // 🔴 Two managers are WORSE than one: the quorum of a two-manager cluster is 2,
-        // so losing either blocks the whole cluster, whereas with a single manager
-        // losing it blocks only that one.
-        if managers == 0 || managers + 1 >= 3 {
-            "manager"
-        } else {
-            "worker"
+        .map(|n| {
+            n.protection
+                .as_deref()
+                .and_then(hlb_bootstrap::protection::Level::parse)
+        })
+        .collect();
+    let level = hlb_bootstrap::protection::assess(&protection).level;
+    let role_final = match role {
+        Some(r) => r.to_string(),
+        None => match hlb_bootstrap::protection::advise_role(&managers, level) {
+            hlb_bootstrap::protection::RoleAdvice::Manager => "manager".to_string(),
+            hlb_bootstrap::protection::RoleAdvice::Worker => "worker".to_string(),
+            hlb_bootstrap::protection::RoleAdvice::Ask(why) => {
+                eprintln!("🔴 No role derived — nothing was touched: {why}.");
+                return Ok(ExitCode::FAILURE);
+            }
+        },
+    };
+    if role_final == "manager" {
+        if let Some(w) = hlb_bootstrap::protection::manager_warning(&managers, level) {
+            println!("⚠️  {w}\n");
         }
-        .to_string()
-    });
+    }
 
     let tier_final = obs
         .total_memory_mb

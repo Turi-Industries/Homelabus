@@ -192,6 +192,66 @@ pub fn assess(s: &Signals) -> Assessment {
     }
 }
 
+/// What a joining machine is proposed as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoleAdvice {
+    Manager,
+    Worker,
+    /// The count asks for a manager and the machine would give every secret up: a
+    /// person chooses, both costs said.
+    Ask(String),
+}
+
+/// The role a machine joins as when none is imposed, from the managers' levels (`None`
+/// where none was read) and its own.
+///
+/// 🔴 Two managers are WORSE than one: their quorum is 2, so losing either stops the
+/// control plane, whereas a single manager lost stops only itself — so a second is
+/// never proposed, and a third is. A manager holds the whole Raft log, every app's
+/// secrets: a C or D machine is never proposed as one, and when the count asks for it
+/// there is no default (decided 2026-10-28) — fragile control or exposed secrets.
+pub fn advise_role(managers: &[Option<Level>], joining: Level) -> RoleAdvice {
+    if managers.is_empty() {
+        return RoleAdvice::Manager;
+    }
+    if managers.len() + 1 < 3 {
+        return RoleAdvice::Worker;
+    }
+    if joining < Level::C {
+        return RoleAdvice::Manager;
+    }
+    RoleAdvice::Ask(format!(
+        "the cluster has {n} managers and asks for a third: with {n}, their quorum is \
+         {n}, so losing either stops the control plane. But a manager holds every app's \
+         secret (the Raft log), and this level-{l} machine gives them up when taken. \
+         Choose: --role manager (secrets on this machine) or --role worker (the control \
+         plane stays fragile until a machine at B or above joins)",
+        n = managers.len(),
+        l = joining.as_str()
+    ))
+}
+
+/// Said when a machine becomes a manager weaker than it should be: below the best
+/// manager's level, or one that gives the Raft log up when taken.
+pub fn manager_warning(managers: &[Option<Level>], joining: Level) -> Option<String> {
+    if joining >= Level::C {
+        return Some(format!(
+            "a manager holds every app's secret (the Raft log): taken, this level-{} \
+             machine gives them up",
+            joining.as_str()
+        ));
+    }
+    let best = managers.iter().flatten().min()?;
+    (joining > *best).then(|| {
+        format!(
+            "a manager at level {}, below the best manager's {}: the Raft log is only as \
+             safe as its weakest copy",
+            joining.as_str(),
+            best.as_str()
+        )
+    })
+}
+
 /// Said wherever Secure Boot is read off: a reset firmware is not a choice to respect.
 pub const SETUP_MODE: &str = "Secure Boot is off: the firmware is in Setup Mode, its keys erased \
      (a reset, or a firmware update) — restore its factory keys in its setup";
@@ -523,6 +583,45 @@ mod tests {
         assert_eq!(replaced, 2, "the fixture holds subject and issuer in clear");
         assert_eq!(parse_platform_key(&own.join(" ")), None);
         assert_eq!(parse_platform_key("not od"), None);
+    }
+
+    #[test]
+    fn a_weak_machine_is_never_proposed_as_a_manager() {
+        use RoleAdvice::*;
+        // The count alone: the first manager, then workers, then the third manager.
+        assert_eq!(
+            advise_role(&[], Level::C),
+            Manager,
+            "the only manager there is"
+        );
+        assert_eq!(advise_role(&[Some(Level::A)], Level::A), Worker);
+        assert_eq!(
+            advise_role(&[Some(Level::A), Some(Level::B)], Level::B),
+            Manager
+        );
+        // A third manager the count asks for, on a machine that gives the Raft log up
+        // when taken: both costs, no default.
+        for weak in [Level::C, Level::D] {
+            match advise_role(&[Some(Level::A), Some(Level::A)], weak) {
+                Ask(why) => {
+                    assert!(why.contains("quorum") && why.contains("secret"), "{why}");
+                    assert!(why.contains("--role manager") && why.contains("--role worker"));
+                }
+                other => panic!("{weak:?}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_manager_below_the_best_is_warned() {
+        let managers = [Some(Level::A), None];
+        let w = manager_warning(&managers, Level::B).expect("below the best");
+        assert!(w.contains("level B") && w.contains("A"), "{w}");
+        assert!(manager_warning(&managers, Level::A).is_none());
+        let w = manager_warning(&[], Level::D).expect("a weak manager, alone");
+        assert!(w.contains("secret"), "{w}");
+        // Nothing read is nothing to compare with.
+        assert!(manager_warning(&[None], Level::B).is_none());
     }
 
     #[test]

@@ -264,6 +264,10 @@ and the disk bound to the network; B, the disk bound to the TPM and the network,
 not verified (every Debian 12); C, no TPM that seals; D, a virtual machine. It is what
 the machine can reach: the line under it says whether its disk is encrypted yet, and a
 Secure Boot platform key that is a manufacturer's test key (PKfail) is warned there.
+`node add` proposes a role from it too: a manager holds every app's secret, so a C or D
+machine is never proposed as one — when the count asks for a third manager there, it
+derives nothing and names both costs (`--role manager` or `--role worker`) — and a
+manager below the best manager's level is warned.
 
 ```sh
 ./target/debug/hlb node check 192.168.1.11           # the level, nothing changed
