@@ -25,7 +25,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::ActionResult;
 
+mod confirm;
 mod record;
+pub use confirm::*;
 pub use record::*;
 
 /// An intent, with the type of its answer.
@@ -97,6 +99,8 @@ pub enum Intent {
     UnmuteAlert(UnmuteAlert),
     SetLogo(SetLogo),
     RecordHistory(RecordHistory),
+    Confirmed(Confirmed),
+    BeginConfirmation(BeginConfirmation),
 }
 
 macro_rules! asks {
@@ -174,6 +178,7 @@ asks! {
     UnmuteAlert => Result<bool, String>,
     SetLogo => Result<(), String>,
     RecordHistory => Result<(), String>,
+    BeginConfirmation => Result<Option<String>, String>,
 }
 
 /// The answer of an action that may not even be planned.

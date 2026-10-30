@@ -18,6 +18,7 @@ use hlb_state::State;
 
 mod apps;
 pub mod backup;
+mod confirm;
 pub mod daemon;
 pub mod demo;
 pub mod fleet;
@@ -104,6 +105,8 @@ pub struct Privd {
     remote: Option<wire::Remote>,
     /// What the agents' poller last found.
     fleet: fleet::Polled,
+    /// The passkey confirmations begun and not yet used up.
+    confirmations: confirm::Confirmations,
 }
 
 impl Privd {
@@ -122,7 +125,15 @@ impl Privd {
             mirror: None,
             remote: None,
             fleet: Default::default(),
+            confirmations: Default::default(),
         }
+    }
+
+    /// Confirms destructions through this issuer rather than the vault's sign-in
+    /// client: a test's PocketID.
+    pub fn confirming_through(mut self, oidc: hlb_identity::oidc::Oidc) -> Self {
+        self.confirmations = confirm::Confirmations::with_issuer(oidc);
+        self
     }
 
     pub fn with_orchestrator(mut self, o: Option<Arc<dyn Orchestrator>>) -> Self {
@@ -237,18 +248,61 @@ impl Privd {
 
     /// Asks one intent, and reads its answer back as its own type.
     pub async fn ask<A: Ask>(&self, intent: A) -> Result<A::Answer, Error> {
+        self.ask_confirmed(None, intent).await
+    }
+
+    /// The same, with the passkey that confirmed it when there is one.
+    pub async fn ask_confirmed<A: Ask>(
+        &self,
+        proof: Option<hlb_api::intent::Proof>,
+        intent: A,
+    ) -> Result<A::Answer, Error> {
+        let intent: Intent = match proof {
+            Some(proof) => hlb_api::intent::Confirmed {
+                proof,
+                asked: Box::new(intent.into()),
+            }
+            .into(),
+            None => intent.into(),
+        };
         let wire = match &self.remote {
-            Some(daemon) => daemon.answer(&intent.into()).await?,
-            None => self.answer(intent.into()).await?,
+            Some(daemon) => daemon.answer(&intent).await?,
+            None => self.answer(intent).await?,
         };
         Ok(serde_json::from_value(wire)?)
     }
 
-    /// Answers an intent with its answer as it travels.
+    /// Answers an intent with its answer as it travels — once a passkey confirmed it,
+    /// when it destroys and PocketID signs people in.
+    pub async fn answer(&self, intent: Intent) -> Result<serde_json::Value, Error> {
+        let intent = match intent {
+            Intent::Confirmed(c) => {
+                let account = confirm::consume(self, &c.proof, &c.asked)
+                    .await
+                    .map_err(Error::Refused)?;
+                tracing::info!(account, "a passkey confirmed a destruction");
+                *c.asked
+            }
+            Intent::BeginConfirmation(b) => {
+                return Ok(serde_json::to_value(confirm::begin(self, b.intents).await)?)
+            }
+            other if other.passkey().is_some() && confirm::required(self).await => {
+                return Err(Error::Refused(
+                    "this destroys, and only a passkey presented for it now allows it: \
+                     confirm it in the interface, or run its command as root"
+                        .into(),
+                ))
+            }
+            other => other,
+        };
+        self.act(intent).await
+    }
+
+    /// Acts on an intent let through.
     ///
     /// 🔴 No `_ =>` arm: an intent added to the enum does not compile until it is
     /// answered here.
-    pub async fn answer(&self, intent: Intent) -> Result<serde_json::Value, Error> {
+    async fn act(&self, intent: Intent) -> Result<serde_json::Value, Error> {
         Ok(match intent {
             Intent::Scale(i) => serde_json::to_value(swarm::scale(self, i).await)?,
             Intent::NodeAvailability(i) => {
@@ -368,6 +422,12 @@ impl Privd {
             Intent::MuteAlert(i) => serde_json::to_value(record::mute_alert(self, i).await)?,
             Intent::UnmuteAlert(i) => serde_json::to_value(record::unmute_alert(self, i).await)?,
             Intent::SetLogo(i) => serde_json::to_value(record::set_logo(self, i).await)?,
+            // Unwrapped by `answer`: one inside another confirms nothing.
+            Intent::Confirmed(_) | Intent::BeginConfirmation(_) => {
+                return Err(Error::Refused(
+                    "a confirmation wraps the intent it confirms, never another".into(),
+                ))
+            }
             Intent::RecordHistory(i) => {
                 serde_json::to_value(record::record_history(self, i).await)?
             }

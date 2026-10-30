@@ -49,6 +49,18 @@ use crate::{Error, Result};
 /// found in a browser history is no longer useful.
 pub const REQUEST_TIMEOUT_S: i64 = 600;
 
+/// How recent a passkey confirming a destruction must be: asked of PocketID as
+/// `max_age`, and checked on the `auth_time` it answers.
+pub const CONFIRMATION_MAX_AGE_S: i64 = 300;
+
+/// A passkey just presented, for one action: who, and when PocketID saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirmation {
+    pub identity: Identity,
+    /// Seconds since the epoch, from the `id_token`.
+    pub auth_time: i64,
+}
+
 /// The endpoints, discovered rather than guessed.
 ///
 /// Hard-coding them would work today and break the day PocketID moves them, with a
@@ -257,27 +269,7 @@ impl Oidc {
         let state = hlb_types::token::base64url(&entropy[0..32]);
         let check = hlb_types::token::base64url(&entropy[32..64]);
         let nonce = hlb_types::token::base64url(&entropy[64..96]);
-
-        let challenge =
-            hlb_types::token::base64url(&hlb_types::token::sha256_bytes(check.as_bytes()));
-
-        let sep = if self.endpoints.authorization_endpoint.contains('?') {
-            '&'
-        } else {
-            '?'
-        };
-        let url = format!(
-            "{}{sep}response_type=code&client_id={}&redirect_uri={}&scope={}\
-             &state={}&nonce={}&code_challenge={}&code_challenge_method=S256",
-            self.endpoints.authorization_endpoint,
-            percent_encode(&self.client_id),
-            percent_encode(&self.redirect_uri),
-            percent_encode("openid profile email groups"),
-            percent_encode(&state),
-            percent_encode(&nonce),
-            percent_encode(&challenge),
-        );
-
+        let url = self.authorize_url(&state, &check, &nonce, "openid profile email groups", "");
         (
             url,
             PendingRequest {
@@ -287,6 +279,64 @@ impl Oidc {
                 created_at: now,
                 return_to,
             },
+        )
+    }
+
+    /// The same, for confirming one action with a passkey: PocketID asks for it again
+    /// whatever session it holds (`prompt=login`), and the `nonce` is the caller's —
+    /// the digest of what is confirmed, so the answer names it.
+    pub fn start_confirming(
+        &self,
+        entropy: &[u8; 64],
+        nonce: &str,
+        now: i64,
+    ) -> (String, PendingRequest) {
+        let state = hlb_types::token::base64url(&entropy[0..32]);
+        let check = hlb_types::token::base64url(&entropy[32..64]);
+        let url = self.authorize_url(
+            &state,
+            &check,
+            nonce,
+            "openid",
+            &format!("&prompt=login&max_age={CONFIRMATION_MAX_AGE_S}"),
+        );
+        (
+            url,
+            PendingRequest {
+                state,
+                check,
+                nonce: nonce.to_string(),
+                created_at: now,
+                return_to: None,
+            },
+        )
+    }
+
+    fn authorize_url(
+        &self,
+        state: &str,
+        check: &str,
+        nonce: &str,
+        scope: &str,
+        extra: &str,
+    ) -> String {
+        let challenge =
+            hlb_types::token::base64url(&hlb_types::token::sha256_bytes(check.as_bytes()));
+        let sep = if self.endpoints.authorization_endpoint.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        format!(
+            "{}{sep}response_type=code&client_id={}&redirect_uri={}&scope={}\
+             &state={}&nonce={}&code_challenge={}&code_challenge_method=S256{extra}",
+            self.endpoints.authorization_endpoint,
+            percent_encode(&self.client_id),
+            percent_encode(&self.redirect_uri),
+            percent_encode(scope),
+            percent_encode(state),
+            percent_encode(nonce),
+            percent_encode(&challenge),
         )
     }
 
@@ -302,6 +352,74 @@ impl Oidc {
         code: &str,
         now: i64,
     ) -> Result<Identity> {
+        let (id_token, identity) = self.exchange(request, received_state, code, now).await?;
+        // The nonce, when there is an id_token. See the security note at the top of
+        // this module: the payload is read without verifying the signature because the
+        // token was just fetched directly, over TLS - never from the browser.
+        if let Some(id) = &id_token {
+            match nonce_of(id) {
+                Some(n) if hlb_types::token::constant_eq(&request.nonce, &n) => {}
+                Some(_) => {
+                    return Err(Error::Unexpected(
+                        "the id_token nonce does not match: replayed response".into(),
+                    ))
+                }
+                // An id_token with no nonce is not proof of a replay: some issuers do
+                // not echo it back. We do not block on that, but we say so, because an
+                // absent protection must not be silent.
+                None => tracing::warn!(
+                    "id_token with no nonce: replay protection then rests \
+                     only on the request deadline"
+                ),
+            }
+        }
+        Ok(identity)
+    }
+
+    /// Exchanges a confirmation's code: the `id_token` must carry the request's
+    /// `nonce` and an `auth_time` — no leniency here, they are what binds the passkey
+    /// to the action and to the moment.
+    pub async fn finish_confirming(
+        &self,
+        request: &PendingRequest,
+        received_state: &str,
+        code: &str,
+        now: i64,
+    ) -> Result<Confirmation> {
+        let (id_token, identity) = self.exchange(request, received_state, code, now).await?;
+        let claims = id_token.as_deref().and_then(claims_of).ok_or_else(|| {
+            Error::Unexpected("a confirmation answered with no readable id_token".into())
+        })?;
+        match claims.get("nonce").and_then(|n| n.as_str()) {
+            Some(n) if hlb_types::token::constant_eq(&request.nonce, n) => {}
+            _ => {
+                return Err(Error::Unexpected(
+                    "the passkey confirmed something else: the id_token's nonce is not \
+                     this action's"
+                        .into(),
+                ))
+            }
+        }
+        let auth_time = claims
+            .get("auth_time")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                Error::Unexpected("the id_token does not say when the passkey was used".into())
+            })?;
+        Ok(Confirmation {
+            identity,
+            auth_time,
+        })
+    }
+
+    /// The code exchanged for the `id_token` and the identity `userinfo` gives.
+    async fn exchange(
+        &self,
+        request: &PendingRequest,
+        received_state: &str,
+        code: &str,
+        now: i64,
+    ) -> Result<(Option<String>, Identity)> {
         if !hlb_types::token::constant_eq(&request.state, received_state) {
             return Err(Error::Unexpected(
                 "invalid sign-in state: the response does not match a request \
@@ -349,27 +467,6 @@ impl Oidc {
 
         let token: TokenResponse = read_json(r, "the token endpoint's response").await?;
 
-        // The nonce, when there is an id_token. See the security note at the top of
-        // this module: the payload is read without verifying the signature because the
-        // token was just fetched directly, over TLS - never from the browser.
-        if let Some(id) = &token.id_token {
-            match nonce_of(id) {
-                Some(n) if hlb_types::token::constant_eq(&request.nonce, &n) => {}
-                Some(_) => {
-                    return Err(Error::Unexpected(
-                        "the id_token nonce does not match: replayed response".into(),
-                    ))
-                }
-                // An id_token with no nonce is not proof of a replay: some issuers do
-                // not echo it back. We do not block on that, but we say so, because an
-                // absent protection must not be silent.
-                None => tracing::warn!(
-                    "id_token with no nonce: replay protection then rests \
-                     only on the request deadline"
-                ),
-            }
-        }
-
         let r = self
             .http
             .get(&self.endpoints.userinfo_endpoint)
@@ -400,7 +497,7 @@ impl Oidc {
             ));
         }
 
-        Ok(identity)
+        Ok((token.id_token, identity))
     }
 }
 
@@ -410,10 +507,14 @@ impl Oidc {
 /// module. Returns `None` as soon as anything does not fit - a malformed JWT is not
 /// "nearly right".
 fn nonce_of(jwt: &str) -> Option<String> {
+    claims_of(jwt)?.get("nonce")?.as_str().map(str::to_string)
+}
+
+/// A JWT's payload, read the same way.
+fn claims_of(jwt: &str) -> Option<serde_json::Value> {
     let load = jwt.split('.').nth(1)?;
     let raw = hlb_types::token::base64url_decode(load)?;
-    let v: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-    v.get("nonce")?.as_str().map(str::to_string)
+    serde_json::from_slice(&raw).ok()
 }
 
 /// Percent-encoding for a query parameter (RFC 3986 §2.3, unreserved characters).
@@ -503,6 +604,99 @@ mod tests {
         assert!(!url.contains(&d.check), "the check is in the URL: {url}");
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    /// A PocketID whose token endpoint answers an `id_token` carrying `claims`, and
+    /// whose userinfo answers `sub` u1.
+    async fn issuer(claims: serde_json::Value) -> Oidc {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", l.local_addr().expect("addr"));
+        let id_token = format!(
+            "h.{}.s",
+            hlb_types::token::base64url(claims.to_string().as_bytes())
+        );
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = l.accept().await {
+                let mut buf = [0u8; 8192];
+                let n = c.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let body = if head.starts_with("POST /token") {
+                    format!(r#"{{"access_token":"a","id_token":"{id_token}"}}"#)
+                } else {
+                    r#"{"sub":"u1","preferred_username":"alice"}"#.to_string()
+                };
+                let _ = c
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            }
+        });
+        Oidc::with_endpoints(
+            Endpoints {
+                issuer: base.clone(),
+                authorization_endpoint: format!("{base}/authorize"),
+                token_endpoint: format!("{base}/token"),
+                userinfo_endpoint: format!("{base}/userinfo"),
+                end_session_endpoint: None,
+            },
+            "hlb",
+            "secret",
+            "https://hlb.home.example/auth/confirmed",
+        )
+    }
+
+    #[test]
+    fn a_confirmation_asks_for_the_passkey_again_and_names_the_action() {
+        let mut e = [0u8; 64];
+        e[..].copy_from_slice(&entropy(9)[..64]);
+        let (url, d) = oidc().start_confirming(&e, "digest-of-the-action", 0);
+        assert_ne!(d.state, d.check);
+        assert!(url.contains("&prompt=login"), "{url}");
+        assert!(
+            url.contains(&format!("&max_age={CONFIRMATION_MAX_AGE_S}")),
+            "{url}"
+        );
+        assert!(url.contains("&nonce=digest-of-the-action&"), "{url}");
+        assert!(url.contains("&scope=openid&"), "{url}");
+        assert!(!url.contains(&d.check), "the check is in the URL: {url}");
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_says_who_and_when() {
+        let o = issuer(serde_json::json!({"nonce": "n1", "auth_time": 1000, "sub": "u1"})).await;
+        let (_, d) = o.start_confirming(&[3; 64], "n1", 1000);
+        let c = o
+            .finish_confirming(&d, &d.state, "code", 1010)
+            .await
+            .expect("confirmed");
+        assert_eq!(c.identity.sub, "u1");
+        assert_eq!(c.auth_time, 1000);
+    }
+
+    #[tokio::test]
+    async fn a_passkey_given_for_another_action_confirms_nothing() {
+        // 🔴 The nonce is the digest of what is confirmed: an answer for another
+        // action, or one saying nothing, never passes — unlike a sign-in's.
+        for claims in [
+            serde_json::json!({"nonce": "other", "auth_time": 1000}),
+            serde_json::json!({"auth_time": 1000}),
+            serde_json::json!({"nonce": "n1"}),
+        ] {
+            let o = issuer(claims.clone()).await;
+            let (_, d) = o.start_confirming(&[3; 64], "n1", 1000);
+            o.finish_confirming(&d, &d.state, "code", 1010)
+                .await
+                .expect_err(&format!("{claims} confirmed"));
+        }
     }
 
     #[test]

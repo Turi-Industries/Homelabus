@@ -4077,13 +4077,15 @@ async fn controller_signin(
         return Ok(());
     };
     let callback = format!("https://{}/auth/return_to", e.controller_host());
+    // And where a passkey confirming a destruction comes back.
+    let confirmed = format!(
+        "https://{}{}",
+        e.controller_host(),
+        hlb_api::intent::CALLBACK
+    );
     let pid = hlb_identity::PocketId::new(relay::reach(url, &cli.platform_network), key);
     let creds = pid
-        .ensure(
-            CONTROLLER_OIDC_CLIENT,
-            std::slice::from_ref(&callback),
-            true,
-        )
+        .ensure(CONTROLLER_OIDC_CLIENT, &[callback.clone(), confirmed], true)
         .await?;
     // A secret PocketID just made replaces the vault's, and the id follows a client
     // re-created — the executor's own rule for every app's client.

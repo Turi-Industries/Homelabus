@@ -42,6 +42,10 @@ pub enum ApiError {
     /// it hammers all the harder.
     #[error("too many requests — try again in {retry_after_s} s")]
     RateLimited { retry_after_s: i64 },
+    /// 428: the action destroys, and a passkey presented for it at PocketID — the
+    /// address in [`crate::passkey::URL_HEADER`] — is what it waits for.
+    #[error("this destroys: present your passkey to confirm it")]
+    PasskeyRequired { url: String },
     #[error("{0}")]
     Internal(String),
     #[error(transparent)]
@@ -60,6 +64,7 @@ impl ApiError {
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooMany(_) | Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
+            Self::PasskeyRequired { .. } => StatusCode::PRECONDITION_REQUIRED,
             Self::State(hlb_state::Error::MailboxTaken { .. }) => StatusCode::CONFLICT,
             Self::Internal(_) | Self::State(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -98,6 +103,9 @@ impl IntoResponse for ApiError {
                 body,
             )
                 .into_response(),
+            Self::PasskeyRequired { url } => {
+                (status, [(crate::passkey::URL_HEADER, url)], body).into_response()
+            }
             _ => (status, body).into_response(),
         }
     }

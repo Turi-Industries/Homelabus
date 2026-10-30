@@ -406,6 +406,16 @@ impl PocketId {
         Ok(added)
     }
 
+    /// Has the client named `name` accept `urls` too, when it exists: `false` when
+    /// none was missing, or there is no such client — never one created, whose secret
+    /// PocketID would hand to nobody.
+    pub async fn accept_callbacks(&self, name: &str, urls: &[String]) -> Result<bool> {
+        match self.find_by_name(name).await? {
+            Some(c) => self.add_callback_urls(&c.id, urls).await,
+            None => Ok(false),
+        }
+    }
+
     /// Adds to the client `id` those of `urls` it does not accept yet, keeping every
     /// other field — and every other URL: the portal's client carries one per app
     /// behind it. Returns whether any was added.

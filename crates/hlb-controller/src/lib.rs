@@ -30,6 +30,7 @@ pub mod me;
 pub mod metrics;
 pub mod mutes;
 pub mod openapi;
+pub mod passkey;
 pub mod portal;
 pub mod promql;
 pub mod recovery;
