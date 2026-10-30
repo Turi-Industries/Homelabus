@@ -32,6 +32,11 @@ spec:
     # allows. `PUID=0` takes the entry script's "already that user" branch.
     PUID: "0"
     PGID: "0"
+    # Its root is read-only: Python's `tempfile` — every import from another app, a
+    # backup restored, an upload over 1 MB — writes beside Mealie's own `.temp` instead
+    # of `/tmp`. Not a tmpfs, which would count an import's photos against the memory
+    # limit; not `.temp` itself, which Mealie makes only on demand.
+    TMPDIR: /app/data
 
     DB_ENGINE: postgres
     POSTGRES_SERVER: "{{ db.host }}"
@@ -103,7 +108,6 @@ spec:
           failsWith: 401
   security:
     user: "0:0"
-    readOnlyRootfs: false
   swarm:
     # 223 MiB once started on PostgreSQL (v3.29.0, 2026-10-30).
     memory: { reserve: 256M, limit: 768M }

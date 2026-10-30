@@ -885,6 +885,15 @@ pull request to the catalog, with no `hlb` release.
   the lifeboat's input.
 - Proving ground for goal 4: calendars and contacts from Stalwart (a capability and a
   phone guide), then Paperless-ngx, Actual, Mealie, Audiobookshelf, Navidrome, FreshRSS.
+  - ✅ Mealie — 2026-10-30, a manifest and a guide, no Rust beyond the form-encoded
+    recovery proof it showed missing. **Proven on the lab** by `hlb install mealie
+    --apply` alone: the guide's `sql` step run by the executor (all four assertions
+    hold, the recovery proof signs in), its session keys mounted inside the volume's
+    path (a backup of the volume holds empty files there), camille and dominique
+    signed in through PocketID — an administrator from `hlb_mealie` and a member —, a
+    message sent over STARTTLS and delivered DKIM-signed, the volume and its database
+    backed up. The first app of the catalog under a read-only root: `TMPDIR` on its
+    volume, without which an upload past 1 MB is refused (400, measured).
 
 **4. Always available.** Gate: the moving-house drill on the lab — the house cut, minutes
 until Vaultwarden and PocketID answer from the VPS, then the way back, both timed.
