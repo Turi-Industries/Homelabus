@@ -1556,6 +1556,7 @@ name = "hlb-api"
 version = "0.2.1"
 dependencies = [
  "hlb-types",
+ "hlb-users",
  "serde",
  "serde_json",
  "utoipa",
