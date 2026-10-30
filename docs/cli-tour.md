@@ -262,7 +262,8 @@ firmware, TPM and systemd, never declared: `node check`, `cluster init` and `nod
 show it, the last two label the node, and `cluster status` lists it. A, a verified boot
 and the disk bound to the network; B, the disk bound to the TPM and the network, boot
 not verified (every Debian 12); C, no TPM that seals; D, a virtual machine. It is what
-the machine can reach: the line under it says whether its disk is encrypted yet.
+the machine can reach: the line under it says whether its disk is encrypted yet, and a
+Secure Boot platform key that is a manufacturer's test key (PKfail) is warned there.
 
 ```sh
 ./target/debug/hlb node check 192.168.1.11           # the level, nothing changed

@@ -778,7 +778,18 @@ three Tangs, and the third alone opens it.
     workflow fails it. Left: the SLSA provenance of Vaultwarden, Bulwark and Anubis, no
     cosign signature; the migrator, a constant in `stalwart_migrate.rs` no update moves;
     cosign missing on the machine still reads as "not checked", as Trivy does.
-  - Secure Boot's dbx (PKfail): not started.
+  - ✅ PKfail — 2026-10-30: the platform key's certificate is read from efivarfs
+    (`od` of `PK`, readable by anyone) and a subject or issuer saying "DO NOT TRUST" or
+    "DO NOT SHIP" — Binarly's markers for the test keys ~900 boards shipped — is
+    warned by `node check`, `cluster init` and `node add`, the subject quoted. A
+    warning, not a lower level: PCR 7 measures PK, KEK and db, so keys rewritten from
+    the running system leave the TPM opening nothing; the attack is the kit's key typed
+    at the prompt that follows. Proven on a fixture made like AMI's key (an
+    EFI_SIGNATURE_LIST in efivarfs's layout, the subject read by its DER length — the
+    next element follows at once) and on this desktop's real Gigabyte PK, which carries
+    no marker. Not measured on enc3, nor on a board that has the test key.
+  - Secure Boot's dbx — whether it holds today's revocations (BlackLotus, the 2023
+    boot managers): not started; fwupd's `UEFI dbx` device carries the version.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
 

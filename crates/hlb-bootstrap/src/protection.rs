@@ -117,6 +117,9 @@ pub struct Signals {
     pub dkms: Vec<String>,
     /// `None`: the root's device could not be followed (ZFS root, an overlay).
     pub root_encrypted: Option<bool>,
+    /// The platform key's certificate says it is a test key ("DO NOT TRUST - AMI Test
+    /// PK"): shipped by the board's maker as is, its private half public (PKfail).
+    pub test_platform_key: Option<String>,
 }
 
 /// The level and why it is not higher.
@@ -168,6 +171,17 @@ pub fn assess(s: &Signals) -> Assessment {
             "Secure Boot is on and DKMS builds {}: a module loads only signed by a key \
              enrolled once at the console (MOK) — unsigned, a ZFS pool stays away",
             s.dkms.join(", ")
+        ));
+    }
+
+    // Not a lower level: PCR 7 measures PK, KEK and db, so keys rewritten from the
+    // running system leave the TPM opening nothing. What it costs is the prompt.
+    if let Some(subject) = &s.test_platform_key {
+        warnings.push(format!(
+            "its Secure Boot platform key is a test key (\"{subject}\", PKfail): its \
+             private half is public, so anyone with a root shell can rewrite the boot's \
+             keys — a disk that asks for the kit's key after a reboot nobody explained \
+             is that; a firmware update from the board's maker replaces it"
         ));
     }
 
@@ -271,6 +285,32 @@ pub fn parse_secure_boot(od: &str) -> Option<bool> {
     }
 }
 
+/// `od -An -tx1 -v` of the `PK` variable: the subject naming it a test key, if its
+/// certificate carries one.
+///
+/// Read in the DER as is: an X.509 name is a PrintableString or a UTF8String, its words
+/// in clear, and its tag and length just before them — the next element follows at
+/// once, so the length is where the subject ends. Binarly's two markers, from the keys
+/// PKfail found on ~900 boards (2024).
+pub fn parse_platform_key(od: &str) -> Option<String> {
+    let bytes: Vec<u8> = od
+        .split_whitespace()
+        .map(|h| u8::from_str_radix(h, 16))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    ["DO NOT TRUST", "DO NOT SHIP"].iter().find_map(|marker| {
+        let at = bytes
+            .windows(marker.len())
+            .position(|w| w == marker.as_bytes())?;
+        // PrintableString (0x13) or UTF8String (0x0c), a short-form length.
+        let whole = match bytes.get(at.checked_sub(2)?..at)? {
+            [0x13 | 0x0c, len] if *len < 0x80 => bytes.get(at..at + usize::from(*len)),
+            _ => None,
+        };
+        Some(String::from_utf8_lossy(whole.unwrap_or(marker.as_bytes())).into_owned())
+    })
+}
+
 /// `systemd-detect-virt`'s output and exit status: `none` exits 1.
 pub fn parse_virt(out: Option<(&str, bool)>) -> Virt {
     match out.map(|(o, ok)| (o.trim(), ok)) {
@@ -314,6 +354,7 @@ mod tests {
             systemd: Some(257),
             dkms: vec![],
             root_encrypted: Some(false),
+            test_platform_key: None,
         }
     }
 
@@ -437,6 +478,51 @@ mod tests {
             ..metal()
         });
         assert!(without.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_test_platform_key_is_warned_and_keeps_the_level() {
+        // PCR 7 measures PK, KEK and db: the keys rewritten, the TPM opens nothing, so
+        // the level holds — but the disk asking for the kit's key is then the attack.
+        let a = assess(&Signals {
+            test_platform_key: Some("DO NOT TRUST - AMI Test PK".into()),
+            ..metal()
+        });
+        assert_eq!(a.level, Level::A);
+        let w = a.warnings.join("\n");
+        assert!(
+            w.contains("DO NOT TRUST - AMI Test PK") && w.contains("PKfail"),
+            "{w}"
+        );
+        assert!(w.contains("kit"), "says what the attack looks like: {w}");
+        assert!(assess(&metal()).warnings.is_empty());
+    }
+
+    #[test]
+    fn the_platform_keys_test_marker_is_read_from_its_certificate() {
+        // `od -An -tx1 -v` of a PK variable as efivarfs gives it: attributes, then an
+        // EFI_SIGNATURE_LIST holding an X.509 certificate made like AMI's leaked one.
+        let ami = include_str!("../tests/data/pk-ami-test.od");
+        assert_eq!(
+            parse_platform_key(ami).as_deref(),
+            Some("DO NOT TRUST - AMI Test PK")
+        );
+        // The same variable, its subject and issuer (self-signed) a manufacturer's own.
+        let mut own: Vec<String> = ami.split_whitespace().map(String::from).collect();
+        let marker: Vec<String> = b"DO NOT TRUST".iter().map(|b| format!("{b:02x}")).collect();
+        let mut replaced = 0;
+        while let Some(at) = own
+            .windows(marker.len())
+            .position(|w| w == marker.as_slice())
+        {
+            for (i, b) in b"GIGABYTE PK ".iter().enumerate() {
+                own[at + i] = format!("{b:02x}");
+            }
+            replaced += 1;
+        }
+        assert_eq!(replaced, 2, "the fixture holds subject and issuer in clear");
+        assert_eq!(parse_platform_key(&own.join(" ")), None);
+        assert_eq!(parse_platform_key("not od"), None);
     }
 
     #[test]

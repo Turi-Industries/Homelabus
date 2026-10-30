@@ -244,6 +244,15 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
     let dkms = read(runner.run(&["dkms".into(), "status".into()]).await)
         .map(|o| p::parse_dkms(&o))
         .unwrap_or_default();
+    // Readable by anyone: efivarfs gives every variable 0644.
+    let test_platform_key = read(
+        runner
+            .run(&sh(
+                "od -An -tx1 -v /sys/firmware/efi/efivars/PK-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+            ))
+            .await,
+    )
+    .and_then(|o| p::parse_platform_key(&o));
     let root_encrypted = read(
         runner
             .run(&sh("lsblk -nso TYPE \"$(findmnt -nvo SOURCE /)\""))
@@ -265,6 +274,7 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
         systemd,
         dkms,
         root_encrypted,
+        test_platform_key,
     })
 }
 
