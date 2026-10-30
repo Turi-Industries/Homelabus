@@ -742,7 +742,17 @@ three Tangs, and the third alone opens it.
 - An append-only destination (rest-server), pruned with another credential from another
   machine, never automatically: restic handles no S3 object lock, and Garage has none.
 - Upstream images' cosign signatures checked against a pinned signer before deploying;
-  Secure Boot's dbx checked (PKfail).
+  Secure Boot's dbx checked (PKfail). **Measured** 2026-10-30, asking each registry for
+  the `sha256-<hex>.sig` tag, the OCI referrers and ghcr.io's referrers tag, for the 50
+  images pinned in the catalog and the crates: 7 carry a cosign signature
+  (`curlimages/curl`, Chainguard's two MinIO images — tests only —, Meilisearch,
+  Stalwart and its migrator, Vikunja), 3 more only a signed SLSA provenance
+  (Vaultwarden, Bulwark, Anubis); the other 40 — PostgreSQL, MariaDB, PocketID, Garage,
+  Immich, Gitea, Fluxer's twelve — nothing. Every image is already pinned by digest, so
+  a signature guards only the moment a new digest is chosen, which is the update; and
+  there one `HLB_COSIGN_IDENTITY` serves every image, so setting it would refuse every
+  image but one signer's — it is never set, and nothing is verified. Worth doing as: a
+  signer per image in the manifest, for the handful that sign.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
 

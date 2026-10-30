@@ -223,7 +223,7 @@ pub async fn verify_signature(
                 Verdict::Findings {
                     critical: 1,
                     high: 0,
-                    detail: format!("signature INVALIDE : {}", err.trim()),
+                    detail: format!("INVALID signature: {}", err.trim()),
                 }
             }
         }
@@ -393,7 +393,7 @@ mod tests {
             signature: Verdict::Findings {
                 critical: 1,
                 high: 0,
-                detail: "signature INVALIDE".into(),
+                detail: "INVALID signature".into(),
             },
         };
         assert!(r.blocks());
