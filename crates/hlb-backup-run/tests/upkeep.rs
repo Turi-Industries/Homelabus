@@ -1,5 +1,6 @@
 //! The weekly upkeep against real REST servers: proved again, pruned to the retention
-//! policy where the destination can be erased anyway, left whole where it cannot.
+//! policy where the destination can be erased anyway, left whole where it cannot — and
+//! pruned there by its owner, running the script `hlb backup dest prune-script` prints.
 //!
 //! ```sh
 //! cargo test -p hlb-backup-run --test upkeep -- --ignored --nocapture
@@ -22,7 +23,7 @@ struct Stand(String);
 
 impl Drop for Stand {
     fn drop(&mut self) {
-        for c in ["rest-ao", "rest-open"] {
+        for c in ["rest-ao", "rest-open", "rest-owner"] {
             let _ = docker(&["rm", "-f", &format!("{}-{c}", self.0)]);
         }
         let _ = docker(&["network", "rm", &self.0]);
@@ -85,7 +86,9 @@ async fn an_erasable_destination_is_pruned_and_one_out_of_reach_is_left_whole() 
         // while a bucket is not full, restic 0.19 keeps the OLDEST too, reaching back as
         // far as it can ("oldest hourly snapshot"): two stay.
         for _ in 0..4 {
-            repo.backup("/etc/hostname", &["app:test"])
+            // Not the proof's witness's `/etc/hostname`: restic groups by host and
+            // paths, and a witness kept beside them would take one of the hour's places.
+            repo.backup("/etc/os-release", &["app:test"])
                 .await
                 .expect("backup");
         }
@@ -138,4 +141,71 @@ async fn an_erasable_destination_is_pruned_and_one_out_of_reach_is_left_whole() 
     .expect("upkeep");
     assert!(again.is_empty(), "{again:?}");
     println!("✓ pruned where erasable, whole where not, once a week");
+
+    // The owner's view of the append-only repository: the same files, served by a
+    // server that deletes. The script runs as printed, its two variables set.
+    let Retention::Left(why) = &of("rest-ao").retention else {
+        panic!("rest-ao was pruned")
+    };
+    assert!(
+        why.contains("hlb backup dest prune-script rest-ao"),
+        "{why}"
+    );
+    let out = docker(&[
+        "run",
+        "-d",
+        "--name",
+        &format!("{net}-rest-owner"),
+        "--network",
+        &net,
+        "--volumes-from",
+        &format!("{net}-rest-ao"),
+        "-e",
+        "DISABLE_AUTHENTICATION=1",
+        REST_SERVER,
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let d = Destination {
+        name: "rest-ao".into(),
+        location: format!("rest:http://{net}-rest-ao:8000/r"),
+        classes: vec![hlb_backup::Class::Critical],
+        credentials_secret: None,
+    };
+    let script = upkeep::owner_script(&d, &RetentionPolicy::default()).expect("script");
+    let out = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--network",
+            &net,
+            "-e",
+            &format!("RESTIC_REPOSITORY=rest:http://{net}-rest-owner:8000/r"),
+            "-e",
+            "RESTIC_PASSWORD",
+            "--entrypoint",
+            "sh",
+            hlb_backup::images::RESTIC,
+            "-c",
+            &script,
+        ])
+        .env("RESTIC_PASSWORD", &password)
+        .output()
+        .expect("docker");
+    println!("{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (_, ao) = count
+        .iter()
+        .find(|(n, _)| *n == "rest-ao")
+        .expect("rest-ao");
+    assert_eq!(ao.snapshots(Some("app:test")).await.expect("list").len(), 2);
+    println!("✓ the owner's script prunes what Homelabus could not");
 }

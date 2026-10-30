@@ -358,32 +358,7 @@ impl<R: Runner> Repository<R> {
     ///
     /// 🔴 Refuses a policy that keeps nothing: that would be a disguised `rm -rf`.
     pub async fn forget(&self, policy: &RetentionPolicy, prune: bool) -> Result<()> {
-        if !policy.keeps_something() {
-            return Err(Error::EmptyRetention);
-        }
-
-        // 🔴 Dumps by database, never by path. restic groups by `host,paths`, and each
-        // dump was written under its own timestamped name: a group of one, which every
-        // policy keeps — a dump every pass, never forgotten, until the disk was full.
-        // Their tags (`app:`, `db:`, the kind) are the same from one dump of a database
-        // to the next, so they are grouped by those.
-        let passes = [
-            vec!["forget".to_string()],
-            vec![
-                "forget".to_string(),
-                "--tag".to_string(),
-                crate::pgdump::DUMP_KIND.to_string(),
-                "--group-by".to_string(),
-                "host,tags".to_string(),
-            ],
-        ];
-        let last = passes.len() - 1;
-        for (i, mut args) in passes.into_iter().enumerate() {
-            args.extend(policy.to_args());
-            // Reclaiming the space once, after both: pruning reads the whole repository.
-            if prune && i == last {
-                args.push("--prune".to_string());
-            }
+        for args in forget_passes(policy, prune)? {
             let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             self.exec(&refs).await?;
         }
@@ -398,6 +373,42 @@ impl<R: Runner> Repository<R> {
         self.exec(&["check"]).await?;
         Ok(())
     }
+}
+
+/// The `restic` arguments retention runs, one pass a line — the upkeep's, and the ones
+/// a destination's owner is handed to run where Homelabus cannot erase.
+///
+/// 🔴 Refuses a policy that keeps nothing: `restic forget` with no `--keep-*` at all
+/// deletes every snapshot.
+pub fn forget_passes(policy: &RetentionPolicy, prune: bool) -> Result<Vec<Vec<String>>> {
+    if !policy.keeps_something() {
+        return Err(Error::EmptyRetention);
+    }
+
+    // 🔴 Dumps by database, never by path. restic groups by `host,paths`, and each
+    // dump was written under its own timestamped name: a group of one, which every
+    // policy keeps — a dump every pass, never forgotten, until the disk was full.
+    // Their tags (`app:`, `db:`, the kind) are the same from one dump of a database
+    // to the next, so they are grouped by those.
+    let mut passes = [
+        vec!["forget".to_string()],
+        vec![
+            "forget".to_string(),
+            "--tag".to_string(),
+            crate::pgdump::DUMP_KIND.to_string(),
+            "--group-by".to_string(),
+            "host,tags".to_string(),
+        ],
+    ];
+    let last = passes.len() - 1;
+    for (i, args) in passes.iter_mut().enumerate() {
+        args.extend(policy.to_args());
+        // Reclaiming the space once, after both: pruning reads the whole repository.
+        if prune && i == last {
+            args.push("--prune".to_string());
+        }
+    }
+    Ok(passes.into())
 }
 
 #[cfg(test)]

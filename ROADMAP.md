@@ -739,8 +739,20 @@ three Tangs, and the third alone opens it.
   a provider driven by its API (deSEC). CAA with `accounturi` (RFC 8657), certspotter,
   and a nightly drift check of NS, DS, CAA and the WHOIS statuses. DANE/TLSA beside
   MTA-STS.
-- An append-only destination (rest-server), pruned with another credential from another
-  machine, never automatically: restic handles no S3 object lock, and Garage has none.
+- ✅ An append-only destination (rest-server), pruned with another credential from
+  another machine, never automatically: restic handles no S3 object lock, and Garage has
+  none. Done 2026-10-30: the upkeep already left a destination proven out of reach
+  unpruned ("its owner prunes it") and nothing helped the owner do it — every
+  append-only repository only grew. `hlb backup dest prune-script <name>` prints the
+  upkeep's own passes (`hlb_backup::restic::forget_passes`, which `forget` now runs
+  too, so the two cannot drift) as a `sh` script holding no secret: the owner sets
+  `RESTIC_REPOSITORY` to a credential that may delete and `RESTIC_PASSWORD` from the
+  kit. Refused for a destination proven erasable — the upkeep prunes it. Proven against
+  real rest-servers (`hlb-backup-run/tests/upkeep.rs`): the script, run as printed
+  through a second server over the append-only one's files, leaves what the upkeep
+  leaves on an erasable one. Found doing it: a proof's witness snapshot is restic's
+  `/etc/hostname`, grouped by host and paths with anything else backed up from there —
+  only the test's own snapshots were.
 - Upstream images' cosign signatures checked against a pinned signer before deploying;
   Secure Boot's dbx checked (PKfail). **Measured** 2026-10-30, asking each registry for
   the `sha256-<hex>.sig` tag, the OCI referrers and ghcr.io's referrers tag, for the 50

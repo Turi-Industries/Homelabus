@@ -109,6 +109,13 @@ deletes versions too, and only an explicit `Deny` stops it — tried, and why th
 tries rather than reads the policy. A lifecycle rule expiring old versions would still
 erase them; the proof does not try that one, since trying writes a rule.
 
+The weekly upkeep prunes a destination to the retention policy only where the proof,
+taken in the same pass, says it is erasable — forgetting snapshots is what an intruder
+holding the credential does. One out of reach is pruned by its owner, never on a
+schedule from the cluster: `hlb backup dest prune-script <name>` prints the upkeep's
+own `restic forget` passes as a script, holding no secret, to run with a credential that
+may delete and the repositories' password from the emergency kit.
+
 ### What a restore brings back
 
 `hlb backup restore` takes only a snapshot Homelabus took itself. One someone else

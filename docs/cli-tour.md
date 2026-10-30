@@ -334,6 +334,15 @@ always comes out erasable — it keeps no versions —, so the copy an intruder 
 reach is an append-only REST server or a versioned bucket whose credential is denied
 `s3:DeleteObjectVersion`.
 
+Homelabus prunes only what it could erase anyway; the copy out of its reach is its
+owner's to prune, from a machine of their own, with a credential that may delete:
+
+```sh
+./target/debug/hlb backup dest prune-script offsite > prune-offsite.sh
+RESTIC_REPOSITORY=rest:https://owner:…@backup.example.org/hlb \
+RESTIC_PASSWORD='<2. on the emergency kit>' sh prune-offsite.sh
+```
+
 A volume put back as a snapshot holds it, on the node holding it — the app stopped
 meanwhile, and what the volume holds backed up first, so the restore itself can be
 undone:

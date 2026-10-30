@@ -851,6 +851,10 @@ enum DestCmd {
     /// Writes the witness — a snapshot of nothing, or an object under `hlb-witness/` —
     /// and nothing else.
     Prove { name: Option<String> },
+    /// The script that prunes a destination Homelabus cannot erase, for its owner to
+    /// run from a machine of their own with a credential that may delete — the weekly
+    /// upkeep's own passes. Holds no secret: the password is the emergency kit's.
+    PruneScript { name: String },
     /// Remove a destination. Backups already sent stay there.
     Remove { name: String },
 }
@@ -11281,10 +11285,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                     d,
                                 )
                                 .await;
+                                println!("  {}: {}", d.name, found.describe());
                                 if matches!(found, hlb_backup::erasure::Erasure::Kept { .. }) {
                                     kept += 1;
+                                    println!(
+                                        "      its owner prunes it: hlb backup dest prune-script {}",
+                                        d.name
+                                    );
                                 }
-                                println!("  {}: {}", d.name, found.describe());
                                 state
                                     .audit(
                                         "cli",
@@ -11379,6 +11387,47 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("✓ destination \"{name}\" → {location}");
                             println!("  The next backup pass writes there.");
                             println!("  ⚠️ Garage keeps no versions: this key can erase what it wrote.");
+                            Ok(ExitCode::SUCCESS)
+                        }
+
+                        DestCmd::PruneScript { name } => {
+                            let Some(d) = load_destinations(&state)
+                                .await?
+                                .into_iter()
+                                .find(|d| d.name == *name)
+                            else {
+                                eprintln!("🔴 no destination \"{name}\" — hlb backup dest list");
+                                return Ok(ExitCode::FAILURE);
+                            };
+                            let proof = state
+                                .destination_proof(&d.name, &d.location)
+                                .await?
+                                .map(|(verdict, detail, _)| {
+                                    hlb_backup::erasure::Erasure::from_stored(&verdict, &detail)
+                                });
+                            // Said on standard error: the script itself goes to a file.
+                            match &proof {
+                                Some(hlb_backup::erasure::Erasure::Erasable { .. }) => {
+                                    eprintln!(
+                                        "🔴 \"{name}\" can be erased with the credential Homelabus \
+                                         holds: the weekly upkeep prunes it itself."
+                                    );
+                                    return Ok(ExitCode::FAILURE);
+                                }
+                                Some(_) => {}
+                                None => eprintln!(
+                                    "⚠️ \"{name}\" was never proven out of reach — \
+                                     hlb backup dest prove {name}"
+                                ),
+                            }
+                            // The daemon's upkeep prunes with the same default.
+                            print!(
+                                "{}",
+                                hlb_backup_run::upkeep::owner_script(
+                                    &d,
+                                    &hlb_backup::RetentionPolicy::default()
+                                )?
+                            );
                             Ok(ExitCode::SUCCESS)
                         }
 
