@@ -7,13 +7,17 @@
 //! Cost today: a few hundred lines. Benefit: the Swarm implementation can be replaced
 //! without touching the resolver, the catalog or the API.
 
-pub mod cluster;
+/// What Swarm says about its nodes and tasks, as plain data: in `hlb-types`, so the
+/// side that only READS them never links Docker.
+pub use hlb_types::swarm as cluster;
 pub mod swarm;
 
 use async_trait::async_trait;
 use hlb_types::{Healthcheck, SecuritySpec};
 
-pub use cluster::{ClusterProfile, JoinTokens, NodeInfo, NodeRole, QuorumHealth};
+pub use cluster::{
+    why_not_running, ClusterProfile, JoinTokens, NodeInfo, NodeRole, QuorumHealth, TaskInfo,
+};
 
 pub use swarm::SwarmOrchestrator;
 
@@ -454,77 +458,6 @@ impl UpdateState {
             Self::Paused | Self::RollbackStarted | Self::RollbackPaused | Self::RollbackCompleted
         )
     }
-}
-
-/// A Swarm task: **one** replica, on **one** node.
-///
-/// ## Why it exists
-///
-/// `running_tasks()` already queried Swarm and reduced everything to a `usize`. The
-/// assigned node, the error message and the timestamps were thrown away - which is
-/// exactly what is needed to answer "why is this app red?" and to draw the topology
-/// view.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskInfo {
-    pub id: String,
-    /// The service's NAME, never Swarm's id for it.
-    pub service: String,
-    /// The replica number. `None` for a service in global mode.
-    pub slot: Option<u64>,
-    /// Swarm's id for the node — a hostname is [`cluster::NodeInfo::hostname`].
-    pub node_id: Option<String>,
-    /// The state Swarm wants: `running`, `shutdown`, `accepted`...
-    pub desired_state: String,
-    /// The actual state: `running`, `failed`, `rejected`, `pending`...
-    pub state: String,
-    pub image: String,
-    /// What Swarm says about the task ("started", "no suitable node"...).
-    pub message: Option<String>,
-    /// 🔴 The error, when there is one. This is THE field that explains a failed app,
-    /// and it is the one the old counter threw away.
-    pub err: Option<String>,
-    /// Unix timestamp of the last state change.
-    pub updated_at: Option<i64>,
-}
-
-impl TaskInfo {
-    /// Is this task really running?
-    ///
-    /// ⚠️ BOTH conditions. Swarm keeps the history of dead tasks: filtering on the
-    /// desired state alone would count corpses.
-    pub fn is_alive(&self) -> bool {
-        self.desired_state == "running" && self.state == "running"
-    }
-
-    /// Did this task fail?
-    ///
-    /// Distinct from "not alive": a deliberately stopped task (an update, a
-    /// scale-down) is not a failure, and counting it as one would make the dashboard
-    /// blink on every normal deployment.
-    pub fn has_failed(&self) -> bool {
-        matches!(self.state.as_str(), "failed" | "rejected" | "orphaned")
-    }
-
-    /// What explains the state, in one line.
-    ///
-    /// The error first: that is what you are looking for. Swarm's message second,
-    /// which often says what the error does not ("no suitable node").
-    pub fn explanation(&self) -> Option<&str> {
-        self.err
-            .as_deref()
-            .or(self.message.as_deref())
-            .filter(|m| !m.is_empty())
-    }
-}
-
-/// Why a service's tasks are not running, from the most recent one that is not.
-pub fn why_not_running(tasks: &[TaskInfo]) -> Option<String> {
-    tasks
-        .iter()
-        .filter(|t| !t.is_alive())
-        .max_by_key(|t| t.updated_at)
-        .and_then(|t| t.explanation())
-        .map(str::to_string)
 }
 
 /// One log line from a service.

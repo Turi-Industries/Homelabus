@@ -1,7 +1,11 @@
-//! Cluster life: initialisation, nodes, tiers and quorum.
+//! Cluster life: nodes, tasks, tiers and quorum, as plain data and pure rules.
 //!
 //! Deliberately separate from service deployment: these are two different concerns,
 //! and mixing "run an app" with "add a machine" makes both harder to reason about.
+//!
+//! Here rather than in `hlb-orchestrator`, which re-exports it as `cluster`: the web
+//! side reads nodes and tasks the privileged side sends it, and judges them with these
+//! rules, without linking the crate that holds Docker's socket.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +28,7 @@ impl NodeRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub id: String,
     pub hostname: String,
@@ -255,12 +259,12 @@ pub const LABEL_STORAGE: &str = "hlb.storage";
 
 /// The node label naming a service whose data lives on that node: `hlb.data.<service>`.
 pub fn data_label(service: &str) -> String {
-    hlb_types::manifest::data_label(service)
+    crate::manifest::data_label(service)
 }
 
 /// The placement constraint that keeps a service on the node holding its data.
 pub fn data_constraint(service: &str) -> String {
-    hlb_types::manifest::data_constraint(service)
+    crate::manifest::data_constraint(service)
 }
 
 fn is_true(v: Option<&String>) -> bool {
@@ -535,13 +539,84 @@ impl JoinTokens {
     }
 }
 
+/// A Swarm task: **one** replica, on **one** node.
+///
+/// ## Why it exists
+///
+/// `running_tasks()` already queried Swarm and reduced everything to a `usize`. The
+/// assigned node, the error message and the timestamps were thrown away - which is
+/// exactly what is needed to answer "why is this app red?" and to draw the topology
+/// view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub id: String,
+    /// The service's NAME, never Swarm's id for it.
+    pub service: String,
+    /// The replica number. `None` for a service in global mode.
+    pub slot: Option<u64>,
+    /// Swarm's id for the node — a hostname is [`NodeInfo::hostname`].
+    pub node_id: Option<String>,
+    /// The state Swarm wants: `running`, `shutdown`, `accepted`...
+    pub desired_state: String,
+    /// The actual state: `running`, `failed`, `rejected`, `pending`...
+    pub state: String,
+    pub image: String,
+    /// What Swarm says about the task ("started", "no suitable node"...).
+    pub message: Option<String>,
+    /// 🔴 The error, when there is one. This is THE field that explains a failed app,
+    /// and it is the one the old counter threw away.
+    pub err: Option<String>,
+    /// Unix timestamp of the last state change.
+    pub updated_at: Option<i64>,
+}
+
+impl TaskInfo {
+    /// Is this task really running?
+    ///
+    /// ⚠️ BOTH conditions. Swarm keeps the history of dead tasks: filtering on the
+    /// desired state alone would count corpses.
+    pub fn is_alive(&self) -> bool {
+        self.desired_state == "running" && self.state == "running"
+    }
+
+    /// Did this task fail?
+    ///
+    /// Distinct from "not alive": a deliberately stopped task (an update, a
+    /// scale-down) is not a failure, and counting it as one would make the dashboard
+    /// blink on every normal deployment.
+    pub fn has_failed(&self) -> bool {
+        matches!(self.state.as_str(), "failed" | "rejected" | "orphaned")
+    }
+
+    /// What explains the state, in one line.
+    ///
+    /// The error first: that is what you are looking for. Swarm's message second,
+    /// which often says what the error does not ("no suitable node").
+    pub fn explanation(&self) -> Option<&str> {
+        self.err
+            .as_deref()
+            .or(self.message.as_deref())
+            .filter(|m| !m.is_empty())
+    }
+}
+
+/// Why a service's tasks are not running, from the most recent one that is not.
+pub fn why_not_running(tasks: &[TaskInfo]) -> Option<String> {
+    tasks
+        .iter()
+        .filter(|t| !t.is_alive())
+        .max_by_key(|t| t.updated_at)
+        .and_then(|t| t.explanation())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn every_tier_a_node_is_given_is_one_a_manifest_may_name() {
         for mb in [0, 1024, 4096, 8191, 8192, 65536] {
             let t = super::tier_for_memory(mb);
-            assert!(hlb_types::manifest::TIERS.contains(&t), "{t}");
+            assert!(crate::manifest::TIERS.contains(&t), "{t}");
         }
     }
 

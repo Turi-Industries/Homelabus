@@ -16,6 +16,7 @@ pub mod domain;
 pub mod guide;
 pub mod manifest;
 pub mod rbac;
+pub mod swarm;
 pub mod token;
 
 pub use guide::{

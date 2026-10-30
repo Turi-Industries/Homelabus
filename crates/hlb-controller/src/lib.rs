@@ -9,7 +9,7 @@ pub mod agents;
 pub mod api;
 pub mod assertions;
 pub mod auth;
-pub mod backup;
+pub use hlb_privd::backup;
 pub mod bitwarden;
 pub mod capacity;
 pub mod coverage;

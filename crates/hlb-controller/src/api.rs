@@ -155,27 +155,17 @@ impl AppState {
     /// ⚠️ Assembled from this state's own fields while the handlers move onto it one
     /// module at a time; once none reads those fields, they move into it for good.
     pub fn privd(&self) -> hlb_privd::Privd {
-        hlb_privd::Privd::new(self.state.clone()).with_orchestrator(self.orchestrator.clone())
+        hlb_privd::Privd::new(self.state.clone())
+            .with_orchestrator(self.orchestrator.clone())
+            .with_catalog(self.catalog.clone())
+            .with_install(self.install.clone())
+            .with_identity(self.identity.clone())
+            .with_mail(self.mail.clone(), &self.mail_domain)
+            .with_backup(self.backup.clone())
     }
 }
 
-/// The clients the executor needs, assembled once at startup.
-///
-/// ⚠️ The vault is opened at startup and kept, not reopened per request: opening it
-/// reads the master key from disk, and doing that on every install would put the key
-/// through one more code path for nothing.
-pub struct InstallContext {
-    pub vault: hlb_secrets::Vault,
-    pub registry: hlb_registry::RegistryClient,
-    pub postgres: Option<hlb_platform::PostgresProvisioner>,
-    pub mariadb: Option<hlb_platform::MariadbProvisioner>,
-    /// Where the volumes live. 🔴 An app declaring `tier: nfs` is refused when this
-    /// carries no server — see `hlb_engine::StorageConfig`.
-    pub storage: hlb_engine::StorageConfig,
-    /// The apps' own APIs, for the guides' `api` steps: the controller is on the
-    /// overlay, and reaches them by name.
-    pub api: hlb_guide::HttpApi,
-}
+pub use hlb_privd::InstallContext;
 
 /// The MIME types the browser needs.
 ///

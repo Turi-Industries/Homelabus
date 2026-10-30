@@ -211,3 +211,9 @@ pub(crate) async fn node_availability(p: &Privd, i: NodeAvailability) -> ActionR
         confirmation_required,
     }
 }
+
+/// The cluster's nodes, as Swarm lists them. `None` = no orchestrator.
+pub(crate) async fn nodes(p: &Privd) -> Option<Result<Vec<hlb_types::swarm::NodeInfo>, String>> {
+    let o = p.orchestrator.as_ref()?;
+    Some(o.nodes().await.map_err(|e| e.to_string()))
+}
