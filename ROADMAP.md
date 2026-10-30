@@ -705,7 +705,12 @@ three Tangs, and the third alone opens it.
     destroyed need not be the one the person read. API tokens no longer destroy where
     PocketID signs people in; the CLI, as root, still does. Without PocketID (the
     demonstration, a fresh installation), nothing signs in by passkey and the intents
-    stay as they are.
+    stay as they are. **Proven on the lab** (deb1, `hlb-controller:lab18`): with a
+    passkey registered by Playwright's virtual authenticator, the roles screen's
+    "Delete" previewed, answered 428, opened PocketID asking for the passkey again, and
+    the action sent back with the proof deleted the role — the daemon logging whose
+    passkey; the raw `remove` intent applied on the socket is refused, its preview
+    answered.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to

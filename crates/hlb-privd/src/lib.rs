@@ -295,7 +295,10 @@ impl Privd {
             }
             other => other,
         };
-        self.act(intent).await
+        // Boxed: every handler awaiting an intent nests this future, whose layout holds
+        // the whole dispatch — inline, release builds overflowed the compiler's query
+        // depth computing a handler's.
+        Box::pin(self.act(intent)).await
     }
 
     /// Acts on an intent let through.
