@@ -577,7 +577,8 @@ three Tangs, and the third alone opens it.
     booted the disk is open: the controller holds Docker's socket, which is root —
     splitting it into a minimal privileged daemon behind a narrow API, the interface
     unprivileged, is its own item. Backups are already encrypted before they leave.
-- **The controller split** — decided 2026-10-30 (owner): a privileged executor. Today
+- ✅ **The controller split** — decided 2026-10-30 (owner), stages 1-3 done the same
+  day: a privileged executor. Today
   the controller holds Docker's socket, the vault's key, `/var/lib/docker/volumes`
   read-write and `DAC_OVERRIDE`: a flaw in any of its routes is root on its node and
   every secret. **Measured** the same day, route by route (92 operations, 20 loops):
@@ -602,8 +603,8 @@ three Tangs, and the third alone opens it.
     CLI reads sessions too, and one file keeps the backup and the restore one.
   - **What it still gives an intruder in the web side**: whatever a signed-in person's
     intents can do — the web side vouches for who asks. No secret read, no host path,
-    no image outside the catalog, no `exec`. Destroy-level intents carrying a fresh
-    PocketID `id_token` the daemon verifies itself would close even that, later.
+    no image outside the catalog, no `exec`. Destructions now need a fresh passkey the
+    daemon checks itself — a code it exchanges, not an `id_token` handed over (✅ below).
   - **Stages**, each gated: (1) the intents, in process — a crate the handlers call
     instead of the orchestrator, the vault and the admin clients, and a test refusing
     those types in the web modules; the suite unchanged. (2) Two processes — the
@@ -612,7 +613,7 @@ three Tangs, and the third alone opens it.
     lab: `docker inspect` of the web service shows no socket, no key, no capability, a
     shell in it reads no secret and writes nothing in `hlb.db`, every screen and
     assertion as before. (3) Intents re-derived and bounded: a local destination's
-    path, the guide's automations, the `id_token` above.
+    path, the guide's automations, a passkey per destruction.
   - Found by the same reading, fixed at once (2026-10-30): a destination could name
     ANY secret of the vault as its credentials, signed with to a location the caller
     chose (`operate`); the Bitwarden assistant replaced a token of the name it was
@@ -652,7 +653,7 @@ three Tangs, and the third alone opens it.
     none broken, an announcement is written through the daemon and audited under the
     token's name; the agents deployed after, the daemon polls them over mTLS with the
     leaf now issued to `hlb-privd`, and the web side shows both nodes. Left for stage 3: the intents re-derived and bounded (a local destination's
-    path, the guide's automations, the `id_token` above).
+    path, the guide's automations, a passkey per destruction).
   - Stage 3, 2026-10-30. **Measured**: of 58 intents, one carried a host path and a
     secret's name the daemon took on trust — `SetDestination`, which recorded any
     location (proven: `/` and `/etc`) and moved a declared destination, credentials
