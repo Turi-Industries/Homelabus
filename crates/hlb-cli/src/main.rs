@@ -3626,8 +3626,10 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
             service,
             apply,
         } => (service.clone(), image.clone(), *apply),
+        // The service holding the leaf: the daemon, which polls the agents. The web side
+        // is deployed beside it.
         FleetCmd::Controller { image, apply, .. } => {
-            ("hlb-controller".to_string(), image.clone(), *apply)
+            (pki::DAEMON_SERVICE.to_string(), image.clone(), *apply)
         }
     };
 
@@ -3654,6 +3656,27 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
     let state_path = std::fs::canonicalize(&cli.state)?;
     let key_path = std::fs::canonicalize(&cli.master_key)?;
     let local = local_hostname().await;
+    let state_dir = state_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| "/".into());
+    if matches!(cmd, FleetCmd::Controller { .. }) {
+        if let Err(why) = web_can_mount(&state_dir, &state_path, &key_path) {
+            eprintln!("🔴 {why}");
+            let dir = "/var/lib/homelabus";
+            eprintln!("   The web side mounts the state's directory read-only, and nothing else:");
+            eprintln!("   give the state one of its own, the key outside it.");
+            eprintln!("     hlb stop hlb-controller --apply    # if one runs");
+            eprintln!("     install -d -m 0755 {dir}");
+            eprintln!("     mv {}* {dir}/", state_path.display());
+            eprintln!("     export HLB_STATE={dir}/hlb.db");
+            eprintln!("   then run this again.");
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    // Under the state's directory, which both services mount: `/run` is a tmpfs, and a
+    // bind whose source a reboot removed stops Swarm from starting the task at all.
+    let socket = state_dir.join("privd.sock");
 
     if !apply {
         match cmd {
@@ -3665,14 +3688,28 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
                 println!("  network  {}", cli.platform_network);
             }
             FleetCmd::Controller { .. } => {
-                println!("Would deploy the controller on {local}:");
+                println!("Would deploy the controller on {local}, as two services:");
                 println!("  image    {image}");
-                println!("  state    {} (shared with hlb)", state_path.display());
-                println!("  vault    {} (read-only)", key_path.display());
-                println!("  docker   /var/run/docker.sock — it drives the Swarm");
-                println!("  mTLS     a client certificate for polling the agents");
+                println!("  {name}  the daemon — what may write, decrypt or drive Docker");
                 println!(
-                    "  network  {} — reach it at http://hlb-controller:8420",
+                    "    state    {} (read-write, shared with hlb)",
+                    state_path.display()
+                );
+                println!("    vault    {} (read-only)", key_path.display());
+                println!("    docker   /var/run/docker.sock — it drives the Swarm");
+                println!("    mTLS     a client certificate for polling the agents");
+                println!(
+                    "    socket   {} — answers uid {WEB_UID} only",
+                    socket.display()
+                );
+                println!("  {CONTROLLER}  the web side — the API and the interface");
+                println!(
+                    "    state    {} read-only, as uid {WEB_UID}, no capability",
+                    state_dir.display()
+                );
+                println!("    no vault, no Docker socket, no volume");
+                println!(
+                    "    network  {} — reach it at http://{CONTROLLER}:8420",
                     cli.platform_network
                 );
                 match state.exposure().await? {
@@ -3734,7 +3771,7 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
         FleetCmd::Agent { service, .. } => Leaf::Agent {
             service: service.clone(),
         },
-        FleetCmd::Controller { .. } => Leaf::Controller,
+        FleetCmd::Controller { .. } => Leaf::Daemon,
     };
     let issued = leaf.issue(&ca).await?;
     let spec = match cmd {
@@ -3754,10 +3791,7 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
             ])
             .bind("/", "/host", true),
         FleetCmd::Controller { agent_service, .. } => {
-            let state_dir = state_path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| "/".into());
+            let state_dir = state_dir.to_string_lossy().to_string();
             let mut env = vec![
                 (
                     "HLB_STATE".to_string(),
@@ -3777,6 +3811,11 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
                     pki::CONTROLLER_PEM.to_string(),
                 ),
                 ("HLB_CONTROLLER_CA".to_string(), pki::CA_FILE.to_string()),
+                (
+                    "HLB_PRIVD_SOCKET".to_string(),
+                    socket.to_string_lossy().to_string(),
+                ),
+                ("HLB_WEB_UID".to_string(), WEB_UID.to_string()),
             ];
             if let Some(r) = &cli.backup_repo {
                 env.push(("HLB_BACKUP_REPO".to_string(), r.clone()));
@@ -3792,10 +3831,11 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
                     env.push((k.to_string(), v.clone()));
                 }
             }
-            let mut s = ServiceSpec::new("hlb-controller", image.clone())
+            let mut s = ServiceSpec::new(name.clone(), image.clone())
                 .network(&cli.platform_network)
                 // Its state and its vault live on THIS machine's disk.
                 .constraint(format!("node.hostname=={local}"))
+                .command(["hlb-privd"])
                 .env(env)
                 .bind(state_dir.clone(), state_dir, false)
                 .bind(
@@ -3830,6 +3870,53 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
             s
         }
     };
+
+    // The web side first: it waits for the daemon's socket, so the one-process
+    // controller it replaces is gone before a second daemon starts beside it — two would
+    // run every loop twice.
+    if matches!(cmd, FleetCmd::Controller { .. }) {
+        let mut web = ServiceSpec::new(CONTROLLER, image.clone())
+            .network(&cli.platform_network)
+            .constraint(format!("node.hostname=={local}"))
+            .env(vec![
+                (
+                    "HLB_STATE".to_string(),
+                    format!("{WEB_STATE}/{}", file_name(&state_path)),
+                ),
+                (
+                    "HLB_PRIVD_SOCKET".to_string(),
+                    format!("{WEB_STATE}/privd.sock"),
+                ),
+            ])
+            // At a path of its own: mounted where it lies, its parents would be the
+            // image's, and `/root` there is root's alone.
+            .bind(state_dir.to_string_lossy().to_string(), WEB_STATE, true);
+        // The default hardening holds: read-only root, every capability dropped.
+        web.hardening.user = Some(format!("{WEB_UID}:{WEB_UID}"));
+        let existed = orch.status(CONTROLLER).await.is_ok();
+        orch.deploy(&web).await?;
+        println!(
+            "✓ {CONTROLLER} {} — uid {WEB_UID}, the state read-only",
+            if existed {
+                "updated, its capabilities dropped"
+            } else {
+                "deployed"
+            }
+        );
+        state
+            .audit(
+                "cli",
+                ACTOR_ROLE,
+                "fleet-deploy",
+                CONTROLLER,
+                "ok",
+                Some(&image),
+            )
+            .await?;
+        // The leaf was the one-process controller's: its end, left recorded, would be
+        // announced ending one day for a service holding no certificate.
+        state.set_leaf_expiry(CONTROLLER, None).await?;
+    }
     let spec = issued
         .files
         .iter()
@@ -3872,6 +3959,68 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
 
 /// Where Docker keeps the named volumes on a node.
 const DOCKER_VOLUMES: &str = "/var/lib/docker/volumes";
+
+/// The web side's service: its routes, its scrape job and the docs keep the name.
+const CONTROLLER: &str = hlb_engine::ingress::CONTROLLER_SERVICE;
+
+/// The web side's uid. Not 65534: the agent runs as nobody on the same node, and the
+/// daemon answers this uid alone.
+const WEB_UID: u32 = 8420;
+
+/// Where the web side sees the state's directory.
+const WEB_STATE: &str = "/state";
+
+fn file_name(p: &std::path::Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Whether the web side, as [`WEB_UID`], can read the state through its directory —
+/// and only the state: the directory is mounted whole.
+fn web_can_mount(
+    dir: &std::path::Path,
+    state: &std::path::Path,
+    key: &std::path::Path,
+) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .map(|m| m.permissions().mode())
+            .map_err(|e| format!("{}: {e}", p.display()))
+    };
+    if key.parent() == Some(dir) {
+        return Err(format!(
+            "the vault's key lies in the state's directory {}: the web side would mount it",
+            dir.display()
+        ));
+    }
+    if dir.parent().is_none() {
+        return Err("the state lies at the root: the web side would mount the whole disk".into());
+    }
+    // Neither owner nor group: the web side's uid is nobody's on the host.
+    if mode(dir)? & 0o005 != 0o005 {
+        return Err(format!(
+            "{} is closed to other users: the web side could not read the state",
+            dir.display()
+        ));
+    }
+    if mode(state)? & 0o004 == 0 {
+        return Err(format!(
+            "{} is closed to other users: the web side could not read it",
+            state.display()
+        ));
+    }
+    // The socket's path, beside the state: a Unix socket's is 107 bytes at most.
+    let socket = dir.join("privd.sock");
+    if socket.as_os_str().len() > 107 {
+        return Err(format!(
+            "{} is too long a path for a socket",
+            socket.display()
+        ));
+    }
+    Ok(())
+}
 
 /// Registers the interface's sign-in client in PocketID, once.
 ///
@@ -9202,21 +9351,33 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
                 println!("✓ all {} secrets open with the old key", clear.len());
 
-                // 🔴 The controller writes secrets (installs, rotations, the nightly
+                // 🔴 The daemon writes secrets (installs, rotations, the nightly
                 // passes) under the key it read at start. Running, it races the rewrite
-                // and keeps writing under the old key after it.
-                let controller = hlb_engine::pki::CONTROLLER_SERVICE;
-                let running = match SwarmOrchestrator::connect().await {
-                    Ok(orch) => orch
-                        .status(controller)
-                        .await
-                        .ok()
-                        .is_some_and(|s| s.desired_replicas > 0),
-                    Err(_) => false,
-                };
-                if running {
-                    eprintln!("\n🔴 {controller} is running: it would write secrets under the old key.");
-                    eprintln!("   hlb stop {controller} --apply, then run this again.");
+                // and keeps writing under the old key after it. The web service too, in
+                // case it is one deployed before the split: that one runs the daemon.
+                let holders = [
+                    hlb_engine::pki::DAEMON_SERVICE,
+                    hlb_engine::ingress::CONTROLLER_SERVICE,
+                ];
+                let mut running = Vec::new();
+                if let Ok(orch) = SwarmOrchestrator::connect().await {
+                    for service in holders {
+                        if orch
+                            .status(service)
+                            .await
+                            .is_ok_and(|s| s.desired_replicas > 0)
+                        {
+                            running.push(service);
+                        }
+                    }
+                }
+                if !running.is_empty() {
+                    let names = running.join(" and ");
+                    eprintln!("\n🔴 {names} running: it would write secrets under the old key.");
+                    for service in running {
+                        eprintln!("   hlb stop {service} --apply");
+                    }
+                    eprintln!("   then run this again.");
                     return Ok(ExitCode::FAILURE);
                 }
 
@@ -9246,7 +9407,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     let _ = std::fs::remove_file(new_key);
                     eprintln!("🔴 {e}");
                     state
-                        .audit("cli", ACTOR_ROLE, "secrets-rekey", "vault", "failed", Some(&e.to_string()))
+                        .audit(
+                            "cli",
+                            ACTOR_ROLE,
+                            "secrets-rekey",
+                            "vault",
+                            "failed",
+                            Some(&e.to_string()),
+                        )
                         .await?;
                     return Ok(ExitCode::FAILURE);
                 }
@@ -9277,7 +9445,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     cli.master_key.display()
                 );
                 println!("  2. mv {} {}", new_key.display(), cli.master_key.display());
-                println!("  3. start the controller again (hlb scale {controller} 1 --apply), and the agents");
+                println!(
+                    "  3. start the daemon again (hlb scale {} 1 --apply), the web side \
+                     (hlb scale {} 1 --apply) and the agents",
+                    hlb_engine::pki::DAEMON_SERVICE,
+                    hlb_engine::ingress::CONTROLLER_SERVICE
+                );
                 // Moved over the link, the new key is a plain file again.
                 if sealed {
                     println!("  4. seal the new key: hlb secrets-seal --apply");
@@ -12095,6 +12268,37 @@ mod tests {
             });
         }
         Some(argv)
+    }
+
+    #[test]
+    fn the_web_side_mounts_a_state_directory_holding_neither_the_key_nor_closed_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let chmod = |p: &std::path::Path, m: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).expect("chmod")
+        };
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("state");
+        std::fs::create_dir(&dir).expect("dir");
+        let state = dir.join("hlb.db");
+        std::fs::write(&state, "").expect("state");
+        let key = root.path().join("hlb-master.key");
+        chmod(&dir, 0o755);
+        chmod(&state, 0o644);
+        assert_eq!(web_can_mount(&dir, &state, &key), Ok(()));
+
+        let beside = dir.join("hlb-master.key");
+        let refused = web_can_mount(&dir, &state, &beside).expect_err("the key beside it");
+        assert!(refused.contains("key"), "{refused}");
+
+        // `/root`'s shape: the web side's uid cannot even traverse it.
+        chmod(&dir, 0o700);
+        assert!(
+            web_can_mount(&dir, &state, &key).is_err(),
+            "a closed directory"
+        );
+        chmod(&dir, 0o755);
+        chmod(&state, 0o600);
+        assert!(web_can_mount(&dir, &state, &key).is_err(), "a closed state");
     }
 
     #[test]

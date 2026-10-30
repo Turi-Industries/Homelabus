@@ -67,6 +67,9 @@ RUN apt-get update \
 # taken from Docker's own image rather than a distribution's lagging package.
 COPY --from=docker:29.9-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/target/release/hlb-controller /usr/local/bin/hlb-controller
+# The daemon, run from the same image: `hlb fleet controller` gives its service the
+# command `hlb-privd`, and the web side's the entrypoint below.
+COPY --from=build /src/target/release/hlb-privd /usr/local/bin/hlb-privd
 COPY --from=web /src/web/build /usr/share/hlb/ui
 # The catalog it installs from: without it the interface says installing is unavailable.
 COPY catalog /usr/share/hlb/catalog

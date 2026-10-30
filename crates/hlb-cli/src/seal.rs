@@ -114,8 +114,8 @@ pub async fn run(cli: &Cli, apply: bool, host_only: bool) -> Result<ExitCode> {
 
     println!("\n✓ Sealed with {}.", sealer.describe());
     println!("  {} → {}", key.display(), seal::UNSEALED);
-    println!("\n⚠️  A controller already running holds the old file open until it restarts:");
-    println!("     docker service update --force hlb-controller");
+    println!("\n⚠️  A daemon already running holds the old file open until it restarts:");
+    println!("     docker service update --force hlb-privd");
     println!("   The file's blocks stay on the disk until overwritten; only disk");
     println!("   encryption, or a rekey after sealing, makes an old image of it useless.");
     Ok(ExitCode::SUCCESS)

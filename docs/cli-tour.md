@@ -223,6 +223,12 @@ printf '%s' '<user>:<token>' | ./target/debug/hlb secret-set registry-ghcr.io --
 ./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.2.1 --apply
 ```
 
+The controller is two services of one image: `hlb-privd`, the daemon holding the
+state, the vault and Docker, and `hlb-controller`, the web side, as uid 8420 with no
+capability, the state's directory read-only and the daemon's socket in it. That
+directory is mounted whole, so the state needs one of its own, the key outside it:
+`fleet controller` refuses `/root` and says how to move it.
+
 The agents and the controller talk over mTLS, with certificates that live 90 days.
 The controller issues them again a month before they end and rolls them out; one it
 could not renew is in the inbox and notified every day. By hand, the same pass:

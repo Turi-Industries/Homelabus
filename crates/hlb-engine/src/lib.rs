@@ -1912,9 +1912,9 @@ mod tests {
             orchestrator: &o,
             agent_service: "hlb-agent",
             now,
-            // The controller's own, read from its file: fine for two months.
-            observed: vec![("hlb-controller".into(), now + 60 * 86_400)],
-            inside: Some("hlb-controller"),
+            // The daemon's own, read from its file: fine for two months.
+            observed: vec![("hlb-privd".into(), now + 60 * 86_400)],
+            inside: Some("hlb-privd"),
         };
 
         let preview = renewal.run(false).await.expect("preview");
@@ -1962,7 +1962,7 @@ mod tests {
             agent_service: "hlb-agent",
             now: 1_800_000_000,
             observed: Vec::new(),
-            inside: Some("hlb-controller"),
+            inside: Some("hlb-privd"),
         }
         .run(true)
         .await

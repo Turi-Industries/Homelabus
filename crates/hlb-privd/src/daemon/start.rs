@@ -1541,7 +1541,7 @@ pub async fn start(
                             .and_then(|pem| {
                                 hlb_agent::pki::not_after(&pem).map_err(|e| e.to_string())
                             }) {
-                            Ok(t) => vec![(pki::CONTROLLER_SERVICE.to_string(), t)],
+                            Ok(t) => vec![(pki::DAEMON_SERVICE.to_string(), t)],
                             Err(e) => {
                                 tracing::warn!("own certificate unreadable: {e}");
                                 Vec::new()
@@ -1554,7 +1554,7 @@ pub async fn start(
                             agent_service: &agent_service,
                             now,
                             observed,
-                            inside: Some(pki::CONTROLLER_SERVICE),
+                            inside: Some(pki::DAEMON_SERVICE),
                         }
                         .run(true)
                         .await;

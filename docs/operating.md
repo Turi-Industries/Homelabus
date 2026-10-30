@@ -218,7 +218,12 @@ token per mailbox.
   --heartbeat /mnt/nas/hlb-heartbeat
 ```
 
-The heartbeat goes **outside the cluster**: the controller is what sends alerts, so
+Run so, one process holds both sides. Deployed, they are apart (`hlb fleet
+controller`): the same flags go to `hlb-privd --socket <dir>/privd.sock --web-uid
+<uid>`, and the web side is `hlb-controller --privd-socket <dir>/privd.sock`, reading
+`--state` read-only.
+
+The heartbeat goes **outside the cluster**: the daemon is what sends alerts, so
 nothing would warn you if it died.
 
 > 🔴 **The heartbeat is conditional, not periodic.** It only fires if the state database

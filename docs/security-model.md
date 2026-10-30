@@ -121,8 +121,9 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 - **The vault's master key.** It decrypts every secret and opens every backup
   repository. Whoever holds the file holds the installation, and losing it loses
   everything. `hlb emergency kit` prints what restores it.
-- **The controller.** It holds the platform's administrator credentials (PostgreSQL,
-  MariaDB, Garage, Stalwart, PocketID's API) so that it can provision apps.
+- **The daemon, `hlb-privd`.** It holds the platform's administrator credentials
+  (PostgreSQL, MariaDB, Garage, Stalwart, PocketID's API) so that it can provision
+  apps, and Docker's socket.
 - **The upstream projects.** Pinning a digest proves that you run the image that was
   reviewed. It does not prove that the image is honest.
 - **GitHub and Sigstore** for the provenance of `hlb` and its images.
@@ -134,8 +135,12 @@ and the house; C, no TPM that seals; D, a virtual machine) says what a machine c
 away, or a boot altered, gives up. It says nothing about a machine that is running:
 
 - **A flaw exploited in a running service, or in Homelabus.** Once booted the disk is
-  open, and an intruder in an app holds what that app holds. The controller holds
-  Docker's socket, which is root on its node: a flaw in the controller is root.
+  open, and an intruder in an app holds what that app holds. The daemon holds
+  Docker's socket, which is root on its node: a flaw in the daemon is root. What the
+  network reaches is the web side, `hlb-controller`: its own uid, no capability, the
+  state read-only, no key and no socket but the daemon's, which answers that uid only
+  and only with intents. A flaw there reaches what a signed-in person's intents can
+  do, not the node.
 - **The firmware itself.** Secure Boot starts after it; a firmware rewritten underneath
   measures what it likes. Only Intel Boot Guard or AMD Platform Secure Boot, fused at
   the factory, verify it — Homelabus can neither set nor read either.

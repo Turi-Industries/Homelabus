@@ -2,18 +2,18 @@
 //!
 //! ## 🔴 A leaf nobody renews ends the fleet in one morning
 //!
-//! The agents' and the controller's certificates live
+//! The agents' and the daemon's certificates live
 //! [`LEAF_DAYS`](hlb_agent::pki::LEAF_DAYS) days — short on purpose,
 //! that is what replaces revocation. Nothing renewed them: on day 91 every agent refused
-//! the controller, and every node read "unreachable" at once. [`Renewal`] issues both
+//! the daemon, and every node read "unreachable" at once. [`Renewal`] issues both
 //! again [`RENEW_BEFORE_DAYS`] before they end and hands them to their services under
-//! the update policy (`Orchestrator::reconfigure`): the controller runs it every night,
+//! the update policy (`Orchestrator::reconfigure`): `hlb-privd` runs it every night,
 //! `hlb pki renew --apply` by hand.
 //!
 //! ## Where an end date comes from
 //!
 //! A Swarm secret cannot be read back, so the state keeps each leaf's end
-//! (`State::leaf_expiries`), written when one is issued — and by the controller from
+//! (`State::leaf_expiries`), written when one is issued — and by the daemon from
 //! the certificate it was itself started with, which is the truth after a rollback. A
 //! leaf whose end nobody wrote down is renewed: unknown, it may end tomorrow.
 
@@ -25,8 +25,9 @@ use hlb_state::State;
 /// The vault's name for the cluster's authority.
 pub const CA_SECRET: &str = "cluster-ca";
 
-/// The controller's own service, as `hlb fleet controller` names it.
-pub const CONTROLLER_SERVICE: &str = "hlb-controller";
+/// The daemon's service, as `hlb fleet controller` names it: the one polling the
+/// agents, so the one holding the client leaf.
+pub const DAEMON_SERVICE: &str = "hlb-privd";
 
 /// Where each service is handed its files. The paths its command and environment name:
 /// changing one here without `hlb fleet` redeploying breaks the service it renews.
@@ -42,7 +43,7 @@ const ROLLOUT_S: u64 = 300;
 /// absent.
 ///
 /// 🔴 Never replaced: a second authority invalidates every certificate in the fleet at
-/// once — the agents refuse the controller, and the other way round.
+/// once — the agents refuse the daemon, and the other way round.
 pub async fn cluster_ca(
     state: &State,
     vault: &Vault,
@@ -81,8 +82,9 @@ pub async fn cluster_ca(
 pub enum Leaf {
     /// The agents' server certificate, one for every task of the global service.
     Agent { service: String },
-    /// The controller's client certificate.
-    Controller,
+    /// The daemon's client certificate, polling the agents. Still issued to
+    /// `controller`, the name the agents accept.
+    Daemon,
 }
 
 /// A leaf issued: the files its service is handed, and when it ends.
@@ -96,7 +98,7 @@ impl Leaf {
     pub fn service(&self) -> &str {
         match self {
             Self::Agent { service } => service,
-            Self::Controller => CONTROLLER_SERVICE,
+            Self::Daemon => DAEMON_SERVICE,
         }
     }
 
@@ -119,7 +121,7 @@ impl Leaf {
                     (CA_FILE.to_string(), ca.cert_pem.clone()),
                 ]
             }
-            Self::Controller => {
+            Self::Daemon => {
                 let c = pki::issue(ca, "controller", &["controller".into()], Purpose::Client)
                     .await
                     .map_err(pki_err)?;
@@ -177,7 +179,7 @@ pub struct Renewal<'a> {
     pub agent_service: &'a str,
     pub now: i64,
     /// Ends read from the certificates themselves, by service, which beat the state's
-    /// — the controller's own, read from the file it was started with.
+    /// — the daemon's own, read from the file it was started with.
     pub observed: Vec<(String, i64)>,
     /// The service this run is part of, never waited for: it is replaced by the update
     /// it starts.
@@ -185,7 +187,7 @@ pub struct Renewal<'a> {
 }
 
 impl Renewal<'_> {
-    /// Renews every leaf that is due, the agents' first: the controller renewing itself
+    /// Renews every leaf that is due, the agents' first: the daemon renewing itself
     /// is restarted by it, and goes last.
     ///
     /// Preview unless `apply`. A leaf that fails does not stop the other.
@@ -198,7 +200,7 @@ impl Renewal<'_> {
             Leaf::Agent {
                 service: self.agent_service.to_string(),
             },
-            Leaf::Controller,
+            Leaf::Daemon,
         ];
         let mut ca = None;
         let mut lines = Vec::new();
@@ -311,7 +313,7 @@ mod tests {
         let e = ending(
             &[
                 ("hlb-agent".into(), now + 10 * DAY),
-                ("hlb-controller".into(), now + 80 * DAY),
+                ("hlb-privd".into(), now + 80 * DAY),
             ],
             now,
         );
