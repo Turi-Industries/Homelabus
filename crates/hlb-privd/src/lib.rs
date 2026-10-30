@@ -17,6 +17,7 @@ use hlb_state::State;
 
 mod apps;
 pub mod backup;
+pub mod daemon;
 mod identity;
 mod mail;
 mod roles;

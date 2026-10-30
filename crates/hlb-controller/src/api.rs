@@ -133,8 +133,6 @@ impl AppState {
     }
 }
 
-pub use hlb_privd::InstallContext;
-
 /// The MIME types the browser needs.
 ///
 /// 🔴 Not decorative: a module script served as `application/octet-stream` is
@@ -3123,7 +3121,7 @@ pub(crate) mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::backup::BackUpNow for FakeBackup {
+    impl hlb_privd::backup::BackUpNow for FakeBackup {
         fn fallback_repo(&self) -> Option<&str> {
             None
         }
@@ -4896,7 +4894,7 @@ pub(crate) mod tests {
     ) -> Arc<AppState> {
         let mut e = base_state(Arc::new(st), true);
         let cat = Arc::new(cat);
-        let install = InstallContext {
+        let install = hlb_privd::InstallContext {
             vault: hlb_secrets::Vault::open_or_init(key).expect("vault"),
             registry: hlb_registry::RegistryClient::new(),
             // 🔴 No database client: the executor must record the provisioning as

@@ -14,148 +14,44 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hlb_engine::Reconciler;
-use hlb_orchestrator::Orchestrator;
 use hlb_state::State;
 
-/// Report of one loop pass. Used by the tests and by supervision.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct TickReport {
-    pub examined: usize,
-    pub acted: usize,
-    pub errors: Vec<String>,
-}
+// What the daemon's loops publish, which the web side reads.
+pub use hlb_privd::daemon::{DriftState, LastReconciled};
 
-impl TickReport {
-    pub fn is_clean(&self) -> bool {
-        self.errors.is_empty()
+/// One uptime sample per EXPOSED app, every tick — no new timer, no new
+/// remote call: runs after each reconciliation pass, at its cadence, from `main`.
+///
+/// ⚠️ Reuses `portal::service_state`/`maintenance_titles` rather than
+/// reimplementing the running/partial/maintenance mapping: history must agree
+/// with what the live status page showed that day, or the two would silently
+/// drift apart.
+pub async fn sample_uptime(state: &State) {
+    let Ok(apps) = state.installed_apps().await else {
+        return;
+    };
+    let now = crate::auth::now();
+    let maintenance = crate::portal::maintenance_titles(state, now).await;
+
+    for (name, status) in apps {
+        // Only the EXPOSED apps: they are the only ones the status page shows, and
+        // sampling the rest would just be unread rows.
+        let Ok(Some(_)) = state.app_domain(&name).await else {
+            continue;
+        };
+        let announced = maintenance.iter().any(|t| t.contains(&name));
+        let service = crate::portal::service_state(&status, announced);
+        if let Err(e) = state.record_uptime_sample(&name, service).await {
+            tracing::warn!("uptime sample not recorded for {name}: {e}");
+        }
     }
 }
-
-/// Periodic reconciliation: the real state must match the desired state.
-pub struct ReconcileLoop<O: Orchestrator> {
-    orchestrator: Arc<O>,
-    state: Arc<State>,
-    /// False by default: observe before correcting.
-    apply: bool,
-    /// Where the loop publishes what it saw — and what it refused to touch.
-    drifts: Option<DriftState>,
-    /// When a pass last reconciled, for the heartbeat.
-    reconciled: Option<LastReconciled>,
-}
-
-/// When reconciliation last completed a pass, in seconds since the epoch. Shared with
-/// the heartbeat: a loop that died or hangs stops moving it, and the beat stops.
-pub type LastReconciled = Arc<std::sync::atomic::AtomicI64>;
 
 /// Did reconciliation complete a pass recently enough to claim it runs? Two intervals
 /// and a minute: one pass may run long, two missed is a loop that stopped.
 pub fn reconciled_recently(last: i64, now: i64, interval_s: u64) -> bool {
     let window = 2 * interval_s as i64 + 60;
     last > 0 && now - last <= window
-}
-
-impl<O: Orchestrator> ReconcileLoop<O> {
-    pub fn new(orchestrator: Arc<O>, state: Arc<State>) -> Self {
-        Self {
-            orchestrator,
-            state,
-            apply: false,
-            drifts: None,
-            reconciled: None,
-        }
-    }
-
-    /// Record, on every pass that completes, when it did.
-    pub fn reports_to(mut self, last: LastReconciled) -> Self {
-        self.reconciled = Some(last);
-        self
-    }
-
-    pub fn apply(mut self, yes: bool) -> Self {
-        self.apply = yes;
-        self
-    }
-
-    /// Publish the observed gaps on every pass.
-    pub fn published_in(mut self, drifts: DriftState) -> Self {
-        self.drifts = Some(drifts);
-        self
-    }
-
-    pub async fn tick(&self) -> TickReport {
-        let mut r = TickReport::default();
-
-        match Reconciler::new(&*self.orchestrator, &self.state)
-            .reconcile(self.apply)
-            .await
-        {
-            Ok(report) => {
-                r.examined = report.drifts.len();
-                r.acted = report.corrected.len();
-                for d in &report.drifts {
-                    tracing::info!("gap: {d}");
-                }
-
-                if let Some(t) = &self.reconciled {
-                    t.store(crate::auth::now(), std::sync::atomic::Ordering::Relaxed);
-                }
-                if let Some(shared) = &self.drifts {
-                    // 🔴 CORRECTED gaps are not republished: they are no longer gaps.
-                    // Leaving them would make the system look permanently adrift when
-                    // it has just done its job.
-                    *shared.write().await = report
-                        .drifts
-                        .iter()
-                        .filter(|d| !report.corrected.contains(d))
-                        .map(|d| hlb_api::DriftSummary {
-                            target: d.app().to_string(),
-                            description: d.to_string(),
-                            corrigible: d.is_correctable(),
-                            refusal: d.refusal().map(str::to_string),
-                        })
-                        .collect();
-                }
-            }
-            Err(e) => {
-                // We log and hand back: the next pass will retry.
-                tracing::warn!("reconciliation impossible this pass: {e}");
-                r.errors.push(e.to_string());
-            }
-        }
-
-        self.sample_uptime().await;
-        r
-    }
-
-    /// One uptime sample per EXPOSED app, every tick — no new timer, no new
-    /// remote call: reuses this loop's own cadence and the app list it already reads
-    /// for reconciliation.
-    ///
-    /// ⚠️ Reuses `portal::service_state`/`maintenance_titles` rather than
-    /// reimplementing the running/partial/maintenance mapping: history must agree
-    /// with what the live status page showed that day, or the two would silently
-    /// drift apart.
-    async fn sample_uptime(&self) {
-        let Ok(apps) = self.state.installed_apps().await else {
-            return;
-        };
-        let now = crate::auth::now();
-        let maintenance = crate::portal::maintenance_titles(&self.state, now).await;
-
-        for (name, status) in apps {
-            // Only the EXPOSED apps: they are the only ones the status page shows, and
-            // sampling the rest would just be unread rows.
-            let Ok(Some(_)) = self.state.app_domain(&name).await else {
-                continue;
-            };
-            let announced = maintenance.iter().any(|t| t.contains(&name));
-            let state = crate::portal::service_state(&status, announced);
-            if let Err(e) = self.state.record_uptime_sample(&name, state).await {
-                tracing::warn!("uptime sample not recorded for {name}: {e}");
-            }
-        }
-    }
 }
 
 /// Periodic backup of the apps whose deadline has passed.
@@ -219,134 +115,6 @@ impl BackupLoop {
                 .await?
                 .map(|s| Duration::from_secs(s.max(0) as u64)),
         ))
-    }
-}
-
-/// Purged of the expired temporary aliases.
-///
-/// 🔴 **Without this loop, "temporary" is a lie.** Stalwart has no notion of expiry: an
-/// account's alias list is a plain list, and what is written there stays. An address
-/// given to a merchant "for thirty days" keeps receiving indefinitely if nobody comes to
-/// remove it.
-///
-/// ## 🔴 A failed purge must SHOW
-///
-/// This is the property that sets this loop apart from the others. A reconciliation that
-/// fails leaves the cluster as it is — annoying but honest. A purge that fails leaves
-/// doors **open that their owner believes closed**, and the silence sustains the belief.
-/// So the report surfaces the number of addresses still open, and not only the number of
-/// errors.
-pub struct AliasPurgeLoop {
-    state: Arc<State>,
-    mail: Option<Arc<hlb_mail::Stalwart>>,
-    default_domain: String,
-}
-
-/// What one purge pass produced.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct PurgeReport {
-    /// Expired aliases found still active.
-    pub due: usize,
-    /// Actually removed from the server.
-    pub retires: usize,
-    pub errors: Vec<String>,
-}
-
-impl PurgeReport {
-    /// How many addresses stay open while believed closed.
-    ///
-    /// 🔴 This is THE number to watch — not the error count. An error-free purge that
-    /// removed nothing leaves as many doors open as a purge that failed loudly.
-    ///
-    pub fn still_open(&self) -> usize {
-        self.due.saturating_sub(self.retires)
-    }
-
-    pub fn is_clean(&self) -> bool {
-        self.still_open() == 0
-    }
-}
-
-impl AliasPurgeLoop {
-    pub fn new(
-        state: Arc<State>,
-        mail: Option<Arc<hlb_mail::Stalwart>>,
-        default_domain: impl Into<String>,
-    ) -> Self {
-        Self {
-            state,
-            mail,
-            default_domain: default_domain.into(),
-        }
-    }
-
-    pub async fn tick(&self) -> PurgeReport {
-        let mut r = PurgeReport::default();
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let due = match self.state.aliases_to_purge(now).await {
-            Ok(v) => v,
-            Err(e) => {
-                r.errors.push(e.to_string());
-                return r;
-            }
-        };
-        r.due = due.len();
-
-        let Some(mail) = &self.mail else {
-            if r.due > 0 {
-                // 🔴 We mark NOTHING as purged. Doing so without removing the alias
-                // would be the worst of both worlds: the address would still receive,
-                // and nothing would say so any more.
-                tracing::error!(
-                    open = r.due,
-                    "purge impossible (Stalwart not configured): these expired addresses \
-                     STILL RECEIVE, and their owner believes them closed"
-                );
-                r.errors.push("Stalwart not configured".into());
-            }
-            return r;
-        };
-
-        for (user, mailbox, local) in due {
-            let dom = self
-                .state
-                .mailboxes(&user)
-                .await
-                .ok()
-                .and_then(|v| {
-                    v.into_iter()
-                        .find(|(l, ..)| l == &mailbox)
-                        .map(|(_, d, _)| d)
-                })
-                .unwrap_or_else(|| self.default_domain.clone());
-
-            // The state is only marked AFTER the actual removal.
-            match mail.remove_alias(&format!("{mailbox}@{dom}"), &local).await {
-                Ok(_) => match self.state.deactivate_alias(&user, &local).await {
-                    Ok(()) => {
-                        r.retires += 1;
-                        tracing::info!(user, alias = %local, "expired alias removed");
-                    }
-                    Err(e) => r.errors.push(format!("{local} : {e}")),
-                },
-                // A failure does not block the following ones: each door closed is a
-                // gain, even if the next one resists.
-                Err(e) => r.errors.push(format!("{local} : {e}")),
-            }
-        }
-
-        if !r.is_clean() {
-            tracing::error!(
-                open = r.still_open(),
-                "🔴 expired addresses STILL active after the purge"
-            );
-        }
-        r
     }
 }
 
@@ -749,12 +517,6 @@ pub fn update_notice(run: &hlb_state::UpdateRun) -> hlb_notify::Notification {
 
 /// The alert state, shared between the loop that writes and the API that reads.
 pub type AlertsState = Arc<tokio::sync::RwLock<Vec<hlb_api::ActiveAlert>>>;
-
-/// The gaps of the last reconciliation pass, deliberate refusals included.
-///
-/// Same pattern as the alerts: the loop writes, the API reads. Without this sharing, the
-/// system's non-actions never left the logs — that is, nowhere.
-pub type DriftState = Arc<tokio::sync::RwLock<Vec<hlb_api::DriftSummary>>>;
 
 /// Default interval between two evaluations.
 pub const DEFAULT_INTERVAL_S: i64 = 60;
@@ -1369,61 +1131,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_purge_without_stalwart_marks_nothing() {
-        // 🔴 Marking an alias "purged" without having removed it from the server would
-        // be the worst of both worlds: the address would still receive, AND nothing
-        // would say so. The silence would sustain the belief that the door is closed.
-        let s = Arc::new(State::in_memory().await.expect("state"));
-        s.upsert_user("lena", "standard", None)
-            .await
-            .expect("account");
-        s.add_mailbox("lena", "lena", "example.fr", true)
-            .await
-            .expect("mailbox");
-        s.add_alias("lena", "lena", "old", Some(1), None, None)
-            .await
-            .expect("expired alias");
-
-        let l = AliasPurgeLoop::new(s.clone(), None, "example.fr");
-        let r = l.tick().await;
-
-        assert_eq!(r.due, 1);
-        assert_eq!(r.retires, 0);
-        assert_eq!(r.still_open(), 1, "the address still receives");
-        assert!(!r.is_clean());
-
-        // And the state was NOT touched: the alias stays reported as active.
-        let remaining = s.aliases_to_purge(9_999_999_999).await.expect("relecture");
-        assert_eq!(remaining.len(), 1, "nothing was marked purged");
-    }
-
-    #[tokio::test]
-    async fn a_clean_purge_has_nothing_left_open() {
-        // No expired alias: nothing to do, and the report must say so without
-        // fabricate an alert.
-        let s = Arc::new(State::in_memory().await.expect("state"));
-        s.upsert_user("lena", "standard", None)
-            .await
-            .expect("account");
-        s.add_mailbox("lena", "lena", "example.fr", true)
-            .await
-            .expect("mailbox");
-        // Permanent: never due.
-        s.add_alias("lena", "lena", "contact", None, None, None)
-            .await
-            .expect("alias permanent");
-
-        let r = AliasPurgeLoop::new(s, None, "example.fr").tick().await;
-        assert_eq!(r.due, 0);
-        assert!(r.is_clean());
-        assert!(
-            r.errors.is_empty(),
-            "no alert for a permanent one: {:?}",
-            r.errors
-        );
-    }
-
-    #[tokio::test]
     async fn the_retention_loop_does_not_prune_what_is_still_fresh() {
         // 🔴 The pruning boundary itself (what counts as "old enough") is
         // `State::prune_uptime_samples`'s own, already tested with a backdated row —
@@ -1442,30 +1149,6 @@ mod tests {
 
         let history = s.uptime_history("gitea", 1).await.expect("history");
         assert_eq!(history[0].1, Some(hlb_api::ServiceState::Operational));
-    }
-
-    #[test]
-    fn what_matters_is_what_stays_open_not_the_error_count() {
-        // 🔴 An error-free purge that removed nothing leaves as many doors open as a
-        // purge that failed loudly. That is the first number
-        // to watch.
-        let silent = PurgeReport {
-            due: 5,
-            retires: 0,
-            errors: vec![],
-        };
-        assert_eq!(silent.still_open(), 5);
-        assert!(!silent.is_clean(), "no error, and yet five doors left open");
-
-        let noisy = PurgeReport {
-            due: 5,
-            retires: 5,
-            errors: vec!["a warning".into()],
-        };
-        assert!(
-            noisy.is_clean(),
-            "everything is closed again: the noise changes nothing"
-        );
     }
 
     #[tokio::test]
@@ -1553,7 +1236,7 @@ mod tests {
         ]));
         let drifts: DriftState = Default::default();
         let last: LastReconciled = Arc::new(std::sync::atomic::AtomicI64::new(0));
-        let rl = ReconcileLoop::new(orch, state)
+        let rl = hlb_privd::daemon::ReconcileLoop::new(orch, state)
             .apply(true)
             .published_in(drifts.clone())
             .reports_to(last.clone());
@@ -1569,16 +1252,6 @@ mod tests {
             last.load(std::sync::atomic::Ordering::Relaxed) > 0,
             "the heartbeat cannot know this pass ran"
         );
-    }
-
-    #[tokio::test]
-    async fn a_tick_report_without_errors_is_clean() {
-        assert!(TickReport::default().is_clean());
-        let r = TickReport {
-            errors: vec!["boum".into()],
-            ..Default::default()
-        };
-        assert!(!r.is_clean());
     }
 
     #[tokio::test]

@@ -333,7 +333,7 @@ impl Legacy {
 /// What the daemon's own loops hold beside the privileged side, until those loops move
 /// into it: the web side's `AppState` carries none of it.
 struct Held {
-    install: Option<Arc<hlb_controller::api::InstallContext>>,
+    install: Option<Arc<hlb_privd::InstallContext>>,
     orchestrator: Option<Arc<dyn Orchestrator>>,
 }
 
@@ -588,7 +588,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     if let Some(orch) = orchestrator {
         let rl = Arc::new(
-            loops::ReconcileLoop::new(orch, state.clone())
+            hlb_privd::daemon::ReconcileLoop::new(orch, state.clone())
                 .apply(cli.reconcile_apply)
                 .published_in(drift_state.clone())
                 .reports_to(reconciled.clone()),
@@ -608,6 +608,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (rl, mirror, st) = (rl.clone(), mirror.clone(), st.clone());
                 async move {
                     let r = rl.tick().await;
+                    // Each pass samples the exposed apps for the status page's history.
+                    loops::sample_uptime(&st).await;
                     if !r.is_clean() {
                         tracing::warn!(errors = r.errors.len(), "incomplete reconciliation");
                     } else if r.acted > 0 {
@@ -652,7 +654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        let purge = Arc::new(loops::AliasPurgeLoop::new(
+        let purge = Arc::new(hlb_privd::daemon::AliasPurgeLoop::new(
             state.clone(),
             mail,
             cli.mail_domain.clone().unwrap_or_else(|| "local".into()),
@@ -825,7 +827,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // too — the declared destinations are what decide, and an installation with none
     // hears about it on every pass rather than never. "Back up now" runs it too, held
     // to one app: the route once drove a provider of its own over `--backup-repo`.
-    let pass_config = hlb_controller::backup::PassConfig {
+    let pass_config = hlb_privd::backup::PassConfig {
         master_key: cli.master_key.clone(),
         state_path: cli.state.clone(),
         fallback_repo: cli.backup_repo.clone(),
@@ -957,7 +959,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Opened at each pass, as the backup loop does: a key rotated by
                     // `hlb secrets-rekey` is read the next night.
                     let vault = hlb_secrets::Vault::open(&master_key).ok();
-                    let pass = hlb_controller::assertions::read_every_app(
+                    let pass = hlb_privd::daemon::assertions::read_every_app(
                         &st,
                         vault.as_ref(),
                         reader.as_ref(),
@@ -981,8 +983,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await;
                     }
                     let Some(mail) = mail else { return };
-                    match hlb_controller::mail_dns::read_and_record(&st, &mail, dns.as_ref(), now)
-                        .await
+                    match hlb_privd::daemon::mail_dns::read_and_record(
+                        &st,
+                        &mail,
+                        dns.as_ref(),
+                        now,
+                    )
+                    .await
                     {
                         Ok(wrong) => {
                             for record in wrong {
@@ -1033,7 +1040,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (mail, st, notif) = (mail.clone(), st.clone(), notif_mq.clone());
                     async move {
                         let now = hlb_controller::auth::now();
-                        match hlb_controller::mail_queue::read_and_record(&st, &mail, now).await {
+                        match hlb_privd::daemon::mail_queue::read_and_record(&st, &mail, now).await
+                        {
                             Ok(pass) => {
                                 if pass.cut {
                                     tracing::warn!(
@@ -1469,7 +1477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 None => None,
             };
-            Some(Arc::new(api::InstallContext {
+            Some(Arc::new(hlb_privd::InstallContext {
                 vault,
                 registry: hlb_registry::RegistryClient::new(),
                 postgres,
@@ -1544,7 +1552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let backup =
-        (!cli.demo).then(|| Arc::new(pass_config) as Arc<dyn hlb_controller::backup::BackUpNow>);
+        (!cli.demo).then(|| Arc::new(pass_config) as Arc<dyn hlb_privd::backup::BackUpNow>);
     // 🔴 The capabilities go to the privileged side, and to the daemon's own loops
     // below: the web side's `AppState` holds none of them, only the door.
     let privd = hlb_privd::Privd::new(state.clone())
