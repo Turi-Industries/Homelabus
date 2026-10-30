@@ -45,6 +45,10 @@ pub enum Intent {
     Remove(Remove),
     BackUp(BackUp),
     PurgeAlias(PurgeAlias),
+    KitFingerprint(KitFingerprint),
+    MyIdentity(MyIdentity),
+    Rename(Rename),
+    DefaultMailbox(DefaultMailbox),
 }
 
 macro_rules! asks {
@@ -75,6 +79,10 @@ asks! {
     Remove => ActionResult,
     BackUp => ActionResult,
     PurgeAlias => ActionResult,
+    KitFingerprint => Option<String>,
+    MyIdentity => crate::MyIdentity,
+    Rename => ActionResult,
+    DefaultMailbox => Acted,
 }
 
 /// The answer of an action that may not even be planned.
@@ -190,6 +198,40 @@ pub struct BackUp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PurgeAlias {
+    /// The account the web side vouches is asking; `None` = nobody signed in.
+    pub account: Option<String>,
+    pub local: String,
+    pub apply: bool,
+}
+
+/// The fingerprint an emergency kit printed now would carry; `None` without a vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KitFingerprint {}
+
+/// A signed-in person's names and address, as PocketID holds them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MyIdentity {
+    pub account: String,
+}
+
+/// Write a person's own names to PocketID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rename {
+    /// The account the web side vouches is asking; `None` = nobody signed in.
+    pub account: Option<String>,
+    pub first_name: String,
+    pub last_name: String,
+    pub display_name: String,
+    pub apply: bool,
+}
+
+/// Make one of a person's own mailboxes their default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultMailbox {
     /// The account the web side vouches is asking; `None` = nobody signed in.
     pub account: Option<String>,
     pub local: String,

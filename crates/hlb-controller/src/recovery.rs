@@ -17,10 +17,11 @@ use hlb_state::State;
 /// The fingerprint a kit printed now would carry; `None` when the controller holds no
 /// vault to compute it with — and then no printed kit can be shown current.
 pub async fn kit_now(s: &crate::api::AppState) -> Option<String> {
-    let install = s.install.as_ref()?;
-    hlb_backup_run::kit::fingerprint(&s.state, &install.vault)
+    s.privd()
+        .ask(hlb_api::intent::KitFingerprint {})
         .await
         .ok()
+        .flatten()
 }
 
 /// The state of the safeguards. `kit` is [`kit_now`].

@@ -17,6 +17,7 @@ use hlb_state::State;
 
 mod apps;
 pub mod backup;
+mod identity;
 mod mail;
 mod swarm;
 
@@ -113,6 +114,15 @@ impl Privd {
         self
     }
 
+    /// The fingerprint a kit printed now would carry: it decrypts the whole kit, which
+    /// is why only this side can say it.
+    async fn kit_fingerprint(&self) -> Option<String> {
+        let install = self.install.as_ref()?;
+        hlb_backup_run::kit::fingerprint(&self.state, &install.vault)
+            .await
+            .ok()
+    }
+
     /// Republishes the routes after something changed which apps they serve. Nothing
     /// to do without an orchestrator: there is no Caddy to tell.
     async fn republish(&self) -> Result<(), String> {
@@ -156,6 +166,14 @@ impl Privd {
             Intent::AttestGuide(i) => serde_json::to_value(apps::attest_guide(self, i).await)?,
             Intent::Remove(i) => serde_json::to_value(apps::remove(self, i).await)?,
             Intent::BackUp(i) => serde_json::to_value(backup::back_up(self, i).await)?,
+            Intent::KitFingerprint(hlb_api::intent::KitFingerprint {}) => {
+                serde_json::to_value(self.kit_fingerprint().await)?
+            }
+            Intent::MyIdentity(i) => serde_json::to_value(identity::my_identity(self, i).await)?,
+            Intent::Rename(i) => serde_json::to_value(identity::rename(self, i).await)?,
+            Intent::DefaultMailbox(i) => {
+                serde_json::to_value(identity::default_mailbox(self, i).await)?
+            }
             Intent::PurgeAlias(i) => serde_json::to_value(mail::purge_alias(self, i).await)?,
         })
     }
