@@ -797,7 +797,20 @@ three Tangs, and the third alone opens it.
     next element follows at once) and on this desktop's real Gigabyte PK, which carries
     no marker. Not measured on enc3, nor on a board that has the test key.
   - Secure Boot's dbx — whether it holds today's revocations (BlackLotus, the 2023
-    boot managers): not started; fwupd's `UEFI dbx` device carries the version.
+    boot managers). **Measured** 2026-10-30 on this desktop (fwupd 2.1.9): `fwupdmgr
+    get-devices --json` reads the `UEFI dbx` device (plugin `uefi_dbx`) as `20250902`,
+    as any user; LVFS's metadata, fetched apart, publishes `20260402` for its GUID
+    `f8ba2887…` and `20260707` for its other, `d07ff664…` (the KEK 2023's) — two
+    behind. 🔴 And `fwupdmgr get-updates --json` answered `{"Devices": []}`, exit 0:
+    its `lvfs` remote reads `"Mtime": -1`, metadata never downloaded, so "nothing to
+    update" and "nothing known" are the same answer. Designed: a signal beside PKfail's
+    in `observe.rs` — the device's version, the `lvfs` remote's `Mtime` (`get-remotes
+    --json`), and `get-updates`'s releases for that device — read as not checked (no
+    fwupd, no device), unknown (metadata never fetched or older than a month: `fwupdmgr
+    refresh`), behind (`fwupdmgr update`) or current. A WARNING under Secure Boot, not a
+    lower level, as PKfail: PCR 7 records which db entry verified each image, so a
+    revoked boot manager booting does not open a level-A disk; and a dbx written is
+    resealed at once (`hlb-uki-efivars.path`). Not started in code.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
   - ✅ The split — 2026-10-30. What is split is not the kit: it changes with every
