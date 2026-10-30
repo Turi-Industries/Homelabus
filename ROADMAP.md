@@ -653,6 +653,14 @@ three Tangs, and the third alone opens it.
     token's name; the agents deployed after, the daemon polls them over mTLS with the
     leaf now issued to `hlb-privd`, and the web side shows both nodes. Left for stage 3: the intents re-derived and bounded (a local destination's
     path, the guide's automations, the `id_token` above).
+  - Stage 3, 2026-10-30. **Measured**: of 58 intents, one carried a host path and a
+    secret's name the daemon took on trust — `SetDestination`, which recorded any
+    location (proven: `/` and `/etc`) and moved a declared destination, credentials
+    and all; the others carry names the daemon looks up, data it stores, or an
+    account the web side vouches for (accepted above). ✅ `SetDestinationClasses`
+    now: the web side changes a declared destination's classes; its location and
+    secret are `hlb backup dest add`'s, as root, and the route refuses another at
+    preview.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to

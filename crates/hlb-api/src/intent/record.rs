@@ -217,14 +217,18 @@ pub struct RevokeInvitation {
     pub reference: String,
 }
 
-/// Create or change a backup destination.
+/// Change which classes of data a declared destination receives.
+///
+/// 🔴 No location and no secret's name: the pass binds a local location read-write
+/// and signs an S3 one's requests with the secret a destination names, so either
+/// would let the web side mount a host path, or send the off-site's copies — fresh on
+/// every screen — where it chose. Both are `hlb backup dest add`'s, run as root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SetDestination {
+pub struct SetDestinationClasses {
     pub name: String,
-    pub location: String,
+    /// `critical`, `bulky`, or both separated by a comma; re-read by the daemon.
     pub classes: String,
-    pub credentials_secret: Option<String>,
 }
 
 /// The folder a person's alias sorts into; `None` = nothing decided.

@@ -1571,6 +1571,17 @@ impl State {
         Ok(())
     }
 
+    /// Changes the classes of a declared destination, and nothing else; `false` when no
+    /// destination has that name.
+    pub async fn set_destination_classes(&self, name: &str, classes: &str) -> Result<bool> {
+        let r = sqlx::query("UPDATE backup_destinations SET classes = ?2 WHERE name = ?1")
+            .bind(name)
+            .bind(classes)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
     /// The declared destinations: `(name, location, classes, secret)`.
     pub async fn destinations(&self) -> Result<Vec<(String, String, String, Option<String>)>> {
         let rows = sqlx::query(

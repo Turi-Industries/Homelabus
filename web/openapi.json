@@ -2535,7 +2535,7 @@
             ]
           },
           "credentials_secret": {
-            "description": "🔴 The NAME of the secret carrying the credentials, **never their value**.\n\nPassing it through would send \"backup-dest-offsite\" as the S3 access key, and the\nserver would answer \"invalid signature\" — an error that points\nnowhere.",
+            "description": "The NAME of the secret the destination signs with, never its value — refused\nunless it is the recorded one.",
             "maxLength": 200,
             "type": [
               "string",
@@ -2543,6 +2543,7 @@
             ]
           },
           "location": {
+            "description": "Refused unless it is the recorded one: the location is `hlb backup dest add`'s.",
             "maxLength": 200,
             "type": [
               "string",
@@ -7852,7 +7853,7 @@
             "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
           }
         },
-        "summary": "Declares or updates a backup destination.",
+        "summary": "Changes the classes of data a declared backup destination receives.",
         "x-hlb-preview": true,
         "x-hlb-requires": "operate"
       }

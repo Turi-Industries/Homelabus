@@ -3326,41 +3326,64 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_destination_signs_with_its_own_secret_and_no_other() {
         // 🔴 The backup pass decrypts the secret a destination names and signs requests
-        // to its location with it: an `operate` caller naming another secret would send
-        // another destination's key to a server of their choosing.
+        // to its location with it: an `operate` caller naming another secret, or moving
+        // the location, would send a key's signatures and the copies where they chose.
         let st = Arc::new(State::in_memory().await.expect("state"));
+        st.upsert_destination(
+            "mine",
+            "s3:s3.example/b",
+            "critical",
+            Some("backup-dest-mine"),
+        )
+        .await
+        .expect("declared by the CLI");
         let r = || router(shared_state(st.clone(), true));
-        let body = |secret: &str| {
-            format!(r#"{{"location": "s3:evil.example/b", "credentials_secret": "{secret}"}}"#)
+        let body = |location: &str, secret: &str| {
+            format!(
+                r#"{{"location": "{location}", "credentials_secret": "{secret}", "classes": "bulky"}}"#
+            )
         };
 
-        let (status, v) = send(
-            r(),
-            "PUT",
-            "/api/backup/destinations/mine?apply=true",
-            &body("backup-dest-offsite"),
-        )
-        .await;
-        assert_eq!(
-            (status, &v["applied"]),
-            (StatusCode::OK, &false.into()),
-            "{v}"
-        );
-        assert!(v["blockers"][0]
-            .as_str()
-            .expect("a blocker")
-            .contains("backup-dest-mine"));
-        assert!(st.destinations().await.expect("read").is_empty());
+        for (location, secret) in [
+            ("s3:s3.example/b", "backup-dest-offsite"),
+            ("s3:evil.example/b", "backup-dest-mine"),
+        ] {
+            let (status, v) = send(
+                r(),
+                "PUT",
+                "/api/backup/destinations/mine?apply=true",
+                &body(location, secret),
+            )
+            .await;
+            assert_eq!(
+                (status, &v["applied"]),
+                (StatusCode::OK, &false.into()),
+                "{v}"
+            );
+            assert!(v["blockers"][0]
+                .as_str()
+                .expect("a blocker")
+                .contains("hlb backup dest add"));
+        }
+        assert_eq!(st.destinations().await.expect("read")[0].2, "critical");
 
         let (_, v) = send(
             r(),
             "PUT",
             "/api/backup/destinations/mine?apply=true",
-            &body("backup-dest-mine"),
+            &body("s3:s3.example/b", "backup-dest-mine"),
         )
         .await;
         assert_eq!(v["applied"], true, "{v}");
-        assert_eq!(st.destinations().await.expect("read").len(), 1);
+        assert_eq!(
+            st.destinations().await.expect("read"),
+            vec![(
+                "mine".to_string(),
+                "s3:s3.example/b".to_string(),
+                "bulky".to_string(),
+                Some("backup-dest-mine".to_string()),
+            )]
+        );
     }
 
     async fn post(r: Router, uri: &str, body: &str) -> (StatusCode, serde_json::Value) {
@@ -5594,39 +5617,9 @@ steps:
     }
 
     #[tokio::test]
-    async fn an_s3_destination_without_credentials_is_refused() {
-        // 🔴 Without credentials, the failure would only show on the first backup, hours
-        // later, on an "invalid signature" that points nowhere.
-        let st = State::in_memory().await.expect("base");
-        let r = router(app_state(st, true));
-
-        let resp = r
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/api/backup/destinations/offsite?apply=true")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"location":"s3:s3.example/hlb"}"#))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
-            .await
-            .expect("body");
-        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(v["applied"], false);
-        assert!(
-            v["blockers"].to_string().contains("invalid signature"),
-            "the message must name the error you would otherwise see: {}",
-            v["blockers"]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_local_destination_is_actually_written() {
-        // The nominal path: an action that really is wired up.
+    async fn a_destination_is_declared_by_root_never_from_here() {
+        // 🔴 A local location is bound read-write by the backup pass: declared from here,
+        // `/` or `/etc` would be mounted into a container running as root.
         let st = State::in_memory().await.expect("base");
         let app = app_state(st, true);
         let state = app.state.clone();
@@ -5638,9 +5631,7 @@ steps:
                     .method("PUT")
                     .uri("/api/backup/destinations/nas?apply=true")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"location":"/mnt/nas/restic","classes":"critical,bulky"}"#,
-                    ))
+                    .body(Body::from(r#"{"location":"/","classes":"critical,bulky"}"#))
                     .expect("request"),
             )
             .await
@@ -5650,12 +5641,13 @@ steps:
             .await
             .expect("body");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(v["applied"], true);
-        assert_eq!(v["steps"][0]["state"], "done");
-
-        let d = state.destinations().await.expect("destinations");
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].0, "nas");
+        assert_eq!(v["applied"], false);
+        assert!(
+            v["blockers"].to_string().contains("hlb backup dest add"),
+            "the refusal names who declares one: {}",
+            v["blockers"]
+        );
+        assert!(state.destinations().await.expect("destinations").is_empty());
     }
 
     #[tokio::test]

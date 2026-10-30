@@ -338,8 +338,8 @@ impl Privd {
             Intent::RevokeInvitation(i) => {
                 serde_json::to_value(record::revoke_invitation(self, i).await)?
             }
-            Intent::SetDestination(i) => {
-                serde_json::to_value(record::set_destination(self, i).await)?
+            Intent::SetDestinationClasses(i) => {
+                serde_json::to_value(record::set_destination_classes(self, i).await)?
             }
             Intent::SetAliasFolder(i) => {
                 serde_json::to_value(record::set_alias_folder(self, i).await)?

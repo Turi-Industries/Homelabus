@@ -13,7 +13,7 @@ use hlb_api::intent::{
 use hlb_api::intent::{
     AttestBreakglass, BringBack, FollowAnnouncement, MuteAlert, PublishAnnouncement,
     RemoveAnnouncement, SaveNamedPlan, SetAliasFolder, SetAside, SetBrand, SetDensity,
-    SetDestination, SetHome, SetLogo, SetTheme, UnmuteAlert,
+    SetDestinationClasses, SetHome, SetLogo, SetTheme, UnmuteAlert,
 };
 
 use hlb_api::intent::RecordHistory;
@@ -206,16 +206,33 @@ pub(crate) async fn revoke_invitation(p: &Privd, i: RevokeInvitation) -> Result<
         .map_err(|e| e.to_string())
 }
 
-pub(crate) async fn set_destination(p: &Privd, i: SetDestination) -> Result<(), String> {
-    p.state
-        .upsert_destination(
-            &i.name,
-            &i.location,
-            &i.classes,
-            i.credentials_secret.as_deref(),
-        )
+pub(crate) async fn set_destination_classes(
+    p: &Privd,
+    i: SetDestinationClasses,
+) -> Result<(), String> {
+    let mut kept = Vec::new();
+    for c in i.classes.split(',').map(str::trim) {
+        match hlb_backup::Class::parse(c) {
+            Some(k) => kept.push(k.name()),
+            // Kept as asked, the destination would accept nothing and still look
+            // configured.
+            None => return Err(format!("unknown class \"{c}\" — expected critical, bulky")),
+        }
+    }
+    let changed = p
+        .state
+        .set_destination_classes(&i.name, &kept.join(","))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if changed {
+        Ok(())
+    } else {
+        Err(format!(
+            "no destination \"{}\": a destination is declared by `hlb backup dest add`, as \
+             root on a manager",
+            i.name
+        ))
+    }
 }
 
 pub(crate) async fn set_alias_folder(p: &Privd, i: SetAliasFolder) -> Result<(), String> {
@@ -378,5 +395,70 @@ mod tests {
             .await
             .expect("a PNG is kept");
         assert!(state.logo().await.expect("logo").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_destination_keeps_the_place_and_the_secret_root_gave_it() {
+        // 🔴 The pass binds a local location read-write and signs with the named secret:
+        // whoever writes either chooses a host path to mount, or where the off-site's
+        // copies — and its key's signatures — go, while it still reads as fresh.
+        let state = Arc::new(State::in_memory().await.expect("state"));
+        state
+            .upsert_destination(
+                "offsite",
+                "s3:s3.example/hlb",
+                "critical",
+                Some("backup-dest-offsite"),
+            )
+            .await
+            .expect("declared by the CLI");
+        let p = Privd::new(state.clone());
+
+        // The wire has no field for either: an intruder's intent naming one is refused
+        // before any code of the daemon reads it.
+        let carrying = serde_json::json!({
+            "intent": "set-destination-classes", "name": "offsite",
+            "classes": "bulky", "location": "/etc"
+        });
+        assert!(serde_json::from_value::<hlb_api::intent::Intent>(carrying).is_err());
+
+        let moved = set_destination_classes(
+            &p,
+            SetDestinationClasses {
+                name: "offsite".into(),
+                classes: "critical, bulky".into(),
+            },
+        )
+        .await;
+        let created = set_destination_classes(
+            &p,
+            SetDestinationClasses {
+                name: "root".into(),
+                classes: "bulky".into(),
+            },
+        )
+        .await;
+        let misspelt = set_destination_classes(
+            &p,
+            SetDestinationClasses {
+                name: "offsite".into(),
+                classes: "importante".into(),
+            },
+        )
+        .await;
+
+        let recorded = state.destinations().await.expect("read");
+        assert_eq!(
+            recorded,
+            vec![(
+                "offsite".to_string(),
+                "s3:s3.example/hlb".to_string(),
+                "critical,bulky".to_string(),
+                Some("backup-dest-offsite".to_string()),
+            )],
+            "moved: {moved:?}, created: {created:?}"
+        );
+        assert!(created.is_err(), "a new destination is root's to declare");
+        assert!(misspelt.is_err(), "a class nobody reads was kept");
     }
 }

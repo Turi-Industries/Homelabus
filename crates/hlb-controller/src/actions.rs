@@ -505,21 +505,19 @@ pub async fn resize(
 
 #[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
 pub struct DestinationRequest {
+    /// Refused unless it is the recorded one: the location is `hlb backup dest add`'s.
     #[serde(default)]
     pub location: Option<String>,
     /// `critical`, `bulky`, or both separated by a comma.
     #[serde(default)]
     pub classes: Option<String>,
-    /// 🔴 The NAME of the secret carrying the credentials, **never their value**.
-    ///
-    /// Passing it through would send "backup-dest-offsite" as the S3 access key, and the
-    /// server would answer "invalid signature" — an error that points
-    /// nowhere.
+    /// The NAME of the secret the destination signs with, never its value — refused
+    /// unless it is the recorded one.
     #[serde(default)]
     pub credentials_secret: Option<String>,
 }
 
-/// Declares or updates a backup destination.
+/// Changes the classes of data a declared backup destination receives.
 #[utoipa::path(
     put,
     path = "/api/backup/destinations/{name}",
@@ -544,13 +542,39 @@ pub async fn destination(
     let d = body.map(|Json(d)| d).unwrap_or_default();
     let mut blockers = Vec::new();
 
-    let location = d.location.clone().unwrap_or_default();
-    if location.trim().is_empty() {
-        blockers.push(
-            "location missing: a local path (/mnt/nas/restic) or an S3 URL \
-             (s3:host/bucket)"
-                .to_string(),
-        );
+    // 🔴 The place and the secret are root's: the pass binds a local location
+    // read-write and signs an S3 one's requests with the secret named, so a caller who
+    // chose either would mount any host path, or send the off-site's copies — still
+    // fresh on every screen — to a server of theirs. This side changes the classes.
+    let recorded = s
+        .state
+        .destinations()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(n, ..)| *n == name);
+    let whose = "a destination's location and credentials are declared by `hlb backup \
+                   dest add`, as root on a manager";
+    let (location, secret) = match recorded {
+        Some((_, location, _, secret)) => (location, secret),
+        None => {
+            blockers.push(format!("no destination \"{name}\": {whose}"));
+            (d.location.clone().unwrap_or_default(), None)
+        }
+    };
+    if let Some(asked) = d.location.as_deref().filter(|l| *l != location) {
+        blockers.push(format!(
+            "location \"{asked}\" is not \"{name}\"'s, {location}: {whose}"
+        ));
+    }
+    if let Some(c) = d
+        .credentials_secret
+        .as_deref()
+        .filter(|c| Some(*c) != secret.as_deref())
+    {
+        blockers.push(format!(
+            "credentials_secret \"{c}\" is not the one \"{name}\" signs with: {whose}"
+        ));
     }
 
     let classes = d.classes.clone().unwrap_or_else(|| "critical".to_string());
@@ -567,41 +591,17 @@ pub async fn destination(
         ));
     }
 
-    // ⚠️ An S3 destination with no credentials will be of no use, and the failure will
-    // only show on the first backup — hours later.
-    if location.starts_with("s3:") && d.credentials_secret.is_none() {
-        blockers.push(
-            "an S3 destination needs a credentials secret \
-             (\"credentials_secret\") — without it, the first backup will fail on \
-             \"invalid signature\""
-                .to_string(),
-        );
-    }
-
-    // 🔴 The pass decrypts the secret named here and signs requests to this location with
-    // it: any other name would hand another secret of the vault — another destination's
-    // key — to a server the caller chose. `hlb backup dest add` stores it under this one.
-    let own = format!("backup-dest-{name}");
-    if let Some(c) = d.credentials_secret.as_deref().filter(|c| *c != own) {
-        blockers.push(format!(
-            "credentials_secret \"{c}\" is not this destination's: only \"{own}\", which \
-             `hlb backup dest add {name} --location {location} --access-key <key>` stores"
-        ));
-    }
-
     let applied = q.apply && blockers.is_empty();
     let mut step = ActionStep {
-        description: format!("declare destination \"{name}\" to {location} [{classes}]"),
+        description: format!("send destination \"{name}\" ({location}) the classes [{classes}]"),
         state: StepState::Planned,
         error: None,
     };
 
     if applied {
-        let asked = hlb_api::intent::SetDestination {
+        let asked = hlb_api::intent::SetDestinationClasses {
             name: name.clone(),
-            location: location.clone(),
             classes: classes.clone(),
-            credentials_secret: d.credentials_secret.clone(),
         };
         match s.record(asked).await {
             Ok(()) => step.state = StepState::Done,
@@ -612,12 +612,18 @@ pub async fn destination(
         }
     }
 
+    // `dest add` without a key forgets the one stored: an S3 destination's line asks it.
+    let key = if secret.is_some() {
+        " --access-key <key>"
+    } else {
+        ""
+    };
     let r = ActionResult {
         applied,
         summary: format!("destination \"{name}\""),
         steps: vec![step],
         cli_command: format!(
-            "hlb backup dest add {name} --location {location} --classes {classes}"
+            "hlb backup dest add {name} --location {location} --classes {classes}{key}"
         ),
         blockers,
         warnings: Vec::new(),

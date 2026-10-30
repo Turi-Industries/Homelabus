@@ -44,6 +44,11 @@ during an outage.
 - **`credentials_secret` is the NAME of the secret, not its value.** Passing it through
   would send "backup-dest-offsite" as the S3 access key, and the server would answer
   "invalid signature" — an error that points nowhere.
+- **🔴 A destination's place and secret are root's.** The pass binds a local location
+  read-write into a root container and signs an S3 one's requests with the secret it
+  names: the web side may only change its classes (`SetDestinationClasses`, no path, no
+  secret's name on the wire), and the daemon refuses a name it has no row for. Moving
+  the off-site elsewhere would have kept it "fresh" on every screen.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.
