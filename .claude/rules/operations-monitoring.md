@@ -4,7 +4,7 @@ paths:
   - "crates/hlb-metrics/**/*.rs"
   - "crates/hlb-notify/**/*.rs"
   - "crates/hlb-controller/src/{agents,capacity,metrics,mutes,promql,timeline}.rs"
-  - "crates/hlb-privd/src/daemon/{alerts,notify,schedule}.rs"
+  - "crates/hlb-privd/src/{fleet.rs,daemon/alerts.rs,daemon/notify.rs,daemon/schedule.rs}"
 ---
 
 # Operations: watching the system

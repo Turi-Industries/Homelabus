@@ -30,8 +30,9 @@ the outside, which is the whole problem.
   service spec binds any host path, so an intent carries no image, mount, command or
   secret name, and the privileged side re-derives them from the catalog and its state.
   Each intent struct is `deny_unknown_fields`, and the dispatch has no `_ =>` arm. The
-  answers round-trip through JSON in process too, so the wire stage 2 puts on a socket
-  is the one the suite already runs. 🔴 `hlb.db` is written by `hlb-privd` alone —
+  answers round-trip through JSON in process too, so the wire is the one the suite
+  runs; across processes it is a Unix socket (`hlb_privd::wire`) answering ONE uid, read
+  from the kernel (`SO_PEERCRED`) before the intent is — never the socket's path. 🔴 `hlb.db` is written by `hlb-privd` alone —
   whoever writes it forges a secret, a session or the audit chain: a web write is an
   intent in `intent/record.rs`, asked with `AppState::record`. A value it carries (a
   session's, an invitation's) is left out of its hand-written `Debug`; an

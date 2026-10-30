@@ -858,7 +858,7 @@ async fn fleet_per_tier(s: &AppState) -> Vec<(Option<String>, Option<u64>)> {
         Ok(None) | Err(_) => return Vec::new(),
     };
 
-    let poll = s.last_poll.read().await;
+    let poll = crate::api::fleet_now(s).await;
     nodes
         .iter()
         .map(|n| {

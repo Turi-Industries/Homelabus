@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use hlb_agent::pki::{self, Purpose};
-use hlb_controller::agents::{AgentPoller, AgentStatus};
+use hlb_privd::fleet::{AgentPoller, AgentStatus};
 
 #[tokio::test]
 async fn an_agent_is_polled_by_ip_and_verified_by_name() {

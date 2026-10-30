@@ -40,11 +40,19 @@ use crate::error::{ActionReply, ApiError, ApiResult};
 use crate::agents::AgentStatus;
 use crate::metrics::{self, AppMetrics};
 
-/// The last agent-polling pass, shared between the loop and the API.
+/// What the daemon's agent poller last found, by agent address.
 ///
-/// The loop writes, the API reads. An `RwLock` rather than a `Mutex` because several
-/// concurrent `/metrics` requests must not serialise behind one polling pass.
-pub type LastPoll = Arc<tokio::sync::RwLock<std::collections::BTreeMap<String, AgentStatus>>>;
+/// ⚠️ Unanswered reads as no node, logged: the inbox still fails loudly then, since the
+/// alerts and the gaps it also asks for are errors when the daemon cannot be reached.
+pub(crate) async fn fleet_now(s: &AppState) -> std::collections::BTreeMap<String, AgentStatus> {
+    match s.privd().ask(hlb_api::intent::Fleet {}).await {
+        Ok(wire) => hlb_privd::fleet::from_wire(wire),
+        Err(e) => {
+            tracing::warn!("the fleet could not be asked for: {e}");
+            Default::default()
+        }
+    }
+}
 
 pub struct AppState {
     pub state: Arc<State>,
@@ -53,7 +61,6 @@ pub struct AppState {
     pub privd: hlb_privd::Privd,
     pub started_at: std::time::Instant,
     pub version: &'static str,
-    pub last_poll: LastPoll,
     /// Web UI directory. `None` = API only.
     pub ui_dir: Option<std::path::PathBuf>,
     /// 🔴 `true` = open API, with no authentication.
@@ -287,7 +294,7 @@ async fn nodes(
 /// would end up giving two different diagnoses.
 pub(crate) async fn nodes_summary(s: &AppState) -> Vec<hlb_api::NodeSummary> {
     let now = crate::auth::now();
-    let poll = s.last_poll.read().await;
+    let poll = fleet_now(s).await;
     let thresholds = hlb_agent::disk::Thresholds::default();
 
     // The tasks, to say what each node hosts. A failure here must not deprive us of the
@@ -416,12 +423,10 @@ async fn node_detail(
         None => Vec::new(),
     };
 
-    // Collected by the agent since the first release, held in `last_poll` already —
-    // simply never read until now. No demo branch needed: demo mode's own `last_poll`
+    // Collected by the agent since the first release, in the poller's pass already —
+    // simply never read until now. No demo branch needed: demo mode's own pass
     // (`demo::nodes`) already fabricates `interfaces` on every reachable node.
-    let interfaces = s
-        .last_poll
-        .read()
+    let interfaces = fleet_now(&s)
         .await
         .get(&address)
         .and_then(|status| status.report())
@@ -2222,7 +2227,7 @@ async fn prometheus(
     // part.
     let coverages = crate::coverage::all_of_them(&s.state, STALENESS_THRESHOLD_S).await;
 
-    let nodes = s.last_poll.read().await;
+    let nodes = fleet_now(&s).await;
     Ok((
         [(
             axum::http::header::CONTENT_TYPE,
@@ -2904,9 +2909,12 @@ pub(crate) mod tests {
         let mut s = base_state(Arc::new(st), true);
         s.demo = true;
         let now = crate::auth::now();
-        *s.last_poll.write().await = crate::demo::nodes_at(now as u64, crate::demo::Scale::Large);
         s.privd = hlb_privd::Privd::new(s.state.clone())
             .with_mail(None, "local")
+            .with_fleet(Arc::new(tokio::sync::RwLock::new(crate::demo::nodes_at(
+                now as u64,
+                crate::demo::Scale::Large,
+            ))))
             .with_published(
                 Arc::new(tokio::sync::RwLock::new(crate::demo::alerts(now))),
                 Arc::new(tokio::sync::RwLock::new(crate::demo::drifts())),
@@ -2924,7 +2932,6 @@ pub(crate) mod tests {
             state: st,
             started_at: std::time::Instant::now(),
             version: "test",
-            last_poll: Default::default(),
             ui_dir: None,
             no_auth,
             signin: Default::default(),
@@ -3943,11 +3950,14 @@ pub(crate) mod tests {
             "swarm-heavy",
             "drain",
         )]));
-        let e = state_with_orchestrator(st, o.clone());
-        e.last_poll
-            .write()
-            .await
-            .extend(crate::demo::nodes(crate::auth::now() as u64));
+        let mut e = base_state(Arc::new(st), true);
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_orchestrator(Some(o))
+            .with_fleet(Arc::new(tokio::sync::RwLock::new(crate::demo::nodes(
+                crate::auth::now() as u64,
+            ))));
+        let e = Arc::new(e);
 
         let (s, v) = get(router(e), "/api/nodes/10.0.0.1:8421/detail").await;
 
@@ -3967,11 +3977,14 @@ pub(crate) mod tests {
             "another-machine",
             "active",
         )]));
-        let e = state_with_orchestrator(st, o.clone());
-        e.last_poll
-            .write()
-            .await
-            .extend(crate::demo::nodes(crate::auth::now() as u64));
+        let mut e = base_state(Arc::new(st), true);
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_orchestrator(Some(o))
+            .with_fleet(Arc::new(tokio::sync::RwLock::new(crate::demo::nodes(
+                crate::auth::now() as u64,
+            ))));
+        let e = Arc::new(e);
 
         let (s, v) = get(router(e), "/api/nodes/10.0.0.1:8421/detail").await;
 

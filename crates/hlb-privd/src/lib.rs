@@ -20,6 +20,7 @@ mod apps;
 pub mod backup;
 pub mod daemon;
 pub mod demo;
+pub mod fleet;
 mod identity;
 mod mail;
 pub mod mirror;
@@ -100,6 +101,8 @@ pub struct Privd {
     /// Where the daemon listens, for the web side's process: every intent goes there,
     /// and this process answers none itself.
     remote: Option<wire::Remote>,
+    /// What the agents' poller last found.
+    fleet: fleet::Polled,
 }
 
 impl Privd {
@@ -117,6 +120,7 @@ impl Privd {
             drifts: Default::default(),
             mirror: None,
             remote: None,
+            fleet: Default::default(),
         }
     }
 
@@ -155,6 +159,12 @@ impl Privd {
     /// listening at `socket`.
     pub fn through(mut self, socket: impl Into<std::path::PathBuf>) -> Self {
         self.remote = Some(wire::Remote::new(socket));
+        self
+    }
+
+    /// Where the agents' poller publishes what it found.
+    pub fn with_fleet(mut self, polled: fleet::Polled) -> Self {
+        self.fleet = polled;
         self
     }
 
@@ -252,6 +262,9 @@ impl Privd {
             }
             Intent::Alerts(hlb_api::intent::Alerts {}) => {
                 serde_json::to_value(&*self.alerts.read().await)?
+            }
+            Intent::Fleet(hlb_api::intent::Fleet {}) => {
+                serde_json::to_value(fleet::to_wire(&*self.fleet.read().await))?
             }
             Intent::Drifts(hlb_api::intent::Drifts {}) => {
                 serde_json::to_value(&*self.drifts.read().await)?

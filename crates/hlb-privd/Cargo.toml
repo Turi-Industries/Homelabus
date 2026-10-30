@@ -24,6 +24,10 @@ hlb-mail.workspace = true
 hlb-backup.workspace = true
 hlb-backup-run.workspace = true
 hlb-gitops.workspace = true
+# The agents' poller.
+hlb-agent.workspace = true
+futures.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
 hlb-notify.workspace = true
 hlb-metrics.workspace = true
 async-trait.workspace = true

@@ -39,4 +39,4 @@ pub mod signin;
 pub mod throughput;
 pub mod timeline;
 
-pub use agents::{AgentPoller, AgentStatus, ClusterHealth};
+pub use agents::{AgentStatus, ClusterHealth};

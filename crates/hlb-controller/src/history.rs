@@ -55,7 +55,7 @@ pub async fn sample(s: &AppState, now: i64) -> Vec<Sample> {
             );
         }
     }
-    for (address, status) in s.last_poll.read().await.iter() {
+    for (address, status) in crate::api::fleet_now(s).await.iter() {
         if let Some(r) = status.report() {
             if !r.interfaces.is_empty() {
                 let rx = r.interfaces.iter().map(|i| i.rx_bytes as f64).sum();
@@ -113,9 +113,7 @@ pub async fn history(
 ) -> Result<Json<Vec<History>>, ApiError> {
     let now = crate::auth::now();
     let window = q.window.unwrap_or_default();
-    let names: BTreeMap<String, String> = s
-        .last_poll
-        .read()
+    let names: BTreeMap<String, String> = crate::api::fleet_now(&s)
         .await
         .iter()
         .filter_map(|(a, st)| st.report().map(|r| (a.clone(), r.hostname.clone())))

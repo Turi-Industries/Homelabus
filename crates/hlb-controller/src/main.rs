@@ -509,8 +509,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut tasks = Vec::new();
 
-    // Shared between the polling loop (which writes) and `/metrics` (which reads).
-    let last_poll: api::LastPoll = Default::default();
+    // Written by the polling loop, read through `Intent::Fleet`.
+    let last_poll: hlb_privd::fleet::Polled = Default::default();
     if cli.demo {
         // We exercise the real sharing path, not a special case: the interface reads
         // exactly the same structure as in production.
@@ -1144,7 +1144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (Some(c), Some(a)) => {
                 let cert = tokio::fs::read_to_string(c).await?;
                 let ca = tokio::fs::read_to_string(a).await?;
-                match agents::AgentPoller::with_mtls(
+                match hlb_privd::fleet::AgentPoller::with_mtls(
                     cli.agent_port,
                     Duration::from_secs(10),
                     &cert,
@@ -1163,7 +1163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "🔴 agents polled over PLAIN HTTP — supply --controller-cert \
                      and --controller-ca"
                 );
-                Arc::new(agents::AgentPoller::new(
+                Arc::new(hlb_privd::fleet::AgentPoller::new(
                     cli.agent_port,
                     Duration::from_secs(10),
                 ))
@@ -1576,7 +1576,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_mail(mail, &mail_domain)
         .with_backup(backup)
         .with_published(alerts_state, drift_state)
-        .with_mirror(cli.git_mirror.clone());
+        .with_mirror(cli.git_mirror.clone())
+        .with_fleet(last_poll.clone());
     let held = Arc::new(Held {
         install,
         orchestrator: orch_api,
@@ -1587,7 +1588,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         privd,
         started_at: std::time::Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
-        last_poll,
         ui_dir: cli.ui_dir.clone(),
         no_auth: cli.insecure_no_auth || cli.demo,
         signin,

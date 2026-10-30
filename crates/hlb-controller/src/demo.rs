@@ -186,7 +186,7 @@ pub fn alerts(_now: i64) -> Vec<hlb_api::ActiveAlert> {
 /// The nodes as an agent would report them.
 ///
 /// Separate from the state because these reports do not live in the database: they are
-/// in memory, in `LastPoll`, and the loop → API sharing is what we want to exercise.
+/// in the daemon's memory, handed to it as the poller's pass would be.
 pub fn nodes(now: u64) -> BTreeMap<String, AgentStatus> {
     let mut m = BTreeMap::new();
 

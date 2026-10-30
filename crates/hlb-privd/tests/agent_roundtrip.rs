@@ -71,7 +71,7 @@ async fn the_controller_reads_a_real_agent_report() {
     let port = 18421;
     let _agent = start_agent(port).await;
 
-    let poller = hlb_controller::AgentPoller::new(port, Duration::from_secs(5));
+    let poller = hlb_privd::fleet::AgentPoller::new(port, Duration::from_secs(5));
     let status = poller.poll("127.0.0.1").await;
 
     let report = status
@@ -100,7 +100,7 @@ async fn a_stopped_agent_becomes_unreachable() {
     // serving the last known report as though it were fresh.
     let port = 18422;
     let mut agent = start_agent(port).await;
-    let poller = hlb_controller::AgentPoller::new(port, Duration::from_secs(5));
+    let poller = hlb_privd::fleet::AgentPoller::new(port, Duration::from_secs(5));
 
     assert!(poller.poll("127.0.0.1").await.report().is_some());
 
@@ -183,7 +183,7 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
     }
 
     // 1. The legitimate controller does get a report.
-    let poller = hlb_controller::AgentPoller::with_mtls(
+    let poller = hlb_privd::fleet::AgentPoller::with_mtls(
         port,
         Duration::from_secs(5),
         &format!("{}{}", controller.cert_pem, controller.key_pem),
@@ -208,7 +208,7 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
 
     // 2. 🔴 A poller WITHOUT a certificate must be refused. That is the compromised
     //    container on the overlay: it sees the agent, it must get nothing from it.
-    let anonymous = hlb_controller::AgentPoller::new(port, Duration::from_secs(5));
+    let anonymous = hlb_privd::fleet::AgentPoller::new(port, Duration::from_secs(5));
     let s = anonymous.poll("localhost").await;
     assert!(
         s.report().is_none(),
@@ -220,7 +220,7 @@ async fn the_controller_polls_a_real_agent_over_mtls() {
     let intruder = pki::issue(&other, "intrus", &["intrus".into()], Purpose::Client)
         .await
         .expect("intrus");
-    let fake = hlb_controller::AgentPoller::with_mtls(
+    let fake = hlb_privd::fleet::AgentPoller::with_mtls(
         port,
         Duration::from_secs(5),
         &format!("{}{}", intruder.cert_pem, intruder.key_pem),

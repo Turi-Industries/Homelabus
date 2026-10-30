@@ -11,10 +11,11 @@ hlb-types.workspace = true
 # A role as the web side asks for it to be written.
 hlb-users.workspace = true
 serde.workspace = true
+# A node's report travels as JSON (`intent::Fleet`).
+serde_json.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

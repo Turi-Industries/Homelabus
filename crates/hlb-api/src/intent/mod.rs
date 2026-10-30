@@ -53,6 +53,7 @@ pub enum Intent {
     KitFingerprint(KitFingerprint),
     Alerts(Alerts),
     Drifts(Drifts),
+    Fleet(Fleet),
     MyIdentity(MyIdentity),
     Rename(Rename),
     DefaultMailbox(DefaultMailbox),
@@ -128,6 +129,7 @@ asks! {
     KitFingerprint => Option<String>,
     Alerts => Vec<crate::ActiveAlert>,
     Drifts => Vec<crate::DriftSummary>,
+    Fleet => std::collections::BTreeMap<String, Result<serde_json::Value, String>>,
     MyIdentity => crate::MyIdentity,
     Rename => ActionResult,
     DefaultMailbox => Acted,
@@ -307,6 +309,12 @@ pub struct Alerts {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Drifts {}
+
+/// What the agents' poller last found, by agent address: a report as JSON, or why the
+/// node did not answer. JSON because this crate cannot depend on the agent's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fleet {}
 
 /// A signed-in person's names and address, as PocketID holds them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
