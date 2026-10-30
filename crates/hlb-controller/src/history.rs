@@ -76,10 +76,12 @@ pub async fn sample(s: &AppState, now: i64) -> Vec<Sample> {
 }
 
 /// Stores what is measured now, and forgets what is older than a day.
-pub async fn record(s: &AppState, now: i64) -> Result<(), hlb_state::Error> {
-    s.state.record_history(&sample(s, now).await).await?;
-    s.state.prune_history(now - KEPT_S).await?;
-    Ok(())
+pub async fn record(s: &AppState, now: i64) -> Result<(), String> {
+    let asked = hlb_api::intent::RecordHistory {
+        samples: sample(s, now).await,
+        forget_before: now - KEPT_S,
+    };
+    s.record(asked).await
 }
 
 #[derive(serde::Deserialize, utoipa::IntoParams)]

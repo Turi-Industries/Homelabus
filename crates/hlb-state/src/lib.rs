@@ -458,17 +458,9 @@ pub struct ActionRecord {
     pub error: Option<String>,
 }
 
-/// One measurement of the day kept for the home's curves.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Sample {
-    /// Unix seconds, on the minute.
-    pub at: i64,
-    /// A node's agent address, or `""` for the installation as a whole.
-    pub subject: String,
-    /// `cpu`, `memory`, `disk:/var/lib/docker`, `net_rx`, `apps_running`…
-    pub metric: String,
-    pub value: f64,
-}
+/// One measurement of the day kept for the home's curves: the web side measures
+/// it, and asks for it to be kept.
+pub use hlb_api::intent::Sample;
 
 /// How the installation is reached from outside — `hlb config exposure`.
 #[derive(Debug, Clone, PartialEq, Eq)]

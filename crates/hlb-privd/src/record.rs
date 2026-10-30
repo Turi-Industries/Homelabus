@@ -16,6 +16,8 @@ use hlb_api::intent::{
     SetDestination, SetHome, SetLogo, SetTheme, UnmuteAlert,
 };
 
+use hlb_api::intent::RecordHistory;
+
 use crate::Privd;
 
 pub(crate) async fn audit(p: &Privd, i: Audit) -> Result<(), String> {
@@ -333,6 +335,18 @@ pub(crate) async fn set_logo(p: &Privd, i: SetLogo) -> Result<(), String> {
     p.state
         .set_logo(i.png.as_deref())
         .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn record_history(p: &Privd, i: RecordHistory) -> Result<(), String> {
+    p.state
+        .record_history(&i.samples)
+        .await
+        .map_err(|e| e.to_string())?;
+    p.state
+        .prune_history(i.forget_before)
+        .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 

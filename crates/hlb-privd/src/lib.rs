@@ -249,6 +249,9 @@ impl Privd {
             Intent::MuteAlert(i) => serde_json::to_value(record::mute_alert(self, i).await)?,
             Intent::UnmuteAlert(i) => serde_json::to_value(record::unmute_alert(self, i).await)?,
             Intent::SetLogo(i) => serde_json::to_value(record::set_logo(self, i).await)?,
+            Intent::RecordHistory(i) => {
+                serde_json::to_value(record::record_history(self, i).await)?
+            }
         })
     }
 }

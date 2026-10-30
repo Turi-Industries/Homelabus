@@ -367,6 +367,28 @@ impl std::fmt::Debug for SetLogo {
     }
 }
 
+/// One measurement of the day kept for the home's curves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sample {
+    /// Unix seconds, on the minute.
+    pub at: i64,
+    /// A node's agent address, or `""` for the installation as a whole.
+    pub subject: String,
+    /// `cpu`, `memory`, `disk:/var/lib/docker`, `net_rx`, `apps_running`…
+    pub metric: String,
+    pub value: f64,
+}
+
+/// Keep what the web side measured this minute, and forget what is older than
+/// `forget_before`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordHistory {
+    pub samples: Vec<Sample>,
+    pub forget_before: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

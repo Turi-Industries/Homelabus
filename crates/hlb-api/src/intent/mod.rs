@@ -34,7 +34,9 @@ pub trait Ask: Into<Intent> {
 }
 
 /// Every privileged thing the web side may ask.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` only: a measurement carries an `f64`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "intent", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Intent {
     Scale(Scale),
@@ -90,6 +92,7 @@ pub enum Intent {
     MuteAlert(MuteAlert),
     UnmuteAlert(UnmuteAlert),
     SetLogo(SetLogo),
+    RecordHistory(RecordHistory),
 }
 
 macro_rules! asks {
@@ -162,6 +165,7 @@ asks! {
     MuteAlert => Result<(), String>,
     UnmuteAlert => Result<bool, String>,
     SetLogo => Result<(), String>,
+    RecordHistory => Result<(), String>,
 }
 
 /// The answer of an action that may not even be planned.
