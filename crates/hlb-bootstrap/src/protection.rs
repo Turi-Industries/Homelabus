@@ -252,6 +252,37 @@ pub fn manager_warning(managers: &[Option<Level>], joining: Level) -> Option<Str
     })
 }
 
+/// Each manager weaker than it need be, said: one that gives the Raft log up when
+/// taken, or one below a node that could carry it — `(hostname, is a manager, level)`.
+pub fn weak_managers(nodes: &[(&str, bool, Option<Level>)]) -> Vec<String> {
+    let best = nodes.iter().filter_map(|(_, _, l)| *l).min();
+    nodes
+        .iter()
+        .filter_map(|(name, manager, level)| {
+            let (true, Some(level), Some(best)) = (*manager, *level, best) else {
+                return None;
+            };
+            if level >= Level::C {
+                return manager_warning(&[], level).map(|w| format!("{name}: {w}"));
+            }
+            let better: Vec<&str> = nodes
+                .iter()
+                .filter(|(_, m, l)| !m && *l == Some(best))
+                .map(|(n, _, _)| *n)
+                .collect();
+            (level > best && !better.is_empty()).then(|| {
+                format!(
+                    "{name}: a manager at level {}, where {} at {} would carry the Raft log \
+                     better",
+                    level.as_str(),
+                    better.join(", "),
+                    best.as_str()
+                )
+            })
+        })
+        .collect()
+}
+
 /// Said wherever Secure Boot is read off: a reset firmware is not a choice to respect.
 pub const SETUP_MODE: &str = "Secure Boot is off: the firmware is in Setup Mode, its keys erased \
      (a reset, or a firmware update) — restore its factory keys in its setup";
@@ -622,6 +653,33 @@ mod tests {
         assert!(w.contains("secret"), "{w}");
         // Nothing read is nothing to compare with.
         assert!(manager_warning(&[None], Level::B).is_none());
+    }
+
+    #[test]
+    fn a_manager_a_better_node_could_replace_is_said() {
+        let nodes = [
+            ("deb1", true, Some(Level::B)),
+            ("enc3", false, Some(Level::A)),
+            ("vm1", true, Some(Level::D)),
+            ("old", true, None),
+        ];
+        let said = weak_managers(&nodes);
+        assert_eq!(said.len(), 2, "{said:#?}");
+        assert!(
+            said[0].starts_with("deb1") && said[0].contains("enc3"),
+            "{}",
+            said[0]
+        );
+        assert!(
+            said[1].starts_with("vm1") && said[1].contains("secret"),
+            "{}",
+            said[1]
+        );
+        // The best there is: nothing to say.
+        assert!(
+            weak_managers(&[("deb1", true, Some(Level::B)), ("w", false, Some(Level::B))])
+                .is_empty()
+        );
     }
 
     #[test]

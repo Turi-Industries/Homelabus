@@ -11619,6 +11619,21 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("\n⚠️  protection level never read: {}", unread.join(", "));
                             println!("   hlb node protection <node> --apply");
                         }
+                        let levels: Vec<_> = nodes
+                            .iter()
+                            .map(|n| {
+                                (
+                                    n.hostname.as_str(),
+                                    n.role == hlb_orchestrator::NodeRole::Manager,
+                                    n.protection
+                                        .as_deref()
+                                        .and_then(hlb_bootstrap::protection::Level::parse),
+                                )
+                            })
+                            .collect();
+                        for w in hlb_bootstrap::protection::weak_managers(&levels) {
+                            println!("\n⚠️  {w}");
+                        }
 
                         Ok(if quorum.needs_attention() {
                             ExitCode::FAILURE

@@ -404,8 +404,8 @@ three Tangs, and the third alone opens it.
     proposed, and where the count asks for a third manager on one, no role is derived
     and both costs are said; a manager below the best manager's level, or a weak one
     imposed, is warned. Left: `cluster init` cannot compare (no other machine yet),
-    `cluster join-command` sees no machine, `cluster status` does not warn of a weak
-    manager already there; `hlb controller move` and the vital apps' constraint wait
+    `cluster join-command` sees no machine; `cluster status` says a manager a better
+    node could replace (`weak_managers`); `hlb controller move` and the vital apps' constraint wait
     for phase 3's criticality. Not run on the lab.
   - **Debian 12 caps a node at B; nodes move to Debian 13** (decided 2026-10-28). The
     preseed and the lab install Debian 12 alone today (`vm.sh`'s only Debian image):
