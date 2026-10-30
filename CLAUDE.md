@@ -42,7 +42,7 @@ verb with a runnable example is in [docs/cli-tour.md](docs/cli-tour.md).
 
 ## The repository
 
-Thirty crates, and the web interface in `web/`. Which one owns what, so a search starts in the right place:
+Thirty-one crates, and the web interface in `web/`. Which one owns what, so a search starts in the right place:
 
 | | |
 |---|---|
@@ -50,7 +50,7 @@ Thirty crates, and the web interface in `web/`. Which one owns what, so a search
 | **Service clients** | `hlb-mail` (Stalwart), `hlb-identity` (PocketID), `hlb-bitwarden` (Vaultwarden: members, the emergency vault, Bitwarden's client cryptography), `hlb-termix` (Termix: the nodes' hosts, key and accounts), `hlb-objstore` (Garage, and the S3 calls proving a backup destination out of reach), `hlb-ingress` (Caddy), `hlb-registry` |
 | **Domain logic** | `hlb-users`, `hlb-metrics`, `hlb-backup`, `hlb-notify`, `hlb-guide`, `hlb-platform`, `hlb-secrets` |
 | **The machines** | `hlb-agent`, `hlb-bootstrap`, `hlb-mesh`, `hlb-updater`, `hlb-selfupdate`, `hlb-gitops` |
-| **Surfaces** | `hlb-cli`, `hlb-controller` (daemon + HTTP API), `hlb-api` (the API's types), `web/` (SvelteKit: modules, inbox, action panel — CONTRIBUTING says how it is put together) |
+| **Surfaces** | `hlb-cli`, `hlb-controller` (daemon + HTTP API), `hlb-privd` (the privileged executor the handlers ask, by intent, instead of holding Docker, the vault or an admin client), `hlb-api` (the API's types), `web/` (SvelteKit: modules, inbox, action panel — CONTRIBUTING says how it is put together) |
 
 `hlb-types` is the **only schema definition**, consumed by Rust and by `schemars` for
 YAML autocompletion; no other crate redefines these types. Domain crates depend on

@@ -21,6 +21,7 @@ hlb-api.workspace = true
 # What the emergency vault's checks say, for the nightly loop's notification.
 hlb-bitwarden.workspace = true
 hlb-state.workspace = true
+hlb-privd.workspace = true
 hlb-engine.workspace = true
 hlb-ingress.workspace = true
 hlb-resolver.workspace = true

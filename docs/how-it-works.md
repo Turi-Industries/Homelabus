@@ -273,6 +273,7 @@ controller — and `cargo clippy --all-targets` stays at zero warnings.
 | `hlb-selfupdate` | N/N+1 compatibility, sequencing, rollback |
 | `hlb-api` | API types, defined once; the interface gets them through OpenAPI |
 | `hlb-controller` | Daemon: API, RBAC, chained audit log, background loops |
+| `hlb-privd` | The privileged executor: the only holder of Docker, the vault and the admin clients, answering the web side's intents |
 | `hlb-cli` | 45 commands |
 
 ## The bollard spike

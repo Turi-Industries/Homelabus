@@ -1,0 +1,22 @@
+[package]
+name = "hlb-privd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The privileged executor: answers the web side's intents with Docker, the vault and the admin clients."
+
+[dependencies]
+hlb-api.workspace = true
+hlb-state.workspace = true
+hlb-orchestrator.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

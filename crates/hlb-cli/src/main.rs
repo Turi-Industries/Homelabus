@@ -11876,9 +11876,26 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut text = String::new();
         let mut walked = 0;
-        // The crates whose text reaches a person: the controller's answers, the
-        // engine's refusals, the API's comments shown on the access screen.
-        for krate in ["hlb-controller", "hlb-engine", "hlb-api"] {
+        // The crates whose text reaches a person: the API's comments shown on the
+        // access screen, and every crate answering through its types — the controller,
+        // the privileged side, the engine's refusals. Derived from the manifests: the
+        // privileged side's answers moved out of a list naming the controller, and the
+        // lines they advertise would have left the scan without a word.
+        let mut krates = vec!["hlb-api".to_string()];
+        for e in std::fs::read_dir(root.join("crates")).expect("crates") {
+            let dir = e.expect("entry").path();
+            let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default();
+            if manifest.lines().any(|l| l.starts_with("hlb-api")) {
+                krates.extend(dir.file_name().and_then(|n| n.to_str()).map(str::to_string));
+            }
+        }
+        assert!(
+            ["hlb-controller", "hlb-privd", "hlb-engine"]
+                .iter()
+                .all(|k| krates.iter().any(|c| c == k)),
+            "the walk lost a crate that answers people: {krates:?}"
+        );
+        for krate in &krates {
             fn rust(d: &std::path::Path, out: &mut String, n: &mut usize) {
                 for e in std::fs::read_dir(d).expect("directory") {
                     let p = e.expect("entry").path();

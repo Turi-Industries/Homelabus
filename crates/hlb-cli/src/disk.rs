@@ -16,7 +16,8 @@ use crate::{open_state, open_vault, Cli, ACTOR_ROLE};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// The one-time passphrase `hlb node preseed --encrypt` installs a node's disk under.
+/// The one-time passphrase a node's disk is installed under (`--encrypt` of `hlb node
+/// preseed`).
 pub const INSTALL_PASSPHRASE_PREFIX: &str = "luks-install-";
 
 #[allow(clippy::too_many_arguments)]
@@ -370,7 +371,8 @@ pub async fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// The one-time passphrase `hlb node preseed --encrypt` installs `node`'s disk under:
+/// The one-time passphrase `node`'s disk is installed under (`--encrypt` of `hlb node
+/// preseed`):
 /// the vault's when there is one, so a preseed rendered twice installs under the same
 /// passphrase, and `bind-disk` reads what the disk was really made with.
 pub async fn install_passphrase(cli: &Cli, node: &str) -> Result<String> {

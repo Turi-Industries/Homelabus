@@ -115,6 +115,11 @@ async fn mirror(s: &AppState, action: &str, target: &str) {
     }
 }
 
+/// The privileged side could not answer: a fault of ours, never the caller's.
+pub(crate) fn privd_error<T>(e: hlb_privd::Error) -> ActionError<T> {
+    ActionError::from(crate::error::ApiError::Internal(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Installation
 // ---------------------------------------------------------------------------
@@ -1199,100 +1204,15 @@ pub async fn resize(
     body: Option<Json<ScaleRequest>>,
 ) -> ActionReply {
     let request = body.map(|Json(d)| d).unwrap_or_default();
-    let mut blockers = Vec::new();
-
-    let Some(target) = request.replicas else {
-        blockers.push("replica count missing (\"replicas\" in the body)".to_string());
-        let r = ActionResult {
-            applied: false,
-            summary: format!("resize {app}"),
-            steps: Vec::new(),
-            cli_command: format!("hlb scale {app} <n> --apply"),
-            blockers,
-            warnings: Vec::new(),
-            confirmation_required: None,
-        };
-        return respond(&s, auth.identity(), "app-scale", &app, r).await;
-    };
-
-    // 🔴 Going down to zero is not a resize, it is a shutdown — and it almost never
-    // happens deliberately from an interface. We refuse it here: `hlb stop` exists and
-    // says what it does.
-    if target == 0 {
-        blockers.push(
-            "zero replicas stops the application — use \"hlb stop\" if that is the intent"
-                .to_string(),
-        );
-    }
-
-    let current = match &s.orchestrator {
-        Some(o) => o.status(&app).await.ok().map(|st| st.desired_replicas),
-        None => None,
-    };
-
-    if current.is_none() {
-        blockers.push(format!(
-            "\"{app}\" is not deployed, or Docker is unreachable"
-        ));
-    }
-
-    let applied = q.apply && blockers.is_empty();
-    let mut step = ActionStep {
-        description: match current {
-            Some(a) => format!(
-                "move {app} from {a} to {}",
-                hlb_api::plural(target, "replica", "replicas")
-            ),
-            None => format!(
-                "move {app} to {}",
-                hlb_api::plural(target, "replica", "replicas")
-            ),
-        },
-        state: StepState::Planned,
-        error: None,
-    };
-
-    if applied {
-        match &s.orchestrator {
-            Some(o) => match o.scale(&app, target).await {
-                Ok(()) => {
-                    step.state = StepState::Done;
-                    // Kept in the state, or reconciliation puts the manifest's count
-                    // back within a minute. The manifest's own count gives it back.
-                    if let Ok(m) = s.state.app_manifest(&app).await {
-                        let decided = (target != m.spec.swarm.replicas).then_some(target);
-                        if let Err(e) = s.state.set_app_replicas(&app, decided).await {
-                            step.error = Some(format!(
-                                "scaled, but not kept: reconciliation may undo it — {e}"
-                            ));
-                        }
-                    }
-                }
-                Err(e) => {
-                    step.state = StepState::Failed;
-                    step.error = Some(e.to_string());
-                }
-            },
-            None => {
-                step.state = StepState::Failed;
-                step.error = Some("Docker unreachable".into());
-            }
-        }
-    }
-
-    let r = ActionResult {
-        applied,
-        summary: format!(
-            "{app} to {}",
-            hlb_api::plural(target, "replica", "replicas")
-        ),
-        steps: vec![step],
-        cli_command: format!("hlb scale {app} {target} --apply"),
-        blockers,
-        warnings: Vec::new(),
-        confirmation_required: None,
-    };
-
+    let r = s
+        .privd()
+        .ask(hlb_api::intent::Scale {
+            app: app.clone(),
+            replicas: request.replicas,
+            apply: q.apply,
+        })
+        .await
+        .map_err(privd_error)?;
     respond(&s, auth.identity(), "app-scale", &app, r).await
 }
 
@@ -1460,107 +1380,16 @@ pub async fn node_availability(
     body: Option<Json<NodeRequest>>,
 ) -> ActionReply {
     let d = body.map(|Json(d)| d).unwrap_or_default();
-    let mut blockers = Vec::new();
-
-    let mut warnings = Vec::new();
-    let mut confirmation_required = None;
-
-    let targeted = d.availability.clone().unwrap_or_default();
-    if !matches!(targeted.as_str(), "active" | "pause" | "drain") {
-        blockers.push("availability expected: \"active\", \"pause\" or \"drain\"".to_string());
-    }
-
-    // 🔴 Draining the LAST healthy node would empty the cluster: every app would stop,
-    // and there would be nowhere left to place them. Swarm accepts it without
-    // complaint — it is on us to refuse.
-    if targeted == "drain" {
-        if let Some(o) = &s.orchestrator {
-            // Unread, every guard below would pass on an empty list.
-            let nodes = match o.nodes().await {
-                Ok(n) => n,
-                Err(e) => {
-                    blockers.push(format!("the cluster's nodes could not be read: {e}"));
-                    Vec::new()
-                }
-            };
-            let healthy = nodes
-                .iter()
-                .filter(|n| n.is_ready() && n.availability == "active")
-                .count();
-            // ⚠️ id OR hostname. Docker addresses a node by either, so `{id}` here can
-            // legitimately be a hostname — and matching on the identifier alone made
-            // this check quietly answer "the target is not active", which skips the
-            // guard below and drains the last node the caller asked about.
-            let target_is_active = nodes
-                .iter()
-                .any(|n| (n.id == id || n.hostname == id) && n.availability == "active");
-            if target_is_active && healthy <= 1 {
-                blockers.push(
-                    "this is the last active node: draining it would stop ALL the \
-                     applications, with nowhere to place them"
-                        .to_string(),
-                );
-            }
-            // 🔴 The CLI's own rule, `cluster::maintenance`: one node at a time, the
-            // managers' quorum, the services whose data stays on this node. Skipped
-            // here, a drain clicked while another node was out left the moved services
-            // nowhere to go, and PostgreSQL stopped without a word of warning.
-            if target_is_active && blockers.is_empty() {
-                match hlb_orchestrator::cluster::maintenance(&nodes, &id) {
-                    hlb_orchestrator::cluster::Maintenance::Go => {}
-                    hlb_orchestrator::cluster::Maintenance::Downtime(why) => {
-                        warnings.push(why);
-                        confirmation_required = Some(id.clone());
-                        if q.apply && d.confirmed.as_deref() != Some(id.as_str()) {
-                            blockers.push(format!(
-                                "the downtime is not accepted — send back \
-                                 {{\"confirmed\": \"{id}\"}} to drain it anyway"
-                            ));
-                        }
-                    }
-                    hlb_orchestrator::cluster::Maintenance::Refused(why) => blockers.push(why),
-                }
-            }
-        }
-    }
-
-    let applied = q.apply && blockers.is_empty();
-    let mut step = ActionStep {
-        description: format!("move node {id} to \"{targeted}\""),
-        state: StepState::Planned,
-        error: None,
-    };
-
-    if applied {
-        match &s.orchestrator {
-            Some(o) => match o.set_node_availability(&id, &targeted).await {
-                Ok(()) => step.state = StepState::Done,
-                Err(e) => {
-                    step.state = StepState::Failed;
-                    step.error = Some(e.to_string());
-                }
-            },
-            // ⚠️ NOT a failure: no orchestrator means Docker is unreachable or we are
-            // in demonstration mode. Recording it as failed would put a red line in the
-            // audit log for something nobody attempted.
-            None => {
-                step.state = StepState::Unimplemented;
-                step.error =
-                    Some("no orchestrator: Docker unreachable, or demonstration mode".into());
-            }
-        }
-    }
-
-    let r = ActionResult {
-        applied,
-        summary: format!("node {id} to \"{targeted}\""),
-        steps: vec![step],
-        cli_command: format!("docker node update --availability {targeted} {id}"),
-        blockers,
-        warnings,
-        confirmation_required,
-    };
-
+    let r = s
+        .privd()
+        .ask(hlb_api::intent::NodeAvailability {
+            node: id.clone(),
+            availability: d.availability.unwrap_or_default(),
+            confirmed: d.confirmed,
+            apply: q.apply,
+        })
+        .await
+        .map_err(privd_error)?;
     respond(&s, auth.identity(), "node-availability", &id, r).await
 }
 

@@ -27,6 +27,7 @@ members = [
     "crates/hlb-api",
     "crates/hlb-selfupdate",
     "crates/hlb-controller",
+    "crates/hlb-privd",
     "crates/hlb-secrets",
     "crates/hlb-state",
     "crates/hlb-engine",
@@ -74,6 +75,7 @@ hlb-selfupdate = { path = "crates/hlb-selfupdate" }
 hlb-secrets = { path = "crates/hlb-secrets" }
 hlb-state = { path = "crates/hlb-state" }
 hlb-engine = { path = "crates/hlb-engine" }
+hlb-privd = { path = "crates/hlb-privd" }
 
 # --- runtime ---
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "process", "time"] }

@@ -15,6 +15,8 @@ paths:
   - "crates/hlb-controller/src/recovery.rs"
   - "crates/hlb-termix/**/*.rs"
   - "crates/hlb-engine/src/termix.rs"
+  - "crates/hlb-privd/**/*.rs"
+  - "crates/hlb-api/src/intent.rs"
 ---
 
 # Security and authorization
@@ -22,6 +24,14 @@ paths:
 Tokens, roles, sessions, the vault and forward-auth. A mistake here is not visible from
 the outside, which is the whole problem.
 
+- **The web side ASKS; `hlb-privd` alone holds.** Docker's socket, the vault and the
+  admin clients are private fields of `hlb_privd::Privd`; a handler sends an
+  `hlb_api::intent::Intent` naming WHAT ("scale gitea to 3"), never HOW — a relayed
+  service spec binds any host path, so an intent carries no image, mount, command or
+  secret name, and the privileged side re-derives them from the catalog and its state.
+  Each intent struct is `deny_unknown_fields`, and the dispatch has no `_ =>` arm. The
+  answers round-trip through JSON in process too, so the wire stage 2 puts on a socket
+  is the one the suite already runs.
 - **An API token carries a ROLE, not an identity.** Enough to read state, wrong as soon
   as a request acts FOR someone: without a binding, a stolen token would create aliases
   on anyone's mailbox. An unbound `admin` token is therefore refused where a bound

@@ -2439,9 +2439,10 @@ impl State {
         self.put_setting("mail-public-certificate", id).await
     }
 
-    /// CrowdSec's local API as the bouncer reaches it, when `hlb crowdsec enroll --url`
-    /// recorded one other than the catalog's. Kept here, not in a flag, so every
-    /// publication — the CLI's and the controller's alike — names the same one.
+    /// CrowdSec's local API as the bouncer reaches it, when
+    /// `hlb crowdsec enroll --url <url>` recorded one other than the catalog's. Kept
+    /// here, not in a flag, so every publication — the CLI's and the controller's
+    /// alike — names the same one.
     pub async fn crowdsec_url(&self) -> Result<Option<String>> {
         self.setting("crowdsec-url").await
     }
@@ -3007,7 +3008,7 @@ impl State {
     /// Every secret, name and ciphertext, for a rekey.
     ///
     /// ⚠️ The only method that hands out ciphertexts in bulk. It exists for one caller,
-    /// `hlb secrets rekey`, and the values still never leave encrypted.
+    /// `hlb secrets-rekey`, and the values still never leave encrypted.
     pub async fn all_ciphertexts(&self) -> Result<Vec<(String, Vec<u8>)>> {
         let rows = sqlx::query("SELECT name, ciphertext FROM secrets ORDER BY name")
             .fetch_all(&self.pool)
@@ -3297,7 +3298,7 @@ impl State {
         self.handle_guide(app, id, false).await
     }
 
-    /// Marks a manual action as handled AGAINST its own check (`hlb ack --force`): the
+    /// Marks a manual action as handled AGAINST its own check (`hlb ack <app>/<id> --force`): the
     /// nightly re-check then leaves it as the person said, until the check agrees.
     pub async fn force_guide(&self, app: &str, id: &str) -> Result<bool> {
         self.handle_guide(app, id, true).await

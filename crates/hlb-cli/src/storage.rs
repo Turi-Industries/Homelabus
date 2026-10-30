@@ -246,7 +246,7 @@ pub async fn encrypt(cli: &Cli, t: Target<'_>, apply: bool) -> Result<ExitCode> 
     if signals.root_encrypted != Some(true) {
         println!("\n⚠️  {node}'s own disk is not encrypted: the key lies on it in clear. A data");
         println!("   disk taken alone gives nothing; the whole machine gives everything");
-        println!("   (`hlb node preseed --encrypt`).");
+        println!("   (`hlb node preseed {node} --disk <by-id> --ssh-key <key> --encrypt`).");
     }
     if stuck {
         eprintln!("\n🔴 Nothing is done while a volume is in a shape no run of Homelabus leaves.");

@@ -148,6 +148,17 @@ pub struct AppState {
     pub trusted_proxy: bool,
 }
 
+impl AppState {
+    /// The privileged side, which every handler asks instead of holding Docker, the
+    /// vault or an admin client itself.
+    ///
+    /// ⚠️ Assembled from this state's own fields while the handlers move onto it one
+    /// module at a time; once none reads those fields, they move into it for good.
+    pub fn privd(&self) -> hlb_privd::Privd {
+        hlb_privd::Privd::new(self.state.clone()).with_orchestrator(self.orchestrator.clone())
+    }
+}
+
 /// The clients the executor needs, assembled once at startup.
 ///
 /// ⚠️ The vault is opened at startup and kept, not reopened per request: opening it
