@@ -656,7 +656,8 @@ pub struct NodeRequest {
     request_body = Option<NodeRequest>,
     responses(
         (status = 200, body = hlb_api::ActionResult),
-        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
     ),
     extensions(
         ("x-hlb-requires" = json!("operate")),
@@ -666,19 +667,22 @@ pub struct NodeRequest {
 pub async fn node_availability(
     auth: Authorized<CanOperate>,
     AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
     Query(q): Query<ActionQuery>,
     body: Option<Json<NodeRequest>>,
 ) -> ActionReply {
     let d = body.map(|Json(d)| d).unwrap_or_default();
+    let asked = hlb_api::intent::NodeAvailability {
+        node: id.clone(),
+        availability: d.availability.unwrap_or_default(),
+        confirmed: d.confirmed,
+        apply: q.apply,
+    };
+    let proof = crate::passkey::confirm(&s, &headers, vec![asked.clone().into()]).await?;
     let r = s
         .privd()
-        .ask(hlb_api::intent::NodeAvailability {
-            node: id.clone(),
-            availability: d.availability.unwrap_or_default(),
-            confirmed: d.confirmed,
-            apply: q.apply,
-        })
+        .ask_confirmed(proof, asked)
         .await
         .map_err(privd_error)?;
     respond(&s, auth.identity(), "node-availability", &id, r).await
@@ -698,7 +702,8 @@ pub async fn node_availability(
     request_body = Option<Confirmation>,
     responses(
         (status = 200, body = hlb_api::ActionResult),
-        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
     ),
     extensions(
         ("x-hlb-requires" = json!("destroy")),
@@ -708,17 +713,20 @@ pub async fn node_availability(
 pub async fn delete_app(
     auth: Authorized<CanDestroy>,
     AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(app): Path<String>,
     Query(q): Query<ActionQuery>,
     body: Option<Json<Confirmation>>,
 ) -> ActionReply {
+    let asked = hlb_api::intent::Remove {
+        app: app.clone(),
+        confirmed: body.and_then(|Json(c)| c.confirmed),
+        apply: q.apply,
+    };
+    let proof = crate::passkey::confirm(&s, &headers, vec![asked.clone().into()]).await?;
     let r = s
         .privd()
-        .ask(hlb_api::intent::Remove {
-            app: app.clone(),
-            confirmed: body.and_then(|Json(c)| c.confirmed),
-            apply: q.apply,
-        })
+        .ask_confirmed(proof, asked)
         .await
         .map_err(privd_error)?;
     respond(&s, auth.identity(), "app-remove", &app, r).await

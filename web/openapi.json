@@ -6468,6 +6468,24 @@
             },
             "description": "Nothing could be planned: the body's `blockers` say why"
           },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "content": {
               "application/json": {
@@ -6617,6 +6635,24 @@
               }
             },
             "description": "Nothing could be planned: the body's `blockers` say why"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -7330,6 +7366,24 @@
               }
             },
             "description": "Nothing could be planned: the body's `blockers` say why"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -9016,6 +9070,24 @@
             },
             "description": "Nothing could be planned: the body's `blockers` say why"
           },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "content": {
               "application/json": {
@@ -9391,6 +9463,24 @@
               }
             },
             "description": "Nothing could be planned: the body's `blockers` say why"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -10291,6 +10381,59 @@
         "summary": "Purges one of the SIGNED-IN account's own expired-but-still-active aliases.",
         "x-hlb-preview": true,
         "x-hlb-requires": "act-on-self"
+      }
+    },
+    "/auth/confirmed": {
+      "get": {
+        "description": "Static: the page reads its own address, so nothing from the query is ever written\ninto it. A `BroadcastChannel`, not `window.opener`: a PocketID answering with\n`Cross-Origin-Opener-Policy` severs the opener for good, and the panel would wait\nfor a message nobody can send. The channel reaches this origin's pages only, and\nthe code is worth nothing without the action the daemon began it for.",
+        "operationId": "passkey_returned",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Said when the person refused, or PocketID refused for them.",
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {}
+            },
+            "description": "A page handing the return to the panel that asked"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "The page PocketID returns to: it hands what it carried to the panel that opened it,\nand closes.",
+        "x-hlb-public": true
       }
     },
     "/auth/return_to": {

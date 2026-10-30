@@ -504,7 +504,8 @@ fn no_role(id: &str, roles: &[hlb_users::RoleDef]) -> String {
     params(crate::actions::ActionQuery),
     responses(
         (status = 200, body = hlb_api::ActionResult),
-        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
     ),
     extensions(
         ("x-hlb-requires" = json!("manage-accounts")),
@@ -514,6 +515,7 @@ fn no_role(id: &str, roles: &[hlb_users::RoleDef]) -> String {
 pub async fn change_role(
     auth: Authorized<CanManageAccounts>,
     AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path((account, role_id)): Path<(String, String)>,
     Query(q): Query<ActionQuery>,
 ) -> ActionReply {
@@ -603,7 +605,8 @@ pub async fn change_role(
             role: role.id.clone(),
             granted_by: Some(auth.actor().name().to_string()),
         };
-        match s.record(asked).await {
+        let proof = crate::passkey::confirm(&s, &headers, vec![asked.clone().into()]).await?;
+        match s.record_confirmed(proof, asked).await {
             Ok(()) => {
                 step.state = StepState::Done;
                 // Its groups in PocketID now, not at the loop's next pass.
@@ -651,7 +654,8 @@ pub struct RolesRequest {
     request_body = RolesRequest,
     responses(
         (status = 200, body = hlb_api::ActionResult),
-        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
     ),
     extensions(
         ("x-hlb-requires" = json!("manage-accounts")),
@@ -661,6 +665,7 @@ pub struct RolesRequest {
 pub async fn change_roles(
     auth: Authorized<CanManageAccounts>,
     AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(role_id): Path<String>,
     Query(q): Query<ActionQuery>,
     Json(d): Json<RolesRequest>,
@@ -725,6 +730,28 @@ pub async fn change_roles(
         }
 
         let applied = q.apply && blockers.is_empty();
+        let changed = |a: &String| {
+            known
+                .get(a)
+                .is_some_and(|h| h.role.as_deref() != Some(role.id.as_str()))
+        };
+        // One passkey for the whole selection: every change is asked for before the
+        // first is sent, so a refusal comes before anything moved.
+        let asked = |account: &String| hlb_api::intent::SetUserRole {
+            user: account.clone(),
+            role: role.id.clone(),
+            granted_by: Some(auth.actor().name().to_string()),
+        };
+        let proof = if applied {
+            let all = accounts
+                .iter()
+                .filter(|a| changed(a))
+                .map(|a| asked(a).into())
+                .collect();
+            crate::passkey::confirm(&s, &headers, all).await?
+        } else {
+            None
+        };
         for account in accounts.iter().filter(|a| known.contains_key(*a)) {
             let Some(h) = known.get(account) else {
                 continue;
@@ -746,12 +773,7 @@ pub async fn change_roles(
             if h.role.as_deref() == Some(role.id.as_str()) {
                 step.description = format!("{account}: already \"{}\"", role.label());
             } else if applied {
-                let asked = hlb_api::intent::SetUserRole {
-                    user: account.clone(),
-                    role: role.id.clone(),
-                    granted_by: Some(auth.actor().name().to_string()),
-                };
-                match s.record(asked).await {
+                match s.record_confirmed(proof.clone(), asked(account)).await {
                     Ok(()) => step.state = StepState::Done,
                     Err(e) => {
                         step.state = StepState::Failed;

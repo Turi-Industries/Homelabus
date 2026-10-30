@@ -14,7 +14,25 @@ export type ActionResult = Schemas['ActionResult'];
  * preview came from — no form state is read again in between — so what is applied is
  * what was read, which is the guarantee "rebuilt from the preview" exists for.
  */
-export type Send = (apply: boolean, confirmed: string | null) => Promise<Answer<ActionResult>>;
+export type Send = (
+	apply: boolean,
+	confirmed: string | null,
+	passkey?: Passkey | null
+) => Promise<Answer<ActionResult>>;
+
+/** What PocketID's return carried, sent again with an action that destroys. */
+export interface Passkey {
+	state: string;
+	code: string;
+}
+
+/** Where the page PocketID returns to says what it carried. */
+export const PASSKEY_CHANNEL = 'hlb-passkey';
+
+/** The headers a passkey rides on, and the one a 428 names PocketID's address in. */
+const passkeyHeaders = (p: Passkey | null | undefined) =>
+	p ? { 'x-hlb-passkey-state': p.state, 'x-hlb-passkey-code': p.code } : {};
+const PASSKEY_URL = 'x-hlb-passkey-url';
 
 export interface Proposal {
 	/** What the person asked for, in their words: the panel's title. */
@@ -57,9 +75,10 @@ export function proposal<P extends Previewable, V extends Verb & keyof paths[P]>
 	) => Promise<Answer<ActionResult>>;
 	return {
 		title,
-		send: (apply, confirmed) =>
+		send: (apply, confirmed, passkey) =>
 			call(path, {
 				params: { path: values.path, query: { apply } },
+				headers: passkeyHeaders(passkey),
 				// Only app removal asks for a repeated name, in a body of its own.
 				body: confirmed === null ? values.body : { ...(values.body ?? {}), confirmed }
 			}),
@@ -93,9 +112,10 @@ export function replay(title: string, plan: Schemas['NamedPlan']): Proposal | nu
 	) => Promise<Answer<ActionResult>>;
 	return {
 		title,
-		send: (apply, confirmed) =>
+		send: (apply, confirmed, passkey) =>
 			call(plan.path, {
 				params: { query: { apply } },
+				headers: passkeyHeaders(passkey),
 				body: confirmed === null ? body : { ...(body ?? {}), confirmed }
 			}),
 		plan: { method, path: plan.path, body: plan.body === '' ? null : plan.body }
@@ -107,6 +127,20 @@ type Stage =
 	| { kind: 'previewing'; proposal: Proposal }
 	| { kind: 'previewed'; proposal: Proposal; result: ActionResult }
 	| { kind: 'applying'; proposal: Proposal; result: ActionResult }
+	/** Applying destroys: it waits for a passkey presented at `url`, opened by a click
+	 * of its own — a window opened after the request came back is one the browser may
+	 * block, its click spent. */
+	| {
+			kind: 'passkey';
+			proposal: Proposal;
+			result: ActionResult;
+			confirmed: string | null;
+			url: string;
+			waiting: boolean;
+			/** Why the last attempt brought nothing back: the window blocked, no answer in
+			 * time, or what PocketID said. */
+			refused: 'blocked' | 'timeout' | { idp: string } | null;
+	  }
 	| { kind: 'applied'; proposal: Proposal; result: ActionResult }
 	| { kind: 'failed'; proposal: Proposal; error: string };
 
@@ -134,7 +168,45 @@ class Panel {
 		if (this.stage.kind !== 'previewed') return;
 		const { proposal, result } = this.stage;
 		this.stage = { kind: 'applying', proposal, result };
-		const outcome = await settle(proposal.send(true, confirmed));
+		const sent = proposal.send(true, confirmed);
+		const url = await passkeyAsked(sent);
+		if (url !== null) {
+			this.stage = { kind: 'passkey', proposal, result, confirmed, url, waiting: false, refused: null };
+			return;
+		}
+		await this.finish(proposal, sent);
+	}
+
+	/**
+	 * Opens PocketID for the passkey the action waits for — from the click itself — and
+	 * sends the action again with what came back.
+	 */
+	async presentPasskey(): Promise<void> {
+		const asked = this.stage;
+		if (asked.kind !== 'passkey') return;
+		const opened = window.open(asked.url, 'hlb-passkey', 'popup,width=480,height=720');
+		if (opened === null) {
+			this.stage = { ...asked, refused: 'blocked' };
+			return;
+		}
+		// Opened again, the window closed by mistake: the return is already awaited.
+		if (asked.waiting) return;
+		const state = new URL(asked.url).searchParams.get('state');
+		this.stage = { ...asked, waiting: true, refused: null };
+		const back = await returned(state);
+		// Closed, or another action asked for meanwhile: this one is left as it was.
+		if (this.stage.kind !== 'passkey' || this.stage.proposal !== asked.proposal) return;
+		if (back === null || 'error' in back) {
+			this.stage = { ...asked, waiting: false, refused: back === null ? 'timeout' : { idp: back.error } };
+			return;
+		}
+		const { proposal, result, confirmed } = asked;
+		this.stage = { kind: 'applying', proposal, result };
+		await this.finish(proposal, proposal.send(true, confirmed, back));
+	}
+
+	private async finish(proposal: Proposal, sent: Promise<Answer<ActionResult>>): Promise<void> {
+		const outcome = await settle(sent);
 		// 🔴 No identity check here, unlike a preview: this is what WAS done, and it may
 		// carry a link shown once. Closed or showing another preview since, the panel
 		// shows it anyway — a preview is asked again with one click, the link never.
@@ -170,6 +242,39 @@ class Panel {
 	close(): void {
 		this.stage = { kind: 'closed' };
 	}
+}
+
+/** PocketID's address when the answer is a 428 waiting for a passkey, else `null`. */
+async function passkeyAsked(sent: Promise<Answer<ActionResult>>): Promise<string | null> {
+	try {
+		const { response } = await sent;
+		return response.status === 428 ? response.headers.get(PASSKEY_URL) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * What the page PocketID returns to says for the confirmation begun with `state` —
+ * `null` once the confirmation would have expired anyway. Another tab's return, or a
+ * stale one, is not this one: matched on the state.
+ */
+function returned(state: string | null, within_ms = 5 * 60_000): Promise<Passkey | { error: string } | null> {
+	return new Promise((resolve) => {
+		const channel = new BroadcastChannel(PASSKEY_CHANNEL);
+		const done = (v: Passkey | { error: string } | null) => {
+			clearTimeout(timer);
+			channel.close();
+			resolve(v);
+		};
+		const timer = setTimeout(() => done(null), within_ms);
+		channel.onmessage = (e: MessageEvent) => {
+			const back = e.data as { state?: unknown; code?: unknown; error?: unknown };
+			if (state === null || back?.state !== state) return;
+			if (typeof back.error === 'string') done({ error: back.error });
+			else if (typeof back.code === 'string') done({ state, code: back.code });
+		};
+	});
 }
 
 /**

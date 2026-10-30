@@ -160,7 +160,22 @@ impl AppState {
     where
         A: hlb_api::intent::Ask<Answer = Result<T, String>>,
     {
-        self.privd.ask(intent).await.map_err(|e| e.to_string())?
+        self.record_confirmed(None, intent).await
+    }
+
+    /// The same, with the passkey that confirmed it when there is one.
+    pub async fn record_confirmed<A, T>(
+        &self,
+        proof: Option<hlb_api::intent::Proof>,
+        intent: A,
+    ) -> Result<T, String>
+    where
+        A: hlb_api::intent::Ask<Answer = Result<T, String>>,
+    {
+        self.privd
+            .ask_confirmed(proof, intent)
+            .await
+            .map_err(|e| e.to_string())?
     }
 }
 
@@ -1613,6 +1628,7 @@ pub fn api() -> OpenApiRouter<Arc<AppState>> {
         // authentication of someone who is coming to authenticate.
         .routes(routes!(crate::signin::start))
         .routes(routes!(crate::signin::return_to))
+        .routes(routes!(crate::passkey::passkey_returned))
         .routes(routes!(crate::signin::signout))
         // 🔴 Open: the sign-in screen must carry the house name and colours, or it
         // looks like every phishing page in the world.
@@ -4094,6 +4110,80 @@ pub(crate) mod tests {
         );
     }
 
+    /// A state whose daemon confirms destructions through a PocketID at `idp.example`.
+    fn confirming_state(st: State, o: Arc<FakeOrch>) -> Arc<AppState> {
+        let mut e = base_state(Arc::new(st), true);
+        let base = "https://idp.example";
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_orchestrator(Some(o))
+            .confirming_through(hlb_identity::oidc::Oidc::with_endpoints(
+                hlb_identity::oidc::Endpoints {
+                    issuer: base.into(),
+                    authorization_endpoint: format!("{base}/authorize"),
+                    token_endpoint: format!("{base}/token"),
+                    userinfo_endpoint: format!("{base}/userinfo"),
+                    end_session_endpoint: None,
+                },
+                "hlb",
+                "secret",
+                format!("https://hlb.example{}", hlb_api::intent::CALLBACK),
+            ));
+        Arc::new(e)
+    }
+
+    #[tokio::test]
+    async fn a_deletion_waits_for_a_passkey_and_its_preview_does_not() {
+        let st = State::in_memory().await.expect("base");
+        st.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("app");
+        let o = Arc::new(FakeOrch::default());
+        let e = confirming_state(st, o.clone());
+
+        let (s, v) = delete(router(e.clone()), "/api/apps/gitea", "{}").await;
+        assert_eq!(s, StatusCode::OK, "a preview asked for a passkey: {v}");
+
+        let resp = router(e.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/apps/gitea?apply=true")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"confirmed":"gitea"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::PRECONDITION_REQUIRED);
+        let url = resp
+            .headers()
+            .get(crate::passkey::URL_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .expect("the address to present a passkey at");
+        assert!(url.starts_with("https://idp.example/authorize?"), "{url}");
+        assert!(url.contains("&prompt=login"), "{url}");
+        assert!(o.removed.lock().expect("mutex").is_empty());
+
+        // A proof PocketID never gave is the daemon's to refuse: nothing moves.
+        let resp = router(e.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/apps/gitea?apply=true")
+                    .header("content-type", "application/json")
+                    .header(crate::passkey::STATE_HEADER, "made-up")
+                    .header(crate::passkey::CODE_HEADER, "made-up")
+                    .body(Body::from(r#"{"confirmed":"gitea"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert!(!resp.status().is_success(), "{}", resp.status());
+        assert!(o.removed.lock().expect("mutex").is_empty());
+        assert_eq!(e.state.installed_apps().await.expect("apps").len(), 1);
+    }
+
     #[tokio::test]
     async fn an_app_that_could_not_be_stopped_is_never_forgotten() {
         // 🔴 No orchestrator: the service may well still be running. Forgetting the app
@@ -4804,8 +4894,8 @@ pub(crate) mod tests {
         // legitimate exception: the request of someone who does not have an account
         // yet and carries their own authorization. What reads is what a person sees
         // before signing in — the house's name, colours and letters — plus Swarm's
-        // probe, the way to sign in, and the status page that refuses by itself until
-        // someone opens it.
+        // probe, the way to sign in and back from a passkey, and the status page that
+        // refuses by itself until someone opens it.
         let public: Vec<String> = declared()
             .iter()
             .filter(|r| r.public)
@@ -4818,6 +4908,7 @@ pub(crate) mod tests {
             "GET /api/catalog/{name}/icon",
             "GET /api/themes",
             "GET /api/themes/{name}/font/{family}",
+            "GET /auth/confirmed",
             "GET /auth/return_to",
             "GET /auth/signin",
             "GET /healthz",

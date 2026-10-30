@@ -297,6 +297,10 @@ mod tests {
                 "a browser navigation back from PocketID: a redirect",
             ),
             (
+                "passkey_returned",
+                "a page PocketID's return lands on, handing it to the panel",
+            ),
+            (
                 "unavailable",
                 "read by a person whose browser followed a sign-in link",
             ),

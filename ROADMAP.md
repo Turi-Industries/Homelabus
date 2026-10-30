@@ -683,19 +683,29 @@ three Tangs, and the third alone opens it.
     turned a start-first `hlb-privd` stop-first, and an overlap forced by hand
     (`--update-order start-first --force`) left the new daemon's socket in place and
     answering after the old one's clean shutdown.
-  - **A passkey per destruction** — decided 2026-10-30 (owner): re-authenticated within
-    five minutes, checked by the daemon. Design: a destroy-level intent (removing an
-    app, draining or pausing a node, deleting a role, changing a person's role) carries
-    the authorization CODE of a PocketID round trip asked with `prompt=login` and a
-    `nonce` that is the SHA-256 of the intent itself; the daemon exchanges the code
-    with PocketID over TLS with its own copy of the client's secret (as sign-in does:
-    no signature to verify), and acts only if the `nonce` is the intent's, `auth_time`
-    is under five minutes old, and the `sub` is an account whose own role allows the
-    intent — read from its state, not vouched for. One passkey, one action: an
-    intruder in the web side acts only while someone confirms, and only what they
-    were asked to confirm. API tokens no longer destroy where PocketID signs people
-    in; the CLI, as root, still does. Without PocketID (the demonstration, a fresh
-    installation), nothing signs in by passkey and the intents stay as they are.
+  - ✅ **A passkey per destruction** — decided 2026-10-30 (owner): re-authenticated
+    within five minutes, checked by the daemon; built 2026-10-30. A destroy-level
+    intent applied (removing an app, draining or pausing a node, deleting a role,
+    changing a person's role) is acted on only inside a `Confirmed` carrying the
+    authorization CODE of a PocketID round trip the daemon began, with `prompt=login`
+    and a `nonce` that is the SHA-256 of the intents begun; the daemon exchanges the
+    code itself, with its own PKCE check and its own copy of the client's secret (as
+    sign-in does: no signature to verify), and acts only if the `nonce` is the
+    intents', `auth_time` is under five minutes old, and the `sub` is an account whose
+    own role allows the intent — read from its state, not vouched for. Each intent
+    begun is acted on once; a bulk change of roles is one passkey for the whole
+    selection. The route answers 428 with PocketID's address in `x-hlb-passkey-url`;
+    the panel opens it from a click of its own (a window opened after the request
+    came back is one the browser may block) and sends the action again with the
+    state and code `/auth/confirmed` hands back over a `BroadcastChannel` — not
+    `window.opener`, which a `Cross-Origin-Opener-Policy` would sever. ⚠️ What it
+    bounds is HOW OFTEN, not WHAT: an intruder in the web side destroys only while
+    someone confirms, one destruction per passkey presented — but PocketID shows
+    nothing of the intent, and the web side chooses what is begun, so the one
+    destroyed need not be the one the person read. API tokens no longer destroy where
+    PocketID signs people in; the CLI, as root, still does. Without PocketID (the
+    demonstration, a fresh installation), nothing signs in by passkey and the intents
+    stay as they are.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to

@@ -182,6 +182,32 @@
 					</div>
 				</section>
 
+				{#if stage.kind === 'passkey'}
+					<section class="flex flex-col items-start gap-3 border-t border-border pt-4">
+						<p class="text-sm font-semibold text-critical">{m.action_destructive_operation()}</p>
+						<p class="text-sm">{m.action_passkey_needed()}</p>
+						{#if stage.refused !== null}
+							<p role="alert" class="text-sm text-critical">
+								{#if stage.refused === 'blocked'}
+									{m.action_passkey_blocked()}
+								{:else if stage.refused === 'timeout'}
+									{m.action_passkey_timeout()}
+								{:else}
+									{m.action_passkey_refused({ error: stage.refused.idp })}
+								{/if}
+							</p>
+						{/if}
+						{#if stage.waiting}
+							<p class="text-sm text-muted-text" aria-busy="true">{m.action_passkey_waiting()}</p>
+						{/if}
+						<button
+							type="button"
+							class="rounded-md border-2 border-critical px-4 py-2 text-sm font-semibold text-critical"
+							onclick={() => void panel.presentPasskey()}>{m.action_passkey_present()}</button
+						>
+					</section>
+				{/if}
+
 				{#if stage.kind === 'previewed' || stage.kind === 'applying'}
 					{#if result.applicable}
 						<form

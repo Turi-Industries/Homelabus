@@ -363,7 +363,8 @@ pub async fn put_role(
     params(crate::actions::ActionQuery),
     responses(
         (status = 200, body = hlb_api::ActionResult),
-        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
     ),
     extensions(
         ("x-hlb-requires" = json!("manage-accounts")),
@@ -373,6 +374,7 @@ pub async fn put_role(
 pub async fn delete_role(
     auth: Authorized<CanManageAccounts>,
     AxumState(s): AxumState<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
     Query(q): Query<ActionQuery>,
 ) -> ActionReply {
@@ -385,11 +387,11 @@ pub async fn delete_role(
     let applied = q.apply && blockers.is_empty();
     let mut step = planned(format!("delete the role \"{id}\" and its PocketID group"));
     if applied {
+        let asked = hlb_api::intent::DeleteRole { id: id.clone() };
+        let proof = crate::passkey::confirm(&s, &headers, vec![asked.clone().into()]).await?;
         apply_step(
             &mut step,
-            s.record(hlb_api::intent::DeleteRole { id: id.clone() })
-                .await
-                .map(|_| ()),
+            s.record_confirmed(proof, asked).await.map(|_| ()),
         );
     }
     let r = result(
