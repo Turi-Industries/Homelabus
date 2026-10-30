@@ -16,7 +16,7 @@ paths:
   - "crates/hlb-termix/**/*.rs"
   - "crates/hlb-engine/src/termix.rs"
   - "crates/hlb-privd/**/*.rs"
-  - "crates/hlb-api/src/intent.rs"
+  - "crates/hlb-api/src/intent/**"
 ---
 
 # Security and authorization
@@ -31,7 +31,11 @@ the outside, which is the whole problem.
   secret name, and the privileged side re-derives them from the catalog and its state.
   Each intent struct is `deny_unknown_fields`, and the dispatch has no `_ =>` arm. The
   answers round-trip through JSON in process too, so the wire stage 2 puts on a socket
-  is the one the suite already runs.
+  is the one the suite already runs. 🔴 `hlb.db` is written by `hlb-privd` alone —
+  whoever writes it forges a secret, a session or the audit chain: a web write is an
+  intent in `intent/record.rs`, asked with `AppState::record`. A value it carries (a
+  session's, an invitation's) is left out of its hand-written `Debug`; an
+  `Option<Option<_>>` is two fields, since JSON says `null` for both.
 - **An API token carries a ROLE, not an identity.** Enough to read state, wrong as soon
   as a request acts FOR someone: without a binding, a stolen token would create aliases
   on anyone's mailbox. An unbound `admin` token is therefore refused where a bound
