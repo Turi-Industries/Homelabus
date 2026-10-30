@@ -6961,6 +6961,48 @@ steps:
     }
 
     #[tokio::test]
+    async fn the_bitwarden_assistant_never_takes_over_another_token() {
+        let st = State::in_memory().await.expect("base");
+        st.upsert_user("lena", "admin", None)
+            .await
+            .expect("account");
+        st.add_mailbox("lena", "lena", "home.example", true)
+            .await
+            .expect("mailbox");
+        let (_, deadman) =
+            hlb_types::token::generate("deadman", hlb_types::Role::Operator, [7; 32]);
+        st.store_token(&deadman).await.expect("deadman");
+        let mut s = base_state(Arc::new(st), true);
+        s.public_url = Some("https://hlb.home.example".into());
+        let e = Arc::new(s);
+        let role = |e: Arc<AppState>| async move {
+            e.state
+                .list_tokens()
+                .await
+                .expect("tokens")
+                .into_iter()
+                .find(|(n, ..)| n == "deadman")
+                .map(|(_, r, _)| r)
+        };
+
+        let (status, v) = post(
+            router(e.clone()),
+            "/api/bitwarden",
+            r#"{"account":"lena","name":"deadman"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{v}");
+        assert_eq!(role(e.clone()).await.as_deref(), Some("operator"));
+
+        // Her own, issued again: the common case of a lost phone.
+        let body = r#"{"account":"lena","name":"bw-lena"}"#;
+        let (status, v) = post(router(e.clone()), "/api/bitwarden", body).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let (status, v) = post(router(e.clone()), "/api/bitwarden", body).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+    }
+
+    #[tokio::test]
     async fn a_domain_that_is_not_one_is_refused_over_http() {
         // 🔴 Written into the Caddyfile as is, a newline and a brace opened a site of
         // their own.

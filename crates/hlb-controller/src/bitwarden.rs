@@ -151,6 +151,21 @@ pub async fn assistant(
         .name
         .clone()
         .unwrap_or_else(|| token_name(&d.account, d.mailbox.as_deref()));
+    // 🔴 `store_token` replaces a token of the same name: a name typed here that is a
+    // service token's — the deadman's, an operator's — would silently become a `user`
+    // token for aliases. Only this account's own is issued again.
+    let taken = s
+        .state
+        .list_tokens()
+        .await?
+        .iter()
+        .any(|(n, ..)| *n == name);
+    if taken && s.state.token_user(&name).await?.as_deref() != Some(d.account.as_str()) {
+        return Err(ApiError::Conflict(format!(
+            "a token named \"{name}\" exists and is not {}'s: choose another name",
+            d.account
+        )));
+    }
 
     let mut entropy = [0u8; hlb_types::token::TOKEN_BYTES];
     hlb_secrets::fill_random(&mut entropy);
