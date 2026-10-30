@@ -49,6 +49,8 @@ pub enum Intent {
     MyIdentity(MyIdentity),
     Rename(Rename),
     DefaultMailbox(DefaultMailbox),
+    CreateAlias(CreateAlias),
+    CreateMailbox(CreateMailbox),
 }
 
 macro_rules! asks {
@@ -83,6 +85,8 @@ asks! {
     MyIdentity => crate::MyIdentity,
     Rename => ActionResult,
     DefaultMailbox => Acted,
+    CreateAlias => Result<String, Refusal>,
+    CreateMailbox => Acted,
 }
 
 /// The answer of an action that may not even be planned.
@@ -236,6 +240,38 @@ pub struct DefaultMailbox {
     pub account: Option<String>,
     pub local: String,
     pub apply: bool,
+}
+
+/// Create an alias on an account's mailbox, for the addy.io API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateAlias {
+    /// The account the web side vouches is asking.
+    pub account: String,
+    /// The mailbox the asking token is bound to; `None` = the default mailbox.
+    pub mailbox: Option<String>,
+    /// The domain the client asked for: honoured only if it is the mailbox's.
+    pub domain: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Why a request the addy.io contract answers with a status was refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Refusal {
+    Conflict(String),
+    Unprocessable(String),
+    TooMany(String),
+    Internal(String),
+}
+
+/// Create a person's own mailbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateMailbox {
+    /// The account the web side vouches is asking; `None` = nobody signed in.
+    pub account: Option<String>,
+    pub local: String,
 }
 
 #[cfg(test)]

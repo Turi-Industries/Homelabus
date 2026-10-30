@@ -30,9 +30,7 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::extract::{Json, Path, Query};
-use hlb_api::{
-    ActionResult, ActionStep, AppSummary, AuditItem, GuideItem, Health, SecretItem, StepState,
-};
+use hlb_api::{AppSummary, AuditItem, GuideItem, Health, SecretItem};
 
 use hlb_state::State;
 
@@ -1484,109 +1482,29 @@ async fn create_alias(
         ));
     };
 
-    // The account's default mailbox receives the alias. It is the only choice that makes
-    // sense here: the client does not know the mailboxes, and asking it to choose would
-    // step outside the protocol Bitwarden knows how to speak.
-    let mailboxes = s.state.mailboxes(&user).await?;
-    // 🔴 The mailbox targeted by the TOKEN wins: it is the only way to choose, the
-    // addy.io protocol having no field for it. Failing that, the default mailbox.
-    let chosen = match &targeted_mailbox {
-        Some(name) => mailboxes.iter().find(|(l, ..)| l == name).cloned(),
-        None => mailboxes.iter().find(|(.., d)| *d).cloned(),
-    };
-
-    let Some((mailbox, mailbox_domain, _)) = chosen else {
-        // ⚠️ A token targeting a deleted mailbox must FAIL, not silently fall back on
-        // the default mailbox: the user would believe their aliases filed where they are
-        // not, and the sorting rules would no longer apply.
-        let detail = match &targeted_mailbox {
-            Some(name) => format!(
-                "the mailbox \"{name}\" targeted by this token no longer exists for {user}. \
-                 Recreate it, or make a new token without --mailbox"
-            ),
-            None => {
-                format!("{user} has no default mailbox: the alias would have nowhere to go")
-            }
-        };
-        return Err(ApiError::Conflict(detail));
-    };
-
-    // ⚠️ The domain the client asks for is only honoured if it matches the mailbox's.
-    // Accepting any domain would create an address on a domain we do not serve: it would
-    // never receive anything, and the user would believe it active because the client
-    // displayed it.
-    let domain = match request.domain.as_deref() {
-        Some(d) if d != mailbox_domain => {
-            return Err(ApiError::Unprocessable(format!(
-                "domain \"{d}\" not served for this account; expected \"{mailbox_domain}\""
-            )));
-        }
-        _ => mailbox_domain,
-    };
-
     let description = request.description.clone().unwrap_or_default();
-    let hint = hlb_users::forwarder::hint_from_description(&description);
-
-    let mut entropy = [0u8; hlb_users::generation::SUFFIX_LEN];
-    hlb_secrets::fill_random(&mut entropy);
-    let generated = hlb_users::Generated::for_site(hint.as_deref().unwrap_or(""), &entropy);
-
-    // 🔴 The quota applies HERE too. A comment already claimed it and it was FALSE:
-    // `add_alias` was called directly, so that a `guest` profile limited to zero
-    // permanent aliases created as many as it liked over HTTP. A limit an API bypasses
-    // limits nothing, and makes the roles' limits decorative.
-    let account = s.state.account(&user).await?;
-    let role = s.state.role_of(&user).await?;
-    let usage = account.usage(crate::auth::now());
-    if let Err(refusal) = role.authorized(&usage, hlb_users::Request::AliasPermanent) {
-        return Err(ApiError::TooMany(refusal.reason));
-    }
-
-    // 🔴 On Stalwart FIRST, in the state AFTERWARDS — as `hlb user alias add`. Recorded
-    // alone, the alias was handed to a merchant and every mail to it bounced, back to
-    // the sender: nobody on this side would know the address does not work.
-    let Some(mail) = &s.mail else {
-        return Err(ApiError::Conflict(
-            "mail is not configured on this controller — refusing rather than handing \
-             out an address that would receive nothing"
-                .into(),
-        ));
-    };
-    mail.add_alias(&format!("{mailbox}@{domain}"), &generated.local)
+    let address = s
+        .privd()
+        .ask(hlb_api::intent::CreateAlias {
+            account: user,
+            mailbox: targeted_mailbox,
+            domain: request.domain,
+            description: request.description,
+        })
         .await
-        .map_err(|e| ApiError::Internal(format!("the mail server refused the alias: {e}")))?;
-
-    // ⚠️ Permanent by default — Bitwarden has no notion of duration, and fabricating an
-    // expiry the user did not ask for would kill their addresses without warning.
-    s.state
-        .add_alias(
-            &user,
-            &mailbox,
-            &generated.local,
-            None,
-            hint.as_deref(),
-            Some(&description),
-        )
-        .await?;
-
-    // The proposed sorting folder, which the user will be able to change.
-    if let Some(d) = hlb_users::sieve::Rule::default_folder(hint.as_deref()) {
-        let _ = s
-            .state
-            .set_alias_folder(&user, &generated.local, Some(&d))
-            .await;
-    }
-
-    tracing::info!(user, alias = %generated.local, "alias created by the addy.io API");
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|r| match r {
+            hlb_api::intent::Refusal::Conflict(m) => ApiError::Conflict(m),
+            hlb_api::intent::Refusal::Unprocessable(m) => ApiError::Unprocessable(m),
+            hlb_api::intent::Refusal::TooMany(m) => ApiError::TooMany(m),
+            hlb_api::intent::Refusal::Internal(m) => ApiError::Internal(m),
+        })?;
 
     // 201: Bitwarden accepts 200 as well as 201, and 201 is the right code for a
     // creation.
     Ok((
         StatusCode::CREATED,
-        Json(hlb_users::AliasCreated::new(
-            generated.address(&domain),
-            description,
-        )),
+        Json(hlb_users::AliasCreated::new(address, description)),
     ))
 }
 
@@ -1629,104 +1547,18 @@ async fn create_my_mailbox(
     AxumState(s): AxumState<Arc<AppState>>,
     Json(request): Json<CreateMailboxRequest>,
 ) -> ActionReply {
-    let account = auth.identity().actor.for_account().map(str::to_string);
-    let mut blockers = Vec::new();
-    let local = request.local.trim().to_string();
-
-    match &account {
-        None => blockers.push("this request acts on nobody's behalf — sign in first".into()),
-        Some(user) => match s.state.account(user).await {
-            Ok(a) => {
-                let role = s
-                    .state
-                    .role_of(user)
-                    .await
-                    .unwrap_or_else(|_| hlb_users::RoleDef::nothing());
-                let usage = a.usage(crate::auth::now());
-                if let Err(refusal) = role.authorized(&usage, hlb_users::Request::Mailbox) {
-                    // Same shape as `create_alias`'s own quota check: a quantity
-                    // refusal, not a rights problem.
-                    blockers.push(refusal.reason);
-                }
-            }
-            Err(e) => return Err(e.into()),
-        },
-    }
-
-    if s.mail.is_none() {
-        // 🔴 Refuse rather than record a mailbox that does not exist on the server: a
-        // half-created account looks functional and only shows on the first lost
-        // email.
-        blockers.push(
-            "mail is not configured on this controller — refusing rather than \
-             recording a mailbox that would receive nothing"
-                .into(),
-        );
-    }
-
-    // A reserved name, an app's own account, another person's mailbox: refused before
-    // anything is asked of Stalwart.
-    if let Some(user) = &account {
-        match hlb_engine::mailbox::refusal(&s.state, user, &local, &s.mail_domain).await {
-            Ok(Some(refusal)) => blockers.push(refusal),
-            Ok(None) => {}
-            Err(e) => return Err(ApiError::Internal(e.to_string()).into()),
-        }
-    }
-
-    let mut applied = blockers.is_empty();
-    let address = format!("{local}@{}", s.mail_domain);
-    let mut steps = vec![ActionStep {
-        description: format!("create {address} in Stalwart"),
-        state: StepState::Planned,
-        error: None,
-    }];
-
-    if applied {
-        // Both present whenever `blockers` is empty.
-        if let (Some(user), Some(mail)) = (&account, &s.mail) {
-            // 🔴 An account Stalwart holds already is REFUSED, never adopted: it is an
-            // app's or one made by hand, and its mail would become this person's.
-            match hlb_engine::mailbox::create(
-                &s.state,
-                mail,
-                user,
-                &local,
-                &s.mail_domain,
-                false,
-                hlb_engine::mailbox::Existing::Refuse,
-            )
-            .await
-            {
-                Ok(Ok(_)) => {
-                    steps[0].state = StepState::Done;
-                    tracing::info!(user, mailbox = %address, "mailbox created via self-service");
-                }
-                Ok(Err(refusal)) => {
-                    applied = false;
-                    blockers.push(refusal);
-                }
-                Err(e) => {
-                    steps[0].state = StepState::Failed;
-                    steps[0].error = Some(e.to_string());
-                }
-            }
-        }
-    }
-
-    let r = ActionResult {
-        applied,
-        summary: format!("create {address}"),
-        steps,
-        cli_command: format!(
-            "hlb user mailbox add {} {local} --apply",
-            account.as_deref().unwrap_or("<account>")
-        ),
-        blockers,
-        warnings: Vec::new(),
-        confirmation_required: None,
+    let answer = s
+        .privd()
+        .ask(hlb_api::intent::CreateMailbox {
+            account: auth.identity().actor.for_account().map(str::to_string),
+            local: request.local,
+        })
+        .await
+        .map_err(crate::actions::privd_error)?;
+    let r = match answer {
+        hlb_api::intent::Acted::Planned(r) => r,
+        hlb_api::intent::Acted::Unplannable(m) => return Err(ApiError::Internal(m).into()),
     };
-
     Ok(Json(r))
 }
 
@@ -3032,6 +2864,7 @@ pub(crate) mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use hlb_api::{ActionResult, StepState};
     use tower::ServiceExt;
 
     fn manifest(name: &str) -> hlb_types::Manifest {

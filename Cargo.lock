@@ -1946,6 +1946,7 @@ dependencies = [
  "hlb-secrets",
  "hlb-state",
  "hlb-types",
+ "hlb-users",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

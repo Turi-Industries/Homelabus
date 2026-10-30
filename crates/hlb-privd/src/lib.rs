@@ -174,6 +174,8 @@ impl Privd {
             Intent::DefaultMailbox(i) => {
                 serde_json::to_value(identity::default_mailbox(self, i).await)?
             }
+            Intent::CreateAlias(i) => serde_json::to_value(mail::create_alias(self, i).await)?,
+            Intent::CreateMailbox(i) => serde_json::to_value(mail::create_mailbox(self, i).await)?,
             Intent::PurgeAlias(i) => serde_json::to_value(mail::purge_alias(self, i).await)?,
         })
     }
