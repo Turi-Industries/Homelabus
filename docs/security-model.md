@@ -64,8 +64,11 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   With Secure Boot, a TPM and systemd 257, `hlb node verify-boot` boots a kernel image
   signed by the node's own key and seals the disk to the measurements that image
   produces. GRUB, a changed initrd or command line, or a root swapped in after the
-  initrd opens nothing. Every new initrd is resealed before the next reboot; a missed
-  reseal makes that boot wait for the kit's key, it never opens more.
+  initrd opens nothing. Every new initrd is resealed before the next reboot, and so
+  is every Secure Boot variable a db or dbx update writes; a missed reseal makes that
+  boot wait for the kit's key, it never opens more. A firmware that lost its keys
+  boots without Secure Boot and waits for that key too — and nothing is sealed to such
+  a boot until the keys are restored.
 
 ### Whoever holds your backups
 

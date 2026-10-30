@@ -4,14 +4,15 @@
 //! Four visits, each read from the node rather than remembered: the key made and handed
 //! to shim, its enrolment at the console, the UKI installed and booted once, the disk
 //! sealed to that boot. A person is needed twice — at the console for the key, and for
-//! the one boot whose PCR 7 nothing could predict, opened by the kit's key.
+//! the one boot whose PCR 7 nothing could predict, opened by the kit's key. At level A,
+//! a visit says what would make the next boot wait for that key.
 
 use std::process::ExitCode;
 
 use hlb_backup_run::kit;
 use hlb_bootstrap::boot::{self, Stage};
 use hlb_bootstrap::disk;
-use hlb_bootstrap::protection::{Tpm, Virt, SYSTEMD_FOR_A};
+use hlb_bootstrap::protection::{Tpm, Virt, SETUP_MODE, SYSTEMD_FOR_A};
 use hlb_bootstrap::provision::{self, Provision, Step};
 use hlb_bootstrap::Runner;
 use hlb_orchestrator::Orchestrator;
@@ -67,7 +68,13 @@ pub async fn run(
         missing.push("a legacy BIOS: shim and a signed kernel need UEFI".to_string());
     }
     if signals.uefi && signals.secure_boot != Some(true) {
-        missing.push("Secure Boot is not on: an unsigned kernel would boot as well".into());
+        missing.push(if signals.setup_mode == Some(true) {
+            // Measured on enc3: that boot waited for the kit's key, and `hlb-uki` refuses
+            // to seal to it until the keys are back.
+            format!("{SETUP_MODE}, then reboot: nothing seals the disk to a boot without it")
+        } else {
+            "Secure Boot is not on: an unsigned kernel would boot as well".into()
+        });
     }
     if !matches!(signals.tpm, Tpm::Seals | Tpm::MissingLibraries) {
         missing.push(format!(
@@ -248,6 +255,10 @@ pub async fn run(
             }
             let steps = boot::seal_steps(&disk.device);
             if !apply {
+                for w in next_boot(runner, &disk.device).await? {
+                    println!("\n⚠️  {w}");
+                }
+                pending_firmware(runner, name).await;
                 preview(&steps);
                 println!(
                     "\n  The binding to GRUB's boot goes: GRUB then opens nothing without the"
@@ -269,12 +280,75 @@ pub async fn run(
             for t in &tangs {
                 println!("    {}", t.url);
             }
-            println!("  Every new kernel or initrd is resealed by `hlb-uki` before the next");
-            println!("  boot; a reseal that fails says so, and that boot runs the image of before");
-            println!("  or waits for the kit's key.");
+            println!("  Every new kernel or initrd, and every Secure Boot variable written (a db");
+            println!("  or dbx update), is resealed by `hlb-uki` before the next boot; a reseal");
+            println!("  that fails says so, and that boot runs the image of before or waits for");
+            println!("  the kit's key.");
+            pending_firmware(runner, name).await;
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// What would make the next boot wait for the kit's key, read from the node.
+async fn next_boot(runner: &dyn Runner, device: &str) -> Result<Vec<String>> {
+    // 🔴 Never run an `hlb-uki` of before with `pcr7`: it knew only `entry`, and any
+    // other word builds and reseals — in a preview.
+    if runner.read_file(boot::TOOL).await?.as_deref() != Some(boot::tool(device).as_str()) {
+        return Ok(vec![
+            "Its `hlb-uki` is not this hlb's: it does not predict PCR 7, so a db or dbx\n   \
+             update would make the next boot wait for the kit's key. --apply installs it."
+                .into(),
+        ]);
+    }
+    let out = runner.run(&[boot::TOOL.into(), "pcr7".into()]).await?;
+    if !out.ok() {
+        return Ok(vec![format!(
+            "The next boot's PCR 7 cannot be predicted: {}",
+            out.stderr.trim()
+        )]);
+    }
+    let sealed = runner.read_file(boot::SEALED).await?.unwrap_or_default();
+    let sealed = sealed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    if sealed != out.stdout.trim() {
+        return Ok(vec![
+            "The next boot's PCR 7 is not the one the disk is sealed to: a Secure Boot\n   \
+             variable changed (a db or dbx update) and nothing resealed — that boot waits\n   \
+             for the kit's key. --apply reseals it now."
+                .into(),
+        ]);
+    }
+    Ok(Vec::new())
+}
+
+/// A firmware update fwupd holds for the reboot measures what nothing predicts.
+async fn pending_firmware(runner: &dyn Runner, node: &str) {
+    // No fwupd, nothing it holds: a missing binary is the runner's error.
+    let Ok(out) = runner
+        .run(&[
+            "fwupdmgr".into(),
+            "get-history".into(),
+            "--json".into(),
+            "--no-unreported-check".into(),
+        ])
+        .await
+    else {
+        return;
+    };
+    let waiting = boot::pending_firmware(&out.stdout);
+    if waiting.is_empty() {
+        return;
+    }
+    println!(
+        "\n⚠️  A firmware update waits for the reboot ({}): what it measures, nothing",
+        waiting.join(", ")
+    );
+    println!("   predicts. The boot after it may wait for the kit's recovery key — keep it");
+    println!("   at hand —, then seal to that boot:  hlb node verify-boot {node} --apply");
 }
 
 fn preview(steps: &[Step]) {

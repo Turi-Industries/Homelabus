@@ -238,6 +238,18 @@ the outside, which is the whole problem.
   `clevis luks bind` beside the binding it replaces fails "Error saving metadata". A
   binding is replaced IN PLACE (`hlb_bootstrap::disk::REBIND`: the new slot, then
   `token import --token-replace`, then the old slot), and names three Tangs at most.
+- **🔴 Level A's PCR 7 is PREDICTED, never read** (`hlb_bootstrap::boot::PCR7_PY`). A
+  db or dbx update moves the next boot's PCR 7, and only that boot could read it: the
+  disk waits for the kit's key. The event log's replay is checked against the TPM at a
+  UKI boot; its Secure Boot variables are recomputed from efivarfs, the rest kept. And
+  🔴 a firmware in Setup Mode (keys erased) still boots the UKI, Secure Boot off: read
+  from the TPM, that boot would have been sealed to — `hlb-uki` refuses unless
+  `SecureBoot` is 1 and `SetupMode` 0. `efi-updatevar` needs `chattr -i` first;
+  fwupd does it itself.
+- **A DKMS module under Secure Boot loads only signed by an enrolled key.** DKMS makes
+  its own MOK and signs with it: "Key was rejected by service", no ZFS pool. Level A
+  points DKMS at the node's MOK, and `dkms install --force` alone reinstalls the
+  module signed before — `dkms build --force` first.
 - **`COPY . .` sends the master key to the daemon.** `web/hlb-master.key` exists; the
   `.dockerignore` refuses `**/*.key` first.
 

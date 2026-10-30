@@ -29,6 +29,22 @@
 //! only from a UKI boot (`StubInfo` set) and kept ([`PCR7`]) for the reseals that run
 //! from GRUB. Moving a node from B to A therefore costs ONE boot opened by the kit's key.
 //!
+//! ## 🔴 PCR 7 moves with the Secure Boot variables: predicted, never read
+//!
+//! A `db` or `dbx` update (fwupd's) changes what the next boot measures, and only that
+//! boot could read it: the disk would wait for the kit's key. The firmware's event log
+//! replays to PCR 7 (measured on enc3, OVMF), so [`PCR7_PY`] replays it with the
+//! variables as efivarfs holds them NOW, every other event as the last UKI boot measured
+//! it — after Microsoft's 2023 `db` update the next boot read the predicted value exactly
+//! and opened alone. [`EFIVARS_PATH`] reseals as soon as one is written.
+//!
+//! ## 🔴 Never sealed to a boot without Secure Boot
+//!
+//! A firmware that loses its keys boots in Setup Mode, Secure Boot off, and that boot
+//! waits for the kit's key — as it should. Once opened, it is still a UKI boot: sealed
+//! to it, the disk would then open under any loader. [`TOOL`] refuses while
+//! `SecureBoot` is not 1 or `SetupMode` not 0.
+//!
 //! ## 🔴 initramfs-tools leaves two holes, closed here
 //!
 //! The class of CVE-2026-32606: a root swapped in by whoever holds the machine, run while
@@ -66,8 +82,11 @@ pub const RESEAL_KEY: &str = "/var/lib/hlb/boot/reseal.key";
 /// what marks a node at level A for `bind-disk`.
 pub const POLICY: &str = "/var/lib/hlb/boot/policy.json";
 pub const CMDLINE: &str = "/var/lib/hlb/boot/cmdline";
-/// PCR 7 as the last UKI boot read it.
+/// PCR 7 as the last reseal predicted it.
 pub const PCR7: &str = "/var/lib/hlb/boot/pcr7";
+/// The PCR 7 events of the last UKI boot, a Secure Boot variable named where the
+/// firmware measured one: what [`PCR7_PY`] replays.
+pub const PCR7_EVENTS: &str = "/var/lib/hlb/boot/pcr7.events";
 /// What the disk is sealed to now: PCR 7, PCR 11, the policy's hash.
 pub const SEALED: &str = "/var/lib/hlb/boot/sealed";
 /// Left by [`HOOK`] when a reseal failed: the next boot waits for the kit's key.
@@ -77,6 +96,16 @@ pub const TOOL: &str = "/usr/local/sbin/hlb-uki";
 pub const HOOK: &str = "/etc/initramfs/post-update.d/zz-hlb-uki";
 pub const BARRIER: &str = "/etc/initramfs-tools/scripts/init-bottom/hlb-pcr-barrier";
 pub const BARRIER_HOOK: &str = "/etc/initramfs-tools/hooks/hlb-pcr-barrier";
+/// Watches the Secure Boot variables, and starts [`EFIVARS_SERVICE`] when one is written.
+pub const EFIVARS_PATH: &str = "/etc/systemd/system/hlb-uki-efivars.path";
+pub const EFIVARS_SERVICE: &str = "/etc/systemd/system/hlb-uki-efivars.service";
+/// DKMS signs with the node's boot key: under Secure Boot a module signed by the key
+/// DKMS makes itself is refused ("Key was rejected by service", ZFS on enc3).
+pub const DKMS_CONF: &str = "/etc/dkms/framework.conf.d/hlb.conf";
+/// What fwupd calls the updates [`PCR7_PY`] predicts: Secure Boot variables, written at
+/// once. Any other one waiting for the reboot — a capsule, SBAT — measures what nothing
+/// can predict.
+pub const PREDICTED_PLUGINS: [&str; 4] = ["uefi_pk", "uefi_kek", "uefi_db", "uefi_dbx"];
 /// shim loads `grubx64.efi` from its own directory: the UKI is named so, beside a copy.
 pub const ESP_DIR: &str = "/boot/efi/EFI/hlb";
 pub const SHIM: &str = "/usr/lib/shim/shimx64.efi.signed";
@@ -293,6 +322,125 @@ fn private_dir() -> Step {
     )
 }
 
+const DKMS_CONF_CONTENT: &str =
+    "# Written by Homelabus: DKMS modules signed by this node's boot key, which shim
+# knows (MOK). Under Secure Boot a module signed by DKMS's own key does not load.
+mok_signing_key=/var/lib/hlb/boot/mok.key
+mok_certificate=/var/lib/hlb/boot/mok.der
+";
+
+/// Every DKMS module not signed by the boot key built again — `dkms install --force`
+/// alone reinstalls the module signed before (measured). `modinfo`'s `sig_key` is the
+/// certificate's serial.
+const DKMS_RESIGN: &str = "command -v dkms >/dev/null 2>&1 || exit 0
+serial=$(openssl x509 -in \"$1\" -noout -serial | sed 's/^serial=//; s/^0*//')
+dkms status | sed -n 's|^\\([^/,]*\\)/\\([^,]*\\), \\([^,]*\\), [^:]*: installed.*|\\1 \\2 \\3|p' |
+while read -r m v k; do
+  key=$(modinfo -k \"$k\" -F sig_key \"$m\" 2>/dev/null | tr -d ':' | sed 's/^0*//')
+  [ \"$key\" = \"$serial\" ] && continue
+  dkms build --force \"$m/$v\" -k \"$k\" && dkms install --force \"$m/$v\" -k \"$k\" || exit 1
+done";
+
+fn dkms_conf() -> Step {
+    install(
+        "DKMS modules signed by the boot key",
+        DKMS_CONF,
+        DKMS_CONF_CONTENT,
+        0o644,
+    )
+}
+
+fn dkms_resign() -> Step {
+    run(
+        Phase::Services,
+        "the DKMS modules already built (ZFS) signed again by it",
+        &["sh", "-c", DKMS_RESIGN, "sh", MOK_CERT],
+    )
+}
+
+const EFIVARS_PATH_CONTENT: &str =
+    "# Written by Homelabus: a Secure Boot variable written (a db or dbx update by
+# fwupd) changes the next boot's PCR 7 — resealed at once, or that boot waits for the
+# kit's key.
+[Unit]
+Description=Homelabus: reseal the disk when a Secure Boot variable changes
+
+[Path]
+PathChanged=/sys/firmware/efi/efivars/PK-8be4df61-93ca-11d2-aa0d-00e098032b8c
+PathChanged=/sys/firmware/efi/efivars/KEK-8be4df61-93ca-11d2-aa0d-00e098032b8c
+PathChanged=/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f
+PathChanged=/sys/firmware/efi/efivars/dbx-d719b2cb-3d3a-4596-a3bc-dad00e67656f
+
+[Install]
+WantedBy=multi-user.target
+";
+
+// Like the initrd hook, a failure is left for `verify-boot` to read.
+const EFIVARS_SERVICE_CONTENT: &str = "# Written by Homelabus: started by hlb-uki-efivars.path.
+[Unit]
+Description=Homelabus: reseal the disk to the next boot's PCR 7
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/local/sbin/hlb-uki || : > /var/lib/hlb/boot/reseal-failed'
+";
+
+fn efivars_steps() -> Vec<Step> {
+    vec![
+        install(
+            "a Secure Boot variable watched",
+            EFIVARS_PATH,
+            EFIVARS_PATH_CONTENT,
+            0o644,
+        ),
+        install(
+            "resealed when one is written",
+            EFIVARS_SERVICE,
+            EFIVARS_SERVICE_CONTENT,
+            0o644,
+        ),
+        run(
+            Phase::Services,
+            "systemd reads them",
+            &["systemctl", "daemon-reload"],
+        ),
+        run(
+            Phase::Services,
+            "the watch started, at every boot",
+            &["systemctl", "enable", "--now", "hlb-uki-efivars.path"],
+        ),
+    ]
+}
+
+/// The fwupd updates waiting for the reboot whose measurements nothing predicts, by
+/// name, from `fwupdmgr get-history --json`. Anything unreadable is none: a node without
+/// fwupd has none to wait.
+pub fn pending_firmware(history: &str) -> Vec<String> {
+    // `FwupdUpdateState` (fwupd-enums.h, 2.0.20): 1 pending (a capsule), 4 needs-reboot.
+    const WAITING: [u64; 2] = [1, 4];
+    let Ok(v) = serde_json::from_str::<Value>(history) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = v["Devices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| {
+            d["UpdateState"]
+                .as_u64()
+                .is_some_and(|s| WAITING.contains(&s))
+        })
+        .filter(|d| {
+            !d["Plugin"]
+                .as_str()
+                .is_some_and(|p| PREDICTED_PLUGINS.contains(&p))
+        })
+        .map(|d| d["Name"].as_str().unwrap_or("a device").to_string())
+        .collect();
+    names.dedup();
+    names
+}
+
 /// Stage [`Stage::Key`]: a MOK made on the node, imported under the password staged at
 /// [`STAGED_MOK_PASSWORD`], which the caller removes afterwards.
 pub fn key_steps(node: &str) -> Vec<Step> {
@@ -336,6 +484,7 @@ openssl req -new -x509 -newkey rsa:2048 -nodes -days 36500 -subj \"/CN=Homelabus
                 STAGED_MOK_HASH,
             ],
         ),
+        dkms_conf(),
         run(
             Phase::Services,
             "ask shim to enrol it at the next boot",
@@ -407,6 +556,8 @@ cp \"$3\" \"$1/mmx64.efi\"";
             "shim and MokManager, beside the UKI",
             &["sh", "-c", SHIM_COPY, "sh", ESP_DIR, SHIM, MOK_MANAGER],
         ),
+        dkms_conf(),
+        dkms_resign(),
         run(
             Phase::Configuration,
             "rebuild the initrd, with the barrier",
@@ -429,7 +580,7 @@ cp \"$3\" \"$1/mmx64.efi\"";
 /// Stage [`Stage::Seal`]: the tools refreshed, the disk sealed to the PCRs this boot
 /// produced, the UKI first in the boot order.
 pub fn seal_steps(device: &str) -> Vec<Step> {
-    vec![
+    let mut steps = vec![
         install(
             "the UKI built, signed and resealed",
             TOOL,
@@ -437,13 +588,19 @@ pub fn seal_steps(device: &str) -> Vec<Step> {
             0o755,
         ),
         install("resealed after every initrd", HOOK, HOOK_CONTENT, 0o755),
+        dkms_conf(),
+        dkms_resign(),
+    ];
+    steps.extend(efivars_steps());
+    steps.extend([
         run(Phase::Services, "seal the disk to this boot", &[TOOL]),
         run(
             Phase::Services,
             "boot the UKI first, always",
             &[TOOL, "entry", "first"],
         ),
-    ]
+    ]);
+    steps
 }
 
 /// The string `systemd-pcrphase` extends PCR 11 with when the initrd hands over.
@@ -514,7 +671,90 @@ pub fn tool(device: &str) -> String {
         .replace("@LABEL@", ENTRY_LABEL)
         .replace("@STUB_INFO@", STUB_INFO)
         .replace("@REBIND@", crate::disk::REBIND.trim_end())
+        .replace("@PCR7_PY@", PCR7_PY.trim_end())
 }
+
+/// PCR 7 replayed from the firmware's event log. `record EVENTS NOW` (a UKI boot): the
+/// log replayed must give `NOW`, its PCR 7 events are kept in `EVENTS`; `replay NOW`
+/// does the same and keeps nothing; `predict EVENTS` reads them back. Each prints the
+/// PCR 7 the next boot reads: every Secure Boot variable as efivarfs holds it now.
+pub const PCR7_PY: &str = r#"import hashlib, json, os, struct, sys, uuid
+
+LOG = os.environ.get("HLB_EVENT_LOG", "/sys/kernel/security/tpm0/binary_bios_measurements")
+EFIVARS = os.environ.get("HLB_EFIVARS", "/sys/firmware/efi/efivars")
+SHA256, NO_ACTION, DRIVER_CONFIG = 0x000B, 3, 0x80000001
+
+
+def events(raw):
+    # The first event is SHA-1 shaped, and names each bank's digest size.
+    size = struct.unpack_from("<I", raw, 28)[0]
+    spec = raw[32 : 32 + size]
+    sizes = {}
+    for i in range(struct.unpack_from("<I", spec, 24)[0]):
+        alg, n = struct.unpack_from("<HH", spec, 28 + 4 * i)
+        sizes[alg] = n
+    o = 32 + size
+    while o < len(raw):
+        pcr, kind, count = struct.unpack_from("<III", raw, o)
+        o += 12
+        digests = {}
+        for _ in range(count):
+            alg = struct.unpack_from("<H", raw, o)[0]
+            digests[alg] = raw[o + 2 : o + 2 + sizes[alg]]
+            o += 2 + sizes[alg]
+        n = struct.unpack_from("<I", raw, o)[0]
+        yield pcr, kind, digests[SHA256], raw[o + 4 : o + 4 + n]
+        o += 4 + n
+
+
+def measured(var):
+    # UEFI_VARIABLE_DATA as the firmware hashes it; efivarfs puts 4 bytes of attributes
+    # first, and a variable absent is measured empty.
+    guid, name = var.split("/", 1)
+    try:
+        with open(f"{EFIVARS}/{name}-{guid}", "rb") as f:
+            data = f.read()[4:]
+    except FileNotFoundError:
+        data = b""
+    head = uuid.UUID(guid).bytes_le + struct.pack("<QQ", len(name), len(data))
+    return hashlib.sha256(head + name.encode("utf-16-le") + data).digest()
+
+
+def replay(seq):
+    pcr = bytes(32)
+    for e in seq:
+        d = measured(e["var"]) if "var" in e else bytes.fromhex(e["sha256"])
+        pcr = hashlib.sha256(pcr + d).digest()
+    return pcr.hex()
+
+
+mode = sys.argv[1]
+if mode == "predict":
+    with open(sys.argv[2]) as f:
+        seq = json.load(f)
+else:
+    now = sys.argv[-1].lower()
+    seq, logged = [], bytes(32)
+    with open(LOG, "rb") as f:
+        raw = f.read()
+    for pcr, kind, digest, data in events(raw):
+        if pcr != 7 or kind == NO_ACTION:
+            continue
+        logged = hashlib.sha256(logged + digest).digest()
+        if kind == DRIVER_CONFIG:
+            n = struct.unpack_from("<Q", data, 16)[0]
+            name = data[32 : 32 + 2 * n].decode("utf-16-le")
+            seq.append({"var": f"{uuid.UUID(bytes_le=data[:16])}/{name}"})
+        else:
+            seq.append({"sha256": digest.hex()})
+    if logged.hex() != now:
+        sys.exit("hlb-uki: the firmware's event log does not replay to PCR 7")
+    if mode == "record":
+        with open(sys.argv[2] + ".new", "w") as f:
+            json.dump(seq, f)
+        os.replace(sys.argv[2] + ".new", sys.argv[2])
+print(replay(seq))
+"#;
 
 const TOOL_TEMPLATE: &str = r#"#!/bin/bash
 # Written by Homelabus (`hlb node verify-boot`): the newest kernel's signed image (UKI),
@@ -522,6 +762,7 @@ const TOOL_TEMPLATE: &str = r#"#!/bin/bash
 #   hlb-uki: build, seal, install — nothing when already sealed to it.
 #   hlb-uki entry next: boot the UKI once, at the next boot.
 #   hlb-uki entry first: boot the UKI first, always.
+#   hlb-uki pcr7: the PCR 7 the next boot reads, predicted; changes nothing.
 # Exit 0: sealed. 2: installed but NOT sealed — no PCR 7 read from a UKI boot yet, so
 # the next boot waits for the kit's key. 1: anything else.
 set -euo pipefail
@@ -562,6 +803,64 @@ entry() {
 if [ "${1:-}" = entry ]; then
   entry "${2:-}"
   exit 0
+fi
+
+pcr7_py=$(cat <<'PY'
+@PCR7_PY@
+PY
+)
+# PCR 7 as the next boot reads it: the Secure Boot variables as they are now — a db or
+# dbx update changes them —, every other event as the last UKI boot measured it.
+# `keep`: what a UKI boot measured is kept for the reseals that run from GRUB.
+predict_pcr7() {
+  local now
+  p7=
+  if [ -e @STUB_INFO@ ]; then
+    now=$(tpm2_pcrread sha256:7 | sed -n 's/^ *7 *: *0x//p' | tr A-F a-f)
+    if [ -z "$now" ]; then
+      echo "hlb-uki: PCR 7 cannot be read" >&2
+      exit 1
+    fi
+    if [ "$1" = keep ]; then
+      p7=$(python3 -c "$pcr7_py" record "$dir/pcr7.events" "$now") || p7=
+    else
+      p7=$(python3 -c "$pcr7_py" replay "$now") || p7=
+    fi
+    if [ -z "$p7" ]; then
+      # This boot's own value holds while no variable changes; a change then waits.
+      echo "hlb-uki: PCR 7 cannot be predicted: sealed to this boot's" >&2
+      p7=$now
+      if [ "$1" = keep ]; then rm -f "$dir/pcr7.events"; fi
+    elif [ "$p7" != "$now" ]; then
+      echo "hlb-uki: a Secure Boot variable changed since this boot: sealed to the next" >&2
+    fi
+  elif [ -s "$dir/pcr7.events" ]; then
+    p7=$(python3 -c "$pcr7_py" predict "$dir/pcr7.events")
+  elif [ -s "$dir/pcr7" ]; then
+    # Kept by an hlb-uki that predicted nothing. GRUB's own PCR 7 would never match.
+    p7=$(tr A-F a-f < "$dir/pcr7")
+  fi
+}
+
+if [ "${1:-}" = pcr7 ]; then
+  predict_pcr7 look
+  [ -n "$p7" ] || { echo "hlb-uki: no PCR 7 read from a UKI boot yet" >&2; exit 2; }
+  echo "$p7"
+  exit 0
+fi
+
+efivar() {
+  od -An -tu1 -j4 -N1 "/sys/firmware/efi/efivars/$1-8be4df61-93ca-11d2-aa0d-00e098032b8c" \
+    2>/dev/null | tr -d ' \n'
+}
+if [ "$(efivar SecureBoot)" != 1 ] || [ "$(efivar SetupMode)" != 0 ]; then
+  if [ "$(efivar SetupMode)" = 1 ]; then
+    echo "hlb-uki: the firmware is in Setup Mode — its Secure Boot keys were erased." >&2
+  fi
+  echo "hlb-uki: Secure Boot is off: sealed to this boot, the disk would open under any" >&2
+  echo "hlb-uki: loader. Restore the firmware's keys (its setup: restore the factory" >&2
+  echo "hlb-uki: keys), boot by the kit's key, then run hlb-uki again." >&2
+  exit 1
 fi
 
 k=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -n 1)
@@ -608,20 +907,11 @@ install_uki() {
   sync -f "$esp/grubx64.efi"
 }
 
-p7=
-if [ -e @STUB_INFO@ ]; then
-  # Booted by the UKI: the PCR 7 its next boot sees too. GRUB's would never match.
-  p7=$(tpm2_pcrread sha256:7 | sed -n 's/^ *7 *: *0x//p')
-  if [ -z "$p7" ]; then
-    echo "hlb-uki: PCR 7 cannot be read" >&2
-    exit 1
-  fi
+predict_pcr7 keep
+if [ -n "$p7" ]; then
   printf '%s\n' "$p7" > "$dir/pcr7.new"
   mv -f "$dir/pcr7.new" "$dir/pcr7"
-elif [ -s "$dir/pcr7" ]; then
-  p7=$(cat "$dir/pcr7")
-fi
-if [ -z "$p7" ]; then
+else
   install_uki
   echo "hlb-uki: the UKI of $k is installed and NOT sealed: PCR 7 is read from a boot" >&2
   echo "hlb-uki: through it only. That boot waits for the kit's key (ssh -p 2222)." >&2
@@ -629,7 +919,8 @@ if [ -z "$p7" ]; then
 fi
 
 want="$p7 $p11 $(sha256sum < "$dir/policy.json" | cut -d ' ' -f 1)"
-if [ "$(cat "$dir/sealed" 2>/dev/null || true)" = "$want" ]; then
+# Lower case: an hlb-uki of before kept tpm2_pcrread's upper case.
+if [ "$(tr A-F a-f < "$dir/sealed" 2>/dev/null || true)" = "$want" ]; then
   rm -f "$dir/reseal-failed"
   echo "hlb-uki: $k is sealed already"
   exit 0
@@ -722,6 +1013,7 @@ mod tests {
         for step in setup_steps("/dev/vda3", &tangs(), "root=/x ro")
             .iter()
             .chain(&key_steps("enc3"))
+            .chain(&seal_steps("/dev/vda3"))
         {
             if let Action::Run(argv) = &step.action {
                 if argv[0] == "sh" && argv[1] == "-c" {
@@ -729,6 +1021,202 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A GUID as UEFI lays it out: its first three fields little-endian.
+    fn guid_le(guid: &str) -> Vec<u8> {
+        let b: Vec<u8> = (0..16)
+            .map(|i| {
+                let h = guid.replace('-', "");
+                u8::from_str_radix(&h[2 * i..2 * i + 2], 16).expect("hex")
+            })
+            .collect();
+        [&[b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6]], &b[8..]].concat()
+    }
+
+    const GLOBAL: &str = "8be4df61-93ca-11d2-aa0d-00e098032b8c";
+    const IMAGE_DB: &str = "d719b2cb-3d3a-4596-a3bc-dad00e67656f";
+
+    fn variable_data(guid: &str, name: &str, data: &[u8]) -> Vec<u8> {
+        let name16: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let n = name.encode_utf16().count() as u64;
+        [
+            guid_le(guid),
+            n.to_le_bytes().to_vec(),
+            (data.len() as u64).to_le_bytes().to_vec(),
+            name16,
+            data.to_vec(),
+        ]
+        .concat()
+    }
+
+    fn event(pcr: u32, kind: u32, data: &[u8]) -> Vec<u8> {
+        [
+            &pcr.to_le_bytes()[..],
+            &kind.to_le_bytes(),
+            &1u32.to_le_bytes(),
+            &0x000Bu16.to_le_bytes(),
+            &Sha256::digest(data)[..],
+            &(data.len() as u32).to_le_bytes(),
+            data,
+        ]
+        .concat()
+    }
+
+    fn extend(pcr: [u8; 32], digest: &[u8]) -> [u8; 32] {
+        Sha256::digest([&pcr[..], digest].concat()).into()
+    }
+
+    fn pcr7_py(env: &std::path::Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(PCR7_PY)
+            .args(args)
+            .env("HLB_EVENT_LOG", env.join("log"))
+            .env("HLB_EFIVARS", env.join("efivars"))
+            .output()
+            .expect("python3 runs")
+    }
+
+    #[test]
+    fn pcr_7_is_predicted_from_the_secure_boot_variables_written_since_the_boot() {
+        // The shape measured on enc3: SecureBoot and db as driver config, a separator,
+        // then an authority, one event of another PCR and one never extended between.
+        const CONFIG: u32 = 0x8000_0001;
+        let dir = std::env::temp_dir().join(format!("hlb-pcr7-{}", std::process::id()));
+        let vars = dir.join("efivars");
+        std::fs::create_dir_all(&vars).expect("a directory");
+        let attrs = [7u8, 0, 0, 0];
+        let write_var = |guid: &str, name: &str, data: &[u8]| {
+            std::fs::write(
+                vars.join(format!("{name}-{guid}")),
+                [&attrs[..], data].concat(),
+            )
+            .expect("written")
+        };
+        write_var(GLOBAL, "SecureBoot", &[1]);
+        write_var(IMAGE_DB, "db", b"the 2011 CA");
+
+        let spec = [
+            &b"Spec ID Event03\0"[..],
+            &0u32.to_le_bytes(),
+            &[0, 2, 0, 2],
+            &1u32.to_le_bytes(),
+            &0x000Bu16.to_le_bytes(),
+            &32u16.to_le_bytes(),
+            &[0],
+        ]
+        .concat();
+        let header = [
+            &0u32.to_le_bytes()[..],
+            &3u32.to_le_bytes(),
+            &[0u8; 20],
+            &(spec.len() as u32).to_le_bytes(),
+            &spec,
+        ]
+        .concat();
+        let secure_boot = variable_data(GLOBAL, "SecureBoot", &[1]);
+        let db = variable_data(IMAGE_DB, "db", b"the 2011 CA");
+        let authority = variable_data(IMAGE_DB, "db", b"the certificate that verified shim");
+        let log = [
+            header,
+            event(0, 0x8000_0008, b"firmware code"),
+            event(7, CONFIG, &secure_boot),
+            event(7, CONFIG, &db),
+            event(7, 3, b"never extended"),
+            event(7, 4, &[0; 4]),
+            event(7, 0x8000_00E0, &authority),
+        ]
+        .concat();
+        std::fs::write(dir.join("log"), log).expect("written");
+
+        let booted = [
+            Sha256::digest(&secure_boot),
+            Sha256::digest(&db),
+            Sha256::digest([0u8; 4]),
+            Sha256::digest(&authority),
+        ]
+        .iter()
+        .fold([0u8; 32], |p, d| extend(p, d));
+        let events = dir.join("pcr7.events");
+        let events = events.to_str().expect("UTF-8");
+        let out = pcr7_py(&dir, &["record", events, &hex(&booted).to_uppercase()]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), hex(&booted));
+
+        // fwupd's db update: the next boot measures the new db, nothing else moves.
+        write_var(IMAGE_DB, "db", b"the 2011 CA and the 2023 CA");
+        let next = [
+            Sha256::digest(&secure_boot),
+            Sha256::digest(variable_data(
+                IMAGE_DB,
+                "db",
+                b"the 2011 CA and the 2023 CA",
+            )),
+            Sha256::digest([0u8; 4]),
+            Sha256::digest(&authority),
+        ]
+        .iter()
+        .fold([0u8; 32], |p, d| extend(p, d));
+        let out = pcr7_py(&dir, &["predict", events]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), hex(&next));
+        assert_ne!(next, booted);
+
+        // A log that does not give the TPM's value predicts nothing.
+        let out = pcr7_py(&dir, &["replay", &hex(&next)]);
+        assert!(!out.status.success());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tool_refuses_a_boot_without_secure_boot_before_it_seals_anything() {
+        let t = tool("/dev/vda3");
+        let refusal = t.find("efivar SetupMode)\" != 0").expect("the refusal");
+        assert!(refusal < t.find("ukify build").expect("the build"));
+        assert!(refusal < t.find("$work/rebind").expect("the rebind"));
+        // `pcr7` reads, and comes before anything is built or kept.
+        let look = t.find("predict_pcr7 look").expect("the look");
+        assert!(look < t.find("ukify build").expect("the build"));
+    }
+
+    #[test]
+    fn the_seal_watches_the_secure_boot_variables_and_signs_dkms_before_sealing() {
+        let steps = seal_steps("/dev/vda3");
+        let w = whats(&steps);
+        let pos = |s: &str| w.iter().position(|x| x.contains(s)).expect(s);
+        assert!(pos("watch started") < pos("seal the disk"));
+        assert!(pos("signed again") < pos("seal the disk"));
+        for v in ["PK-", "KEK-", "db-", "dbx-"] {
+            assert!(
+                EFIVARS_PATH_CONTENT.contains(&format!("/efivars/{v}")),
+                "{v}"
+            );
+        }
+        // The key is DKMS's from before enrolment: what it builds meanwhile loads after.
+        assert!(whats(&key_steps("n")).contains(&"DKMS modules signed by the boot key"));
+    }
+
+    #[test]
+    fn only_a_firmware_update_nothing_predicts_is_announced() {
+        // `fwupdmgr get-history --json` on enc3 after Microsoft's db update, its state
+        // 2 (success) once rebooted; the others as fwupd writes a waiting one.
+        let history = r#"{"Devices":[
+          {"Name":"UEFI CA","Plugin":"uefi_db","UpdateState":2},
+          {"Name":"UEFI dbx","Plugin":"uefi_dbx","UpdateState":4},
+          {"Name":"System Firmware","Plugin":"uefi_capsule","UpdateState":1},
+          {"Name":"SBAT","Plugin":"uefi_sbat","UpdateState":4}]}"#;
+        assert_eq!(pending_firmware(history), vec!["System Firmware", "SBAT"]);
+        assert!(pending_firmware("").is_empty());
+        assert!(pending_firmware("No history").is_empty());
     }
 
     #[test]
@@ -754,6 +1242,7 @@ mod tests {
             "@LABEL@",
             "@STUB_INFO@",
             "@REBIND@",
+            "@PCR7_PY@",
         ] {
             assert!(!t.contains(p), "{p} left in");
         }

@@ -108,6 +108,8 @@ pub struct Signals {
     pub uefi: bool,
     /// `None`: no `SecureBoot` variable to read — legacy BIOS, or a firmware without it.
     pub secure_boot: Option<bool>,
+    /// `SetupMode`: on, the firmware holds no platform key — reset, its keys erased.
+    pub setup_mode: Option<bool>,
     pub tpm: Tpm,
     pub virt: Virt,
     pub systemd: Option<u32>,
@@ -176,12 +178,17 @@ pub fn assess(s: &Signals) -> Assessment {
     }
 }
 
+/// Said wherever Secure Boot is read off: a reset firmware is not a choice to respect.
+pub const SETUP_MODE: &str = "Secure Boot is off: the firmware is in Setup Mode, its keys erased \
+     (a reset, or a firmware update) — restore its factory keys in its setup";
+
 /// What keeps a machine whose TPM seals from a verified boot.
 fn boot_shortfall(s: &Signals) -> Vec<String> {
     let mut why = Vec::new();
     match (s.uefi, s.secure_boot) {
         (false, _) => why.push("a legacy BIOS: no Secure Boot".to_string()),
         (true, Some(true)) => {}
+        (true, Some(false)) if s.setup_mode == Some(true) => why.push(SETUP_MODE.to_string()),
         (true, Some(false)) => why.push("Secure Boot is off".to_string()),
         (true, None) => why.push("the firmware has no Secure Boot variable to read".to_string()),
     }
@@ -249,7 +256,8 @@ pub fn parse_systemd_version(out: &str) -> Option<u32> {
     words.next()?.parse().ok()
 }
 
-/// `od -An -tu1` of the `SecureBoot` variable: four bytes of attributes, then the value.
+/// `od -An -tu1` of the `SecureBoot` variable — or `SetupMode`, shaped alike: four bytes
+/// of attributes, then the value.
 pub fn parse_secure_boot(od: &str) -> Option<bool> {
     let bytes: Vec<u8> = od
         .split_whitespace()
@@ -300,6 +308,7 @@ mod tests {
         Signals {
             uefi: true,
             secure_boot: Some(true),
+            setup_mode: Some(false),
             tpm: Tpm::Seals,
             virt: Virt::BareMetal,
             systemd: Some(257),
@@ -361,6 +370,18 @@ mod tests {
             ..metal()
         });
         assert_eq!(a.held_back.len(), 2, "{:?}", a.held_back);
+    }
+
+    #[test]
+    fn a_firmware_that_lost_its_keys_is_said_so_not_only_secure_boot_off() {
+        // Measured on enc3, its platform key deleted: SecureBoot 0, SetupMode 1.
+        let a = assess(&Signals {
+            secure_boot: Some(false),
+            setup_mode: Some(true),
+            ..metal()
+        });
+        assert_eq!(a.level, Level::B);
+        assert_eq!(a.held_back, vec![SETUP_MODE.to_string()]);
     }
 
     #[test]

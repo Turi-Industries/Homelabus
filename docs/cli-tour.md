@@ -286,6 +286,11 @@ read from the node: the key made and handed to shim (a one-time password to type
 console, in MokManager), the UKI installed and booted once — that boot opened by the
 kit's key over `ssh -p 2222`, since only a boot through it reads its PCR 7 —, then the
 disk sealed to it and the UKI first. GRUB opens nothing afterwards; `bind-disk` reseals.
+At level A, a db or dbx update (`fwupdmgr update`) is resealed as soon as it is written —
+the next boot's PCR 7 is predicted from the firmware's event log — and DKMS modules (ZFS)
+are signed by the same key. Run again, the verb says what would make the next boot wait
+for the kit's key: a PCR 7 nothing resealed, a firmware update fwupd holds for the
+reboot, a firmware in Setup Mode.
 
 ```sh
 ./target/debug/hlb node verify-boot worker-1           # which stage, and what it does

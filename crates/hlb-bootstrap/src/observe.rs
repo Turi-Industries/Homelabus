@@ -207,6 +207,14 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
             .await,
     )
     .and_then(|o| p::parse_secure_boot(&o));
+    let setup_mode = read(
+        runner
+            .run(&sh(
+                "od -An -tu1 /sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c",
+            ))
+            .await,
+    )
+    .and_then(|o| p::parse_secure_boot(&o));
 
     let has_tpm2 = runner
         .run(&["systemd-creds".into(), "has-tpm2".into()])
@@ -246,6 +254,7 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
     Ok(p::Signals {
         uefi,
         secure_boot,
+        setup_mode,
         tpm: p::tpm(
             root,
             has_tpm2.as_deref(),

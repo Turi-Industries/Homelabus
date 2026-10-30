@@ -510,12 +510,38 @@ three Tangs, and the third alone opens it.
        ONE header write (`token import --token-replace`), the old slot killed after:
        before it the old binding opens the disk, after it the new one. And three Tangs
        at most (11 139 of 12 288 bytes; four do not fit), those the binding names
-       first. Left: DKMS's modules signed by the MOK (enc3 has none).
-    6. What breaks an unlock, handled before it happens: a dbx or firmware update
-       changes PCR 7 (`fwupd` says when one is pending: reseal right after, or
-       announce the recovery); a BIOS that resets its keys is seen in Setup Mode at
-       the next boot; a ZFS module unsigned under Secure Boot does not load — the
-       storage node's pool would stay away.
+       first. DKMS's modules signed by the MOK: done with step 6.
+    6. ✅ What breaks an unlock, handled before it happens — 2026-10-30, measured on
+       enc3 before anything was written. **PCR 7 is predicted, never read**: the
+       firmware's event log replays to it exactly (OVMF), so `hlb-uki` keeps the PCR 7
+       events of a UKI boot and recomputes the Secure Boot variables (PK, KEK, db, dbx)
+       from efivarfs as they are NOW. fwupd offered Microsoft's 2023 `db` update on
+       enc3 — the CA of 2026 — and applied it at once (no capsule): PCR 7 moved from
+       226cd8… to 672be2…, which the replay predicted and the next boot read exactly;
+       sealed to it, the disk opened alone in 20 s. A systemd path unit watching the
+       four variables (inotify fires on efivarfs, measured on fwupd's write) reseals
+       within seconds; replayed by the verbs alone — kit's key, `verify-boot --apply`,
+       `fwupdmgr update`, reboot: opened alone in 18 s. `verify-boot` at A says when
+       the next boot's PCR 7 is not the sealed one, when the node's `hlb-uki` predates
+       this hlb (never run with a word it does not know: any other word reseals), and
+       any fwupd update waiting for the reboot that is not a Secure Boot variable — a
+       capsule, SBAT — whose measurements nothing predicts: the kit's key at hand. **A
+       firmware that loses its keys** (PK deleted from enc3's variables, offline):
+       SecureBoot 0, SetupMode 1, the boot waited for the kit's key — and, 🔴 once
+       opened, it was still a UKI boot, so the `hlb-uki` of step 5 would have sealed
+       the disk to a boot WITHOUT Secure Boot at the next initrd. It now refuses while
+       `SecureBoot` is not 1 or `SetupMode` not 0 (the initrd hook and the path unit
+       leave `reseal-failed`), and `verify-boot` names Setup Mode, not just "Secure
+       Boot off". **ZFS under Secure Boot**: `zfs-dkms` signed by the key DKMS makes
+       itself — "Key was rejected by service", no pool. DKMS now signs with the node's
+       MOK (`framework.conf.d/hlb.conf`, from the key's stage), and the modules built
+       before are built again (`dkms install --force` alone reinstalls the old
+       signature — measured); the MOK, with no code-signing EKU, loads them, and ZFS
+       loads at boot. Left, unmeasured: a real capsule update (OVMF has none) and a
+       real board's event log — the replay is checked against the TPM at every UKI
+       boot, and a log that does not replay falls back to that boot's own PCR 7, said;
+       shim's copy in `EFI/hlb` is never updated, and a newer SbatLevel (written by a
+       newer shim, or fwupd's SBAT update) would refuse it.
     7. The running system: IOMMU on, Thunderbolt off where unused, kernel lockdown in
        `confidentiality` where neither hibernation nor kexec is needed (Debian's
        Secure Boot gives `integrity`); the firmware's password, USB and PXE boot off
