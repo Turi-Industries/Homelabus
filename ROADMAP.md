@@ -669,7 +669,28 @@ three Tangs, and the third alone opens it.
     action panel on a new preview of the request as filed; a plan may name only a
     route with a preview, not a public one, and no segment that sends a fetch
     elsewhere — a replay of the Bitwarden assistant's route would have minted a
-    token. Left: the destroy-level `id_token`, the owner's call.
+    token. **Proven on the lab** (deb1, `hlb-controller:lab16`): over the API a move of
+    `nas` to `/etc` and a new destination at `/` are refused with the CLI named; on the
+    daemon's socket as uid 8420, the old intent, a `location` slipped into the new one
+    and an unknown name are refused; the destinations read as before; a plan of
+    `/api/bitwarden` is refused and `/api/plans` gives the body and the route. Found
+    deploying it, not fixed: Swarm replaces `hlb-privd` START-FIRST, so two daemons run
+    every loop at once for a while, and the old one, shutting down cleanly, removes the
+    socket the new one has just bound — the web side waits on "the daemon's socket" for
+    ever. Put right on the lab by hand (`--update-order stop-first --force`).
+  - **A passkey per destruction** — decided 2026-10-30 (owner): re-authenticated within
+    five minutes, checked by the daemon. Design: a destroy-level intent (removing an
+    app, draining or pausing a node, deleting a role, changing a person's role) carries
+    the authorization CODE of a PocketID round trip asked with `prompt=login` and a
+    `nonce` that is the SHA-256 of the intent itself; the daemon exchanges the code
+    with PocketID over TLS with its own copy of the client's secret (as sign-in does:
+    no signature to verify), and acts only if the `nonce` is the intent's, `auth_time`
+    is under five minutes old, and the `sub` is an account whose own role allows the
+    intent — read from its state, not vouched for. One passkey, one action: an
+    intruder in the web side acts only while someone confirms, and only what they
+    were asked to confirm. API tokens no longer destroy where PocketID signs people
+    in; the CLI, as root, still does. Without PocketID (the demonstration, a fresh
+    installation), nothing signs in by passkey and the intents stay as they are.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to
