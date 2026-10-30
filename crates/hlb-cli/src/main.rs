@@ -9931,13 +9931,37 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         wanted.sort();
                         wanted.dedup();
 
+                        // Which exist already: `create -p` leaves them as they are, so a
+                        // preview marking them new would promise encryption it never does.
+                        let listed = runner
+                            .run(&[
+                                "zfs".into(),
+                                "list".into(),
+                                "-H".into(),
+                                "-o".into(),
+                                "name".into(),
+                                "-r".into(),
+                                base.clone(),
+                            ])
+                            .await?;
+                        let existing: std::collections::BTreeSet<&str> = if listed.ok() {
+                            listed.stdout.lines().map(str::trim).collect()
+                        } else {
+                            Default::default()
+                        };
                         for (d, nfs) in &wanted {
-                            if *nfs {
-                                println!("  {d}  (NFS, owned by uid {})", zfs::NFS_OWNER);
+                            let mark = if existing.contains(d.as_str()) {
+                                "✓"
                             } else {
-                                println!("  {d}");
+                                "→"
+                            };
+                            if *nfs {
+                                println!("  {mark} {d}  (NFS, owned by uid {})", zfs::NFS_OWNER);
+                            } else {
+                                println!("  {mark} {d}");
                             }
                         }
+                        println!("  (✓ there already, left as it is; → created)");
                         // Encryption by default, declining it explicit — decided
                         // 2026-10-29. The key is put here by `storage encrypt`, run where
                         // the vault is: this machine has none.

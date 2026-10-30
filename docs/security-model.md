@@ -72,6 +72,11 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   root (lockdown in `confidentiality`) and devices reach memory only through the IOMMU,
   both on the signed command line. The firmware's own password, and USB and network
   boot turned off, are yours to set: `verify-boot` lists them, it cannot read them.
+- **A storage node's pool opens with its own key.** `hlb storage encrypt` encrypts its
+  datasets under a key kept in the vault and on the emergency kit; at boot they are
+  unlocked before Docker and the NFS server start, and without the key neither starts —
+  nothing is written beside a locked volume. The pool's disks taken alone, in this
+  machine or another, give nothing without that key.
 
 ### Whoever holds your backups
 
@@ -149,6 +154,9 @@ plan around them.
   drained and reinstalled to get there. A bound node without Secure Boot, or on
   Debian 12, verifies no boot: whoever has it inside the house, a Tang answering, gets
   a root shell at boot. A virtual machine's host reads its memory whatever is bound.
+- **A storage node's dataset key is a file on its root disk.** Where that disk is not
+  encrypted, the whole machine carried away opens its pool. And a volume encrypted
+  after the fact leaves its plain blocks on the disks until ZFS writes over them.
 - **The vault's key is a `0600` file next to the state until you seal it.** `hlb
   secrets-seal` seals it to the node's TPM and keeps it in memory only; root on that
   node can still read it there, and a node carried away whole unseals it at boot until

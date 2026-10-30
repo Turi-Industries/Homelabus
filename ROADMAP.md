@@ -25,7 +25,7 @@ goals added, and eight phases to get there. **Measured** the same day:
 |---|---|
 | 1. deploy | `v0.2.0` has no release: the quick start begins with building thirty crates, then five commands. Time to a first app is measured nowhere |
 | 2. never lose | no record anywhere of which apps' restores were rehearsed; `hlb dr exercise` rehearses PostgreSQL's base backup |
-| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No real node's disk is encrypted yet** (`node preseed --encrypt` installs one LUKS under a one-time passphrase that `node bind-disk` replaces with the TPM AND a Tang, measured on the lab; ZFS without its native encryption); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
+| 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No real node's disk is encrypted yet** (`node preseed --encrypt` installs one LUKS under a one-time passphrase that `node bind-disk` replaces with the TPM AND a Tang, measured on the lab; `hlb storage encrypt` puts a storage node's datasets under a key of its own, unlocked before Docker, measured on the lab 2026-10-30); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
 | 4. no Rust | **0 of 12** apps went in without Rust in the same commit; of the last 12 commits completing an app, 8 touched Rust. No production code branches on an app's name |
 | 5. always available — the vital apps reachable while the house is down, or moving | no notion of a site, of an app's criticality, of a relay: the way in is a port forward on the house's router. Every service runs `replicas: 1` |
 | 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Trivy at update time only |
@@ -580,8 +580,27 @@ three Tangs, and the third alone opens it.
 - The controller split: a minimal privileged daemon holds Docker's socket behind a
   narrow API, the HTTP API and the interface run unprivileged — today a flaw in the
   controller is root on its node.
-- ZFS native encryption, whose `zfs send -w` lets a remote site keep a copy it cannot
-  read.
+- ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
+  puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
+  covered by its fingerprint; refused until the kit is printed with it), writes it to
+  `/etc/hlb/zfs.key` (0400), and installs `hlb-zfs-load-key.service`: Debian masks
+  ZFS's own unit, and `zfs mount -a` leaves an encrypted dataset locked over an EMPTY
+  directory of its plain parent (measured on Debian 12 and 13) — a bind mount there
+  writes in clear. The unit loads and mounts every dataset under the key after
+  `zfs-mount`, fails unless all are mounted, and Docker and the NFS server `Require`
+  it. ZFS cannot encrypt in place: each volume is copied (`send | recv`, its own
+  encryption root), its file list compared, swapped in by two renames and the original
+  destroyed, every app owning one stopped meanwhile — a rename passes under a
+  container's bind mount, and the app would keep writing into the original. Each shape
+  in between is named, so a run resumes. `storage init` creates new ones encrypted and
+  refuses clear without `--unencrypted`. Proven on the lab (deb2, Debian 12, ZFS 2.1):
+  27 volumes of 20 apps moved, every assertion green; rebooted, unlocked 0.5 s after
+  `zfs-mount` and before NFS and Docker, everything back alone; booted with the key
+  moved away, the unit fails naming the kit, Docker and NFS stay down, nothing is
+  mounted; the key put back, all returns. Left: the plain blocks a copy freed stay on
+  the disks until overwritten, and on a root disk in clear the key lies beside the pool
+  — a data disk taken alone gives nothing, the whole machine everything; and `zfs send
+  -w`, which would let a remote site keep a copy it cannot read.
 - The domain, the weakest point (every domain theft of 2024-2026 went through a
   registrar's support): a hidden Knot primary at home signs the zone, at least two
   secondaries serve it — the signing key never leaves the house; the simple level stays

@@ -144,10 +144,37 @@ pub async fn encrypt(cli: &Cli, t: Target<'_>, apply: bool) -> Result<ExitCode> 
         ),
     }
 
+    // Read back, so a second run's preview does not list as work what is already there.
     let boot = zfs::boot_steps();
+    let mut in_place = Vec::new();
+    for s in &boot {
+        in_place.push(match &s.action {
+            provision::Action::Install { path, content, .. } => {
+                runner.read_file(path).await?.as_deref() == Some(content.as_str())
+            }
+            provision::Action::Run(_) => false,
+        });
+    }
+    let enabled = run(runner, &["systemctl", "is-enabled", zfs::LOAD_KEY_UNIT])
+        .await?
+        .first_line()
+        .as_deref()
+        == Some("enabled");
+    let boot_current = enabled
+        && boot
+            .iter()
+            .zip(&in_place)
+            .all(|(s, &done)| done || matches!(s.action, provision::Action::Run(_)));
     println!("\nAt every boot:");
-    for (i, s) in boot.iter().enumerate() {
-        println!("  {}. {}", i + 1, s.describe());
+    if boot_current {
+        println!(
+            "  ✓ {} and its drop-ins, in place and enabled",
+            zfs::LOAD_KEY_UNIT
+        );
+    } else {
+        for (s, done) in boot.iter().zip(&in_place) {
+            println!("  {} {}", if *done { "✓" } else { "→" }, s.describe());
+        }
     }
 
     let mut stuck = false;
@@ -224,6 +251,13 @@ pub async fn encrypt(cli: &Cli, t: Target<'_>, apply: bool) -> Result<ExitCode> 
     if stuck {
         eprintln!("\n🔴 Nothing is done while a volume is in a shape no run of Homelabus leaves.");
         return Ok(ExitCode::FAILURE);
+    }
+    let volumes_done = volumes
+        .iter()
+        .all(|v| matches!(v.migration, Migration::Done | Migration::Foreign));
+    if boot_current && on_node.is_some() && volumes_done {
+        println!("\n✓ Nothing to do: {node}'s datasets are encrypted and unlocked at boot.");
+        return Ok(ExitCode::SUCCESS);
     }
     if !crate::seal::kit_current(&state, &vault).await? {
         eprintln!("\n🔴 No emergency kit printed with this key: nothing is encrypted. Its pool");

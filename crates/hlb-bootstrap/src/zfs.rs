@@ -280,7 +280,10 @@ roots=$(zfs list -H -o name,keylocation -t filesystem |
 	awk -F '\t' '$2 == "file:///etc/hlb/zfs.key" { print $1 }')
 [ -n "$roots" ] || exit 0
 printf '%s\n' "$roots" | while IFS= read -r root; do
-	[ "$(zfs get -H -o value keystatus "$root")" = available ] || zfs load-key "$root"
+	[ "$(zfs get -H -o value keystatus "$root")" = available ] || zfs load-key "$root" || {
+		echo "$root stays locked, and Docker and the NFS server with it: put this node's key from the emergency kit back in /etc/hlb/zfs.key (0400), then reboot" >&2
+		exit 1
+	}
 done
 unmounted() {
 	zfs list -H -o name,encryptionroot,canmount,mounted -t filesystem |
@@ -1037,6 +1040,8 @@ tank/private\tprompt\tunavailable\ttank/private\ton\tno
             "a key that does not load must fail the unit:\n{after}"
         );
         assert!(stderr.contains("Key load error"), "{stderr}");
+        // ZFS's own words do not say where the key comes back from.
+        assert!(stderr.contains("emergency kit"), "{stderr}");
     }
 
     #[test]
