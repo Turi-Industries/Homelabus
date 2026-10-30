@@ -883,8 +883,11 @@ pull request to the catalog, with no `hlb` release.
   socket, public exposure, a mail admin token.
 - An app's criticality (vital, important, normal) in the manifest, optional on read —
   the lifeboat's input.
-- Proving ground for goal 4: calendars and contacts from Stalwart (a capability and a
-  phone guide), then Paperless-ngx, Actual, Mealie, Audiobookshelf, Navidrome, FreshRSS.
+- Proving ground for goal 4: **which apps is the owner's decision, taken when this phase
+  starts** (2026-10-30) — the list below was proposed while planning, never decided, and
+  no app is added from it meanwhile. Calendars and contacts from Stalwart (a capability
+  and a phone guide), then Paperless-ngx, Actual, Mealie, Audiobookshelf, Navidrome,
+  FreshRSS.
   - ✅ Mealie — 2026-10-30, a manifest and a guide, no Rust beyond the form-encoded
     recovery proof it showed missing. **Proven on the lab** by `hlb install mealie
     --apply` alone: the guide's `sql` step run by the executor (all four assertions
