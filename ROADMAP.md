@@ -620,6 +620,17 @@ three Tangs, and the third alone opens it.
     local destination's path is any host path, bound read-write by the backup pass;
     three read routes decrypt the whole emergency kit to show its fingerprint; the
     `drifts` screen reads the reconcile loop's memory, which stage 2 must persist.
+  - ✅ Stage 1 — 2026-10-30: every handler asks `hlb_privd::Privd` an intent
+    (`hlb_api::intent`, twenty of them, answers round-tripped through JSON);
+    `AppState` holds the `Privd` and no client; the loops that hold one live in
+    `hlb_privd::daemon`; `web_holds_no_capability` refuses, in every module but
+    `main.rs`, each type `Privd` and `InstallContext` hold, read from their source.
+    Left for stage 2: the web side still WRITES `hlb.db` (accounts, invitations,
+    roles, the audit, the git mirror); the agents' poller holds the controller's mTLS
+    key (read-only reports — nothing it opens acts); the `hlb-engine` helpers it calls
+    read the state only (`roles::opened_by`, `pki::ending`, `access::pocketid_public`…)
+    and stay; `main.rs`'s Termix, emergency-vault, upkeep, prune and PKI loops still
+    run in the binary beside the web side.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to
