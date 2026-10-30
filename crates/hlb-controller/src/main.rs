@@ -389,7 +389,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let s = State::in_memory().await?;
         let catalog = hlb_catalog::Catalog::load(&cli.catalog).ok();
-        hlb_controller::demo::seed_at(&s, cli.demo_scale, catalog.as_ref()).await?;
+        hlb_privd::demo::seed_at(&s, cli.demo_scale, catalog.as_ref()).await?;
         Arc::new(s)
     } else {
         Arc::new(State::open(&cli.state).await?)
@@ -1575,7 +1575,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_identity(identity)
         .with_mail(mail, &mail_domain)
         .with_backup(backup)
-        .with_published(alerts_state, drift_state);
+        .with_published(alerts_state, drift_state)
+        .with_mirror(cli.git_mirror.clone());
     let held = Arc::new(Held {
         install,
         orchestrator: orch_api,
@@ -2100,8 +2101,8 @@ async fn export(
     path: &std::path::Path,
     state: &State,
     message: &str,
-) -> Result<(), hlb_controller::diff::MirrorError> {
-    hlb_controller::diff::export(path, state, message).await
+) -> Result<(), hlb_privd::mirror::MirrorError> {
+    hlb_privd::mirror::export(path, state, message).await
 }
 
 /// Resolves `tasks.<service>` to the addresses of every task.

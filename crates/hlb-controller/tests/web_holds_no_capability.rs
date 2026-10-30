@@ -22,6 +22,10 @@ const READ_BY_THE_WEB: &[(&str, &str)] = &[
         "the web side reads the state; only the daemon will write it",
     ),
     ("Catalog", "the web side browses the catalog it shows"),
+    (
+        "PathBuf",
+        "a path: the web side reads the Git mirror's history, which only the daemon writes",
+    ),
 ];
 
 /// Wrappers around a field's type, not a type of their own.
@@ -159,6 +163,144 @@ fn no_web_module_reaches_the_daemon() {
     assert!(
         found.is_empty(),
         "a web module reaches the daemon — ask hlb_privd an intent instead:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The words of a statement that writes.
+const WRITES: &[&str] = &["INSERT", "UPDATE", "DELETE", "REPLACE"];
+
+/// Each function of `src` — `(name, public, body)` — cut at the next function's header.
+fn functions(src: &str) -> Vec<(String, bool, String)> {
+    let mut out: Vec<(String, bool, String)> = Vec::new();
+    for line in src.lines() {
+        let t = line.trim_start();
+        let public = t.starts_with("pub ");
+        let header = t
+            .trim_start_matches("pub(crate) ")
+            .trim_start_matches("pub ")
+            .trim_start_matches("async ")
+            .strip_prefix("fn ")
+            .filter(|_| line.len() - t.len() <= 4);
+        match header {
+            Some(rest) => {
+                let name: String = rest.chars().take_while(|c| ident(*c)).collect();
+                out.push((name, public, String::new()));
+            }
+            None => {
+                if let Some((_, _, body)) = out.last_mut() {
+                    body.push_str(line);
+                    body.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The public methods of `hlb-state` that write: a statement among their literals, a
+/// transaction opened, or a call to a function that does either.
+fn state_writers() -> BTreeSet<String> {
+    let dir = scan::crates_root().join("hlb-state/src");
+    let mut fns = Vec::new();
+    for f in scan::rust_files(&dir) {
+        let src = std::fs::read_to_string(&f).expect("hlb-state's source");
+        let production = src
+            .split_once("\n#[cfg(test)]")
+            .map_or(src.as_str(), |(c, _)| c);
+        for (name, public, body) in functions(production) {
+            let (code, strings) = scan::split(&body);
+            let writes = strings
+                .iter()
+                .any(|s| s.split(|c: char| !ident(c)).any(|w| WRITES.contains(&w)))
+                || code.contains(".begin(")
+                || code.contains(".begin_with(");
+            fns.push((name, public, code, writes));
+        }
+    }
+    // A function calling a writer writes: until nothing changes.
+    let mut writers: BTreeSet<String> = fns.iter().filter(|f| f.3).map(|f| f.0.clone()).collect();
+    loop {
+        let before = writers.len();
+        for (name, _, code, _) in &fns {
+            let calls = |w: &String| {
+                code.contains(&format!("self.{w}(")) || code.contains(&format!("Self::{w}("))
+            };
+            if writers.iter().any(calls) {
+                writers.insert(name.clone());
+            }
+        }
+        if writers.len() == before {
+            break;
+        }
+    }
+    fns.iter()
+        .filter(|f| f.1 && writers.contains(&f.0))
+        .map(|f| f.0.clone())
+        .collect()
+}
+
+/// 🔴 Whoever writes `hlb.db` forges a secret, a session or the audit chain, so the
+/// web side writes nothing in it: every write is an intent the privileged side answers.
+/// The writers are read from `hlb-state` itself — a method added there tomorrow is
+/// refused here the day it is added. A web method sharing a writer's name is renamed:
+/// matched by name, the scan cannot tell receivers apart.
+#[test]
+fn no_web_module_writes_the_state() {
+    let writers = state_writers();
+    // The floor: 98 writers when this was written. Read as far fewer, the parsing broke
+    // and the scan below would pass on nothing.
+    assert!(
+        writers.len() >= 90,
+        "only {} writers read: {writers:?}",
+        writers.len()
+    );
+    for known in [
+        "audit",
+        "open_session",
+        "upsert_app",
+        "set_user_role",
+        "prune_uptime_samples",
+    ] {
+        assert!(writers.contains(known), "{known} not read as a writer");
+    }
+    assert!(
+        !writers.contains("installed_apps"),
+        "a reader read as a writer"
+    );
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0;
+    let mut found = Vec::new();
+    for f in scan::rust_files(&src) {
+        let code = production(&f);
+        let called: BTreeSet<&String> = writers
+            .iter()
+            .filter(|w| code.contains(&format!(".{w}(")))
+            .collect();
+        if f.file_name().is_some_and(|n| n == "main.rs") {
+            // The daemon's loops still run there, and write: seeing them proves the
+            // matcher reads real code.
+            assert!(
+                !called.is_empty(),
+                "main.rs writes nothing: the scan reads nothing"
+            );
+            continue;
+        }
+        scanned += 1;
+        for w in called {
+            found.push(format!("{}: {w}", scan::short(&f)));
+        }
+        // The Git mirror is the daemon's to write: opening it with `open_or_init`
+        // creates a repository.
+        if code.contains("GitMirror::open_or_init(") {
+            found.push(format!("{}: GitMirror::open_or_init", scan::short(&f)));
+        }
+    }
+    assert!(scanned >= 30, "only {scanned} web modules read");
+    assert!(
+        found.is_empty(),
+        "a web module writes the state — ask hlb_privd an intent instead:\n{}",
         found.join("\n")
     );
 }

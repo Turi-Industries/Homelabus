@@ -119,7 +119,7 @@ pub async fn attest(
     .map_err(ApiError::Internal)?;
 
     let _ = s
-        .audit(
+        .append_audit(
             &actor,
             auth.identity().role,
             "breakglass-attest",

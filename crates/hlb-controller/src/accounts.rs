@@ -898,7 +898,7 @@ async fn refuse_signup(s: &AppState, name: &str, r: ActionResult) -> ActionReply
             .to_string()
     };
     let _ = s
-        .audit(
+        .append_audit(
             "signup",
             hlb_types::Role::User,
             "signup",
@@ -921,7 +921,7 @@ async fn finish_signup(
 ) -> ActionReply<Registered> {
     let issue = if r.succeeded() { "ok" } else { "failed" };
     let _ = s
-        .audit(
+        .append_audit(
             "signup",
             hlb_types::Role::User,
             "signup",
@@ -954,7 +954,7 @@ async fn audit(
     };
 
     let _ = s
-        .audit(
+        .append_audit(
             identity.actor.name(),
             identity.role,
             action,

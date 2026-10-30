@@ -476,7 +476,7 @@ mod tests {
     /// "me" have someone to describe.
     async fn demo(dir: &std::path::Path) -> (axum::Router, String) {
         let st = hlb_state::State::in_memory().await.expect("state");
-        crate::demo::seed(&st).await.expect("demo data");
+        hlb_privd::demo::seed(&st).await.expect("demo data");
         let (token, stored) =
             hlb_types::generate_token("lena-laptop", hlb_types::Role::Admin, [9u8; 32]);
         st.store_token(&stored).await.expect("token");

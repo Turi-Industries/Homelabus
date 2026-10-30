@@ -360,7 +360,7 @@ impl<E: Requires> axum::extract::FromRequestParts<Arc<AppState>> for Authorized<
                 // protected, it did not break down. Painting them the same would send
                 // you looking for an incident where a guard worked.
                 let _ = s
-                    .audit(
+                    .append_audit(
                         identity.actor.name(),
                         identity.role,
                         E::ACTION.name(),

@@ -166,7 +166,7 @@ async fn answer(
         "failed"
     };
     let _ = s
-        .audit(
+        .append_audit(
             auth.actor.name(),
             auth.role,
             action,
@@ -780,7 +780,7 @@ pub async fn sync_access(
         "failed"
     };
     let _ = s
-        .audit(
+        .append_audit(
             auth.actor().name(),
             auth.identity().role,
             "role-sync",

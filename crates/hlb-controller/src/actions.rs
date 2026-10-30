@@ -86,7 +86,7 @@ pub(crate) async fn respond(
     };
 
     let _ = s
-        .audit(
+        .append_audit(
             identity.actor.name(),
             identity.role,
             action,
@@ -95,24 +95,8 @@ pub(crate) async fn respond(
             Some(&r.verdict()),
         )
         .await;
-    if r.applied {
-        mirror(s, action, target).await;
-    }
 
     Ok(Json(r))
-}
-
-/// What moves the desired state goes to the Git mirror at once: exported at startup
-/// and after a reconciliation only, an install from the interface reached it at the
-/// next restart — and the history screen, which reads the mirror, never showed it.
-async fn mirror(s: &AppState, action: &str, target: &str) {
-    if !matches!(action, "app-install" | "app-upgrade" | "app-remove") {
-        return;
-    }
-    let Some(path) = &s.mirror else { return };
-    if let Err(e) = crate::diff::export(path, &s.state, &format!("{action} {target}")).await {
-        tracing::warn!("Git mirror not updated after {action} {target}: {e}");
-    }
 }
 
 /// The privileged side could not answer: a fault of ours, never the caller's.
@@ -372,7 +356,7 @@ async fn action_error(
         confirmation_required: None,
     };
     let _ = s
-        .audit(
+        .append_audit(
             identity.actor.name(),
             identity.role,
             action,
@@ -381,8 +365,6 @@ async fn action_error(
             Some(message),
         )
         .await;
-    // A run that stopped halfway still froze its manifest: the mirror says so.
-    mirror(s, action, target).await;
     Err(ActionError::Unplannable(Box::new(r)))
 }
 
@@ -1025,51 +1007,6 @@ pub async fn list_plans(
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn an_install_from_the_interface_reaches_the_git_mirror_at_once() {
-        let st = std::sync::Arc::new(hlb_state::State::in_memory().await.expect("state"));
-        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
-            "apiVersion: hlb/v1\nkind: App\nmetadata: { name: gitea }\n\
-             spec:\n  image: { repo: a/b, tag: \"1\" }\n",
-        )
-        .expect("manifest");
-        st.upsert_app("gitea", &m, None).await.expect("app");
-        let dir = tempfile::tempdir().expect("dir");
-        let mut s = crate::api::tests::base_state(st, true);
-        s.mirror = Some(dir.path().to_path_buf());
-        let who = crate::auth::Identity {
-            role: hlb_types::Role::Admin,
-            actor: crate::auth::Actor::Person {
-                user: "lena".into(),
-            },
-        };
-        let applied = |applied| hlb_api::ActionResult {
-            applied,
-            summary: "install gitea".into(),
-            steps: Vec::new(),
-            cli_command: String::new(),
-            blockers: Vec::new(),
-            warnings: Vec::new(),
-            confirmation_required: None,
-        };
-        let versions = || {
-            hlb_gitops::GitMirror::open_or_init(dir.path())
-                .expect("mirror")
-                .versions("gitea", 10)
-                .expect("versions")
-                .len()
-        };
-
-        let _ = super::respond(&s, &who, "app-install", "gitea", applied(false)).await;
-        assert_eq!(versions(), 0, "a preview moved nothing");
-        let _ = super::respond(&s, &who, "app-install", "gitea", applied(true)).await;
-        assert_eq!(
-            versions(),
-            1,
-            "the install waited for a restart to be mirrored"
-        );
-    }
-
     #[test]
     fn removing_an_app_without_volumes_promises_nothing() {
         // 🔴 Found by running the preview: "0 volume is kept, the data stays" promises

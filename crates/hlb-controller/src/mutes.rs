@@ -75,7 +75,7 @@ pub async fn mute(
     .map_err(ApiError::Internal)?;
     let detail = format!("{} s: {reason}", d.for_s);
     let _ = s
-        .audit(
+        .append_audit(
             &actor,
             auth.identity().role,
             "alert-mute",
@@ -111,7 +111,7 @@ pub async fn unmute(
     }
     let actor = auth.identity().actor.name().to_string();
     let _ = s
-        .audit(
+        .append_audit(
             &actor,
             auth.identity().role,
             "alert-unmute",

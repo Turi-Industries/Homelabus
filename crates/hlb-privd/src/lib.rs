@@ -18,8 +18,10 @@ use hlb_state::State;
 mod apps;
 pub mod backup;
 pub mod daemon;
+pub mod demo;
 mod identity;
 mod mail;
+pub mod mirror;
 mod record;
 mod roles;
 mod signup;
@@ -84,6 +86,8 @@ pub struct Privd {
     alerts: daemon::AlertsState,
     /// The gaps reconciliation's last pass left.
     drifts: daemon::DriftState,
+    /// The Git mirror of the desired state, when configured.
+    mirror: Option<std::path::PathBuf>,
 }
 
 impl Privd {
@@ -99,6 +103,7 @@ impl Privd {
             mail_domain: String::new(),
             alerts: Default::default(),
             drifts: Default::default(),
+            mirror: None,
         }
     }
 
@@ -130,6 +135,11 @@ impl Privd {
 
     pub fn with_backup(mut self, b: Option<Arc<dyn backup::BackUpNow>>) -> Self {
         self.backup = b;
+        self
+    }
+
+    pub fn with_mirror(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.mirror = path;
         self
     }
 
@@ -189,13 +199,30 @@ impl Privd {
             Intent::Swarm(hlb_api::intent::Swarm { service }) => {
                 serde_json::to_value(swarm::view(self, service.as_deref()).await)?
             }
-            Intent::Install(i) => serde_json::to_value(apps::install(self, i).await)?,
-            Intent::Upgrade(i) => serde_json::to_value(apps::upgrade(self, i).await)?,
+            Intent::Install(i) => {
+                let (app, apply) = (i.app.clone(), i.apply);
+                let acted = apps::install(self, i).await;
+                self.mirror(mirror::moved(&acted, apply), "app-install", &app)
+                    .await;
+                serde_json::to_value(acted)?
+            }
+            Intent::Upgrade(i) => {
+                let (app, apply) = (i.app.clone(), i.apply);
+                let acted = apps::upgrade(self, i).await;
+                self.mirror(mirror::moved(&acted, apply), "app-upgrade", &app)
+                    .await;
+                serde_json::to_value(acted)?
+            }
             Intent::CatalogChanges(hlb_api::intent::CatalogChanges { app }) => {
                 serde_json::to_value(apps::catalog_changes(self, &app).await)?
             }
             Intent::AttestGuide(i) => serde_json::to_value(apps::attest_guide(self, i).await)?,
-            Intent::Remove(i) => serde_json::to_value(apps::remove(self, i).await)?,
+            Intent::Remove(i) => {
+                let app = i.app.clone();
+                let r = apps::remove(self, i).await;
+                self.mirror(r.applied, "app-remove", &app).await;
+                serde_json::to_value(r)?
+            }
             Intent::BackUp(i) => serde_json::to_value(backup::back_up(self, i).await)?,
             Intent::KitFingerprint(hlb_api::intent::KitFingerprint {}) => {
                 serde_json::to_value(self.kit_fingerprint().await)?

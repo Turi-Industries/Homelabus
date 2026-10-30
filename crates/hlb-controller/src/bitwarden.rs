@@ -174,7 +174,7 @@ pub async fn assistant(
 
     // 🔴 The log records the CREATION, never the value.
     let _ = s
-        .audit(
+        .append_audit(
             auth.identity().actor.name(),
             auth.identity().role,
             "bitwarden-assistant",

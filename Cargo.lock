@@ -1933,11 +1933,13 @@ version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
+ "clap",
  "hlb-api",
  "hlb-backup",
  "hlb-backup-run",
  "hlb-catalog",
  "hlb-engine",
+ "hlb-gitops",
  "hlb-guide",
  "hlb-identity",
  "hlb-mail",

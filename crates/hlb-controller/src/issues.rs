@@ -359,7 +359,7 @@ mod tests {
     #[tokio::test]
     async fn the_demonstration_is_one_line_a_cause() {
         let st = hlb_state::State::in_memory().await.expect("state");
-        crate::demo::seed_at(&st, crate::demo::Scale::Large, None)
+        hlb_privd::demo::seed_at(&st, crate::demo::Scale::Large, None)
             .await
             .expect("seed");
         let s = crate::api::tests::demo_state(st).await;
@@ -425,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn an_operator_inbox_never_reads_the_accounts() {
         let st = hlb_state::State::in_memory().await.expect("state");
-        crate::demo::seed(&st).await.expect("seed");
+        hlb_privd::demo::seed(&st).await.expect("seed");
         let s = crate::api::tests::demo_state(st).await;
         let issues = group(findings(&s, false).await.expect("findings"));
         assert!(!issues.iter().any(|i| matches!(

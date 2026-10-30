@@ -127,7 +127,7 @@ impl AppState {
     }
 
     /// Appends an entry to the audit chain, which only the privileged side writes.
-    pub async fn audit(
+    pub async fn append_audit(
         &self,
         actor: &str,
         role: hlb_types::Role,
@@ -739,7 +739,9 @@ async fn manifest_versions(
     let Some(path) = &s.mirror else {
         return Json(Vec::new());
     };
-    match hlb_gitops::GitMirror::open_or_init(path) {
+    // Opened, never initialised: the daemon writes the mirror, and a repository the
+    // first visit to this screen created would be one more thing the web side wrote.
+    match hlb_gitops::GitMirror::open(path) {
         Ok(m) => Json(crate::diff::versions(&m, &name, 20)),
         Err(_) => Json(Vec::new()),
     }
@@ -1380,7 +1382,7 @@ async fn change_appearance(
         .map_err(ApiError::Internal)?;
 
     let _ = s
-        .audit(
+        .append_audit(
             auth.actor().name(),
             auth.identity().role,
             "appearance",
@@ -1434,7 +1436,7 @@ async fn upload_logo(
         .map_err(ApiError::Internal)?;
 
     let _ = s
-        .audit(
+        .append_audit(
             auth.actor().name(),
             auth.identity().role,
             "appearance-logo",

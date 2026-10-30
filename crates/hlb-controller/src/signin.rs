@@ -341,7 +341,7 @@ pub async fn return_to(
 
     let Some(account) = account else {
         let _ = s
-            .audit(
+            .append_audit(
                 identity.account_name(),
                 hlb_types::Role::User,
                 "signin",
@@ -377,7 +377,7 @@ pub async fn return_to(
         Ok(true) => {}
         Ok(false) => {
             let _ = s
-                .audit(
+                .append_audit(
                     identity.account_name(),
                     hlb_types::Role::User,
                     "signin",
@@ -424,7 +424,7 @@ pub async fn return_to(
 
     let role = s.state.user_role(&account).await.unwrap_or_default();
     let _ = s
-        .audit(&account, role, "signin", &identity.sub, "ok", None)
+        .append_audit(&account, role, "signin", &identity.sub, "ok", None)
         .await;
 
     let mut r = (
@@ -499,7 +499,7 @@ pub async fn signout(
     }
 
     let _ = s
-        .audit(
+        .append_audit(
             identity.actor.name(),
             identity.role,
             "signout",

@@ -12,31 +12,6 @@
 //! always comes from the same `serde`, so the order is stable. A set comparison is enough
 //! and cannot lie about what it shows.
 
-/// Why the Git mirror was not written.
-#[derive(Debug, thiserror::Error)]
-pub enum MirrorError {
-    #[error(transparent)]
-    State(#[from] hlb_state::Error),
-    #[error(transparent)]
-    Git(#[from] hlb_gitops::Error),
-}
-
-/// Writes the desired state — every installed app's manifest — into the Git mirror.
-/// A commit only when it moved.
-pub async fn export(
-    path: &std::path::Path,
-    state: &hlb_state::State,
-    message: &str,
-) -> Result<(), MirrorError> {
-    let mut apps = Vec::new();
-    for (name, status) in state.installed_apps().await? {
-        let manifest = state.app_manifest(&name).await?;
-        apps.push((name, status, manifest));
-    }
-    hlb_gitops::GitMirror::open_or_init(path)?.export(&apps, message)?;
-    Ok(())
-}
-
 /// A manifest's successive versions, each with its diff.
 pub fn versions(
     mirror: &hlb_gitops::GitMirror,

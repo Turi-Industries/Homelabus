@@ -23,9 +23,14 @@ hlb-identity.workspace = true
 hlb-mail.workspace = true
 hlb-backup.workspace = true
 hlb-backup-run.workspace = true
+hlb-gitops.workspace = true
 hlb-notify.workspace = true
 hlb-metrics.workspace = true
 async-trait.workspace = true
+# The demonstration's scale, chosen on the command line.
+clap.workspace = true
+# The demonstration's own manifests, where the catalog lacks the app.
+serde_yaml_ng.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -35,7 +40,6 @@ tokio = { workspace = true, features = ["sync", "time", "fs", "macros"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 # The fake ntfy the notification tests publish to.
 axum = "0.8"
-serde_yaml_ng.workspace = true
 tempfile = "3"
 
 [lints]

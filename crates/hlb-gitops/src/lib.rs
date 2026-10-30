@@ -76,6 +76,14 @@ impl GitMirror {
         Ok(Self { repo, root })
     }
 
+    /// Opens an existing repository, creating nothing: what a reader that must not
+    /// write uses.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let root = path.as_ref().to_path_buf();
+        let repo = Repository::open(&root)?;
+        Ok(Self { repo, root })
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
