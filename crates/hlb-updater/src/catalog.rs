@@ -129,6 +129,7 @@ pub async fn propose(
                     tag: tag.to_string(),
                     digest: Some(digest),
                     built_here: false,
+                    signed_by: current.signed_by.clone(),
                 });
                 p.published = published;
                 break;
@@ -142,22 +143,38 @@ pub async fn propose(
 /// comments and layout kept. `None` when the line is not found exactly once.
 ///
 /// Images are written `image: { repo: …, tag: "…" }` across the catalog, with an
-/// optional `digest: "…"`; anything else is left for a person to edit.
+/// optional `digest: "…"` and `signedBy: { … }` last, which is kept; anything else is
+/// left for a person to edit.
 pub fn rewrite(manifest: &str, from: &Image, to: &Image) -> Option<String> {
     let old = match &from.digest {
         Some(d) => format!(
-            "{{ repo: {}, tag: \"{}\", digest: \"{d}\" }}",
+            "{{ repo: {}, tag: \"{}\", digest: \"{d}\"",
             from.repo, from.tag
         ),
-        None => format!("{{ repo: {}, tag: \"{}\" }}", from.repo, from.tag),
+        None => format!("{{ repo: {}, tag: \"{}\"", from.repo, from.tag),
     };
     let new = format!(
-        "{{ repo: {}, tag: \"{}\", digest: \"{}\" }}",
+        "{{ repo: {}, tag: \"{}\", digest: \"{}\"",
         to.repo,
         to.tag,
         to.digest.as_deref()?
     );
-    (manifest.matches(&old).count() == 1).then(|| manifest.replacen(&old, &new, 1))
+    // Only where the image's fields end: an unpinned `from` is a prefix of the same
+    // image pinned.
+    let at: Vec<usize> = manifest
+        .match_indices(&old)
+        .map(|(i, _)| i)
+        .filter(|i| {
+            let rest = &manifest[i + old.len()..];
+            rest.starts_with(" }") || rest.starts_with(", signedBy:")
+        })
+        .collect();
+    let [i] = at[..] else { return None };
+    Some(format!(
+        "{}{new}{}",
+        &manifest[..i],
+        &manifest[i + old.len()..]
+    ))
 }
 
 #[cfg(test)]
@@ -174,6 +191,7 @@ mod tests {
             tag: tag.into(),
             digest: digest.map(Into::into),
             built_here: false,
+            signed_by: None,
         }
     }
 
@@ -238,5 +256,26 @@ mod tests {
         assert_eq!(rewrite(yaml, &image("9-alpine", None), &to), None);
         let twice = format!("{yaml}{yaml}");
         assert_eq!(rewrite(&twice, &image("8-alpine", None), &to), None);
+    }
+
+    #[test]
+    fn a_signer_stays_on_the_rewritten_line() {
+        // The signer sits in the same braces: matched whole, the line was "not found"
+        // and no signed image would ever have moved.
+        let signer = ", signedBy: { github: valkey-io/valkey, workflow: release.yml } }";
+        let yaml = format!(
+            "  image: {{ repo: valkey/valkey, tag: \"8.1.9\", digest: \"sha256:old\"{signer}\n"
+        );
+        let new = rewrite(
+            &yaml,
+            &image("8.1.9", Some("sha256:old")),
+            &image("8.1.10", Some("sha256:new")),
+        );
+        assert_eq!(
+            new,
+            Some(format!(
+                "  image: {{ repo: valkey/valkey, tag: \"8.1.10\", digest: \"sha256:new\"{signer}\n"
+            ))
+        );
     }
 }

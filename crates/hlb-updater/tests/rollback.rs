@@ -497,6 +497,7 @@ fn with_companion() -> Candidate {
             tag: "1.1".into(),
             digest: Some("sha256:ml-update".into()),
             built_here: false,
+            signed_by: None,
         },
         maturity: hlb_updater::Maturity::Mature,
     });

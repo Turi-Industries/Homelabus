@@ -99,6 +99,11 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 - **Every app image is pinned by digest.** A deployment never falls back to a tag. An
   update waits until the new build is at least a week old, is scanned by Trivy and backed up
   before it switches, and is rolled back if the app does not come up.
+- **An image whose publisher signs it is held to that signer.** The catalog names the
+  GitHub workflow that signs Vikunja, Stalwart and Meilisearch (`signedBy`); an update
+  to a digest it did not sign — unsigned, or signed by anyone else — is refused. Most
+  publishers sign nothing (40 of the 50 images measured on 2026-10-30): for those, the
+  digest pinned in the catalog is the only guarantee.
 - **The build itself**: GitHub Actions are pinned by commit, every workflow's token is
   read-only unless a job needs to write, the job that can push never checks the code
   out, and every run is checked by `cargo audit`, CodeQL and Scorecard.

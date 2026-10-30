@@ -17,6 +17,7 @@ thiserror.workspace = true
 hlb-backup.workspace = true
 serde_json.workspace = true
 hlb-registry.workspace = true
+hlb-updater.workspace = true
 hlb-ingress.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tempfile = "3"

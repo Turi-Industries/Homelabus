@@ -23,14 +23,14 @@ pub mod scan;
 pub mod window;
 
 pub use apply::{apply, UpdateOutcome};
-pub use scan::{audit, Report as ScanReport, Verdict};
+pub use scan::{audit, audit_signed_by, Report as ScanReport, Verdict};
 pub use window::MaintenanceWindow;
 
 use std::collections::BTreeMap;
 
 use hlb_registry::{best_upgrade, ImageRef, RegistryClient, Version};
 use hlb_state::State;
-use hlb_types::{Image, Manifest, UpdateChannel};
+use hlb_types::{Image, ImageSigner, Manifest, UpdateChannel};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -171,6 +171,40 @@ impl Maturity {
 }
 
 impl Candidate {
+    /// Every image that will start, the companions' included, as the digest that will
+    /// run, each with the signer it is held to.
+    ///
+    /// 🔴 The signer is the CATALOG's: an installation's frozen manifest predates any
+    /// signer declared since, and would let an unsigned digest through as "not
+    /// checked". Matched by repository — a signer is one publisher's.
+    pub fn to_verify(
+        &self,
+        installed: &Image,
+        catalog: Option<&Image>,
+    ) -> Vec<(String, Option<ImageSigner>)> {
+        let (repo, tag) = match &self.kind {
+            UpdateKind::NewVersion { to_tag } => (installed.repo.as_str(), to_tag.as_str()),
+            UpdateKind::Catalog { repo, tag } => (repo.as_str(), tag.as_str()),
+            UpdateKind::DigestOnly | UpdateKind::Companions => {
+                (installed.repo.as_str(), installed.tag.as_str())
+            }
+        };
+        let signer = match catalog {
+            Some(c) if c.repo == repo => c.signed_by.clone(),
+            _ if installed.repo == repo => installed.signed_by.clone(),
+            _ => None,
+        };
+        let own = (self.kind != UpdateKind::Companions)
+            .then(|| (format!("{repo}:{tag}@{}", self.to_digest), signer));
+        own.into_iter()
+            .chain(
+                self.companions
+                    .iter()
+                    .map(|m| (m.to.reference(), m.to.signed_by.clone())),
+            )
+            .collect()
+    }
+
     pub fn describe(&self) -> String {
         let own = match &self.kind {
             UpdateKind::DigestOnly => {
@@ -570,6 +604,60 @@ mod tests {
     }
 
     #[test]
+    fn every_image_that_will_start_is_verified_against_the_catalogs_signer() {
+        let signer = |repo: &str| {
+            Some(ImageSigner {
+                github: repo.into(),
+                workflow: "release.yml".into(),
+            })
+        };
+        // Installed before the catalog declared a signer: its frozen manifest has none.
+        let installed = image("acme/gitea", "1.24", Some("sha256:old"));
+        let catalog = Image {
+            signed_by: signer("acme/gitea"),
+            ..image("acme/gitea", "1.24", Some("sha256:catalog"))
+        };
+        let ml = Image {
+            signed_by: signer("acme/ml"),
+            ..image("acme/ml", "1.1", Some("sha256:ml"))
+        };
+        let mut c = candidate(false);
+        c.companions.push(CompanionMove {
+            name: "ml".into(),
+            service: "gitea-ml".into(),
+            to: ml,
+            maturity: Maturity::Mature,
+        });
+        assert_eq!(
+            c.to_verify(&installed, Some(&catalog)),
+            [
+                (
+                    "acme/gitea:1.25@sha256:new".to_string(),
+                    signer("acme/gitea")
+                ),
+                ("acme/ml:1.1@sha256:ml".to_string(), signer("acme/ml")),
+            ]
+        );
+        // A signer is its publisher's: an image the catalog moved to another
+        // repository is not checked against the old one's, nor the reverse.
+        c.kind = UpdateKind::Catalog {
+            repo: "other/gitea".into(),
+            tag: "2".into(),
+        };
+        let frozen = Image {
+            signed_by: signer("acme/gitea"),
+            ..installed.clone()
+        };
+        assert_eq!(
+            c.to_verify(&frozen, None)[0],
+            ("other/gitea:2@sha256:new".into(), None)
+        );
+        // The companions alone: the app's own image does not start again.
+        c.kind = UpdateKind::Companions;
+        assert_eq!(c.to_verify(&installed, Some(&catalog)).len(), 1);
+    }
+
+    #[test]
     fn an_update_requiring_backup_is_refused_without_a_provider() {
         // 🔴 The heart of it: a schema migration is not reversible by an image
         // rollback. Without a backup, we do not play.
@@ -656,6 +744,7 @@ mod tests {
             tag: tag.into(),
             digest: digest.map(Into::into),
             built_here: false,
+            signed_by: None,
         }
     }
 

@@ -64,7 +64,8 @@ by the controller, success included:
 
 A companion the catalog moved — Immich's machine learning — moves with its app and
 before it, in the same `update apply`; one that does not come up leaves the app as it
-was.
+was. An image the catalog declares a signer for (`signedBy`) is verified with `cosign`
+against it, and an unsigned digest is refused like a forged one.
 
 The catalog's own images are pinned by digest, and moved by the same rules — the newest
 mature build of each image's tag shape within its major, the digest the tag names when

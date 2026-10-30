@@ -256,6 +256,48 @@ pub struct Image {
     /// the Dockerfile's own bases, each by digest.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub built_here: bool,
+    /// Who signs this image's releases, when its publisher signs them with cosign.
+    /// Declared, an update whose new digest carries no signature from it is refused:
+    /// for an image that is always signed, a missing signature is a substitution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_by: Option<ImageSigner>,
+}
+
+/// A GitHub Actions workflow signing an image keylessly, through Sigstore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageSigner {
+    /// `owner/repository`, as in `github.com/<owner>/<repository>`.
+    pub github: String,
+    /// The workflow's file name in `.github/workflows/`, e.g. `release.yml`.
+    pub workflow: String,
+}
+
+impl ImageSigner {
+    /// The OIDC issuer of every GitHub Actions certificate.
+    pub const ISSUER: &'static str = "https://token.actions.githubusercontent.com";
+
+    /// The certificate identity `cosign verify --certificate-identity-regexp` expects.
+    ///
+    /// 🔴 Anchored at both ends: cosign matches the expression ANYWHERE in the identity,
+    /// so an unanchored one passes `github.com/attacker/x/...?github.com/<owner>/...`.
+    /// Tags only: a branch build is not a release.
+    pub fn identity_regexp(&self) -> String {
+        let escaped = |s: &str| {
+            s.chars().fold(String::new(), |mut out, c| {
+                if !c.is_ascii_alphanumeric() && !matches!(c, '/' | '-' | '_') {
+                    out.push('\\');
+                }
+                out.push(c);
+                out
+            })
+        };
+        format!(
+            "^https://github\\.com/{}/\\.github/workflows/{}@refs/tags/[^@]+$",
+            escaped(&self.github),
+            escaped(&self.workflow)
+        )
+    }
 }
 
 impl Image {

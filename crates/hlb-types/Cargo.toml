@@ -28,3 +28,8 @@ rsa = "0.9"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Reads a signer's identity expression as cosign does: Go's RE2 and this crate share
+# the syntax, and both match anywhere unless anchored.
+regex = "1"

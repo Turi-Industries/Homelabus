@@ -9,7 +9,7 @@ spec:
   # 🔴 A 1.0 server refuses to open a 0.16 store: an installed 0.16 moves only through
   # `hlb mail migrate`, which copies its store into the new volume below. `hlb-mail`
   # speaks both, for as long as a 0.16 is installed somewhere.
-  image: { repo: stalwartlabs/stalwart, tag: "v1.0.0", digest: "sha256:baafeacd6cbde77acdd94af49972d41c6709e54a376df48e18a9fe3f445eb3d5" }
+  image: { repo: stalwartlabs/stalwart, tag: "v1.0.0", digest: "sha256:baafeacd6cbde77acdd94af49972d41c6709e54a376df48e18a9fe3f445eb3d5", signedBy: { github: stalwartlabs/stalwart, workflow: ci.yml } }
   requires:
     # The image's own data directory: it belongs to the `stalwart` user, and a new
     # volume inherits that. `/opt/stalwart` belonged to root, and RocksDB could not

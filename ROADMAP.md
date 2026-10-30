@@ -765,6 +765,20 @@ three Tangs, and the third alone opens it.
   there one `HLB_COSIGN_IDENTITY` serves every image, so setting it would refuse every
   image but one signer's — it is never set, and nothing is verified. Worth doing as: a
   signer per image in the manifest, for the handful that sign.
+  - ✅ The signer per image — 2026-10-30: `signedBy: { github, workflow }` on an image
+    (`hlb_types::ImageSigner`), the identity derived anchored and on a tag only — cosign
+    matches an expression anywhere. `hlb update apply` verifies each image that will
+    start against the CATALOG's signer (a frozen manifest predates it), and with one
+    declared, "no signatures found" is refused as a substitution rather than reported
+    as unchecked; `HLB_COSIGN_IDENTITY` is gone from it (`update scan` keeps its flags).
+    The bot's rewrite keeps the signer on the line. Declared for Vikunja, Stalwart and
+    Fluxer's Meilisearch, read from each signature's certificate (all GitHub Actions,
+    Sigstore bundles in the OCI referrers, no `.sig` tag) and proven with cosign 3.1.4
+    (`hlb-catalog/tests/signatures.rs`, ignored: cosign and the network); a wrong
+    workflow fails it. Left: the SLSA provenance of Vaultwarden, Bulwark and Anubis, no
+    cosign signature; the migrator, a constant in `stalwart_migrate.rs` no update moves;
+    cosign missing on the machine still reads as "not checked", as Trivy does.
+  - Secure Boot's dbx (PKfail): not started.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
 

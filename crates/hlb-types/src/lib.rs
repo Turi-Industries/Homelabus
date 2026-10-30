@@ -30,9 +30,9 @@ pub use assertion::{Assertion, Check};
 pub use binding::{redact, substitute, Token};
 pub use capability::{CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier};
 pub use manifest::{
-    ApiVersion, AuthRoute, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image, Ingress,
-    Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, RecoveryLogin, Runtime, SecuritySpec,
-    SignIn, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
+    ApiVersion, AuthRoute, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image,
+    ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, RecoveryLogin,
+    Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -245,6 +245,40 @@ pub fn validate(m: &Manifest) -> Result<()> {
                     m.metadata.name
                 )));
             }
+        }
+    }
+
+    // A signer is interpolated into the identity cosign expects: a malformed one names
+    // a workflow no certificate carries, and every update of the image is refused.
+    let images = std::iter::once(&m.spec.image).chain(m.spec.companions.iter().map(|c| &c.image));
+    for (image, s) in images.filter_map(|i| Some((i, i.signed_by.as_ref()?))) {
+        let name_ok = |p: &str| {
+            !p.is_empty()
+                && !p.starts_with('.')
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        };
+        let why = match s.github.split_once('/') {
+            Some((owner, repo)) if name_ok(owner) && name_ok(repo) => None,
+            _ => Some(format!("github {:?} is not owner/repository", s.github)),
+        }
+        .or_else(|| {
+            let file = s
+                .workflow
+                .strip_suffix(".yml")
+                .or_else(|| s.workflow.strip_suffix(".yaml"));
+            (!file.is_some_and(name_ok)).then(|| {
+                format!(
+                    "workflow {:?} is not a file name in .github/workflows/",
+                    s.workflow
+                )
+            })
+        });
+        if let Some(why) = why {
+            return Err(Error::Validation(format!(
+                "{}: {}'s signer — {why}",
+                m.metadata.name, image.repo
+            )));
         }
     }
 
@@ -1505,6 +1539,69 @@ metadata: { name: test }
 spec:
   image: { repo: acme/test, tag: "1.0", digest: "sha256:abc" }
 "#;
+
+    #[test]
+    fn a_signer_names_one_workflow_of_one_repository_on_a_tag() {
+        let s = ImageSigner {
+            github: "go-vikunja/vikunja".into(),
+            workflow: "release.yml".into(),
+        };
+        let re = s.identity_regexp();
+        assert_eq!(
+            re,
+            "^https://github\\.com/go-vikunja/vikunja/\\.github/workflows/release\\.yml\
+             @refs/tags/[^@]+$"
+        );
+        let re = regex::Regex::new(&re).expect("an expression cosign reads");
+        // The certificate's SAN, measured on Vikunja 2.7.1's signature.
+        let release = "https://github.com/go-vikunja/vikunja/.github/workflows/release.yml";
+        assert!(re.is_match(&format!("{release}@refs/tags/v2.7.1")));
+        for other in [
+            format!("{release}@refs/heads/main"),
+            "https://github.com/go-vikunja/vikunja/.github/workflows/nightly.yml@refs/tags/v1"
+                .into(),
+            "https://githubXcom/go-vikunja/vikunja/.github/workflows/release.yml@refs/tags/v1"
+                .into(),
+            // Matched anywhere unless anchored: an attacker's workflow naming the real one.
+            format!("https://github.com/attacker/x/.github/workflows/a.yml?{release}@refs/tags/v1"),
+            format!("{release}@refs/tags/v1@evil"),
+        ] {
+            assert!(!re.is_match(&other), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_signer_is_a_repository_and_a_workflow_file() {
+        for (signer, why) in [
+            (
+                "{ github: go-vikunja, workflow: release.yml }",
+                "owner/repository",
+            ),
+            (
+                "{ github: a/b/c, workflow: release.yml }",
+                "owner/repository",
+            ),
+            (
+                "{ github: \"a/b c\", workflow: release.yml }",
+                "owner/repository",
+            ),
+            ("{ github: a/b, workflow: ../x.yml }", "file name"),
+            ("{ github: a/b, workflow: release }", "file name"),
+            ("{ github: a/b, workflow: \"\" }", "file name"),
+        ] {
+            let yaml = BASE.replace(
+                "digest: \"sha256:abc\" }",
+                &format!("digest: \"sha256:abc\", signedBy: {signer} }}"),
+            );
+            let err = validate(&manifest(&yaml)).expect_err(signer).to_string();
+            assert!(err.contains(why), "{signer}: {err}");
+        }
+        let yaml = BASE.replace(
+            "digest: \"sha256:abc\" }",
+            "digest: \"sha256:abc\", signedBy: { github: go-vikunja/vikunja, workflow: release.yml } }",
+        );
+        validate(&manifest(&yaml)).expect("a well-formed signer");
+    }
 
     #[test]
     fn a_declaration_nothing_reads_is_refused() {

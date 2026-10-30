@@ -44,6 +44,11 @@ cargo run -q -p hlb-cli -- install <name>            # the preview: every action
 cargo run -q -p hlb-cli -- catalog images            # the newest mature tag of each, by digest
 ```
 
+If the publisher signs its images with cosign, declare who: `signedBy: { github:
+owner/repository, workflow: release.yml }` in the image, read from the signature's
+certificate, then `cargo test -p hlb-catalog --test signatures -- --ignored` with
+`cosign` on the `PATH`.
+
 Then every closed door gets an `assertion` read back from the running app, proven on
 the pinned image (`crates/hlb-guide/tests/live_assertions.rs` says how) — and proven to
 FAIL once you open the door by hand, or it reads nothing. Then the lab, which `lease.sh`

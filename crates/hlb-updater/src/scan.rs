@@ -22,6 +22,7 @@
 //! and the caller must handle the two differently.
 
 use crate::Result;
+use hlb_types::ImageSigner;
 
 /// A check's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,7 +194,20 @@ pub async fn verify_signature(
                 .into(),
         };
     };
+    cosign_verify(image, identity, issuer, false).await
+}
 
+/// Verifies an image against the signer its manifest declares, if any.
+pub async fn verify_signed_by(image: &str, signer: Option<&ImageSigner>) -> Verdict {
+    let Some(signer) = signer else {
+        return Verdict::NotChecked {
+            reason: "no signer declared for this image".into(),
+        };
+    };
+    cosign_verify(image, &signer.identity_regexp(), ImageSigner::ISSUER, true).await
+}
+
+async fn cosign_verify(image: &str, identity: &str, issuer: &str, declared: bool) -> Verdict {
     let out = tokio::process::Command::new("cosign")
         .args([
             "verify",
@@ -211,22 +225,34 @@ pub async fn verify_signature(
             reason: format!("cosign unavailable: {e}"),
         },
         Ok(o) if o.status.success() => Verdict::Clean,
-        Ok(o) => {
-            let err = String::from_utf8_lossy(&o.stderr);
-            // Separating "no signature" from "invalid signature": the first is common
-            // (many images are unsigned), the second is a security alert.
-            if err.contains("no matching signatures") || err.contains("no signatures found") {
-                Verdict::NotChecked {
-                    reason: "unsigned image".into(),
-                }
-            } else {
-                Verdict::Findings {
-                    critical: 1,
-                    high: 0,
-                    detail: format!("INVALID signature: {}", err.trim()),
-                }
-            }
-        }
+        Ok(o) => read_failure(&String::from_utf8_lossy(&o.stderr), declared),
+    }
+}
+
+/// What a failed `cosign verify` means.
+///
+/// Separating "no signature" from "invalid signature": the first is common (most images
+/// are unsigned), the second is a security alert. 🔴 Unless the manifest declares who
+/// signs the image: its publisher signs every release, so a digest carrying no
+/// signature is not theirs. cosign 3.1 says "no signatures found" for an unsigned image
+/// and for a digest the registry does not hold alike, and "no matching attestations"
+/// for one signed by someone else.
+fn read_failure(stderr: &str, declared: bool) -> Verdict {
+    let unsigned =
+        stderr.contains("no matching signatures") || stderr.contains("no signatures found");
+    if unsigned && !declared {
+        return Verdict::NotChecked {
+            reason: "unsigned image".into(),
+        };
+    }
+    Verdict::Findings {
+        critical: 1,
+        high: 0,
+        detail: if unsigned {
+            "UNSIGNED, though its publisher signs every release".into()
+        } else {
+            format!("INVALID signature: {}", stderr.trim())
+        },
     }
 }
 
@@ -270,6 +296,15 @@ pub async fn audit(
         image: image.to_string(),
         vulnerabilities: scan_image(image).await,
         signature: verify_signature(image, identity_regexp, issuer).await,
+    })
+}
+
+/// Full check of an image, against the signer its manifest declares.
+pub async fn audit_signed_by(image: &str, signer: Option<&ImageSigner>) -> Result<Report> {
+    Ok(Report {
+        image: image.to_string(),
+        vulnerabilities: scan_image(image).await,
+        signature: verify_signed_by(image, signer).await,
     })
 }
 
@@ -365,6 +400,29 @@ mod tests {
         let v = verify_signature("alpine:3", None, None).await;
         assert!(!v.was_checked());
         assert!(v.describe().contains("identity"), "{}", v.describe());
+    }
+
+    #[test]
+    fn an_unsigned_image_blocks_only_when_its_publisher_signs() {
+        // cosign 3.1.4's own words, measured on gitea/gitea:28.2 (unsigned) and on
+        // Vikunja 2.7 against another workflow.
+        let unsigned = "Error: no signatures found\nerror during command execution: no \
+                        signatures found\n";
+        let other = "error during command execution: no matching attestations: failed to \
+                     verify certificate identity: no matching CertificateIdentity found";
+        assert!(!read_failure(unsigned, false).blocks());
+        assert!(!read_failure(unsigned, false).was_checked());
+        let substituted = read_failure(unsigned, true);
+        assert!(substituted.blocks(), "{substituted:?}");
+        assert!(substituted.describe().contains("UNSIGNED"));
+        assert!(read_failure(other, false).blocks());
+        assert!(read_failure(other, true).blocks());
+    }
+
+    #[tokio::test]
+    async fn an_image_with_no_declared_signer_is_not_checked() {
+        let v = verify_signed_by("alpine:3", None).await;
+        assert!(!v.was_checked() && !v.blocks(), "{v:?}");
     }
 
     #[test]

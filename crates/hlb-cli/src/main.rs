@@ -10640,22 +10640,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         };
                         let target = format!("{named}@{}", c.to_digest);
 
-                        // Every image that will start, the companions' included.
-                        let mut scanned = Vec::new();
-                        if c.kind != hlb_updater::UpdateKind::Companions {
-                            scanned.push(target.clone());
-                        }
-                        scanned.extend(c.companions.iter().map(|m| m.to.reference()));
+                        // Each image against its own publisher's signer: one identity for
+                        // every image refused all but one publisher's, so none was set.
+                        let in_catalog = catalog.get(app.as_str()).map(|m| &m.spec.image);
                         let mut reports = Vec::new();
-                        for image in &scanned {
-                            reports.push(
-                                hlb_updater::audit(
-                                    image,
-                                    std::env::var("HLB_COSIGN_IDENTITY").ok().as_deref(),
-                                    std::env::var("HLB_COSIGN_ISSUER").ok().as_deref(),
-                                )
-                                .await?,
-                            );
+                        for (image, signer) in c.to_verify(&installed, in_catalog) {
+                            reports
+                                .push(hlb_updater::audit_signed_by(&image, signer.as_ref()).await?);
                         }
                         let blocks = reports.iter().any(|r| r.blocks());
                         let described = reports
