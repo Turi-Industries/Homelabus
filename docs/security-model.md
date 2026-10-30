@@ -75,7 +75,9 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   A board shipped with a test platform key (PKfail: "DO NOT TRUST - AMI Test PK",
   its private half public) is said by `node check`: anyone with a root shell can
   rewrite its boot's keys. The seal holds — the disk then waits for the kit's key —
-  but that prompt, after a reboot nobody explained, is the attack.
+  but that prompt, after a reboot nobody explained, is the attack. A revocation list
+  (dbx) behind LVFS's is said beside it: a revoked boot manager still boots, though
+  the TPM, which records the entry that verified it, opens nothing to it.
 - **A storage node's pool opens with its own key.** `hlb storage encrypt` encrypts its
   datasets under a key kept in the vault and on the emergency kit; at boot they are
   unlocked before Docker and the NFS server start, and without the key neither starts —

@@ -1,0 +1,29 @@
+{
+  "Devices": [
+    {
+      "Name": "UEFI dbx",
+      "DeviceId": "362301da643102b9f38477387e2193e57abaa590",
+      "Guid": [
+        "f8ba2887-9411-5c36-9cee-88995bb39731",
+        "d07ff664-b0e1-5f4e-a723-d7fbcbfcb94f"
+      ],
+      "Plugin": "uefi_dbx",
+      "Version": "20250902",
+      "VersionFormat": "number",
+      "Releases": [
+        {
+          "AppstreamId": "org.linuxfoundation.dbx.x64.20260402.firmware",
+          "Name": "Secure Boot dbx",
+          "Version": "20260402",
+          "Protocol": "org.uefi.dbx2"
+        },
+        {
+          "AppstreamId": "org.linuxfoundation.dbx.x64.20260707.firmware",
+          "Name": "Secure Boot dbx",
+          "Version": "20260707",
+          "Protocol": "org.uefi.dbx2"
+        }
+      ]
+    }
+  ]
+}

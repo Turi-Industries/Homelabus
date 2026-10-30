@@ -253,6 +253,35 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
             .await,
     )
     .and_then(|o| p::parse_platform_key(&o));
+    let fwupd = |args: &[&str]| {
+        let mut argv = vec!["fwupdmgr".to_string()];
+        argv.extend(args.iter().map(|a| a.to_string()));
+        argv.push("--json".into());
+        argv
+    };
+    let dbx = match read(runner.run(&fwupd(&["get-devices"])).await) {
+        None => p::Dbx::NotChecked,
+        Some(devices) => {
+            let remotes = read(runner.run(&fwupd(&["get-remotes"])).await);
+            // Each `--no-*` keeps it from offering a metadata download, a remote enabled
+            // or a report sent: observing changes nothing. Its status is not read — the
+            // JSON says what it found, and an answer without `Devices` is unknown.
+            let updates = runner
+                .run(&fwupd(&[
+                    "get-updates",
+                    "--no-metadata-check",
+                    "--no-remote-check",
+                    "--no-unreported-check",
+                ]))
+                .await
+                .ok()
+                .filter(|o| o.status != 127)
+                .map(|o| o.stdout);
+            let now = read(runner.run(&["date".into(), "+%s".into()]).await)
+                .and_then(|o| o.trim().parse().ok());
+            p::parse_dbx(&devices, remotes.as_deref(), updates.as_deref(), now)
+        }
+    };
     let root_encrypted = read(
         runner
             .run(&sh("lsblk -nso TYPE \"$(findmnt -nvo SOURCE /)\""))
@@ -275,6 +304,7 @@ pub async fn protection(runner: &dyn Runner) -> Result<crate::protection::Signal
         dkms,
         root_encrypted,
         test_platform_key,
+        dbx,
     })
 }
 
@@ -576,6 +606,38 @@ mod tests {
         let signals = protection(&r).await.expect("observed");
         assert_eq!(signals.tpm, crate::protection::Tpm::Untried);
         assert!(!tpm_driver(&r).await);
+    }
+
+    #[tokio::test]
+    async fn the_dbx_is_read_without_fwupd_downloading_anything() {
+        // Answered only to these exact lines: without each `--no-*`, `get-updates`
+        // goes unanswered and the list reads as unknown.
+        let r = Scripted(vec![
+            (
+                "fwupdmgr get-devices --json",
+                include_str!("../tests/data/fwupd-devices.json"),
+            ),
+            (
+                "fwupdmgr get-remotes --json",
+                r#"{"Remotes": [{"Id": "lvfs", "Enabled": true, "Mtime": 1793300000}]}"#,
+            ),
+            (
+                "fwupdmgr get-updates --no-metadata-check --no-remote-check \
+                 --no-unreported-check --json",
+                include_str!("../tests/data/fwupd-updates-dbx.json"),
+            ),
+            ("date +%s", "1793400000\n"),
+        ]);
+        let signals = protection(&r).await.expect("observed");
+        assert_eq!(
+            signals.dbx,
+            crate::protection::Dbx::Behind {
+                version: "20250902".into(),
+                latest: "20260707".into()
+            }
+        );
+        let none = protection(&Scripted(vec![])).await.expect("observed");
+        assert_eq!(none.dbx, crate::protection::Dbx::NotChecked);
     }
 
     #[tokio::test]

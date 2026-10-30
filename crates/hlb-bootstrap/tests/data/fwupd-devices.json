@@ -1,0 +1,58 @@
+{
+  "Devices": [
+    {
+      "Name": "UEFI Signature Database",
+      "DeviceId": "0352a8acc949c7df21fec16e566ba9a74e797a97",
+      "Plugin": "uefi_db",
+      "Flags": [
+        "internal"
+      ],
+      "Icons": [
+        "application-certificate"
+      ],
+      "Created": 1793393560
+    },
+    {
+      "Name": "UEFI dbx",
+      "DeviceId": "362301da643102b9f38477387e2193e57abaa590",
+      "InstanceIds": [
+        "UEFI\\CRT_A1117F516A32CEFCBA3F2D1ACE10A87972FD6BBE8FE0D0B996E09E65D802A503&ARCH_X64",
+        "UEFI\\CRT_3CD3F0309EDAE228767A976DD40D9F4AFFC4FBD5218F2E8CC3C9DD97E8AC6F9D&ARCH_X64"
+      ],
+      "Guid": [
+        "f8ba2887-9411-5c36-9cee-88995bb39731",
+        "d07ff664-b0e1-5f4e-a723-d7fbcbfcb94f"
+      ],
+      "Summary": "UEFI revocation database",
+      "Plugin": "uefi_dbx",
+      "Protocols": [
+        "org.uefi.dbx2"
+      ],
+      "Flags": [
+        "internal",
+        "updatable",
+        "needs-reboot",
+        "usable-during-update",
+        "only-version-upgrade",
+        "signed-payload",
+        "can-emulation-tag"
+      ],
+      "Checksums": [
+        "e14c88dc48339c0555686849a4e3f8986d558e65c4fc863a1a4f1d40478bd47c"
+      ],
+      "Vendor": "Microsoft",
+      "VendorIds": [
+        "UEFI:Microsoft"
+      ],
+      "Version": "20250902",
+      "VersionLowest": "20250902",
+      "VersionFormat": "number",
+      "VersionRaw": 20250902,
+      "Icons": [
+        "application-certificate"
+      ],
+      "InstallDuration": 1,
+      "Created": 1793393560
+    }
+  ]
+}

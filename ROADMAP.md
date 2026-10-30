@@ -810,7 +810,14 @@ three Tangs, and the third alone opens it.
     refresh`), behind (`fwupdmgr update`) or current. A WARNING under Secure Boot, not a
     lower level, as PKfail: PCR 7 records which db entry verified each image, so a
     revoked boot manager booting does not open a level-A disk; and a dbx written is
-    resealed at once (`hlb-uki-efivars.path`). Not started in code.
+    resealed at once (`hlb-uki-efivars.path`). ✅ Coded 2026-10-30
+    (`protection::parse_dbx`, `Signals::dbx`), held to this desktop's real outputs:
+    read here it says unknown, "never downloaded" — and without that check, current,
+    proven by removing it. `get-updates` runs with `--no-metadata-check
+    --no-remote-check --no-unreported-check`, so observing downloads nothing. Its
+    releases fixture is built in its shape from the LVFS versions measured, since this
+    desktop's metadata was not ours to refresh; and not measured on a Secure Boot node
+    (this desktop's is off: no warning, rightly), nor on Debian 12's fwupd 1.8.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
   - ✅ The split — 2026-10-30. What is split is not the kit: it changes with every

@@ -283,7 +283,9 @@ show it, the last two label the node, and `cluster status` lists it. A, a verifi
 and the disk bound to the network; B, the disk bound to the TPM and the network, boot
 not verified (every Debian 12); C, no TPM that seals; D, a virtual machine. It is what
 the machine can reach: the line under it says whether its disk is encrypted yet, and a
-Secure Boot platform key that is a manufacturer's test key (PKfail) is warned there.
+Secure Boot platform key that is a manufacturer's test key (PKfail) is warned there, as
+is a revocation list (dbx) behind LVFS's — or one fwupd cannot compare, its metadata
+never fetched or a month old.
 `node add` proposes a role from it too: a manager holds every app's secret, so a C or D
 machine is never proposed as one — when the count asks for a third manager there, it
 derives nothing and names both costs (`--role manager` or `--role worker`) — and a

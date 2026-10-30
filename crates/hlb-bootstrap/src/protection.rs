@@ -120,7 +120,32 @@ pub struct Signals {
     /// The platform key's certificate says it is a test key ("DO NOT TRUST - AMI Test
     /// PK"): shipped by the board's maker as is, its private half public (PKfail).
     pub test_platform_key: Option<String>,
+    pub dbx: Dbx,
 }
+
+/// Whether Secure Boot's revocation list holds what LVFS publishes (BlackLotus, the
+/// 2023 boot managers), as fwupd reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dbx {
+    /// No fwupd, or no `UEFI dbx` device in it: nothing to compare.
+    NotChecked,
+    /// The list read, nothing to compare it with: fwupd answers "no update" alike
+    /// whether its metadata is current or was never downloaded.
+    Unknown {
+        version: String,
+        why: String,
+    },
+    Behind {
+        version: String,
+        latest: String,
+    },
+    Current {
+        version: String,
+    },
+}
+
+/// Older than this, LVFS's metadata no longer says the list is current.
+pub const DBX_METADATA_DAYS: i64 = 31;
 
 /// The level and why it is not higher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +208,22 @@ pub fn assess(s: &Signals) -> Assessment {
              keys — a disk that asks for the kit's key after a reboot nobody explained \
              is that; a firmware update from the board's maker replaces it"
         ));
+    }
+
+    // Not a lower level either: PCR 7 records which db entry verified each image, so
+    // a revoked boot manager booting leaves a level-A disk shut.
+    if s.secure_boot == Some(true) {
+        match &s.dbx {
+            Dbx::Behind { version, latest } => warnings.push(format!(
+                "its Secure Boot revocation list (dbx) is {version}, LVFS publishes \
+                 {latest}: boot managers revoked since still boot — `fwupdmgr update`"
+            )),
+            Dbx::Unknown { version, why } => warnings.push(format!(
+                "its Secure Boot revocation list (dbx) is {version}, and whether that is \
+                 current is not known: {why} — `fwupdmgr refresh`"
+            )),
+            Dbx::NotChecked | Dbx::Current { .. } => {}
+        }
     }
 
     Assessment {
@@ -402,6 +443,86 @@ pub fn parse_platform_key(od: &str) -> Option<String> {
     })
 }
 
+/// The dbx, from `fwupdmgr get-devices --json`, `get-remotes --json` and `get-updates
+/// --json`, and the machine's clock (`date +%s`): `None` where a command answered nothing.
+///
+/// 🔴 `get-updates` answers `{"Devices": []}`, exit 0, over metadata never downloaded
+/// (measured on fwupd 2.1.9, its `lvfs` remote at `"Mtime": -1`): "nothing to update" is
+/// believed only beside fresh metadata.
+pub fn parse_dbx(
+    devices: &str,
+    remotes: Option<&str>,
+    updates: Option<&str>,
+    now: Option<i64>,
+) -> Dbx {
+    use serde_json::Value;
+    let parse = |json: Option<&str>| serde_json::from_str::<Value>(json?).ok();
+    // `None` where the answer has no `Devices` list: not the same as an empty one.
+    let dbx_device = |v: &Value| -> Option<Option<Value>> {
+        let devices = v.get("Devices")?.as_array()?;
+        Some(
+            devices
+                .iter()
+                .find(|d| d.get("Plugin").and_then(Value::as_str) == Some("uefi_dbx"))
+                .cloned(),
+        )
+    };
+    let Some(version) = parse(Some(devices))
+        .and_then(|v| dbx_device(&v).flatten())
+        .and_then(|d| d.get("Version")?.as_str().map(str::to_string))
+        .filter(|v| !v.is_empty())
+    else {
+        return Dbx::NotChecked;
+    };
+    let unknown = |why: &str| Dbx::Unknown {
+        version: version.clone(),
+        why: why.to_string(),
+    };
+
+    let lvfs = parse(remotes).and_then(|r| {
+        r.get("Remotes")?
+            .as_array()?
+            .iter()
+            .find(|r| r.get("Id").and_then(Value::as_str) == Some("lvfs"))
+            .cloned()
+    });
+    let Some(lvfs) = lvfs else {
+        return unknown("fwupd has no LVFS remote");
+    };
+    if lvfs.get("Enabled").and_then(Value::as_bool) != Some(true) {
+        return unknown("fwupd's LVFS remote is disabled");
+    }
+    let mtime = lvfs.get("Mtime").and_then(Value::as_i64).filter(|m| *m > 0);
+    let Some(mtime) = mtime else {
+        return unknown("LVFS's metadata was never downloaded");
+    };
+    let Some(now) = now else {
+        return unknown("the machine's clock could not be read");
+    };
+    let days = (now - mtime) / 86_400;
+    if days > DBX_METADATA_DAYS {
+        return unknown(&format!("LVFS's metadata is {days} days old"));
+    }
+
+    // A number for fwupd ("VersionFormat": "number"); a text otherwise, compared as such.
+    let key = |v: &str| (v.parse::<u64>().ok(), v.to_string());
+    let Some(listed) = parse(updates).and_then(|u| dbx_device(&u)) else {
+        return unknown("fwupd's updates could not be read");
+    };
+    let latest = listed.and_then(|d| {
+        d.get("Releases")?
+            .as_array()?
+            .iter()
+            .filter_map(|r| r.get("Version")?.as_str())
+            .max_by_key(|v| key(v))
+            .map(str::to_string)
+    });
+    match latest {
+        Some(latest) if key(&latest) > key(&version) => Dbx::Behind { version, latest },
+        _ => Dbx::Current { version },
+    }
+}
+
 /// `systemd-detect-virt`'s output and exit status: `none` exits 1.
 pub fn parse_virt(out: Option<(&str, bool)>) -> Virt {
     match out.map(|(o, ok)| (o.trim(), ok)) {
@@ -446,6 +567,9 @@ mod tests {
             dkms: vec![],
             root_encrypted: Some(false),
             test_platform_key: None,
+            dbx: Dbx::Current {
+                version: "20260707".into(),
+            },
         }
     }
 
@@ -614,6 +738,124 @@ mod tests {
         assert_eq!(replaced, 2, "the fixture holds subject and issuer in clear");
         assert_eq!(parse_platform_key(&own.join(" ")), None);
         assert_eq!(parse_platform_key("not od"), None);
+    }
+
+    #[test]
+    fn a_dbx_behind_or_unknown_is_warned_under_secure_boot_and_keeps_the_level() {
+        let behind = Dbx::Behind {
+            version: "20250902".into(),
+            latest: "20260707".into(),
+        };
+        let a = assess(&Signals {
+            dbx: behind.clone(),
+            ..metal()
+        });
+        assert_eq!(a.level, Level::A);
+        let w = a.warnings.join("\n");
+        assert!(
+            w.contains("20250902") && w.contains("20260707") && w.contains("fwupdmgr update"),
+            "{w}"
+        );
+        let a = assess(&Signals {
+            dbx: Dbx::Unknown {
+                version: "20250902".into(),
+                why: "LVFS's metadata was never downloaded".into(),
+            },
+            ..metal()
+        });
+        let w = a.warnings.join("\n");
+        assert!(
+            w.contains("never downloaded") && w.contains("fwupdmgr refresh"),
+            "{w}"
+        );
+        // Without Secure Boot the list checks nothing: what holds the level back says so.
+        let off = assess(&Signals {
+            dbx: behind,
+            secure_boot: Some(false),
+            ..metal()
+        });
+        assert!(off.warnings.is_empty(), "{:?}", off.warnings);
+        let unread = assess(&Signals {
+            dbx: Dbx::NotChecked,
+            ..metal()
+        });
+        assert!(unread.warnings.is_empty());
+    }
+
+    #[test]
+    fn the_dbx_is_current_only_beside_fresh_metadata() {
+        // Captured on this desktop (fwupd 2.1.9), trimmed to two devices and two remotes.
+        let devices = include_str!("../tests/data/fwupd-devices.json");
+        let remotes = include_str!("../tests/data/fwupd-remotes.json");
+        let none = include_str!("../tests/data/fwupd-updates-none.json");
+        let version = "20250902".to_string();
+        let now = 1_793_400_000;
+
+        // 🔴 As measured: the `lvfs` remote at `"Mtime": -1`, and "no update" all the same.
+        assert_eq!(
+            parse_dbx(devices, Some(remotes), Some(none), Some(now)),
+            Dbx::Unknown {
+                version: version.clone(),
+                why: "LVFS's metadata was never downloaded".into()
+            }
+        );
+
+        let fetched = |days: i64| {
+            remotes.replace(
+                "\"Mtime\": -1,\n      \"RefreshInterval\": 86400",
+                &format!(
+                    "\"Mtime\": {},\n      \"RefreshInterval\": 86400",
+                    now - days * 86_400
+                ),
+            )
+        };
+        assert_ne!(
+            fetched(1),
+            remotes,
+            "the fixture's lvfs remote is rewritten"
+        );
+        assert_eq!(
+            parse_dbx(devices, Some(&fetched(1)), Some(none), Some(now)),
+            Dbx::Current {
+                version: version.clone()
+            }
+        );
+        match parse_dbx(devices, Some(&fetched(90)), Some(none), Some(now)) {
+            Dbx::Unknown { why, .. } => assert!(why.contains("90 days"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        // The releases LVFS published for this device's two GUIDs on 2026-10-30, in
+        // `get-updates`'s shape: refreshing this desktop's metadata was not ours to do.
+        let offered = include_str!("../tests/data/fwupd-updates-dbx.json");
+        assert_eq!(
+            parse_dbx(devices, Some(&fetched(1)), Some(offered), Some(now)),
+            Dbx::Behind {
+                version: version.clone(),
+                latest: "20260707".into()
+            }
+        );
+
+        // What cannot be read is never current.
+        for (remotes, updates, now) in [
+            (None, Some(none), Some(now)),
+            (Some(fetched(1)), None, Some(now)),
+            (Some(fetched(1)), Some("error: no daemon"), Some(now)),
+            (Some(fetched(1)), Some(none), None),
+            (
+                Some(fetched(1).replace("\"Enabled\": true", "\"Enabled\": false")),
+                Some(none),
+                Some(now),
+            ),
+        ] {
+            let got = parse_dbx(devices, remotes.as_deref(), updates, now);
+            assert!(matches!(got, Dbx::Unknown { .. }), "{got:?}");
+        }
+        // No fwupd answer, or no dbx device in it: nothing compared, nothing claimed.
+        assert_eq!(parse_dbx("", None, None, None), Dbx::NotChecked);
+        assert_eq!(
+            parse_dbx(r#"{"Devices": []}"#, Some(remotes), Some(none), Some(now)),
+            Dbx::NotChecked
+        );
     }
 
     #[test]
