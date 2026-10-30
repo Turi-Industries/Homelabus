@@ -94,17 +94,17 @@ pub async fn set_aside(
             "this line is no longer in the inbox".into(),
         ));
     };
-    s.state
-        .set_aside(
-            account,
-            &hlb_api::issues::Aside {
-                cause: d.cause,
-                until: crate::auth::now() + d.for_s,
-                attention: issue.attention,
-                subjects: issue.subjects.len(),
-            },
-        )
-        .await?;
+    s.record(hlb_api::intent::SetAside {
+        user: account.to_string(),
+        aside: hlb_api::issues::Aside {
+            cause: d.cause,
+            until: crate::auth::now() + d.for_s,
+            attention: issue.attention,
+            subjects: issue.subjects.len(),
+        },
+    })
+    .await
+    .map_err(crate::error::ApiError::Internal)?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -131,7 +131,15 @@ pub async fn bring_back(
             "a service token has no inbox of its own: it belongs to nobody".into(),
         ));
     };
-    if !s.state.bring_back(account, &d.cause).await? {
+    let asked = hlb_api::intent::BringBack {
+        user: account.to_string(),
+        cause: d.cause,
+    };
+    if !s
+        .record(asked)
+        .await
+        .map_err(crate::error::ApiError::Internal)?
+    {
         return Err(crate::error::ApiError::NotFound(
             "this line was not set aside".into(),
         ));

@@ -160,7 +160,7 @@ pub struct Issue {
 pub const ASIDE_MAX_S: i64 = 7 * 86_400;
 
 /// A line a person set aside, as it was then.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Aside {
     pub cause: Cause,
     pub until: i64,

@@ -100,6 +100,11 @@ pub enum LogoError {
     RasterizeFailed(String),
 }
 
+/// Whether `bytes` open as a PNG — what may be stored without being parsed.
+pub fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&PNG_SIGNATURE)
+}
+
 /// Accepts either PNG or SVG bytes and returns PNG bytes ready for
 /// [`State::set_logo`]. Checked before the bytes reach `set_logo` so every entry
 /// point — the CLI, `POST /api/appearance/logo` — accepts the same two formats, at the

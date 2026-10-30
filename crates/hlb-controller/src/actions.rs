@@ -615,11 +615,13 @@ pub async fn destination(
     };
 
     if applied {
-        match s
-            .state
-            .upsert_destination(&name, &location, &classes, d.credentials_secret.as_deref())
-            .await
-        {
+        let asked = hlb_api::intent::SetDestination {
+            name: name.clone(),
+            location: location.clone(),
+            classes: classes.clone(),
+            credentials_secret: d.credentials_secret.clone(),
+        };
+        match s.record(asked).await {
             Ok(()) => step.state = StepState::Done,
             Err(e) => {
                 step.state = StepState::Failed;
@@ -822,11 +824,12 @@ pub async fn disable_my_alias(
 
     if applied {
         if let Some(acct) = &account {
-            match s
-                .state
-                .set_alias_folder(acct, &local, Some("Disabled"))
-                .await
-            {
+            let asked = hlb_api::intent::SetAliasFolder {
+                user: acct.to_string(),
+                local: local.clone(),
+                folder: Some("Disabled".into()),
+            };
+            match s.record(asked).await {
                 Ok(()) => steps[0].state = StepState::Done,
                 Err(e) => {
                     steps[0].state = StepState::Failed;
@@ -942,19 +945,16 @@ pub async fn record_plan(
     }
 
     let actor = auth.identity().actor.name().to_string();
-    if let Err(e) = s
-        .state
-        .save_named_plan(
-            &d.name,
-            &d.method,
-            &d.path,
-            &d.body,
-            &d.summary,
-            &actor,
-            d.note.as_deref(),
-        )
-        .await
-    {
+    let asked = hlb_api::intent::SaveNamedPlan {
+        name: d.name.clone(),
+        method: d.method.clone(),
+        path: d.path.clone(),
+        body: d.body.clone(),
+        summary: d.summary.clone(),
+        by: actor.clone(),
+        note: d.note.clone(),
+    };
+    if let Err(e) = s.record(asked).await {
         return action_error(&s, auth.identity(), "plan-record", &d.name, &e.to_string()).await;
     }
 

@@ -219,6 +219,36 @@ impl Privd {
             Intent::RevokeInvitation(i) => {
                 serde_json::to_value(record::revoke_invitation(self, i).await)?
             }
+            Intent::SetDestination(i) => {
+                serde_json::to_value(record::set_destination(self, i).await)?
+            }
+            Intent::SetAliasFolder(i) => {
+                serde_json::to_value(record::set_alias_folder(self, i).await)?
+            }
+            Intent::SaveNamedPlan(i) => {
+                serde_json::to_value(record::save_named_plan(self, i).await)?
+            }
+            Intent::AttestBreakglass(i) => {
+                serde_json::to_value(record::attest_breakglass(self, i).await)?
+            }
+            Intent::SetTheme(i) => serde_json::to_value(record::set_theme(self, i).await)?,
+            Intent::SetDensity(i) => serde_json::to_value(record::set_density(self, i).await)?,
+            Intent::SetHome(i) => serde_json::to_value(record::set_home(self, i).await)?,
+            Intent::PublishAnnouncement(i) => {
+                serde_json::to_value(record::publish_announcement(self, i).await)?
+            }
+            Intent::FollowAnnouncement(i) => {
+                serde_json::to_value(record::follow_announcement(self, i).await)?
+            }
+            Intent::RemoveAnnouncement(i) => {
+                serde_json::to_value(record::remove_announcement(self, i).await)?
+            }
+            Intent::SetBrand(i) => serde_json::to_value(record::set_brand(self, i).await)?,
+            Intent::SetAside(i) => serde_json::to_value(record::set_aside(self, i).await)?,
+            Intent::BringBack(i) => serde_json::to_value(record::bring_back(self, i).await)?,
+            Intent::MuteAlert(i) => serde_json::to_value(record::mute_alert(self, i).await)?,
+            Intent::UnmuteAlert(i) => serde_json::to_value(record::unmute_alert(self, i).await)?,
+            Intent::SetLogo(i) => serde_json::to_value(record::set_logo(self, i).await)?,
         })
     }
 }

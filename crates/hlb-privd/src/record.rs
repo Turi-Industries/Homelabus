@@ -10,6 +10,12 @@ use hlb_api::intent::{
     Refusal, TouchSession, TouchToken,
 };
 
+use hlb_api::intent::{
+    AttestBreakglass, BringBack, FollowAnnouncement, MuteAlert, PublishAnnouncement,
+    RemoveAnnouncement, SaveNamedPlan, SetAliasFolder, SetAside, SetBrand, SetDensity,
+    SetDestination, SetHome, SetLogo, SetTheme, UnmuteAlert,
+};
+
 use crate::Privd;
 
 pub(crate) async fn audit(p: &Privd, i: Audit) -> Result<(), String> {
@@ -196,4 +202,167 @@ pub(crate) async fn revoke_invitation(p: &Privd, i: RevokeInvitation) -> Result<
         .revoke_invitation(&i.reference)
         .await
         .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_destination(p: &Privd, i: SetDestination) -> Result<(), String> {
+    p.state
+        .upsert_destination(
+            &i.name,
+            &i.location,
+            &i.classes,
+            i.credentials_secret.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_alias_folder(p: &Privd, i: SetAliasFolder) -> Result<(), String> {
+    p.state
+        .set_alias_folder(&i.user, &i.local, i.folder.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn save_named_plan(p: &Privd, i: SaveNamedPlan) -> Result<(), String> {
+    p.state
+        .save_named_plan(
+            &i.name,
+            &i.method,
+            &i.path,
+            &i.body,
+            &i.summary,
+            &i.by,
+            i.note.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn attest_breakglass(p: &Privd, i: AttestBreakglass) -> Result<(), String> {
+    p.state
+        .attest_breakglass(&i.id, &i.by, i.note.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_theme(p: &Privd, i: SetTheme) -> Result<(), String> {
+    p.state
+        .set_theme_of(&i.user, i.theme.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_density(p: &Privd, i: SetDensity) -> Result<(), String> {
+    p.state
+        .set_density_of(&i.user, i.density)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_home(p: &Privd, i: SetHome) -> Result<(), String> {
+    p.state
+        .set_home_of(&i.user, i.home.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn publish_announcement(p: &Privd, i: PublishAnnouncement) -> Result<i64, String> {
+    p.state
+        .publish_announcement(
+            &i.title,
+            &i.body,
+            i.level,
+            i.pinned,
+            i.audience,
+            &i.author,
+            i.expires_at,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn follow_announcement(p: &Privd, i: FollowAnnouncement) -> Result<(), String> {
+    p.state
+        .follow_announcement(i.announcement, &i.body, &i.author)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn remove_announcement(p: &Privd, i: RemoveAnnouncement) -> Result<bool, String> {
+    p.state
+        .remove_announcement(i.id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_brand(p: &Privd, i: SetBrand) -> Result<(), String> {
+    p.state.set_brand(&i.brand).await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_aside(p: &Privd, i: SetAside) -> Result<(), String> {
+    p.state
+        .set_aside(&i.user, &i.aside)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn bring_back(p: &Privd, i: BringBack) -> Result<bool, String> {
+    p.state
+        .bring_back(&i.user, &i.cause)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn mute_alert(p: &Privd, i: MuteAlert) -> Result<(), String> {
+    p.state.mute_alert(&i.mute).await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn unmute_alert(p: &Privd, i: UnmuteAlert) -> Result<bool, String> {
+    p.state
+        .unmute_alert(&i.rule)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_logo(p: &Privd, i: SetLogo) -> Result<(), String> {
+    if let Some(png) = &i.png {
+        if !hlb_state::is_png(png) {
+            return Err("a logo reaches the privileged side as a PNG, never anything else".into());
+        }
+    }
+    p.state
+        .set_logo(i.png.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use hlb_state::State;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_logo_that_is_not_a_png_is_refused_unparsed() {
+        let state = Arc::new(State::in_memory().await.expect("state"));
+        let p = Privd::new(state.clone());
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
+        let refused = set_logo(
+            &p,
+            SetLogo {
+                png: Some(svg.to_vec()),
+            },
+        )
+        .await;
+        assert!(refused.is_err(), "an SVG reached the state: {refused:?}");
+        assert!(state.logo().await.expect("logo").is_none());
+
+        let png = hlb_state::prepare_logo(svg).expect("rasterised on the web side");
+        set_logo(&p, SetLogo { png: Some(png) })
+            .await
+            .expect("a PNG is kept");
+        assert!(state.logo().await.expect("logo").is_some());
+    }
 }

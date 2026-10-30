@@ -232,7 +232,11 @@ pub async fn change_density(
             "a service token has no preferences: it belongs to nobody".into(),
         ));
     };
-    s.state.set_density_of(account, d.density).await?;
+    let asked = hlb_api::intent::SetDensity {
+        user: account.to_string(),
+        density: d.density,
+    };
+    s.record(asked).await.map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -295,7 +299,11 @@ pub async fn arrange_home(
             hlb_api::TILE_H_MAX
         )));
     }
-    s.state.set_home_of(account, d.home.as_deref()).await?;
+    let asked = hlb_api::intent::SetHome {
+        user: account.to_string(),
+        home: d.home.clone(),
+    };
+    s.record(asked).await.map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -349,7 +357,11 @@ pub async fn change_theme(
         }
     }
 
-    s.state.set_theme_of(account, d.theme.as_deref()).await?;
+    let asked = hlb_api::intent::SetTheme {
+        user: account.to_string(),
+        theme: d.theme.clone(),
+    };
+    s.record(asked).await.map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -583,19 +595,16 @@ pub async fn publish(
 
     if applied {
         let expire = d.duration_s.map(|s| crate::auth::now().saturating_add(s));
-        match s
-            .state
-            .publish_announcement(
-                &title,
-                &text,
-                level,
-                d.pinned,
-                audience,
-                auth.actor().name(),
-                expire,
-            )
-            .await
-        {
+        let asked = hlb_api::intent::PublishAnnouncement {
+            title: title.clone(),
+            body: text.clone(),
+            level,
+            pinned: d.pinned,
+            audience,
+            author: auth.actor().name().to_string(),
+            expires_at: expire,
+        };
+        match s.record(asked).await {
             Ok(_) => step.state = StepState::Done,
             Err(e) => {
                 step.state = StepState::Failed;
@@ -670,11 +679,12 @@ pub async fn follow_up(
     };
 
     if applied {
-        match s
-            .state
-            .follow_announcement(id, &text, auth.actor().name())
-            .await
-        {
+        let asked = hlb_api::intent::FollowAnnouncement {
+            announcement: id,
+            body: text.clone(),
+            author: auth.actor().name().to_string(),
+        };
+        match s.record(asked).await {
             Ok(()) => step.state = StepState::Done,
             Err(e) => {
                 step.state = StepState::Failed;
@@ -731,7 +741,7 @@ pub async fn remove(
     };
 
     if applied {
-        match s.state.remove_announcement(id).await {
+        match s.record(hlb_api::intent::RemoveAnnouncement { id }).await {
             Ok(true) => step.state = StepState::Done,
             Ok(false) => {
                 step.state = StepState::Failed;

@@ -217,6 +217,156 @@ pub struct RevokeInvitation {
     pub reference: String,
 }
 
+/// Create or change a backup destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetDestination {
+    pub name: String,
+    pub location: String,
+    pub classes: String,
+    pub credentials_secret: Option<String>,
+}
+
+/// The folder a person's alias sorts into; `None` = nothing decided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetAliasFolder {
+    pub user: String,
+    pub local: String,
+    pub folder: Option<String>,
+}
+
+/// Keep a previewed request under a name, to be replayed as it was previewed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveNamedPlan {
+    pub name: String,
+    pub method: String,
+    pub path: String,
+    pub body: String,
+    pub summary: String,
+    pub by: String,
+    pub note: Option<String>,
+}
+
+/// Record that a person attested an access safeguard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttestBreakglass {
+    pub id: String,
+    pub by: String,
+    pub note: Option<String>,
+}
+
+/// A person's theme; `None` = the installation's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetTheme {
+    pub user: String,
+    pub theme: Option<String>,
+}
+
+/// A person's density.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetDensity {
+    pub user: String,
+    pub density: crate::Density,
+}
+
+/// A person's home tiles; `None` = the default arrangement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetHome {
+    pub user: String,
+    pub home: Option<Vec<crate::HomeTile>>,
+}
+
+/// Publish an announcement; answers its id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishAnnouncement {
+    pub title: String,
+    pub body: String,
+    pub level: crate::AnnouncementLevel,
+    pub pinned: bool,
+    pub audience: Option<hlb_types::Role>,
+    pub author: String,
+    pub expires_at: Option<i64>,
+}
+
+/// Add an update to an announcement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FollowAnnouncement {
+    pub announcement: i64,
+    pub body: String,
+    pub author: String,
+}
+
+/// Remove an announcement. `true` when there was one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveAnnouncement {
+    pub id: i64,
+}
+
+/// The installation's name, product, accent, footer and default theme.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetBrand {
+    pub brand: crate::Brand,
+}
+
+/// Set one of a person's inbox lines aside, as it was then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetAside {
+    pub user: String,
+    pub aside: crate::issues::Aside,
+}
+
+/// Bring a line set aside back into a person's inbox. `true` when it was aside.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BringBack {
+    pub user: String,
+    pub cause: crate::issues::Cause,
+}
+
+/// Mute an alert rule until a time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MuteAlert {
+    pub mute: crate::AlertMute,
+}
+
+/// Unmute an alert rule. `true` when it was muted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnmuteAlert {
+    pub rule: String,
+}
+
+/// The installation's logo, already a PNG — `None` removes it.
+///
+/// 🔴 An SVG is rasterised on the web side, which parses what a person uploaded with
+/// no privilege; this side stores PNG bytes only, and refuses anything else rather
+/// than parse it here.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetLogo {
+    pub png: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for SetLogo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetLogo")
+            .field("bytes", &self.png.as_ref().map(Vec::len))
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

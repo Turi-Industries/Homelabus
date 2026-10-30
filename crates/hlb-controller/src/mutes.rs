@@ -63,14 +63,16 @@ pub async fn mute(
     }
 
     let actor = auth.identity().actor.name().to_string();
-    s.state
-        .mute_alert(&hlb_api::AlertMute {
+    s.record(hlb_api::intent::MuteAlert {
+        mute: hlb_api::AlertMute {
             rule: rule.clone(),
             until: crate::auth::now() + d.for_s,
             by: actor.clone(),
             reason: reason.to_string(),
-        })
-        .await?;
+        },
+    })
+    .await
+    .map_err(ApiError::Internal)?;
     let detail = format!("{} s: {reason}", d.for_s);
     let _ = s
         .audit(
@@ -103,7 +105,8 @@ pub async fn unmute(
     Path(rule): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     known(&rule)?;
-    if !s.state.unmute_alert(&rule).await? {
+    let asked = hlb_api::intent::UnmuteAlert { rule: rule.clone() };
+    if !s.record(asked).await.map_err(ApiError::Internal)? {
         return Err(ApiError::NotFound(format!("\"{rule}\" is not muted")));
     }
     let actor = auth.identity().actor.name().to_string();

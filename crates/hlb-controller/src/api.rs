@@ -1364,7 +1364,9 @@ async fn change_appearance(
         return Err(ApiError::Unprocessable(problems.join("; ")));
     }
 
-    s.state.set_brand(&m).await?;
+    s.record(hlb_api::intent::SetBrand { brand: m.clone() })
+        .await
+        .map_err(ApiError::Internal)?;
 
     let _ = s
         .audit(
@@ -1402,22 +1404,23 @@ async fn upload_logo(
     let removal = body.is_empty();
     let logo = if removal { None } else { Some(body.as_ref()) };
 
-    // `set_logo` prepares internally (format detection, SVG rasterization, size) —
-    // this maps its `LogoError` to the right HTTP status rather than a generic 500,
-    // which is all `ApiError::State` would give it.
-    if let Err(e) = s.state.set_logo(logo).await {
-        return Err(match &e {
-            hlb_state::Error::Logo(hlb_state::LogoError::TooLarge { .. }) => {
-                ApiError::PayloadTooLarge(e.to_string())
-            }
-            hlb_state::Error::Logo(
-                hlb_state::LogoError::UnrecognisedFormat
-                | hlb_state::LogoError::InvalidSvg(_)
-                | hlb_state::LogoError::RasterizeFailed(_),
-            ) => ApiError::UnsupportedMediaType(e.to_string()),
-            _ => e.into(),
-        });
-    }
+    // Prepared HERE — format detection, SVG rasterization, size — so an uploaded SVG
+    // is parsed by the side holding no privilege, and its `LogoError` maps to the right
+    // HTTP status rather than a generic 500.
+    let png = match logo.map(hlb_state::prepare_logo).transpose() {
+        Ok(png) => png,
+        Err(e @ hlb_state::LogoError::TooLarge { .. }) => {
+            return Err(ApiError::PayloadTooLarge(e.to_string()))
+        }
+        Err(
+            e @ (hlb_state::LogoError::UnrecognisedFormat
+            | hlb_state::LogoError::InvalidSvg(_)
+            | hlb_state::LogoError::RasterizeFailed(_)),
+        ) => return Err(ApiError::UnsupportedMediaType(e.to_string())),
+    };
+    s.record(hlb_api::intent::SetLogo { png })
+        .await
+        .map_err(ApiError::Internal)?;
 
     let _ = s
         .audit(

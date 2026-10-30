@@ -110,7 +110,13 @@ pub async fn attest(
     }
 
     let actor = auth.identity().actor.name().to_string();
-    s.state.attest_breakglass(&id, &actor, None).await?;
+    s.record(hlb_api::intent::AttestBreakglass {
+        id: id.clone(),
+        by: actor.clone(),
+        note: None,
+    })
+    .await
+    .map_err(ApiError::Internal)?;
 
     let _ = s
         .audit(
