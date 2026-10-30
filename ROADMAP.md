@@ -541,11 +541,36 @@ three Tangs, and the third alone opens it.
        real board's event log — the replay is checked against the TPM at every UKI
        boot, and a log that does not replay falls back to that boot's own PCR 7, said;
        shim's copy in `EFI/hlb` is never updated, and a newer SbatLevel (written by a
-       newer shim, or fwupd's SBAT update) would refuse it.
-    7. The running system: IOMMU on, Thunderbolt off where unused, kernel lockdown in
-       `confidentiality` where neither hibernation nor kexec is needed (Debian's
-       Secure Boot gives `integrity`); the firmware's password, USB and PXE boot off
-       — instructions, since no software sets them.
+       newer shim, or fwupd's SBAT update) would refuse it — copying it automatically
+       may move PCR 7 (SbatLevel is measured there): measure a shim update on enc3
+       first. The path unit is proven on a `db` write by fwupd and by hand in Setup
+       Mode, never on a `dbx` (fwupd offers none on OVMF: same code path, unproven);
+       a variable written WHILE its reseal runs may not start another (systemd's path
+       semantics, unmeasured) — `verify-boot` then reports the drift.
+    7. ✅ The running system — 2026-10-30, measured on enc3 (`-device intel-iommu`)
+       before anything was written. **Lockdown**: Debian's Secure Boot already gives
+       `integrity`, which disables hibernation (`/sys/power/disk` reads `[disabled]`)
+       and unsigned kexec, so "where neither is needed" decided nothing.
+       `confidentiality` adds only the kernel's memory kept from root — perf, kprobes,
+       tracefs, `/proc/kcore`, BPF reading it — which nothing in `crates/` or
+       `catalog/` uses; Docker runs under it, its BPF device cgroup included (`docker
+       run --device`). **IOMMU**: Debian 6.12 already translates DMA by default
+       (`INTEL_IOMMU_DEFAULT_ON_INTGPU_OFF`, five groups `DMA-FQ` on enc3 without any
+       word), and 🔴 `/sys/class/iommu` lists `dmar0` whether it translates or not:
+       the groups' type is read instead. Both go on the UKI's SIGNED command line,
+       `lockdown=confidentiality intel_iommu=on`, GRUB's `lockdown=`, `intel_iommu=`,
+       `amd_iommu=`, `iommu=` (`pt` is no protection) dropped; a node sealed before
+       gets them at its next `verify-boot --apply`, which reseals the new PCR 11 —
+       on enc3: preview says so, `--apply`, reboot opened alone in 14.5 s, lockdown
+       `[confidentiality]`, Swarm active. At B or C GRUB's line is editable at the
+       console, so neither is written there. `verify-boot` at A reads lockdown, the
+       IOMMU groups and each Thunderbolt domain's `iommu_dma_protection`, and says
+       what is missing and whether a reboot or `--apply` brings it; then what no
+       software sets nor reads back — a setup password, USB and PXE boot off,
+       Thunderbolt off where unused, VT-d / AMD-Vi on. Left, unmeasured: a VM has no
+       Thunderbolt (the report is read-only, nothing is blacklisted unmeasured), and
+       a real board's DMAR tables — some firmware ships broken ones, which this line
+       would meet at the first UKI boot.
   - **What no level protects**, said in `docs/security-model.md`: a flaw exploited in
     a running service or in Homelabus; firmware implants (only Boot Guard or AMD PSB,
     set at the factory, help); a VPS's provider; a compromised hypervisor. And once

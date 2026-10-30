@@ -68,7 +68,10 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   is every Secure Boot variable a db or dbx update writes; a missed reseal makes that
   boot wait for the kit's key, it never opens more. A firmware that lost its keys
   boots without Secure Boot and waits for that key too — and nothing is sealed to such
-  a boot until the keys are restored.
+  a boot until the keys are restored. Once booted, the kernel's memory is kept from
+  root (lockdown in `confidentiality`) and devices reach memory only through the IOMMU,
+  both on the signed command line. The firmware's own password, and USB and network
+  boot turned off, are yours to set: `verify-boot` lists them, it cannot read them.
 
 ### Whoever holds your backups
 

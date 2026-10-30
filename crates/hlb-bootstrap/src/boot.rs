@@ -211,11 +211,26 @@ pub fn refusal(disk: &Disk) -> Option<String> {
     })
 }
 
+/// What the signed command line enforces once booted: lockdown's `confidentiality` and
+/// the IOMMU. Only at level A — GRUB's line is editable at the console, so at B or C
+/// they would be a default anyone removes.
+///
+/// Debian's Secure Boot already gives lockdown `integrity`, which disables hibernation
+/// and unsigned kexec (measured on enc3: `/sys/power/disk` reads `[disabled]`), so
+/// neither decides anything. `confidentiality` adds the kernel's memory kept from root:
+/// perf, kprobes, tracefs, `/proc/kcore`, BPF reading it — nothing Homelabus or its
+/// catalog uses, and Docker's BPF device cgroup runs under it. Debian 6.12 already
+/// translates DMA through the IOMMU (`INTEL_IOMMU_DEFAULT_ON_INTGPU_OFF`, AMD's on): the
+/// word is there so no distribution's default decides, and GRUB's `intel_iommu=off` or
+/// `iommu=pt` is not carried over.
+pub const HARDENED: [&str; 2] = ["lockdown=confidentiality", "intel_iommu=on"];
+
 /// The command line the UKI carries, from the one GRUB booted with: what only a boot
-/// loader passes goes, so does whatever opens a shell, and `panic=10` reboots where
-/// initramfs-tools would drop to one — after the disk is open.
+/// loader passes goes, so does whatever opens a shell or weakens [`HARDENED`], and
+/// `panic=10` reboots where initramfs-tools would drop to one — after the disk is open.
+/// Run on its own output it changes nothing: a UKI boot's line is its input at level A.
 pub fn cmdline(booted: &str) -> String {
-    const DROPPED: [&str; 14] = [
+    const DROPPED: [&str; 19] = [
         "BOOT_IMAGE",
         "initrd",
         "panic",
@@ -230,13 +245,83 @@ pub fn cmdline(booted: &str) -> String {
         "rd.emergency",
         "systemd.unit",
         "systemd.debug_shell",
+        "lockdown",
+        "intel_iommu",
+        "amd_iommu",
+        // `iommu=pt` maps the host's devices one to one: no DMA protection left.
+        "iommu",
+        "iommu.passthrough",
     ];
     let mut words: Vec<&str> = booted
         .split_whitespace()
         .filter(|w| !DROPPED.contains(&w.split('=').next().unwrap_or(w)))
         .collect();
     words.push("panic=10");
+    words.extend(HARDENED);
     words.join(" ")
+}
+
+/// The bracketed mode of `/sys/kernel/security/lockdown` ("none integrity
+/// [confidentiality]").
+pub fn lockdown_mode(file: &str) -> Option<&str> {
+    let start = file.find('[')? + 1;
+    let end = start + file[start..].find(']')?;
+    Some(&file[start..end])
+}
+
+/// What the running system at level A does not enforce, and what to do about it.
+/// `booted` is `/proc/cmdline`, `next` the command line the next UKI carries
+/// ([`CMDLINE`]); `iommu` each group's `type` under `/sys/kernel/iommu_groups`;
+/// `thunderbolt` each domain's `iommu_dma_protection`.
+///
+/// 🔴 `/sys/class/iommu` lists the hardware, not the translation: `dmar0` is there on a
+/// boot that translates nothing. A group typed `DMA` or `DMA-FQ` is translated; one
+/// `identity` is not (an Intel integrated GPU, by Debian's default — it is no port).
+pub fn running_gaps(
+    lockdown: Option<&str>,
+    iommu: &[&str],
+    thunderbolt: &[bool],
+    booted: &str,
+    next: &str,
+) -> Vec<String> {
+    let has_all = |line: &str| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        HARDENED.iter().all(|h| words.contains(h))
+    };
+    let mut gaps = Vec::new();
+    if !has_all(booted) {
+        gaps.push(if has_all(next) {
+            "This boot predates kernel lockdown in confidentiality on the signed command\n   \
+             line, which the next UKI carries: reboot it."
+                .to_string()
+        } else {
+            "This boot runs without kernel lockdown in confidentiality on the signed\n   \
+             command line: --apply puts it there, then reboot."
+                .to_string()
+        });
+    } else if lockdown != Some("confidentiality") {
+        gaps.push(format!(
+            "Kernel lockdown is {}, though the command line asks for confidentiality:\n   \
+             this kernel ignores it.",
+            lockdown.unwrap_or("unreadable")
+        ));
+    }
+    if !iommu.iter().any(|t| t.starts_with("DMA")) {
+        gaps.push(
+            "No IOMMU translates DMA: VT-d (Intel) or AMD-Vi is off in the firmware, or the\n   \
+             board has none — a PCIe or Thunderbolt device then reads all memory. Turn it\n   \
+             on in the firmware."
+                .into(),
+        );
+    }
+    if thunderbolt.contains(&false) {
+        gaps.push(
+            "A Thunderbolt controller without DMA protection: a device plugged in reads\n   \
+             memory. Turn Thunderbolt off in the firmware where unused."
+                .into(),
+        );
+    }
+    gaps
 }
 
 /// Where Tang `i`'s advertisement is kept: a reseal then needs no Tang to answer.
@@ -578,9 +663,11 @@ cp \"$3\" \"$1/mmx64.efi\"";
 }
 
 /// Stage [`Stage::Seal`]: the tools refreshed, the disk sealed to the PCRs this boot
-/// produced, the UKI first in the boot order.
-pub fn seal_steps(device: &str) -> Vec<Step> {
+/// produced, the UKI first in the boot order. `booted` is `/proc/cmdline`: a node sealed
+/// before [`HARDENED`] gets it on its next UKI, which the reseal predicts.
+pub fn seal_steps(device: &str, booted: &str) -> Vec<Step> {
     let mut steps = vec![
+        install("the UKI's command line", CMDLINE, &cmdline(booted), 0o600),
         install(
             "the UKI built, signed and resealed",
             TOOL,
@@ -1013,7 +1100,7 @@ mod tests {
         for step in setup_steps("/dev/vda3", &tangs(), "root=/x ro")
             .iter()
             .chain(&key_steps("enc3"))
-            .chain(&seal_steps("/dev/vda3"))
+            .chain(&seal_steps("/dev/vda3", "root=/x ro panic=10"))
         {
             if let Action::Run(argv) = &step.action {
                 if argv[0] == "sh" && argv[1] == "-c" {
@@ -1190,7 +1277,7 @@ mod tests {
 
     #[test]
     fn the_seal_watches_the_secure_boot_variables_and_signs_dkms_before_sealing() {
-        let steps = seal_steps("/dev/vda3");
+        let steps = seal_steps("/dev/vda3", "root=/x ro panic=10");
         let w = whats(&steps);
         let pos = |s: &str| w.iter().position(|x| x.contains(s)).expect(s);
         assert!(pos("watch started") < pos("seal the disk"));
@@ -1265,14 +1352,81 @@ mod tests {
 
     #[test]
     fn the_command_line_keeps_the_root_and_drops_every_shell() {
+        let hardened = "panic=10 lockdown=confidentiality intel_iommu=on";
+        let enc3 = cmdline("BOOT_IMAGE=/vmlinuz-6.12.113+deb13-amd64 root=/dev/mapper/enc3--vg-root ro console=ttyS0,115200n8 quiet");
         assert_eq!(
-            cmdline("BOOT_IMAGE=/vmlinuz-6.12.113+deb13-amd64 root=/dev/mapper/enc3--vg-root ro console=ttyS0,115200n8 quiet"),
-            "root=/dev/mapper/enc3--vg-root ro console=ttyS0,115200n8 quiet panic=10"
+            enc3,
+            format!("root=/dev/mapper/enc3--vg-root ro console=ttyS0,115200n8 quiet {hardened}")
         );
         assert_eq!(
             cmdline("root=/dev/x ro break=premount init=/bin/sh panic=0 rd.break single"),
-            "root=/dev/x ro panic=10"
+            format!("root=/dev/x ro {hardened}")
         );
+        // Whatever weakens lockdown or the IOMMU goes; nothing is said twice.
+        assert_eq!(
+            cmdline("root=/dev/x lockdown=none intel_iommu=off amd_iommu=off iommu=pt iommu.passthrough=1"),
+            format!("root=/dev/x {hardened}")
+        );
+        // A UKI boot's line, read back at stage 4, gives the same image: no reseal.
+        assert_eq!(cmdline(&enc3), enc3);
+    }
+
+    #[test]
+    fn the_running_system_says_what_it_lacks_and_whether_a_reboot_brings_it() {
+        let file = "none integrity [confidentiality]";
+        assert_eq!(lockdown_mode(file), Some("confidentiality"));
+        assert_eq!(
+            lockdown_mode("[none] integrity confidentiality\n"),
+            Some("none")
+        );
+        assert_eq!(lockdown_mode(""), None);
+        let hard = cmdline("root=/x ro");
+        // Measured on enc3 under `-device intel-iommu`: five groups, DMA-FQ.
+        let translated = ["DMA-FQ"; 5];
+        assert!(running_gaps(Some("confidentiality"), &translated, &[], &hard, &hard).is_empty());
+        // Sealed before: --apply, then a reboot.
+        let before = "root=/x ro panic=10";
+        let g = running_gaps(Some("integrity"), &translated, &[], before, before);
+        assert!(g.len() == 1 && g[0].contains("--apply"), "{g:?}");
+        let g = running_gaps(Some("integrity"), &translated, &[], before, &hard);
+        assert!(g.len() == 1 && g[0].contains("reboot it"), "{g:?}");
+        // No group, or only the integrated GPU's left alone: the firmware's.
+        for iommu in [&[][..], &["identity"][..]] {
+            let g = running_gaps(Some("confidentiality"), iommu, &[true], &hard, &hard);
+            assert!(g.len() == 1 && g[0].contains("in the firmware"), "{g:?}");
+        }
+        let g = running_gaps(
+            Some("confidentiality"),
+            &["DMA", "identity"],
+            &[],
+            &hard,
+            &hard,
+        );
+        assert!(g.is_empty(), "{g:?}");
+        let g = running_gaps(
+            Some("confidentiality"),
+            &translated,
+            &[true, false],
+            &hard,
+            &hard,
+        );
+        assert!(g.len() == 1 && g[0].contains("Thunderbolt"), "{g:?}");
+    }
+
+    #[test]
+    fn a_node_sealed_before_gets_the_hardened_line_before_its_reseal() {
+        let steps = seal_steps("/dev/vda3", "root=/x ro panic=10");
+        let line = steps
+            .iter()
+            .find_map(|s| match &s.action {
+                Action::Install { path, content, .. } if path == CMDLINE => Some(content),
+                _ => None,
+            })
+            .expect("the command line installed");
+        assert!(HARDENED.iter().all(|h| line.contains(h)), "{line}");
+        let w = whats(&steps);
+        let pos = |s: &str| w.iter().position(|x| x.contains(s)).expect(s);
+        assert!(pos("command line") < pos("seal the disk"));
     }
 
     #[test]

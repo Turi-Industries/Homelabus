@@ -246,6 +246,11 @@ the outside, which is the whole problem.
   from the TPM, that boot would have been sealed to — `hlb-uki` refuses unless
   `SecureBoot` is 1 and `SetupMode` 0. `efi-updatevar` needs `chattr -i` first;
   fwupd does it itself.
+- **🔴 `/sys/class/iommu` lists the hardware, not the translation.** enc3 showed
+  `dmar0` on a boot that translated nothing as on one that did: whether DMA goes
+  through the IOMMU is each `/sys/kernel/iommu_groups/*/type` (`DMA`, `DMA-FQ`; not
+  `identity`). Debian 6.12 translates by default (`INTEL_IOMMU_DEFAULT_ON_INTGPU_OFF`);
+  lockdown and the IOMMU go on level A's SIGNED line only — GRUB's is editable.
 - **A DKMS module under Secure Boot loads only signed by an enrolled key.** DKMS makes
   its own MOK and signs with it: "Key was rejected by service", no ZFS pool. Level A
   points DKMS at the node's MOK, and `dkms install --force` alone reinstalls the

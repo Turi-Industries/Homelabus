@@ -253,12 +253,14 @@ pub async fn run(
                 println!("   image of before, or waits for the kit's recovery key. --apply runs");
                 println!("   it again.");
             }
-            let steps = boot::seal_steps(&disk.device);
+            let booted = runner.read_file("/proc/cmdline").await?.unwrap_or_default();
+            let steps = boot::seal_steps(&disk.device, &booted);
             if !apply {
                 for w in next_boot(runner, &disk.device).await? {
                     println!("\n⚠️  {w}");
                 }
                 pending_firmware(runner, name).await;
+                running(runner, &booted).await?;
                 preview(&steps);
                 println!(
                     "\n  The binding to GRUB's boot goes: GRUB then opens nothing without the"
@@ -285,6 +287,7 @@ pub async fn run(
             println!("  that fails says so, and that boot runs the image of before or waits for");
             println!("  the kit's key.");
             pending_firmware(runner, name).await;
+            running(runner, &booted).await?;
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -323,6 +326,69 @@ async fn next_boot(runner: &dyn Runner, device: &str) -> Result<Vec<String>> {
         ]);
     }
     Ok(Vec::new())
+}
+
+/// What the running system enforces, read from it; then what only the firmware's setup
+/// sets, which no software reads back.
+async fn running(runner: &dyn Runner, booted: &str) -> Result<()> {
+    let lockdown = runner
+        .read_file("/sys/kernel/security/lockdown")
+        .await?
+        .unwrap_or_default();
+    let lockdown = boot::lockdown_mode(&lockdown);
+    // Each group's domain type: `/sys/class/iommu` lists the hardware even when nothing
+    // is translated (measured on enc3).
+    let groups = runner
+        .run(&[
+            "sh".into(),
+            "-c".into(),
+            "cat /sys/kernel/iommu_groups/*/type 2>/dev/null".into(),
+        ])
+        .await?
+        .stdout;
+    let iommu: Vec<&str> = groups.split_whitespace().collect();
+    // No controller, no file: a VM has none, nor does a board without Thunderbolt.
+    let thunderbolt: Vec<bool> = runner
+        .run(&[
+            "sh".into(),
+            "-c".into(),
+            "cat /sys/bus/thunderbolt/devices/domain*/iommu_dma_protection 2>/dev/null".into(),
+        ])
+        .await?
+        .stdout
+        .split_whitespace()
+        .map(|v| v == "1")
+        .collect();
+    let next = runner.read_file(boot::CMDLINE).await?.unwrap_or_default();
+
+    println!("\nThe running system:");
+    println!("  kernel lockdown  {}", lockdown.unwrap_or("unreadable"));
+    let translated = iommu.iter().filter(|t| t.starts_with("DMA")).count();
+    println!(
+        "  IOMMU            {}",
+        match (translated, iommu.len() - translated) {
+            (0, _) => "translates nothing".to_string(),
+            (n, 0) => format!("translates DMA ({n} groups)"),
+            (n, i) => format!("translates DMA ({n} groups; {i} left identity)"),
+        }
+    );
+    println!(
+        "  Thunderbolt      {}",
+        match (thunderbolt.len(), thunderbolt.contains(&false)) {
+            (0, _) => "no controller",
+            (_, false) => "DMA-protected by the IOMMU",
+            (_, true) => "NOT DMA-protected",
+        }
+    );
+    for g in boot::running_gaps(lockdown, &iommu, &thunderbolt, booted, &next) {
+        println!("\n⚠️  {g}");
+    }
+    println!("\nIn the firmware's setup, which no software sets nor reads back:");
+    println!("  · a setup password — without it, whoever holds the machine turns Secure");
+    println!("    Boot off: the disk then waits for the kit's key, but the firmware is theirs;");
+    println!("  · booting from USB and from the network (PXE) off;");
+    println!("  · Thunderbolt off where unused, VT-d / AMD-Vi on.");
+    Ok(())
 }
 
 /// A firmware update fwupd holds for the reboot measures what nothing predicts.

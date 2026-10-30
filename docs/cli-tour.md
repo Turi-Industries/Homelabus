@@ -290,7 +290,10 @@ At level A, a db or dbx update (`fwupdmgr update`) is resealed as soon as it is 
 the next boot's PCR 7 is predicted from the firmware's event log — and DKMS modules (ZFS)
 are signed by the same key. Run again, the verb says what would make the next boot wait
 for the kit's key: a PCR 7 nothing resealed, a firmware update fwupd holds for the
-reboot, a firmware in Setup Mode.
+reboot, a firmware in Setup Mode. The signed command line also carries kernel lockdown
+in `confidentiality` and the IOMMU; each visit reads both from the running system, with
+any Thunderbolt port's DMA protection, then lists what only the firmware's setup sets —
+a password, USB and network boot off.
 
 ```sh
 ./target/debug/hlb node verify-boot worker-1           # which stage, and what it does
