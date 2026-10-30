@@ -6,8 +6,9 @@
 //! handler that wants the orchestrator does not compile, rather than relying on a
 //! reviewer to notice.
 //!
-//! For now both sides run in one process. The answers already go through JSON, so the
-//! day they become two processes joined by a socket, only the transport changes.
+//! Both sides run in one process, or two joined by a Unix socket ([`wire`], the web
+//! side's `Privd` built [`Privd::through`] it). In process, the answers go through JSON
+//! all the same, so the wire the suite runs is the one the socket carries.
 
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ mod record;
 mod roles;
 mod signup;
 mod swarm;
+pub mod wire;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -33,6 +35,13 @@ pub enum Error {
     /// in process before a socket ever carries it.
     #[error("the privileged side's answer does not read back: {0}")]
     Wire(#[from] serde_json::Error),
+    /// The daemon could not be reached, or closed without answering.
+    #[error("the privileged daemon is unreachable at {0}")]
+    Transport(String),
+    /// The daemon refused to answer: the intent is unknown to it, or the caller is not
+    /// the web side.
+    #[error("the privileged daemon refused: {0}")]
+    Refused(String),
 }
 
 /// The clients the executor needs, assembled once at startup.
@@ -88,6 +97,9 @@ pub struct Privd {
     drifts: daemon::DriftState,
     /// The Git mirror of the desired state, when configured.
     mirror: Option<std::path::PathBuf>,
+    /// Where the daemon listens, for the web side's process: every intent goes there,
+    /// and this process answers none itself.
+    remote: Option<wire::Remote>,
 }
 
 impl Privd {
@@ -104,6 +116,7 @@ impl Privd {
             alerts: Default::default(),
             drifts: Default::default(),
             mirror: None,
+            remote: None,
         }
     }
 
@@ -135,6 +148,13 @@ impl Privd {
 
     pub fn with_backup(mut self, b: Option<Arc<dyn backup::BackUpNow>>) -> Self {
         self.backup = b;
+        self
+    }
+
+    /// The web side's door, in its own process: every intent goes to the daemon
+    /// listening at `socket`.
+    pub fn through(mut self, socket: impl Into<std::path::PathBuf>) -> Self {
+        self.remote = Some(wire::Remote::new(socket));
         self
     }
 
@@ -179,7 +199,10 @@ impl Privd {
 
     /// Asks one intent, and reads its answer back as its own type.
     pub async fn ask<A: Ask>(&self, intent: A) -> Result<A::Answer, Error> {
-        let wire = self.answer(intent.into()).await?;
+        let wire = match &self.remote {
+            Some(daemon) => daemon.answer(&intent.into()).await?,
+            None => self.answer(intent.into()).await?,
+        };
         Ok(serde_json::from_value(wire)?)
     }
 
