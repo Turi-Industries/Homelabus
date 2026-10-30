@@ -571,12 +571,15 @@ three Tangs, and the third alone opens it.
        Thunderbolt (the report is read-only, nothing is blacklisted unmeasured), and
        a real board's DMAR tables — some firmware ships broken ones, which this line
        would meet at the first UKI boot.
-  - **What no level protects**, said in `docs/security-model.md`: a flaw exploited in
+  - ✅ **What no level protects**, said in `docs/security-model.md`: a flaw exploited in
     a running service or in Homelabus; firmware implants (only Boot Guard or AMD PSB,
     set at the factory, help); a VPS's provider; a compromised hypervisor. And once
     booted the disk is open: the controller holds Docker's socket, which is root —
     splitting it into a minimal privileged daemon behind a narrow API, the interface
     unprivileged, is its own item. Backups are already encrypted before they leave.
+- The controller split: a minimal privileged daemon holds Docker's socket behind a
+  narrow API, the HTTP API and the interface run unprivileged — today a flaw in the
+  controller is root on its node.
 - ZFS native encryption, whose `zfs send -w` lets a remote site keep a copy it cannot
   read.
 - The domain, the weakest point (every domain theft of 2024-2026 went through a

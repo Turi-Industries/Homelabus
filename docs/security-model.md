@@ -122,6 +122,24 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
   reviewed. It does not prove that the image is honest.
 - **GitHub and Sigstore** for the provenance of `hlb` and its images.
 
+## What no protection level covers
+
+A node's level (`hlb node protection`: A, a verified boot; B, the disk bound to the TPM
+and the house; C, no TPM that seals; D, a virtual machine) says what a machine carried
+away, or a boot altered, gives up. It says nothing about a machine that is running:
+
+- **A flaw exploited in a running service, or in Homelabus.** Once booted the disk is
+  open, and an intruder in an app holds what that app holds. The controller holds
+  Docker's socket, which is root on its node: a flaw in the controller is root.
+- **The firmware itself.** Secure Boot starts after it; a firmware rewritten underneath
+  measures what it likes. Only Intel Boot Guard or AMD Platform Secure Boot, fused at
+  the factory, verify it — Homelabus can neither set nor read either.
+- **Whoever runs the hypervisor**, a VPS's provider included. It reads the machine's
+  memory and its virtual TPM, which is why every virtual machine reads D.
+
+What leaves the house is covered whatever the level: backups are encrypted before they
+leave.
+
 ## Not protected yet
 
 These are measured in the [roadmap](../ROADMAP.md) and closed in this order. Until then,
