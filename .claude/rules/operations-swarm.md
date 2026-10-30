@@ -152,7 +152,10 @@ If one of these tests fails, the code is usually wrong, not the test.
   lost its lock file and shut down hard, and the next replayed its WAL. So does one
   holding a port of its node (host mode): Fluxer's LiveKit, on the one ingress node,
   waited "host-mode port already in use" for its own old task, and the update never
-  ended (`a_service_holding_a_port_of_its_node_stops_before_its_next_task`).
+  ended (`a_service_holding_a_port_of_its_node_stops_before_its_next_task`). And
+  Homelabus's daemon, `alone()`: two `hlb-privd` ran every loop at once, and the old
+  one's shutdown removed the socket the new one had bound. A service read back that
+  already stops first keeps it — `alone()` leaves no other trace in Swarm.
 
 ## Running the Swarm integration tests
 

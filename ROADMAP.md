@@ -673,11 +673,16 @@ three Tangs, and the third alone opens it.
     `nas` to `/etc` and a new destination at `/` are refused with the CLI named; on the
     daemon's socket as uid 8420, the old intent, a `location` slipped into the new one
     and an unknown name are refused; the destinations read as before; a plan of
-    `/api/bitwarden` is refused and `/api/plans` gives the body and the route. Found
-    deploying it, not fixed: Swarm replaces `hlb-privd` START-FIRST, so two daemons run
-    every loop at once for a while, and the old one, shutting down cleanly, removes the
-    socket the new one has just bound — the web side waits on "the daemon's socket" for
-    ever. Put right on the lab by hand (`--update-order stop-first --force`).
+    `/api/bitwarden` is refused and `/api/plans` gives the body and the route. ✅ Found
+    deploying it, fixed the same day: Swarm replaced `hlb-privd` START-FIRST, so two
+    daemons ran every loop at once for a while, and the old one, shutting down cleanly,
+    removed the socket the new one had just bound — the web side waited on "the
+    daemon's socket" for ever. `hlb fleet controller` deploys the daemon `alone()`
+    (stop-first, kept when an update reads the service back), and the daemon removes
+    the socket only while its inode is the one it bound. On the lab (`lab17`): the verb
+    turned a start-first `hlb-privd` stop-first, and an overlap forced by hand
+    (`--update-order start-first --force`) left the new daemon's socket in place and
+    answering after the old one's clean shutdown.
   - **A passkey per destruction** — decided 2026-10-30 (owner): re-authenticated within
     five minutes, checked by the daemon. Design: a destroy-level intent (removing an
     app, draining or pausing a node, deleting a role, changing a person's role) carries

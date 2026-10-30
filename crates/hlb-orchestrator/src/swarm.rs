@@ -955,8 +955,11 @@ impl SwarmOrchestrator {
 }
 
 /// Whether a service read back from Swarm must stop before its next task starts: it
-/// keeps data on its node (its data constraint says so), or holds a port of its node.
+/// keeps data on its node (its data constraint says so), holds a port of its node, or
+/// already stops first — what [`ServiceSpec::alone`] wrote leaves no other trace.
 fn stops_first(spec: &bollard::models::ServiceSpec) -> bool {
+    let already = spec.update_config.as_ref().and_then(|u| u.order)
+        == Some(ServiceSpecUpdateConfigOrderEnum::STOP_FIRST);
     let pinned = spec
         .task_template
         .as_ref()
@@ -975,7 +978,7 @@ fn stops_first(spec: &bollard::models::ServiceSpec) -> bool {
                 p.publish_mode == Some(bollard::models::EndpointPortConfigPublishModeEnum::HOST)
             })
         });
-    pinned || holds_a_port
+    already || pinned || holds_a_port
 }
 
 #[async_trait]
@@ -1947,6 +1950,24 @@ mod tests {
         );
         let stateless = SwarmOrchestrator::to_bollard(&ServiceSpec::new("whoami", "whoami:1"));
         assert!(!super::stops_first(&stateless));
+    }
+
+    #[test]
+    fn a_service_never_run_twice_stops_first_through_every_update() {
+        // 🔴 Started first, two `hlb-privd` ran every loop at once, and the old one's
+        // clean shutdown removed the socket the new one had bound (the lab, 2026-10-30).
+        use bollard::models::ServiceSpecUpdateConfigOrderEnum as Order;
+        let daemon = ServiceSpec::new("hlb-privd", "hlb-controller:1").alone();
+        assert!(daemon.stops_first());
+        let created = SwarmOrchestrator::to_bollard(&daemon);
+        assert_eq!(
+            created.update_config.as_ref().and_then(|u| u.order),
+            Some(Order::STOP_FIRST)
+        );
+        assert!(
+            super::stops_first(&created),
+            "an image moved, a restart: read back, the order is kept"
+        );
     }
 
     #[test]

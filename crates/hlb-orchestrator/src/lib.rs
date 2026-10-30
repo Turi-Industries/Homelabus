@@ -98,6 +98,9 @@ pub struct ServiceSpec {
     /// Swarm's reservation and limit. `None` is neither — what a frozen manifest from
     /// before the field still deploys as.
     pub memory: Option<hlb_types::Memory>,
+    /// Two of its tasks must never run at once — Homelabus's privileged daemon, whose
+    /// loops would run twice and whose socket the old task would remove under the new.
+    pub alone: bool,
 }
 
 /// A host path mounted into a container.
@@ -128,6 +131,7 @@ impl ServiceSpec {
             files: Vec::new(),
             binds: Vec::new(),
             memory: None,
+            alone: false,
         }
     }
 
@@ -212,7 +216,14 @@ impl ServiceSpec {
     /// Whether its next task may start only once this one stopped: two would open the
     /// same data, or need the same port of the same node.
     pub fn stops_first(&self) -> bool {
-        self.keeps_data_on_its_node() || !self.hardening.published_ports.is_empty()
+        self.alone || self.keeps_data_on_its_node() || !self.hardening.published_ports.is_empty()
+    }
+
+    /// Never two tasks at once, wherever its data is: the next starts once this one
+    /// stopped.
+    pub fn alone(mut self) -> Self {
+        self.alone = true;
+        self
     }
 
     /// Replaces the service's environment variables.

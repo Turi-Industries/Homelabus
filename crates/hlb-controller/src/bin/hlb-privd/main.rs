@@ -67,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // loop runs. The web side opens nothing early, waiting for the state's migration
     // too, and a connection waits in the backlog until the daemon answers.
     let listener = wire::listen(&cli.socket)?;
+    let bound = wire::Bound::of(&cli.socket)?;
     // Open to every uid: the peer's uid is the guard, checked on each connection. An
     // owner or group on the file would need CAP_CHOWN, dropped in the container.
     std::fs::set_permissions(&cli.socket, std::fs::Permissions::from_mode(0o666))?;
@@ -97,9 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for t in tasks {
         let _ = t.await;
     }
-    // The next start replaces it anyway; removed, a web side starting meanwhile waits
-    // instead of connecting to nobody.
-    let _ = std::fs::remove_file(&cli.socket);
+    wire::release(&cli.socket, bound);
     tracing::info!("clean shutdown");
     Ok(())
 }

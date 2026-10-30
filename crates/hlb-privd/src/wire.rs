@@ -73,6 +73,34 @@ pub fn listen(socket: &Path) -> std::io::Result<UnixListener> {
     UnixListener::bind(socket)
 }
 
+/// Which file a listener bound, by device and inode: a later start binds a new one at
+/// the same path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bound {
+    dev: u64,
+    ino: u64,
+}
+
+impl Bound {
+    pub fn of(socket: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::symlink_metadata(socket)?;
+        Ok(Self {
+            dev: m.dev(),
+            ino: m.ino(),
+        })
+    }
+}
+
+/// Removes the socket at shutdown, so a web side starting meanwhile waits instead of
+/// connecting to nobody — only while it is still the one `bound`: a successor started
+/// first has bound its own at the same path.
+pub fn release(socket: &Path, bound: Bound) {
+    if Bound::of(socket).is_ok_and(|now| now == bound) {
+        let _ = std::fs::remove_file(socket);
+    }
+}
+
 /// Answers every connection from the web side's uid, until shutdown.
 pub async fn serve(
     listener: UnixListener,
@@ -157,6 +185,27 @@ mod tests {
             rx,
         ));
         (dir, Remote::new(socket), tx)
+    }
+
+    #[tokio::test]
+    async fn a_daemon_stopping_leaves_the_socket_its_successor_bound() {
+        // 🔴 Swarm started the new daemon before stopping the old, whose clean shutdown
+        // then removed the new one's socket: the web side waited on it for ever.
+        let dir = tempfile::tempdir().expect("dir");
+        let socket = dir.path().join("privd.sock");
+        let _old = listen(&socket).expect("the old daemon");
+        let old = Bound::of(&socket).expect("bound");
+        let _new = listen(&socket).expect("the new daemon");
+        let new = Bound::of(&socket).expect("bound");
+        assert_ne!(old, new);
+        release(&socket, old);
+        assert_eq!(
+            Bound::of(&socket).ok(),
+            Some(new),
+            "the new daemon's socket"
+        );
+        release(&socket, new);
+        assert!(!socket.exists(), "its own is removed");
     }
 
     #[tokio::test]

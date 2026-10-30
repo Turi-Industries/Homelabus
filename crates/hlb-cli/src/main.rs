@@ -3795,85 +3795,15 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
                 "/host",
             ])
             .bind("/", "/host", true),
-        FleetCmd::Controller { agent_service, .. } => {
-            let state_dir = state_dir.to_string_lossy().to_string();
-            let mut env = vec![
-                (
-                    "HLB_STATE".to_string(),
-                    state_path.to_string_lossy().to_string(),
-                ),
-                (
-                    "HLB_MASTER_KEY".to_string(),
-                    key_path.to_string_lossy().to_string(),
-                ),
-                (
-                    "HLB_PLATFORM_NETWORK".to_string(),
-                    cli.platform_network.clone(),
-                ),
-                ("HLB_AGENT_SERVICE".to_string(), agent_service.clone()),
-                (
-                    "HLB_CONTROLLER_CERT".to_string(),
-                    pki::CONTROLLER_PEM.to_string(),
-                ),
-                ("HLB_CONTROLLER_CA".to_string(), pki::CA_FILE.to_string()),
-                (
-                    "HLB_PRIVD_SOCKET".to_string(),
-                    socket.to_string_lossy().to_string(),
-                ),
-                ("HLB_WEB_UID".to_string(), WEB_UID.to_string()),
-            ];
-            if let Some(r) = &cli.backup_repo {
-                env.push(("HLB_BACKUP_REPO".to_string(), r.clone()));
-            }
-            // Where volumes land: without these an install from the interface refused
-            // every `tier: nfs` app, and placed `tier: local` ones off the pool.
-            for (k, v) in [
-                ("HLB_STORAGE_ROOT", &cli.storage_root),
-                ("HLB_NFS_SERVER", &cli.nfs_server),
-                ("HLB_NFS_EXPORT", &cli.nfs_export),
-            ] {
-                if let Some(v) = v {
-                    env.push((k.to_string(), v.clone()));
-                }
-            }
-            let mut s = ServiceSpec::new(name.clone(), image.clone())
-                .network(&cli.platform_network)
-                // Its state and its vault live on THIS machine's disk.
-                .constraint(format!("node.hostname=={local}"))
-                .command(["hlb-privd"])
-                .env(env)
-                .bind(state_dir.clone(), state_dir, false)
-                .bind(
-                    key_path.to_string_lossy().to_string(),
-                    key_path.to_string_lossy().to_string(),
-                    true,
-                )
-                .bind("/var/run/docker.sock", "/var/run/docker.sock", false)
-                // 🔴 The backup pass reads a SQLite volume where Docker keeps it, by
-                // its host path: from inside the container every one failed on "No
-                // such file". Read-write: `VACUUM INTO` on a WAL database writes its
-                // shared-memory file beside it.
-                .bind(DOCKER_VOLUMES, DOCKER_VOLUMES, false);
-            // The pool's datasets, where `tier: local` volumes are bound.
-            if let Some(root) = cli
-                .storage_root
-                .as_ref()
-                .filter(|r| std::path::Path::new(r).is_dir())
-            {
-                s = s.bind(root.clone(), root.clone(), false);
-            }
-            // Writable root: backups stage snapshots in a temporary directory. No
-            // privilege escalation.
-            s.hardening.read_only_rootfs = false;
-            // 🔴 An app's volume belongs to the app's user: PocketID's `keys/` is 0700,
-            // and a SQLite file in WAL mode is read through a `-shm` its owner alone may
-            // write. Root with every capability dropped could cross neither, and the
-            // backup of that volume failed on "Permission denied". The socket mounted
-            // above already makes the controller the node's root; these two take
-            // nothing from a sandbox it was never in.
-            s.hardening.cap_add = vec!["DAC_READ_SEARCH".into(), "DAC_OVERRIDE".into()];
-            s
-        }
+        FleetCmd::Controller { agent_service, .. } => daemon_spec(
+            cli,
+            &image,
+            agent_service,
+            &local,
+            &state_path,
+            &key_path,
+            &socket,
+        ),
     };
 
     // The web side first: it waits for the daemon's socket, so the one-process
@@ -3960,6 +3890,102 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
         println!("  Every node runs one; nodes added later get theirs on their own.");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The daemon's service: what may write the state, decrypt the vault and drive Docker.
+fn daemon_spec(
+    cli: &Cli,
+    image: &str,
+    agent_service: &str,
+    local: &str,
+    state_path: &std::path::Path,
+    key_path: &std::path::Path,
+    socket: &std::path::Path,
+) -> hlb_orchestrator::ServiceSpec {
+    use hlb_engine::pki;
+    use hlb_orchestrator::ServiceSpec;
+    let state_dir = state_path
+        .parent()
+        .map_or_else(|| "/".into(), |d| d.to_string_lossy().into_owned());
+    let mut env = vec![
+        (
+            "HLB_STATE".to_string(),
+            state_path.to_string_lossy().to_string(),
+        ),
+        (
+            "HLB_MASTER_KEY".to_string(),
+            key_path.to_string_lossy().to_string(),
+        ),
+        (
+            "HLB_PLATFORM_NETWORK".to_string(),
+            cli.platform_network.clone(),
+        ),
+        ("HLB_AGENT_SERVICE".to_string(), agent_service.to_string()),
+        (
+            "HLB_CONTROLLER_CERT".to_string(),
+            pki::CONTROLLER_PEM.to_string(),
+        ),
+        ("HLB_CONTROLLER_CA".to_string(), pki::CA_FILE.to_string()),
+        (
+            "HLB_PRIVD_SOCKET".to_string(),
+            socket.to_string_lossy().to_string(),
+        ),
+        ("HLB_WEB_UID".to_string(), WEB_UID.to_string()),
+    ];
+    if let Some(r) = &cli.backup_repo {
+        env.push(("HLB_BACKUP_REPO".to_string(), r.clone()));
+    }
+    // Where volumes land: without these an install from the interface refused
+    // every `tier: nfs` app, and placed `tier: local` ones off the pool.
+    for (k, v) in [
+        ("HLB_STORAGE_ROOT", &cli.storage_root),
+        ("HLB_NFS_SERVER", &cli.nfs_server),
+        ("HLB_NFS_EXPORT", &cli.nfs_export),
+    ] {
+        if let Some(v) = v {
+            env.push((k.to_string(), v.clone()));
+        }
+    }
+    let mut s = ServiceSpec::new(pki::DAEMON_SERVICE, image)
+        .network(&cli.platform_network)
+        // Its state and its vault live on THIS machine's disk.
+        .constraint(format!("node.hostname=={local}"))
+        // Two would run every loop twice, and the old one's shutdown would remove the
+        // socket the new one bound.
+        .alone()
+        .command(["hlb-privd"])
+        .env(env)
+        .bind(state_dir.clone(), state_dir, false)
+        .bind(
+            key_path.to_string_lossy().to_string(),
+            key_path.to_string_lossy().to_string(),
+            true,
+        )
+        .bind("/var/run/docker.sock", "/var/run/docker.sock", false)
+        // 🔴 The backup pass reads a SQLite volume where Docker keeps it, by
+        // its host path: from inside the container every one failed on "No
+        // such file". Read-write: `VACUUM INTO` on a WAL database writes its
+        // shared-memory file beside it.
+        .bind(DOCKER_VOLUMES, DOCKER_VOLUMES, false);
+    // The pool's datasets, where `tier: local` volumes are bound.
+    if let Some(root) = cli
+        .storage_root
+        .as_ref()
+        .filter(|r| std::path::Path::new(r).is_dir())
+    {
+        s = s.bind(root.clone(), root.clone(), false);
+    }
+    // Writable root: backups stage snapshots in a temporary directory. No
+    // privilege escalation.
+    s.hardening.read_only_rootfs = false;
+    // 🔴 An app's volume belongs to the app's user: PocketID's `keys/` is 0700,
+    // and a SQLite file in WAL mode is read through a `-shm` its owner alone may
+    // write. Root with every capability dropped could cross neither, and the
+    // backup of that volume failed on "Permission denied". The socket mounted
+    // above already makes the controller the node's root; these two take
+    // nothing from a sandbox it was never in.
+    s.hardening.cap_add = vec!["DAC_READ_SEARCH".into(), "DAC_OVERRIDE".into()];
+    s
 }
 
 /// Where Docker keeps the named volumes on a node.
@@ -12273,6 +12299,24 @@ mod tests {
             });
         }
         Some(argv)
+    }
+
+    #[test]
+    fn the_daemon_is_never_run_twice() {
+        // 🔴 Started first, the old task's clean shutdown removed the socket the new one
+        // had bound, and the web side waited on it for ever (the lab, 2026-10-30).
+        let cli = Cli::try_parse_from(["hlb", "ps"]).expect("a command");
+        let dir = std::path::Path::new("/var/lib/homelabus");
+        let spec = daemon_spec(
+            &cli,
+            "hlb-controller:1",
+            "hlb-agent",
+            "deb1",
+            &dir.join("hlb.db"),
+            std::path::Path::new("/etc/hlb/master.key"),
+            &dir.join("privd.sock"),
+        );
+        assert!(spec.stops_first());
     }
 
     #[test]
