@@ -166,7 +166,6 @@ async fn answer(
         "failed"
     };
     let _ = s
-        .state
         .audit(
             auth.actor.name(),
             auth.role,
@@ -767,7 +766,6 @@ pub async fn sync_access(
         "failed"
     };
     let _ = s
-        .state
         .audit(
             auth.actor().name(),
             auth.identity().role,

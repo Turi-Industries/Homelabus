@@ -131,6 +131,27 @@ impl AppState {
     pub fn privd(&self) -> &hlb_privd::Privd {
         &self.privd
     }
+
+    /// Appends an entry to the audit chain, which only the privileged side writes.
+    pub async fn audit(
+        &self,
+        actor: &str,
+        role: hlb_types::Role,
+        action: &str,
+        target: &str,
+        outcome: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
+        let asked = hlb_api::intent::Audit {
+            actor: actor.to_string(),
+            role,
+            action: action.to_string(),
+            target: target.to_string(),
+            outcome: outcome.to_string(),
+            detail: detail.map(str::to_string),
+        };
+        self.privd.ask(asked).await.map_err(|e| e.to_string())?
+    }
 }
 
 /// The MIME types the browser needs.
@@ -1337,7 +1358,6 @@ async fn change_appearance(
     s.state.set_brand(&m).await?;
 
     let _ = s
-        .state
         .audit(
             auth.actor().name(),
             auth.identity().role,
@@ -1391,7 +1411,6 @@ async fn upload_logo(
     }
 
     let _ = s
-        .state
         .audit(
             auth.actor().name(),
             auth.identity().role,

@@ -73,7 +73,6 @@ pub async fn mute(
         .await?;
     let detail = format!("{} s: {reason}", d.for_s);
     let _ = s
-        .state
         .audit(
             &actor,
             auth.identity().role,
@@ -109,7 +108,6 @@ pub async fn unmute(
     }
     let actor = auth.identity().actor.name().to_string();
     let _ = s
-        .state
         .audit(
             &actor,
             auth.identity().role,

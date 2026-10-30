@@ -20,6 +20,7 @@ pub mod backup;
 pub mod daemon;
 mod identity;
 mod mail;
+mod record;
 mod roles;
 mod signup;
 mod swarm;
@@ -191,6 +192,7 @@ impl Privd {
             Intent::SignUp(i) => serde_json::to_value(signup::sign_up(self, i).await)?,
             Intent::SyncRoles(i) => serde_json::to_value(roles::sync(self, i).await)?,
             Intent::PortalRoles(i) => serde_json::to_value(roles::portal(self, i).await)?,
+            Intent::Audit(i) => serde_json::to_value(record::audit(self, i).await)?,
         })
     }
 }

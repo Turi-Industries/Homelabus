@@ -25,6 +25,9 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::ActionResult;
 
+mod record;
+pub use record::*;
+
 /// An intent, with the type of its answer.
 pub trait Ask: Into<Intent> {
     type Answer: Serialize + DeserializeOwned;
@@ -54,6 +57,7 @@ pub enum Intent {
     SignUp(SignUp),
     SyncRoles(SyncRoles),
     PortalRoles(PortalRoles),
+    Audit(Audit),
 }
 
 macro_rules! asks {
@@ -93,6 +97,7 @@ asks! {
     SignUp => SignedUp,
     SyncRoles => Result<RolesSynced, String>,
     PortalRoles => Result<(), String>,
+    Audit => Result<(), String>,
 }
 
 /// The answer of an action that may not even be planned.

@@ -113,7 +113,6 @@ pub async fn attest(
     s.state.attest_breakglass(&id, &actor, None).await?;
 
     let _ = s
-        .state
         .audit(
             &actor,
             auth.identity().role,

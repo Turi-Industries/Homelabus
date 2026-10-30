@@ -86,7 +86,6 @@ pub(crate) async fn respond(
     };
 
     let _ = s
-        .state
         .audit(
             identity.actor.name(),
             identity.role,
@@ -373,7 +372,6 @@ async fn action_error(
         confirmation_required: None,
     };
     let _ = s
-        .state
         .audit(
             identity.actor.name(),
             identity.role,

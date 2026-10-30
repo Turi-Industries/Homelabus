@@ -189,7 +189,6 @@ pub async fn assistant(
 
     // 🔴 The log records the CREATION, never the value.
     let _ = s
-        .state
         .audit(
             auth.identity().actor.name(),
             auth.identity().role,

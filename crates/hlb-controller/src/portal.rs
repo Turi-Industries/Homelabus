@@ -785,7 +785,6 @@ async fn respond(
         "failed"
     };
     let _ = s
-        .state
         .audit(
             identity.actor.name(),
             identity.role,
