@@ -23,13 +23,14 @@ pub trait Reader: Send + Sync {
     /// A GET that follows no redirect: the status, and the body.
     /// `host`: the `Host` header, when the check names one.
     async fn get(&self, url: &str, host: Option<&str>) -> Result<(u16, String), String>;
-    /// A POST that follows no redirect, its body JSON: the status, and the body.
-    /// `basic`: a username and password sent as HTTP Basic.
+    /// A POST that follows no redirect, its body of `content_type` (JSON or a form):
+    /// the status, and the body. `basic`: a username and password sent as HTTP Basic.
     async fn post(
         &self,
         url: &str,
         headers: &[(String, String)],
         basic: Option<(&str, &str)>,
+        content_type: &str,
         body: &str,
     ) -> Result<(u16, String), String>;
     /// The running task's environment, `NAME=value`; `None` when no task runs.
@@ -222,13 +223,56 @@ async fn prove(
             Err(e) => return (Verdict::Unknown, short(&e)),
         }
     };
+    let (content_type, body) = if p.form {
+        match form(&body) {
+            Ok(b) => (FORM, b),
+            Err(e) => return (Verdict::Unknown, short(&e)),
+        }
+    } else {
+        (JSON, body)
+    };
     let headers: Vec<(String, String)> = p.headers.clone().into_iter().collect();
     let url = format!("http://{}:{port}{}", m.metadata.name, p.path);
     let basic = p.basic.then_some((username, password));
-    match reader.post(&url, &headers, basic, &body).await {
+    match reader
+        .post(&url, &headers, basic, content_type, &body)
+        .await
+    {
         Ok((code, answer)) => judge_sign_in(code, &answer, &p.pointer),
         Err(e) => (Verdict::Unknown, short(&format!("no answer: {e}"))),
     }
+}
+
+pub const JSON: &str = "application/json";
+pub const FORM: &str = "application/x-www-form-urlencoded";
+
+/// A proof's body, already filled, as a form: one JSON object of strings, each field
+/// percent-encoded as browsers encode a form (WHATWG URL, `application/x-www-form-urlencoded`).
+fn form(body: &str) -> Result<String, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("the proof's body is not JSON: {e}"))?;
+    let fields = v.as_object().ok_or("a form's body is one JSON object")?;
+    let encode = |s: &str| {
+        let mut out = String::new();
+        for b in s.bytes() {
+            match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                    out.push(char::from(b));
+                }
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    };
+    fields
+        .iter()
+        .map(|(k, v)| match v {
+            serde_json::Value::String(s) => Ok(format!("{}={}", encode(k), encode(s))),
+            _ => Err(format!("a form's field `{k}` is not a string")),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|f| f.join("&"))
 }
 
 /// A proof's body with the sign-in in its strings, escaped as JSON.
@@ -480,12 +524,13 @@ impl Reader for LiveReader {
         url: &str,
         headers: &[(String, String)],
         basic: Option<(&str, &str)>,
+        content_type: &str,
         body: &str,
     ) -> Result<(u16, String), String> {
         let mut req = self
             .http
             .post((self.reach)(url))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(body.to_string());
         for (k, v) in headers {
             req = req.header(k.as_str(), v.as_str());
@@ -645,6 +690,7 @@ mod tests {
             _: &[(String, String)],
             _: Option<(&str, &str)>,
             _: &str,
+            _: &str,
         ) -> Result<(u16, String), String> {
             Err("connection refused".into())
         }
@@ -739,6 +785,107 @@ spec:
         assert_eq!(v["user"], "admin");
     }
 
+    #[test]
+    fn a_form_is_encoded_as_a_browser_encodes_one() {
+        let filled = fill(
+            r#"{"username":"admin","password":"{{ password }}"}"#,
+            "admin",
+            "a&b=c+d é",
+        )
+        .expect("filled");
+        assert_eq!(
+            form(&filled).as_deref(),
+            // serde_json sorts the fields, which a form never minds.
+            Ok("password=a%26b%3Dc%2Bd+%C3%A9&username=admin")
+        );
+        assert!(form(r#"{"n":1}"#).is_err());
+        assert!(form("[]").is_err());
+    }
+
+    /// Signs in whoever sends the form a made-up app's token endpoint takes.
+    struct FormOnly;
+
+    #[async_trait]
+    impl Reader for FormOnly {
+        async fn post(
+            &self,
+            url: &str,
+            _: &[(String, String)],
+            basic: Option<(&str, &str)>,
+            content_type: &str,
+            body: &str,
+        ) -> Result<(u16, String), String> {
+            assert_eq!(url, "http://recipes:9000/api/auth/token");
+            assert!(basic.is_none());
+            // As such an app reads a JSON body: empty fields, refused.
+            Ok(
+                if content_type == FORM && body == "password=s%26cret&username=admin" {
+                    (200, r#"{"access_token":"t","token_type":"bearer"}"#.into())
+                } else {
+                    (401, String::new())
+                },
+            )
+        }
+        async fn get(&self, _: &str, _: Option<&str>) -> Result<(u16, String), String> {
+            Err("no".into())
+        }
+        async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
+            Err("no".into())
+        }
+        async fn sql(&self, _: DbEngine, _: &str, _: &str) -> Result<Option<String>, String> {
+            Err("no".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_recovery_sign_in_by_form_is_sent_as_a_form() {
+        let manifest = |form: bool| -> Manifest {
+            serde_yaml_ng::from_str(&format!(
+                r#"
+apiVersion: hlb/v1
+kind: App
+metadata: {{ name: recipes }}
+spec:
+  image: {{ repo: recipes, tag: "1" }}
+  ingress:
+    - {{ host: r.example.org, port: 9000 }}
+  recovery:
+    - secret: admin-password
+      username: admin
+      proof:
+        path: /api/auth/token
+        body: '{{"username":"{{{{ username }}}}","password":"{{{{ password }}}}"}}'
+        form: {form}
+        pointer: /access_token
+"#
+            ))
+            .expect("manifest")
+        };
+        let credentials = [Credential {
+            secret: "admin-password".into(),
+            sign_in: Ok(("admin".into(), "s&cret".into())),
+        }];
+        let read = read_all(
+            &FormOnly,
+            &manifest(true),
+            &credentials,
+            Refused::TryAgain,
+            1,
+        )
+        .await;
+        assert_eq!(read[0].verdict, Verdict::Holds, "{}", read[0].observed);
+        // The same proof sent as JSON is what the app refuses.
+        let read = read_all(
+            &FormOnly,
+            &manifest(false),
+            &credentials,
+            Refused::TryAgain,
+            1,
+        )
+        .await;
+        assert_eq!(read[0].verdict, Verdict::Broken, "{}", read[0].observed);
+    }
+
     /// Refuses every sign-in, and counts them.
     #[derive(Default)]
     struct Refusing(std::sync::Mutex<usize>);
@@ -750,9 +897,11 @@ spec:
             url: &str,
             _: &[(String, String)],
             basic: Option<(&str, &str)>,
+            content_type: &str,
             body: &str,
         ) -> Result<(u16, String), String> {
             assert_eq!(url, "http://jellyfin:8096/Users/AuthenticateByName");
+            assert_eq!(content_type, JSON);
             assert!(basic.is_none());
             assert!(body.contains("Trial-pass-1"), "{body}");
             *self.0.lock().expect("lock") += 1;

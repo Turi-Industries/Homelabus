@@ -169,8 +169,8 @@ the outside, which is the whole problem.
   which the image reads at its FIRST start only, so the vault's password — deposited in
   the emergency vault — opened an account that did not exist, and the admin anyone could
   guess stayed. Grafana reads its administrator's password the same way. Each
-  `recovery:` carries a `proof` (one POST on the overlay, JSON or HTTP Basic, a pointer
-  the answer holds once signed in), required by the catalog and checked against the six
+  `recovery:` carries a `proof` (one POST on the overlay, JSON, a form or HTTP Basic, a
+  pointer the answer holds once signed in), required by the catalog and checked against the six
   real images; it is an assertion like the others (`recovery:<secret>`). A refusal is
   NEVER tried again by the nightly pass — Jellyfin disables an administrator after five,
   Stalwart bans the address — only by a person's `hlb assert`. Optional when read: a

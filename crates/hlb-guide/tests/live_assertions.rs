@@ -41,9 +41,12 @@ impl Reader for Container {
         url: &str,
         headers: &[(String, String)],
         basic: Option<(&str, &str)>,
+        content_type: &str,
         body: &str,
     ) -> Result<(u16, String), String> {
-        self.live.post(url, headers, basic, body).await
+        self.live
+            .post(url, headers, basic, content_type, body)
+            .await
     }
     async fn get(&self, url: &str, host: Option<&str>) -> Result<(u16, String), String> {
         self.live.get(url, host).await

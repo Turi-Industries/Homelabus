@@ -1114,6 +1114,17 @@ fn validate_sign_in(m: &Manifest, r: &RecoveryLogin) -> std::result::Result<(), 
     let mut strings = Vec::new();
     json_strings(&body, &mut strings);
     let says = |token: &str| strings.iter().any(|s| s.contains(token));
+    if p.form {
+        if p.basic {
+            return Err("a form or HTTP Basic, not both".into());
+        }
+        let flat = body
+            .as_object()
+            .is_some_and(|o| o.values().all(serde_json::Value::is_string));
+        if !flat {
+            return Err("a form's body is one JSON object of strings".into());
+        }
+    }
     if p.basic {
         if r.username.is_none() {
             return Err("HTTP Basic needs the username the deposit holds".into());
@@ -2086,6 +2097,19 @@ spec:
                 r#"{ path: /jmap/, body: '{}', basic: true, pointer: /s }"#
             ),
             Ok(())
+        );
+        // A form: its body still JSON, flat — a field of a form is one string.
+        let form = r#"{ path: /token, body: '{"username":"{{ username }}","password":"{{ password }}"}', form: true, pointer: /access_token }"#;
+        assert_eq!(with(admin, form), Ok(()));
+        refused(
+            admin,
+            r#"{ path: /token, body: '{"username":"{{ username }}","p":{"v":"{{ password }}"}}', form: true, pointer: /t }"#,
+            "one JSON object of strings",
+        );
+        refused(
+            admin,
+            r#"{ path: /token, body: '{}', form: true, basic: true, pointer: /t }"#,
+            "not both",
         );
     }
 

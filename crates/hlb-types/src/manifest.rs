@@ -217,6 +217,12 @@ pub struct SignIn {
     /// Stalwart's administrator signs in no other way.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub basic: bool,
+    /// The body's fields sent as a form (`application/x-www-form-urlencoded`), still
+    /// written as one JSON object of strings: an OAuth2 password grant (RFC 6749 §4.3)
+    /// takes nothing else — FastAPI's `OAuth2PasswordRequestForm`, Mealie's
+    /// `/api/auth/token`, which reads a JSON body as empty fields.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub form: bool,
     /// Sent as they are: Jellyfin signs in no client that does not name itself.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub headers: std::collections::BTreeMap<String, String>,

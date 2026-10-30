@@ -96,6 +96,7 @@ mod tests {
             _: &[(String, String)],
             _: Option<(&str, &str)>,
             _: &str,
+            _: &str,
         ) -> Result<(u16, String), String> {
             Err("nothing signs in here".into())
         }
@@ -204,6 +205,7 @@ spec:
             _: &str,
             _: &[(String, String)],
             _: Option<(&str, &str)>,
+            _: &str,
             body: &str,
         ) -> Result<(u16, String), String> {
             assert!(body.contains("from-the-vault"), "{body}");
