@@ -281,7 +281,12 @@ impl Report {
             "{}\n  vulnerabilities: {}\n  signature      : {}",
             self.image,
             self.vulnerabilities.describe(),
-            self.signature.describe()
+            match &self.signature {
+                // `Verdict` speaks of vulnerabilities; a signature's finding is its detail.
+                Verdict::Clean => "✓ signed by the expected signer".into(),
+                Verdict::Findings { detail, .. } => format!("🔴 {detail}"),
+                v @ Verdict::NotChecked { .. } => v.describe(),
+            }
         )
     }
 }
@@ -423,6 +428,26 @@ mod tests {
     async fn an_image_with_no_declared_signer_is_not_checked() {
         let v = verify_signed_by("alpine:3", None).await;
         assert!(!v.was_checked() && !v.blocks(), "{v:?}");
+    }
+
+    #[test]
+    fn a_signature_is_described_as_a_signature() {
+        // A verified signature read "✓ no critical vulnerability": the scan's words.
+        let r = |signature| Report {
+            image: "a/b:1".into(),
+            vulnerabilities: Verdict::Clean,
+            signature,
+        };
+        let signed = r(Verdict::Clean).describe();
+        let line = signed.lines().last().expect("a signature line");
+        assert!(line.contains("signed by the expected signer"), "{line}");
+        assert!(!line.contains("vulnerab"), "{line}");
+        let forged = r(read_failure("no signatures found", true)).describe();
+        let line = forged.lines().last().expect("a signature line");
+        assert!(
+            line.contains("UNSIGNED") && !line.contains("critical"),
+            "{line}"
+        );
     }
 
     #[test]
