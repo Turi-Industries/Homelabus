@@ -16,6 +16,7 @@
 //!   for choosing it: Bitwarden only sends `domain` and `description`. One token per
 //!   mailbox, and changing destination means changing token.
 
+use hlb_api::intent::Refusal;
 use serde::Deserialize;
 
 /// What the wizard asks for.
@@ -151,41 +152,25 @@ pub async fn assistant(
         .name
         .clone()
         .unwrap_or_else(|| token_name(&d.account, d.mailbox.as_deref()));
-    // 🔴 `store_token` replaces a token of the same name: a name typed here that is a
-    // service token's — the deadman's, an operator's — would silently become a `user`
-    // token for aliases. Only this account's own is issued again.
-    let taken = s
-        .state
-        .list_tokens()
-        .await?
-        .iter()
-        .any(|(n, ..)| *n == name);
-    if taken && s.state.token_user(&name).await?.as_deref() != Some(d.account.as_str()) {
-        return Err(ApiError::Conflict(format!(
-            "a token named \"{name}\" exists and is not {}'s: choose another name",
-            d.account
-        )));
-    }
-
     let mut entropy = [0u8; hlb_types::token::TOKEN_BYTES];
     hlb_secrets::fill_random(&mut entropy);
-    // 🔴 `user`, the least there is: creating an alias is acting on oneself. The token
-    // lives in a password manager on a phone — stolen as `operator`, it installed,
-    // removed and drained.
+    // The role the privileged side gives it is `user`, whatever is asked here: the
+    // value is drawn here only to be shown once, and only its fingerprint leaves.
     let (value, stored) = hlb_types::token::generate(&name, hlb_types::Role::User, entropy);
-
-    if let Err(e) = s.state.store_token(&stored).await {
-        return Err(ApiError::Conflict(e.to_string()));
+    let asked = hlb_api::intent::IssueAliasToken {
+        name: name.clone(),
+        account: d.account.clone(),
+        mailbox: mailbox.clone(),
+        fingerprint: stored.fingerprint,
+    };
+    match s.privd().ask(asked).await {
+        Ok(Ok(())) => {}
+        Ok(Err(Refusal::Conflict(m))) => return Err(ApiError::Conflict(m)),
+        Ok(Err(Refusal::Unprocessable(m) | Refusal::TooMany(m) | Refusal::Internal(m))) => {
+            return Err(ApiError::Internal(m))
+        }
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
     }
-    // 🔴 TWO bindings, and the second was forgotten in a first attempt: the token
-    // carried its mailbox but no ACCOUNT, and the alias API refused it — "this request
-    // does not act on anyone's behalf". The wizard would have delivered, with its six
-    // reassuring steps, a token Bitwarden could not use.
-    //
-    // A token carries a ROLE, not an identity: without a binding it would create
-    // aliases on anyone's mailbox, so it creates nothing at all.
-    s.state.set_token_user(&name, Some(&d.account)).await?;
-    s.state.set_token_mailbox(&name, Some(&mailbox)).await?;
 
     // 🔴 The log records the CREATION, never the value.
     let _ = s

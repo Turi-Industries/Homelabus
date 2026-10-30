@@ -207,10 +207,14 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for Identity {
 
                 // Extends the session without waiting: recording the use must neither
                 // slow the request down nor make it fail.
-                let st = s.state.clone();
-                let v = value.clone();
+                let st = s.clone();
+                let asked = hlb_api::intent::TouchSession {
+                    presented: value.clone(),
+                    now,
+                    duration_s: SESSION_DURATION_S,
+                };
                 tokio::spawn(async move {
-                    let _ = st.touch_session(&v, now, SESSION_DURATION_S).await;
+                    let _ = st.privd().ask(asked).await;
                 });
                 if let Some(slid) = parts.extensions.get::<Slid>() {
                     slid.set(&value);
@@ -237,10 +241,12 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for Identity {
         // Distinguishing would tell an attacker whether a value they tried exists.
         match s.state.find_token(presented).await {
             Ok(Some(t)) => {
-                let st = s.state.clone();
-                let name = t.name.clone();
+                let st = s.clone();
+                let asked = hlb_api::intent::TouchToken {
+                    name: t.name.clone(),
+                };
                 tokio::spawn(async move {
-                    let _ = st.touch_token(&name).await;
+                    let _ = st.privd().ask(asked).await;
                 });
 
                 let user = s.state.token_user(&t.name).await.unwrap_or(None);

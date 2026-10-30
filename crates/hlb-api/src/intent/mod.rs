@@ -58,6 +58,13 @@ pub enum Intent {
     SyncRoles(SyncRoles),
     PortalRoles(PortalRoles),
     Audit(Audit),
+    OpenSession(OpenSession),
+    TouchSession(TouchSession),
+    CloseSession(CloseSession),
+    CloseSessionByReference(CloseSessionByReference),
+    BindIdentity(BindIdentity),
+    TouchToken(TouchToken),
+    IssueAliasToken(IssueAliasToken),
 }
 
 macro_rules! asks {
@@ -98,6 +105,13 @@ asks! {
     SyncRoles => Result<RolesSynced, String>,
     PortalRoles => Result<(), String>,
     Audit => Result<(), String>,
+    OpenSession => Result<(), String>,
+    TouchSession => Result<(), String>,
+    CloseSession => Result<bool, String>,
+    CloseSessionByReference => Result<bool, String>,
+    BindIdentity => Result<bool, String>,
+    TouchToken => Result<(), String>,
+    IssueAliasToken => Result<(), Refusal>,
 }
 
 /// The answer of an action that may not even be planned.

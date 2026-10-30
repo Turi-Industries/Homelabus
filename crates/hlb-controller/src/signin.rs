@@ -326,7 +326,7 @@ pub async fn return_to(
     //
     // 🔴 A state that cannot be read is a refusal, never "not bound yet": that fallback
     // goes by a NAME, which the identity provider lets people choose.
-    let unreadable = |e: hlb_state::Error| {
+    let unreadable = |e: &dyn std::fmt::Display| {
         tracing::warn!(error = %e, "sign-in: the state cannot be read");
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -336,7 +336,7 @@ pub async fn return_to(
     };
     let account = match account_for(&s.state, &identity.sub, identity.account_name()).await {
         Ok(a) => a,
-        Err(e) => return unreadable(e),
+        Err(e) => return unreadable(&e),
     };
 
     let Some(account) = account else {
@@ -369,7 +369,17 @@ pub async fn return_to(
     // The `sub` ↔ account link is recorded on the first sign-in: a rename at PocketID
     // will no longer break anything afterwards. Bound only if still unbound — another
     // sign-in may have bound it since it was read.
-    match s.state.upsert_user_pocket_id(&account, &identity.sub).await {
+    let asked = hlb_api::intent::BindIdentity {
+        user: account.clone(),
+        sub: identity.sub.clone(),
+    };
+    match s
+        .privd()
+        .ask(asked)
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
+    {
         Ok(true) => {}
         Ok(false) => {
             let _ = s
@@ -388,7 +398,7 @@ pub async fn return_to(
             )
                 .into_response();
         }
-        Err(e) => return unreadable(e),
+        Err(e) => return unreadable(&e),
     }
 
     let mut raw = [0u8; 32];
@@ -402,17 +412,20 @@ pub async fn return_to(
         .and_then(|v| v.to_str().ok())
         .map(|v| v.chars().take(120).collect::<String>());
 
+    let asked = hlb_api::intent::OpenSession {
+        presented: value.clone(),
+        user: account.clone(),
+        subject: Some(identity.sub.clone()),
+        now: now(),
+        duration_s: SESSION_DURATION_S,
+        user_agent: agent,
+    };
     if let Err(e) = s
-        .state
-        .open_session(
-            &value,
-            &account,
-            Some(&identity.sub),
-            now(),
-            SESSION_DURATION_S,
-            agent.as_deref(),
-        )
+        .privd()
+        .ask(asked)
         .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -491,7 +504,10 @@ pub async fn signout(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| crate::auth::cookie(v, COOKIE))
     {
-        let _ = s.state.close_session(&value).await;
+        let _ = s
+            .privd()
+            .ask(hlb_api::intent::CloseSession { presented: value })
+            .await;
     }
 
     let _ = s

@@ -279,7 +279,17 @@ pub async fn close_my_session(
 
     if applied {
         if let Some(a) = &account {
-            match s.state.close_session_by_reference(a, &reference).await {
+            let asked = hlb_api::intent::CloseSessionByReference {
+                user: a.clone(),
+                reference: reference.clone(),
+            };
+            match s
+                .privd()
+                .ask(asked)
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r)
+            {
                 // `false`: expired or closed since the preview. What was asked — that
                 // device signed out — holds either way.
                 Ok(_) => steps[0].state = StepState::Done,
@@ -364,7 +374,17 @@ pub async fn close_my_other_sessions(
     if applied {
         if let Some(a) = &account {
             for (step, x) in steps.iter_mut().zip(&others) {
-                match s.state.close_session_by_reference(a, &x.reference).await {
+                let asked = hlb_api::intent::CloseSessionByReference {
+                    user: a.clone(),
+                    reference: x.reference.clone(),
+                };
+                match s
+                    .privd()
+                    .ask(asked)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+                {
                     // See `close_my_session`: gone since the preview is signed out.
                     Ok(_) => step.state = StepState::Done,
                     Err(e) => {

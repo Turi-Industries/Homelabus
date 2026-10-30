@@ -193,6 +193,17 @@ impl Privd {
             Intent::SyncRoles(i) => serde_json::to_value(roles::sync(self, i).await)?,
             Intent::PortalRoles(i) => serde_json::to_value(roles::portal(self, i).await)?,
             Intent::Audit(i) => serde_json::to_value(record::audit(self, i).await)?,
+            Intent::OpenSession(i) => serde_json::to_value(record::open_session(self, i).await)?,
+            Intent::TouchSession(i) => serde_json::to_value(record::touch_session(self, i).await)?,
+            Intent::CloseSession(i) => serde_json::to_value(record::close_session(self, i).await)?,
+            Intent::CloseSessionByReference(i) => {
+                serde_json::to_value(record::close_session_by_reference(self, i).await)?
+            }
+            Intent::BindIdentity(i) => serde_json::to_value(record::bind_identity(self, i).await)?,
+            Intent::TouchToken(i) => serde_json::to_value(record::touch_token(self, i).await)?,
+            Intent::IssueAliasToken(i) => {
+                serde_json::to_value(record::issue_alias_token(self, i).await)?
+            }
         })
     }
 }
