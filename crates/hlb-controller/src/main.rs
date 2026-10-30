@@ -8,7 +8,8 @@
 //! steering, not the service — which makes its updates and restarts far less delicate.
 //!
 
-use hlb_controller::{agents, api, loops, signin};
+use hlb_controller::{agents, api, signin};
+use hlb_privd::daemon::{self, schedule};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -337,6 +338,18 @@ struct Held {
     orchestrator: Option<Arc<dyn Orchestrator>>,
 }
 
+/// VictoriaMetrics as the alert loop reads it: through the PromQL relay, whose
+/// allowlist then holds the shipped rules too. Here and not in `promql.rs`, so no web
+/// module names the daemon.
+struct Victoria(Arc<hlb_controller::promql::Metrics>);
+
+#[async_trait::async_trait]
+impl daemon::Measure for Victoria {
+    async fn samples(&self, query: &str) -> Result<Vec<hlb_metrics::Sample>, String> {
+        self.0.instant_samples(query).await
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -545,11 +558,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if notif.is_none() {
         tracing::warn!("no ntfy configured: the alerts will stay in the logs");
     }
-    let notif = hlb_controller::notify::Notifier::new(notif, state.clone());
+    let notif = daemon::Notifier::new(notif, state.clone());
     // What quiet hours held back, delivered once the installation's morning comes.
     {
         let notif = notif.clone();
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(HELD_NOTIFICATIONS_SECS),
             shutdown_rx.clone(),
             move || {
@@ -575,7 +588,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The gaps of the last pass, shared with the API: reconciliation's deliberate
     // non-actions used to come out only in the logs, that is to say
     // nowhere.
-    let drift_state: hlb_controller::loops::DriftState = Default::default();
+    let drift_state: daemon::DriftState = Default::default();
     // And a third reference for the API, which reads the Swarm tasks: the reconciliation
     // loop consumes the value right after.
     let orch_api = orchestrator
@@ -583,7 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|o| o as Arc<dyn hlb_orchestrator::Orchestrator>);
 
     // Started at "now": the heartbeat grants the first pass its window, and no more.
-    let reconciled: loops::LastReconciled = Arc::new(std::sync::atomic::AtomicI64::new(
+    let reconciled: daemon::LastReconciled = Arc::new(std::sync::atomic::AtomicI64::new(
         hlb_controller::auth::now(),
     ));
     if let Some(orch) = orchestrator {
@@ -601,7 +614,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             correction = cli.reconcile_apply,
             "reconciliation loop"
         );
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.reconcile_secs),
             rx,
             move || {
@@ -609,7 +622,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 async move {
                     let r = rl.tick().await;
                     // Each pass samples the exposed apps for the status page's history.
-                    loops::sample_uptime(&st).await;
+                    schedule::sample_uptime(&st).await;
                     if !r.is_clean() {
                         tracing::warn!(errors = r.errors.len(), "incomplete reconciliation");
                     } else if r.acted > 0 {
@@ -660,7 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cli.mail_domain.clone().unwrap_or_else(|| "local".into()),
         ));
         let rx = shutdown_rx.clone();
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.alias_purge_secs),
             rx,
             move || {
@@ -691,9 +704,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Once a day: at the sampling cadence, 90 days of history is small enough that
     // pruning does not need to be frequent.
     {
-        let retention = Arc::new(loops::UptimeRetentionLoop::new(state.clone(), 90));
+        let retention = Arc::new(schedule::UptimeRetentionLoop::new(state.clone(), 90));
         let rx = shutdown_rx.clone();
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(86_400),
             rx,
             move || {
@@ -718,7 +731,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         let rx = shutdown_rx.clone();
         let (catalog_dir, master_key) = (cli.catalog.clone(), cli.master_key.clone());
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(86_400),
             rx,
             move || {
@@ -764,14 +777,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(path) = cli.heartbeat.clone() {
-        let hb = Arc::new(loops::Heartbeat::new(path.clone()));
+        let hb = Arc::new(schedule::Heartbeat::new(path.clone()));
         let rx = shutdown_rx.clone();
         let st = state.clone();
         let orch = orch_health.clone();
         let (reconciled, reconcile_secs) = (reconciled.clone(), cli.reconcile_secs);
         tracing::info!(file = %path.display(), "heartbeat (conditional)");
 
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.heartbeat_secs),
             rx,
             move || {
@@ -796,7 +809,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // a task of its own, and one that died or hangs left this
                         // timer beating — the watchdog green over a cluster nobody
                         // reconciled.
-                        recent_reconciliation: loops::reconciled_recently(
+                        recent_reconciliation: schedule::reconciled_recently(
                             reconciled.load(std::sync::atomic::Ordering::Relaxed),
                             hlb_controller::auth::now(),
                             reconcile_secs,
@@ -836,7 +849,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mariadb_admin: cli.mariadb_admin.clone(),
     };
     if !cli.demo {
-        let bl = Arc::new(loops::BackupLoop::new(
+        let bl = Arc::new(schedule::BackupLoop::new(
             state.clone(),
             hlb_backup::Schedule::default(),
         ));
@@ -846,7 +859,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config = pass_config.clone();
         tracing::info!("backup loop");
 
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.backup_check_secs),
             rx,
             move || {
@@ -948,7 +961,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let notif_as = notif.clone();
         let master_key = cli.master_key.clone();
         tracing::info!(interval = cli.assertions_secs, "assertions loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.assertions_secs),
             rx,
             move || {
@@ -1033,7 +1046,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rx = shutdown_rx.clone();
             let notif_mq = notif.clone();
             tracing::info!(interval = cli.mail_queue_secs, "mail queue loop");
-            tasks.push(tokio::spawn(loops::every(
+            tasks.push(tokio::spawn(schedule::every(
                 Duration::from_secs(cli.mail_queue_secs),
                 rx,
                 move || {
@@ -1076,7 +1089,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rx = shutdown_rx.clone();
             let notif_jobs = notif.clone();
             tracing::info!(interval = cli.jobs_secs, "scheduled jobs loop");
-            tasks.push(tokio::spawn(loops::every(
+            tasks.push(tokio::spawn(schedule::every(
                 Duration::from_secs(cli.jobs_secs),
                 rx,
                 move || {
@@ -1109,14 +1122,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let st = state.clone();
         let rx = shutdown_rx.clone();
         let notif_updates = notif.clone();
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(60),
             rx,
             move || {
                 let (st, notif) = (st.clone(), notif_updates.clone());
                 async move {
                     let now = hlb_controller::auth::now();
-                    loops::notify_update_runs(&st, &notif, now).await;
+                    daemon::notify::notify_update_runs(&st, &notif, now).await;
                 }
             },
         )));
@@ -1171,7 +1184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let notif_ag = notif.clone();
         tracing::info!(service = %service, "agent polling loop");
 
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.agent_poll_secs),
             rx,
             move || {
@@ -1287,7 +1300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         *drift_state.write().await = hlb_controller::demo::drifts();
     }
 
-    let alerts_state: hlb_controller::loops::AlertsState = Default::default();
+    let alerts_state: daemon::AlertsState = Default::default();
     if cli.demo {
         // Without VictoriaMetrics the loop does not run: we place fabricated alerts, or
         // the alerts screen would be empty and impossible to write.
@@ -1301,8 +1314,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &series {
         Some(m) => {
-            let loop_body = Arc::new(loops::AlertLoop::new(
-                m.clone(),
+            let loop_body = Arc::new(daemon::AlertLoop::new(
+                Arc::new(Victoria(m.clone())),
                 notif.clone(),
                 state.clone(),
             ));
@@ -1311,7 +1324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let shared = loop_body.active.clone();
             let to_api = alerts_state.clone();
             let interval = Duration::from_secs(cli.alerts_secs);
-            tasks.push(tokio::spawn(loops::every(
+            tasks.push(tokio::spawn(schedule::every(
                 interval,
                 shutdown_rx.clone(),
                 move || {
@@ -1561,7 +1574,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_install(install.clone())
         .with_identity(identity)
         .with_mail(mail, &mail_domain)
-        .with_backup(backup);
+        .with_backup(backup)
+        .with_published(alerts_state, drift_state);
     let held = Arc::new(Held {
         install,
         orchestrator: orch_api,
@@ -1579,8 +1593,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         throughput: Arc::new(hlb_controller::throughput::RateLimiter::new()),
         trusted_proxy: cli.trusted_proxy,
         series: series.clone(),
-        alerts: alerts_state,
-        drifts: drift_state,
         beat: cli.heartbeat.clone(),
         mirror: cli.git_mirror.clone(),
         public_url: cli.public_url.clone(),
@@ -1617,7 +1629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // reported — in demonstration mode too, which reads the same structure.
     {
         let shared = shared.clone();
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(60),
             shutdown_rx.clone(),
             move || {
@@ -1639,7 +1651,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shared = shared.clone();
         let notif_roles = notif.clone();
         tracing::info!(interval = cli.roles_secs, "roles loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.roles_secs),
             shutdown_rx.clone(),
             move || {
@@ -1688,7 +1700,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let held = held.clone();
         let notif_vault = notif.clone();
         tracing::info!(interval = cli.emergency_secs, "emergency vault loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.emergency_secs),
             shutdown_rx.clone(),
             move || {
@@ -1763,7 +1775,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let notif_upkeep = notif.clone();
         let network = cli.platform_network.clone();
         tracing::info!(interval = cli.upkeep_secs, "destinations upkeep loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.upkeep_secs),
             shutdown_rx.clone(),
             move || {
@@ -1840,7 +1852,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let held = held.clone();
         let notif_termix = notif.clone();
         tracing::info!(interval = cli.termix_secs, "termix loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.termix_secs),
             shutdown_rx.clone(),
             move || {
@@ -1905,7 +1917,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let held = held.clone();
         let notif_prune = notif.clone();
         tracing::info!(interval = cli.prune_secs, "image prune loop");
-        tasks.push(tokio::spawn(loops::every(
+        tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(cli.prune_secs),
             shutdown_rx.clone(),
             move || {
@@ -1960,7 +1972,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let notif_pki = notif.clone();
             let agent_service = cli.agent_service.clone();
             tracing::info!(interval = cli.pki_secs, "certificate renewal loop");
-            tasks.push(tokio::spawn(loops::every(
+            tasks.push(tokio::spawn(schedule::every(
                 Duration::from_secs(cli.pki_secs),
                 shutdown_rx.clone(),
                 move || {

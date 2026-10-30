@@ -232,7 +232,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
         topology.attention(),
         None,
     ));
-    for d in s.drifts.read().await.iter() {
+    for d in crate::api::drifts_now(s).await? {
         out.push((Cause::Drift, d.attention(), Some(d.target.clone())));
     }
     for (check, cause) in crate::health::findings(&s.state, s.beat.as_deref(), now).await {

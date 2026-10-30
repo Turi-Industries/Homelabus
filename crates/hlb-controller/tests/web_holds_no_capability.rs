@@ -115,3 +115,50 @@ fn no_web_module_names_a_capability() {
         found.join("\n")
     );
 }
+
+/// Whether `code` reaches `hlb_privd::daemon`, by path or inside a `use` group.
+fn reaches_the_daemon(code: &str) -> bool {
+    code.match_indices("hlb_privd::").any(|(i, m)| {
+        let rest = &code[i + m.len()..];
+        rest.starts_with("daemon")
+            || rest.starts_with('{')
+                && rest.split_once('}').is_some_and(|(group, _)| {
+                    group.split(|c: char| !ident(c)).any(|w| w == "daemon")
+                })
+    })
+}
+
+/// The daemon's modules — its loops, the notifier holding ntfy's credentials, the
+/// memory its loops publish — are the composition root's to start: `Privd` does not
+/// hold the notifier, so the scan above cannot see it.
+#[test]
+fn no_web_module_reaches_the_daemon() {
+    assert!(reaches_the_daemon(
+        "use hlb_privd::{backup, daemon::Notifier};"
+    ));
+    assert!(!reaches_the_daemon("use hlb_privd::{backup, Privd};"));
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0;
+    let mut found = Vec::new();
+    for f in scan::rust_files(&src) {
+        let reaches = reaches_the_daemon(&production(&f));
+        if f.file_name().is_some_and(|n| n == "main.rs") {
+            assert!(
+                reaches,
+                "main.rs starts no daemon loop: the scan reads nothing"
+            );
+            continue;
+        }
+        scanned += 1;
+        if reaches {
+            found.push(scan::short(&f));
+        }
+    }
+    assert!(scanned >= 30, "only {scanned} web modules read");
+    assert!(
+        found.is_empty(),
+        "a web module reaches the daemon — ask hlb_privd an intent instead:\n{}",
+        found.join("\n")
+    );
+}

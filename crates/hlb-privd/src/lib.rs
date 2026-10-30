@@ -79,6 +79,11 @@ pub struct Privd {
     backup: Option<Arc<dyn backup::BackUpNow>>,
     /// The installation's mail domain, named when an alias's own cannot be found.
     mail_domain: String,
+    /// What the alert loop last found, kept in the daemon's memory: a restart
+    /// re-evaluates within one pass.
+    alerts: daemon::AlertsState,
+    /// The gaps reconciliation's last pass left.
+    drifts: daemon::DriftState,
 }
 
 impl Privd {
@@ -92,6 +97,8 @@ impl Privd {
             mail: None,
             backup: None,
             mail_domain: String::new(),
+            alerts: Default::default(),
+            drifts: Default::default(),
         }
     }
 
@@ -123,6 +130,18 @@ impl Privd {
 
     pub fn with_backup(mut self, b: Option<Arc<dyn backup::BackUpNow>>) -> Self {
         self.backup = b;
+        self
+    }
+
+    /// Where the alert and reconciliation loops publish what they found: the same
+    /// memory they write, read when the web side asks.
+    pub fn with_published(
+        mut self,
+        alerts: daemon::AlertsState,
+        drifts: daemon::DriftState,
+    ) -> Self {
+        self.alerts = alerts;
+        self.drifts = drifts;
         self
     }
 
@@ -180,6 +199,12 @@ impl Privd {
             Intent::BackUp(i) => serde_json::to_value(backup::back_up(self, i).await)?,
             Intent::KitFingerprint(hlb_api::intent::KitFingerprint {}) => {
                 serde_json::to_value(self.kit_fingerprint().await)?
+            }
+            Intent::Alerts(hlb_api::intent::Alerts {}) => {
+                serde_json::to_value(&*self.alerts.read().await)?
+            }
+            Intent::Drifts(hlb_api::intent::Drifts {}) => {
+                serde_json::to_value(&*self.drifts.read().await)?
             }
             Intent::MyIdentity(i) => serde_json::to_value(identity::my_identity(self, i).await)?,
             Intent::Rename(i) => serde_json::to_value(identity::rename(self, i).await)?,

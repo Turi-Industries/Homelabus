@@ -486,6 +486,14 @@ pub fn parse_range(json: &str) -> Option<Vec<(i64, f64)>> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn an_unreachable_base_is_an_error_never_an_empty_answer() {
+        // 🔴 The alert rules read this: an empty answer would judge every rule fine
+        // while ALL monitoring is blind. An error is `Unknown`, which alerts.
+        let m = Metrics::new("http://127.0.0.1:1");
+        assert!(m.instant_samples("hlb_app_up").await.is_err());
+    }
+
     #[test]
     fn every_shipped_rule_passes_the_relay_s_own_allowlist() {
         // 🔴 The alert loop queries through this check: a rule it refuses is evaluated

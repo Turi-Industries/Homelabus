@@ -13,7 +13,7 @@ use std::sync::Arc;
 use hlb_notify::{Delivery, Level, Notification, NtfyClient};
 use hlb_state::State;
 
-/// The one way the controller notifies: every loop holds one.
+/// The one way the daemon notifies: every loop holds one.
 #[derive(Clone)]
 pub struct Notifier {
     client: Option<Arc<NtfyClient>>,
@@ -87,7 +87,7 @@ impl Notifier {
     /// Says `n` for a caller that raises it again at its own next pass anyway: a
     /// failure is logged, with the notification.
     pub async fn tell(&self, n: &Notification) {
-        let _ = self.say(n, crate::auth::now()).await;
+        let _ = self.say(n, crate::now()).await;
     }
 
     /// Delivers the held notifications once quiet hours are over, oldest first. Stops
@@ -186,6 +186,76 @@ fn parse_level(s: &str) -> Level {
         "info" => Level::Info,
         "critical" => Level::Critical,
         _ => Level::Important,
+    }
+}
+
+/// Tells someone about every image update that ended — an applied one too: an updater
+/// that stays silent when it succeeds cannot be told from one that does nothing.
+///
+/// A notice ntfy refused stays unsent and is tried at the next pass; one quiet hours
+/// held is kept in the state for the morning and counts as said, like one logged with
+/// no ntfy at all.
+pub async fn notify_update_runs(state: &State, notif: &Notifier, now: i64) {
+    let runs = match state.unnotified_update_runs().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("update outcomes unreadable: {e}");
+            return;
+        }
+    };
+    for run in runs {
+        let n = update_notice(&run);
+        if let Err(e) = notif.say(&n, now).await {
+            tracing::warn!(app = %run.app, "update notice kept for the next pass: {e}");
+            return;
+        }
+        if let Err(e) = state.mark_update_run_notified(run.id, now).await {
+            tracing::warn!(app = %run.app, "update notice sent, not marked: {e}");
+        }
+    }
+}
+
+/// What an update's outcome says, and how loudly.
+pub fn update_notice(run: &hlb_state::UpdateRun) -> hlb_notify::Notification {
+    use hlb_state::UpdateRunOutcome as O;
+    let subject = format!("update:{}", run.app);
+    let detail = if run.detail.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", run.detail)
+    };
+    match run.outcome {
+        O::Applied => hlb_notify::Notification::important(
+            &subject,
+            &format!("{} updated", run.app),
+            &format!("{} → {}", run.from_image, run.to_image),
+        ),
+        O::RolledBack => hlb_notify::Notification::important(
+            &subject,
+            &format!("{}'s update was rolled back", run.app),
+            &format!(
+                "it still runs {}; {} did not start{detail}",
+                run.from_image, run.to_image
+            ),
+        ),
+        // Neither image is serving: the old one would not start on what the new one
+        // had already migrated.
+        O::Paused => hlb_notify::Notification::critical(
+            &subject,
+            &format!("{}'s update stopped half-way", run.app),
+            &format!(
+                "{} → {}: Swarm paused it and nothing may be serving{detail}",
+                run.from_image, run.to_image
+            ),
+        ),
+        O::Inconclusive => hlb_notify::Notification::important(
+            &subject,
+            &format!("{}'s update did not conclude", run.app),
+            &format!(
+                "{} → {}: no outcome within the deadline — hlb ps says where it stands{detail}",
+                run.from_image, run.to_image
+            ),
+        ),
     }
 }
 
@@ -301,5 +371,72 @@ mod tests {
         for l in [Level::Debug, Level::Info, Level::Important, Level::Critical] {
             assert_eq!(parse_level(level_name(l)), l);
         }
+    }
+
+    fn run(outcome: hlb_state::UpdateRunOutcome) -> hlb_state::UpdateRun {
+        hlb_state::UpdateRun {
+            id: 0,
+            app: "gitea".into(),
+            ran_at: 0,
+            from_image: "gitea/gitea:1.24@sha256:a".into(),
+            to_image: "gitea/gitea:1.24.7@sha256:b".into(),
+            outcome,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn an_applied_update_is_pushed_like_a_failed_one() {
+        use hlb_state::UpdateRunOutcome as O;
+        let applied = update_notice(&run(O::Applied));
+        assert!(
+            applied.level.is_pushed(),
+            "a success said nowhere is silence"
+        );
+        assert!(applied.body.contains("1.24.7"), "{}", applied.body);
+        assert!(update_notice(&run(O::RolledBack)).level.is_pushed());
+        assert_eq!(
+            update_notice(&run(O::Paused)).level,
+            hlb_notify::Level::Critical,
+            "nothing may be serving"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_update_outcome_is_said_once() {
+        let s = State::in_memory().await.expect("state");
+        s.record_update_run(&run(hlb_state::UpdateRunOutcome::Applied))
+            .await
+            .expect("recorded");
+        let s = Arc::new(s);
+        notify_update_runs(&s, &Notifier::new(None, s.clone()), 10).await;
+        assert!(s.unnotified_update_runs().await.expect("read").is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_update_notice_ntfy_refused_is_not_marked_said() {
+        let s = Arc::new(State::in_memory().await.expect("state"));
+        s.record_update_run(&run(hlb_state::UpdateRunOutcome::Applied))
+            .await
+            .expect("recorded");
+        // Nothing listens there; noon UTC, no quiet hours.
+        let client = Arc::new(hlb_notify::NtfyClient::new("http://127.0.0.1:9", "hlb"));
+        let notif = Notifier::new(Some(client), s.clone());
+        notify_update_runs(&s, &notif, 1_782_907_200).await;
+        assert_eq!(s.unnotified_update_runs().await.expect("read").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_update_applied_at_night_is_kept_for_the_morning() {
+        let s = Arc::new(State::in_memory().await.expect("state"));
+        s.record_update_run(&run(hlb_state::UpdateRunOutcome::Applied))
+            .await
+            .expect("recorded");
+        let client = Arc::new(hlb_notify::NtfyClient::new("http://127.0.0.1:9", "hlb"));
+        let notif = Notifier::new(Some(client), s.clone());
+        // 03:00 UTC: held, not sent — kept, so marking it said loses nothing.
+        notify_update_runs(&s, &notif, 1_782_874_800).await;
+        assert!(s.unnotified_update_runs().await.expect("read").is_empty());
+        assert_eq!(s.held_notifications().await.expect("held").len(), 1);
     }
 }

@@ -51,6 +51,8 @@ pub enum Intent {
     BackUp(BackUp),
     PurgeAlias(PurgeAlias),
     KitFingerprint(KitFingerprint),
+    Alerts(Alerts),
+    Drifts(Drifts),
     MyIdentity(MyIdentity),
     Rename(Rename),
     DefaultMailbox(DefaultMailbox),
@@ -124,6 +126,8 @@ asks! {
     BackUp => ActionResult,
     PurgeAlias => ActionResult,
     KitFingerprint => Option<String>,
+    Alerts => Vec<crate::ActiveAlert>,
+    Drifts => Vec<crate::DriftSummary>,
     MyIdentity => crate::MyIdentity,
     Rename => ActionResult,
     DefaultMailbox => Acted,
@@ -291,6 +295,18 @@ pub struct PurgeAlias {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KitFingerprint {}
+
+/// The alerts the daemon's last evaluation found, muted ones included, before the
+/// mutes are applied: the web side applies them at answer time, so a mute set a second
+/// ago shows at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Alerts {}
+
+/// The gaps reconciliation's last pass left — refused, or not corrected yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Drifts {}
 
 /// A signed-in person's names and address, as PocketID holds them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

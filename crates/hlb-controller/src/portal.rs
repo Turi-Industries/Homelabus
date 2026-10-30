@@ -420,35 +420,6 @@ pub async fn private_status(
 /// How many days of history the status page's uptime bar covers.
 const UPTIME_WINDOW_DAYS: i64 = 90;
 
-/// The service state shown for an app: raw deploy status, overridden by an ANNOUNCED
-/// maintenance — planned, so it must not read as an unexplained outage.
-///
-/// Shared with `loops.rs`'s uptime sampling: both must agree on what "the state" means
-/// for a given app at a given moment, or the history would silently disagree with what
-/// the live status page showed that day.
-pub(crate) fn service_state(status: &str, announced: bool) -> hlb_api::ServiceState {
-    match status {
-        _ if announced => hlb_api::ServiceState::Maintenance,
-        "running" => hlb_api::ServiceState::Operational,
-        "partial" => hlb_api::ServiceState::Degraded,
-        _ => hlb_api::ServiceState::Unavailable,
-    }
-}
-
-/// The lower-cased titles of the currently-announced maintenances — checked by
-/// substring against an app's name, the same "the app appears in the announcement's
-/// title" convention `build_status` already used.
-pub(crate) async fn maintenance_titles(state: &hlb_state::State, now: i64) -> Vec<String> {
-    state
-        .announcements(hlb_types::Role::User, now, false)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|a| a.level == hlb_api::AnnouncementLevel::Maintenance)
-        .map(|a| a.title.to_lowercase())
-        .collect()
-}
-
 async fn build_status(s: &AppState) -> hlb_api::StatusPage {
     let now = crate::auth::now();
 
@@ -470,7 +441,7 @@ async fn build_status(s: &AppState) -> hlb_api::StatusPage {
         })
         .collect();
 
-    let en_maintenance = maintenance_titles(&s.state, now).await;
+    let en_maintenance = s.state.maintenance_titles(now).await;
 
     let mut services = Vec::new();
     for (name, status) in s.state.installed_apps().await.unwrap_or_default() {
@@ -492,7 +463,7 @@ async fn build_status(s: &AppState) -> hlb_api::StatusPage {
             .collect();
 
         services.push(hlb_api::ServiceStatus {
-            state: service_state(&status, announced),
+            state: hlb_api::ServiceState::of(&status, announced),
             name,
             domain: Some(domain),
             uptime,
@@ -824,30 +795,28 @@ fn offered(s: &std::sync::Arc<crate::api::AppState>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn an_announced_maintenance_overrides_a_running_status() {
         assert_eq!(
-            service_state("running", true),
+            hlb_api::ServiceState::of("running", true),
             hlb_api::ServiceState::Maintenance
         );
         assert_eq!(
-            service_state("running", false),
+            hlb_api::ServiceState::of("running", false),
             hlb_api::ServiceState::Operational
         );
         assert_eq!(
-            service_state("partial", false),
+            hlb_api::ServiceState::of("partial", false),
             hlb_api::ServiceState::Degraded
         );
         assert_eq!(
-            service_state("failed", false),
+            hlb_api::ServiceState::of("failed", false),
             hlb_api::ServiceState::Unavailable
         );
         // An unrecognised status string is not silently "fine": it reads the same as
         // "failed", never a default that could pass for healthy.
         assert_eq!(
-            service_state("anything-else", false),
+            hlb_api::ServiceState::of("anything-else", false),
             hlb_api::ServiceState::Unavailable
         );
     }
@@ -878,7 +847,7 @@ mod tests {
         .await
         .expect("announcement");
 
-        let titles = maintenance_titles(&st, crate::auth::now()).await;
+        let titles = st.maintenance_titles(crate::auth::now()).await;
         assert_eq!(titles, vec!["maintenance on gitea".to_string()]);
     }
 
@@ -902,6 +871,6 @@ mod tests {
         .await
         .expect("announcement");
 
-        assert!(maintenance_titles(&st, now).await.is_empty());
+        assert!(st.maintenance_titles(now).await.is_empty());
     }
 }

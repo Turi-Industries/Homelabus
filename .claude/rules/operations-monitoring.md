@@ -3,7 +3,8 @@ paths:
   - "crates/hlb-agent/**/*.rs"
   - "crates/hlb-metrics/**/*.rs"
   - "crates/hlb-notify/**/*.rs"
-  - "crates/hlb-controller/src/{agents,capacity,loops,metrics,mutes,notify,promql,timeline}.rs"
+  - "crates/hlb-controller/src/{agents,capacity,metrics,mutes,promql,timeline}.rs"
+  - "crates/hlb-privd/src/daemon/{alerts,notify,schedule}.rs"
 ---
 
 # Operations: watching the system
@@ -81,13 +82,14 @@ where silence is cheapest: an unknown reads as calm unless the type forbids it.
 - **Quiet hours hold a notification, never drop it.** `send` answered a `bool`, and held
   read as said: an Important alert raised at night was never raised again, an update
   applied at 3 a.m. was marked notified. Held goes to `held_notifications` (one per
-  subject) and `notify::Notifier::flush` sends it in the installation's morning — its
-  `hlb config timezone`, never UTC. And a rule read as ONE number (`min(hlb_app_up)`)
+  subject) and `hlb_privd::daemon::Notifier::flush` sends it in the installation's
+  morning — its `hlb config timezone`, never UTC. And a rule read as ONE number (`min(hlb_app_up)`)
   never said a second app was failing: the rules keep a series per subject, and the loop
   says a subject, or a level, it has not said yet.
 - **An update said nowhere is silence.** Every outcome of `hlb update apply`, success
-  included, is a row of `update_runs` the controller notifies once
-  (`loops::notify_update_runs`); a notice ntfy refused stays unsent for the next pass.
+  included, is a row of `update_runs` the daemon notifies once
+  (`daemon::notify::notify_update_runs`); a notice ntfy refused stays unsent for the
+  next pass.
 
 ## Read mid-outage
 

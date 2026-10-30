@@ -1932,6 +1932,7 @@ name = "hlb-privd"
 version = "0.2.1"
 dependencies = [
  "async-trait",
+ "axum",
  "hlb-api",
  "hlb-backup",
  "hlb-backup-run",
@@ -1940,6 +1941,8 @@ dependencies = [
  "hlb-guide",
  "hlb-identity",
  "hlb-mail",
+ "hlb-metrics",
+ "hlb-notify",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",
@@ -1949,6 +1952,8 @@ dependencies = [
  "hlb-types",
  "hlb-users",
  "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

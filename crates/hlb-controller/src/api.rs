@@ -94,12 +94,6 @@ pub struct AppState {
     pub public_status: bool,
     /// Demonstration mode: some views are fabricated for want of an orchestrator.
     pub demo: bool,
-    /// The current state of the alerts, written by `AlertLoop`.
-    ///
-    /// Same pattern as `last_poll`: the loop writes, the API reads.
-    pub alerts: crate::loops::AlertsState,
-    /// The gaps of the last reconciliation pass, written by `ReconcileLoop`.
-    pub drifts: crate::loops::DriftState,
     /// The deadman's heartbeat file, when one is configured.
     ///
     /// ⚠️ Used by the checklist, which must distinguish "no deadman" from "silent
@@ -997,8 +991,8 @@ async fn exposure(
 async fn drifts(
     _auth: Authorized<CanRead>,
     AxumState(s): AxumState<Arc<AppState>>,
-) -> Json<Vec<hlb_api::DriftSummary>> {
-    Json(s.drifts.read().await.clone())
+) -> ApiResult<Vec<hlb_api::DriftSummary>> {
+    Ok(Json(drifts_now(&s).await?))
 }
 
 /// The active alerts.
@@ -1027,16 +1021,33 @@ pub(crate) async fn alerts_now(s: &AppState) -> Result<Vec<hlb_api::AlertAt>, Ap
     // The table, read at answer time: a mute set a second ago shows now, not at the
     // loop's next pass — the screen that set it would otherwise look like it failed.
     let mutes = s.state.alert_mutes(now).await?;
-    Ok(s.alerts
-        .read()
-        .await
-        .iter()
-        .map(|a| {
-            let mut a = a.clone();
+    Ok(active_alerts(s)
+        .await?
+        .into_iter()
+        .map(|mut a| {
             a.apply_mutes(&mutes);
             a.at(now)
         })
         .collect())
+}
+
+/// The alerts the daemon's last evaluation found, mutes not applied.
+pub(crate) async fn active_alerts(s: &AppState) -> Result<Vec<hlb_api::ActiveAlert>, ApiError> {
+    s.privd()
+        .ask(hlb_api::intent::Alerts {})
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// The gaps reconciliation's last pass left.
+///
+/// ⚠️ Unanswered is an error, never "no gap": the inbox would say nothing needs anyone
+/// while the daemon that knows could not be asked.
+pub(crate) async fn drifts_now(s: &AppState) -> Result<Vec<hlb_api::DriftSummary>, ApiError> {
+    s.privd()
+        .ask(hlb_api::intent::Drifts {})
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 /// A time series, relayed to VictoriaMetrics.
@@ -2048,11 +2059,8 @@ async fn app_detail(
     // the alerts at the same time. The interface shows them on three screens and cannot
     // make the link — which is exactly what separates a dashboard from a
     // diagnostic.
-    let diagnostic = hlb_api::diagnostic::explain(
-        &detail,
-        &nodes_summary(&s).await,
-        &s.alerts.read().await.clone(),
-    );
+    let diagnostic =
+        hlb_api::diagnostic::explain(&detail, &nodes_summary(&s).await, &active_alerts(&s).await?);
 
     Ok(Json(hlb_api::AppDetail {
         diagnostic: Some(diagnostic),
@@ -2895,8 +2903,12 @@ pub(crate) mod tests {
         s.demo = true;
         let now = crate::auth::now();
         *s.last_poll.write().await = crate::demo::nodes_at(now as u64, crate::demo::Scale::Large);
-        *s.drifts.write().await = crate::demo::drifts();
-        *s.alerts.write().await = crate::demo::alerts(now);
+        s.privd = hlb_privd::Privd::new(s.state.clone())
+            .with_mail(None, "local")
+            .with_published(
+                Arc::new(tokio::sync::RwLock::new(crate::demo::alerts(now))),
+                Arc::new(tokio::sync::RwLock::new(crate::demo::drifts())),
+            );
         s
     }
 
@@ -2917,8 +2929,6 @@ pub(crate) mod tests {
             throughput: Arc::new(crate::throughput::RateLimiter::new()),
             trusted_proxy: false,
             series: None,
-            alerts: Default::default(),
-            drifts: Default::default(),
             beat: None,
             mirror: None,
             public_url: None,
@@ -3132,6 +3142,46 @@ pub(crate) mod tests {
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::LogLine>> {
             Ok(Vec::new())
         }
+    }
+
+    #[tokio::test]
+    async fn a_pass_reports_when_it_reconciled_and_publishes_only_what_is_left() {
+        let state = Arc::new(State::in_memory().await.expect("base"));
+        state
+            .upsert_app("demo", &manifest("demo"), None)
+            .await
+            .expect("upsert");
+        state
+            .set_app_status("demo", "running")
+            .await
+            .expect("status");
+        let orch = Arc::new(FakeOrch::running(vec![hlb_orchestrator::ServiceStatus {
+            name: "demo".into(),
+            id: "id".into(),
+            image: "a/b:1".into(),
+            desired_replicas: 0,
+            running_replicas: 0,
+            update_state: None,
+        }]));
+        let drifts: hlb_privd::daemon::DriftState = Default::default();
+        let last: hlb_privd::daemon::LastReconciled =
+            Arc::new(std::sync::atomic::AtomicI64::new(0));
+        let rl = hlb_privd::daemon::ReconcileLoop::new(orch, state)
+            .apply(true)
+            .published_in(drifts.clone())
+            .reports_to(last.clone());
+
+        let r = rl.tick().await;
+        assert_eq!((r.examined, r.acted), (1, 1), "{r:?}");
+        assert!(
+            drifts.read().await.is_empty(),
+            "a corrected gap was published as a gap: {:?}",
+            drifts.read().await
+        );
+        assert!(
+            last.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "the heartbeat cannot know this pass ran"
+        );
     }
 
     /// "Back up now" whose pass reports what the test chooses.
@@ -6242,8 +6292,8 @@ steps:
     #[tokio::test]
     async fn a_mute_set_by_the_route_is_seen_at_once_and_audited() {
         let st = Arc::new(State::in_memory().await.expect("base"));
-        let app = Arc::new(base_state(st.clone(), true));
-        *app.alerts.write().await = vec![hlb_api::ActiveAlert {
+        let mut app = base_state(st.clone(), true);
+        let firing = vec![hlb_api::ActiveAlert {
             rule: "disk-full".into(),
             level: hlb_api::AlertLevel::Critical,
             explanation: "a filesystem is above 85 % usage".into(),
@@ -6254,7 +6304,11 @@ steps:
             muted_by: None,
             mute_reason: None,
         }];
-        let r = router(app);
+        app.privd = app.privd.with_published(
+            Arc::new(tokio::sync::RwLock::new(firing)),
+            Default::default(),
+        );
+        let r = router(Arc::new(app));
 
         // Refused, and nothing stored.
         let (s, _) = post(

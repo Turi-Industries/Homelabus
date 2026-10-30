@@ -4,7 +4,8 @@ paths:
   - "crates/hlb-backup-run/**/*.rs"
   - "crates/hlb-agent/**/*.rs"
   - "crates/hlb-metrics/**/*.rs"
-  - "crates/hlb-controller/src/{loops,metrics,recovery,health}.rs"
+  - "crates/hlb-controller/src/{metrics,recovery,health}.rs"
+  - "crates/hlb-privd/src/{backup.rs,daemon/schedule.rs}"
 ---
 
 # Backups

@@ -23,14 +23,20 @@ hlb-identity.workspace = true
 hlb-mail.workspace = true
 hlb-backup.workspace = true
 hlb-backup-run.workspace = true
+hlb-notify.workspace = true
+hlb-metrics.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+# The fake ntfy the notification tests publish to.
+axum = "0.8"
+serde_yaml_ng.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

@@ -3858,6 +3858,19 @@ impl State {
         Ok(())
     }
 
+    /// The lower-cased titles of the maintenances announced now: an app whose name a
+    /// title contains is in maintenance, for the status page and the uptime samples
+    /// alike. Unreadable is none — the app then shows its own status.
+    pub async fn maintenance_titles(&self, now: i64) -> Vec<String> {
+        self.announcements(hlb_types::Role::User, now, false)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.level == hlb_api::AnnouncementLevel::Maintenance)
+            .map(|a| a.title.to_lowercase())
+            .collect()
+    }
+
     /// The announcements visible to this role.
     ///
     /// ⚠️ Filtered by audience: an operations announcement does not interest a portal

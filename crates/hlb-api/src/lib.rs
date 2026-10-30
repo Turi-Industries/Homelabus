@@ -1629,6 +1629,19 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
+    /// What an app's recorded status shows on the status page.
+    ///
+    /// One definition for the live page and the daemon's uptime sampling: two would let
+    /// the history disagree with what the page showed that day.
+    pub fn of(status: &str, announced: bool) -> Self {
+        match status {
+            _ if announced => Self::Maintenance,
+            "running" => Self::Operational,
+            "partial" => Self::Degraded,
+            _ => Self::Unavailable,
+        }
+    }
+
     pub fn attention(&self) -> Attention {
         match self {
             Self::Operational => Attention::Ok,

@@ -524,11 +524,13 @@ mod tests {
         );
         s.privd = hlb_privd::Privd::new(s.state.clone())
             .with_mail(None, &s.mail_domain)
-            .with_catalog(Some(catalog.clone()));
+            .with_catalog(Some(catalog.clone()))
+            .with_published(
+                std::sync::Arc::new(tokio::sync::RwLock::new(crate::demo::alerts(now as i64))),
+                std::sync::Arc::new(tokio::sync::RwLock::new(crate::demo::drifts())),
+            );
         s.catalog = Some(catalog);
         *s.last_poll.write().await = crate::demo::nodes(now);
-        *s.drifts.write().await = crate::demo::drifts();
-        *s.alerts.write().await = crate::demo::alerts(now as i64);
         s.themes_dir = dir.to_path_buf();
         s.custom_themes = vec![hlb_api::CustomTheme {
             name: "Maison".into(),
