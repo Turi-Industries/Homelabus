@@ -33,6 +33,60 @@ pub const LUKS_RECOVERY_PREFIX: &str = "luks-recovery-";
 /// by [`zfs_key`] when its datasets are about to be encrypted.
 pub const ZFS_KEY_PREFIX: &str = "zfs-key-";
 
+/// The kit's split among relatives (`hlb emergency split`): its PUBLIC half and its
+/// shape. The key itself was forgotten once cut — it is in nobody's hands but theirs.
+pub const SPLIT_SECRET: &str = "kit-split";
+
+/// A split, as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitRecord {
+    /// What the kit is sealed to.
+    pub recipient: String,
+    pub threshold: u8,
+    pub count: u8,
+}
+
+impl SplitRecord {
+    pub fn id(&self) -> String {
+        hlb_secrets::split::split_id(&self.recipient)
+    }
+}
+
+/// The split the kit is sealed to, if one was made.
+pub async fn split(state: &State, vault: &Vault) -> Result<Option<SplitRecord>> {
+    let Some(ct) = state.secret(SPLIT_SECRET).await? else {
+        return Ok(None);
+    };
+    let text = vault.decrypt(&ct)?;
+    let mut parts = text.split_whitespace();
+    Ok(match (parts.next(), parts.next(), parts.next()) {
+        (Some(recipient), Some(t), Some(n)) => match (t.parse(), n.parse()) {
+            (Ok(threshold), Ok(count)) => Some(SplitRecord {
+                recipient: recipient.to_string(),
+                threshold,
+                count,
+            }),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Records `split` as the one the kit is sealed to, over any former one.
+pub async fn record_split(state: &State, vault: &Vault, split: &SplitRecord) -> Result<()> {
+    let ct = vault.encrypt(&format!(
+        "{} {} {}",
+        split.recipient, split.threshold, split.count
+    ))?;
+    if !state
+        .store_secret_if_absent(SPLIT_SECRET, &ct, "the emergency kit's split, public half")
+        .await?
+    {
+        state.rotate_secret(SPLIT_SECRET, &ct).await?;
+    }
+    Ok(())
+}
+
 /// One destination, as the kit prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
@@ -329,6 +383,56 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
     s
 }
 
+/// A relative's sheet: their share, and how it opens the kit with the others. Printed,
+/// and read by someone who never ran Homelabus.
+pub fn render_share(
+    share: &hlb_secrets::split::Share,
+    installation: &str,
+    printed: &str,
+) -> String {
+    let (i, n, t, id) = (
+        share.index(),
+        share.count(),
+        share.threshold(),
+        share.split_id(),
+    );
+    let mut s = String::new();
+    let mut line = |l: &str| {
+        s.push_str(l);
+        s.push('\n');
+    };
+    line(&format!(
+        "HOMELABUS — A SHARE OF THE EMERGENCY KIT — {installation}"
+    ));
+    line(&format!("Share {i} of {n}, split {id}, made {printed}."));
+    line("");
+    line(&format!(
+        "Any {t} of the {n} shares open the emergency kit of {installation}; fewer say"
+    ));
+    line("nothing of it. The kit opens every backup: keep this sheet as you would a house");
+    line(&format!(
+        "key, and hand it only to whoever gathers {t} of them to bring it back."
+    ));
+    line("");
+    line("The share — every letter counts, the spaces do not:");
+    line("");
+    let groups = share.groups();
+    for row in groups.chunks(7) {
+        line(&format!("   {}", row.join(" ")));
+    }
+    line("");
+    line("The sealed kit is a file, kit.age, sent to every holder: it opens with the");
+    line("shares only. On any machine with hlb (https://github.com/Turi-Industries/Homelabus):");
+    line("");
+    line("   hlb emergency combine --kit kit.age --out kit.txt");
+    line("");
+    line("then type each share as printed, and an empty line after the last. Without");
+    line(&format!(
+        "--kit, it says only whether the shares open split {id}: once a year, check they do."
+    ));
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +573,64 @@ mod tests {
                 &[]
             )
         );
+    }
+
+    #[tokio::test]
+    async fn a_split_is_kept_by_its_public_half_and_replaced_whole() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let vault = Vault::init(d.path().join("k")).expect("vault");
+        let state = State::in_memory().await.expect("state");
+        assert_eq!(split(&state, &vault).await.expect("read"), None);
+        let printed = fingerprint(&state, &vault).await.expect("fingerprint");
+
+        let first = hlb_secrets::split::split(3, 5).expect("split");
+        let record = SplitRecord {
+            recipient: first.recipient.clone(),
+            threshold: 3,
+            count: 5,
+        };
+        record_split(&state, &vault, &record)
+            .await
+            .expect("recorded");
+        assert_eq!(split(&state, &vault).await.expect("read"), Some(record));
+        // The split opens the kit; it is not part of what the kit restores.
+        assert_eq!(printed, fingerprint(&state, &vault).await.expect("now"));
+
+        let second = SplitRecord {
+            recipient: hlb_secrets::split::split(2, 3).expect("split").recipient,
+            threshold: 2,
+            count: 3,
+        };
+        record_split(&state, &vault, &second)
+            .await
+            .expect("replaced");
+        assert_eq!(split(&state, &vault).await.expect("read"), Some(second));
+    }
+
+    #[test]
+    fn a_share_sheet_carries_the_share_and_how_it_opens_the_kit() {
+        let split = hlb_secrets::split::split(3, 5).expect("split");
+        let share = &split.shares[1];
+        let sheet = render_share(share, "Turi Industries", "2026-10-30 17:00 UTC");
+        for needed in [
+            "Share 2 of 5",
+            &format!("split {}", share.split_id()),
+            "Any 3 of the 5 shares",
+            "hlb emergency combine --kit kit.age --out kit.txt",
+        ] {
+            assert!(sheet.contains(needed), "{needed} missing from:\n{sheet}");
+        }
+        // Typed back from the sheet's own lines, it is the same share.
+        let typed: String = sheet
+            .lines()
+            .filter(|l| l.starts_with("   ") && !l.contains("hlb"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let read = hlb_secrets::split::Share::read(&typed, 1).expect("read back");
+        assert_eq!(&read, share);
+        for l in sheet.lines() {
+            assert!(l.chars().count() <= 84, "too wide to print: {l}");
+        }
     }
 
     #[test]

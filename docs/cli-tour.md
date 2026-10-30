@@ -137,6 +137,20 @@ new destination makes the printed one stale, and the recovery screen says so.
 ./target/debug/hlb emergency kit --out /tmp/kit.txt   # print it, then delete the file
 ```
 
+The family without the owner: the kit's key split among relatives, any three of five
+opening the kit sealed to it, fewer nothing. A share is a printed sheet, typed back in
+modhex (the same keys on any layout); the sealed kit is a file safe to send to them all,
+sealed again after any change without a share moving. Combining needs no state and no
+vault, so it runs on a relative's laptop; without `--kit` it only checks the shares.
+
+```sh
+./target/debug/hlb emergency split --out /tmp/family        # share-1.txt … share-5.txt, kit.age
+./target/debug/hlb emergency split --threshold 2 --shares 3 --out /tmp/family --replace
+./target/debug/hlb emergency kit --sealed --out /tmp/kit.age   # after a change: send it again
+./target/debug/hlb emergency combine                         # type 3 shares: do they open it?
+./target/debug/hlb emergency combine --kit kit.age --out kit.txt
+```
+
 Termix gets every node: on each, an account `hlb-termix` with no right beyond a shell,
 and a key Homelabus generates, accepted from Termix's own node only; in Termix, a host
 per node shared with the administrators. Termix lets no program make its first API key,

@@ -382,6 +382,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blahaj"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487933050478214ae28623a5095231bce28713322e85e32d30fce4e760c96f3a"
+dependencies = [
+ "hashbrown 0.17.1",
+ "rand 0.10.3",
+ "zeroize",
+]
+
+[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1995,11 +2006,15 @@ name = "hlb-secrets"
 version = "0.2.1"
 dependencies = [
  "age",
+ "bech32",
+ "blahaj",
  "rand 0.10.3",
  "secrecy",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -4471,7 +4486,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

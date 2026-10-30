@@ -15,6 +15,8 @@
 //! ([`CREDENTIALS_DIR`]), and the disk holds it only encrypted. Against a machine
 //! carried away whole, the defence is still disk encryption.
 
+pub mod split;
+
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 

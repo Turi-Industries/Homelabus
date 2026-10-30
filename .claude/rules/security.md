@@ -356,6 +356,16 @@ the outside, which is the whole problem.
   fingerprint printed is today's. Written with `create_new` and mode 0600, never over a
   file, audited before it is shown, and counted only once written — attested first, a
   full disk left the safeguard green over a kit nobody held.
+- **The kit's split cuts a key, never the kit, and keeps only its public half.**
+  `hlb emergency split` draws an age identity, cuts it 3 of 5 (`hlb_secrets::split`)
+  and forgets it: the kit, which moves with every destination, is SEALED to the public
+  half (`kit-split`) and sent again after a change while the shares stay in their
+  drawers; kept nowhere, the key needs no protection of its own. Interpolation always
+  yields 32 bytes, so `combine` checks the rebuilt key's public half against the
+  split's id before decrypting. A share's checksum is a CRC, not a truncated hash:
+  every single mistyped letter and every swap of two is caught, where a hash misses
+  one in 65 536. Recorded only once every sheet is written, or the kit would be sealed
+  from then on to shares nobody holds.
 - **`hlb secrets-rekey` never races the controller.** It holds the old key in memory and
   writes secrets under it: refused while its Swarm service runs, `--apply` requires
   `--controller-stopped` for one run by hand, and the rewrite is a compare-and-swap

@@ -37,6 +37,8 @@ pub enum Error {
     #[error(transparent)]
     Vault(#[from] hlb_secrets::Error),
     #[error(transparent)]
+    Split(#[from] hlb_secrets::split::Error),
+    #[error(transparent)]
     Backup(#[from] hlb_backup::Error),
     #[error("staging the snapshot: {0}")]
     Io(#[from] std::io::Error),

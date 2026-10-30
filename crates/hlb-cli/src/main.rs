@@ -1454,6 +1454,39 @@ enum EmergencyCmd {
         /// output. An existing file is never overwritten.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Sealed to the split `hlb emergency split` made: a file safe to send to every
+        /// relative, which their shares open. Print it again after any change — the
+        /// shares stay as they are.
+        #[arg(long)]
+        sealed: bool,
+    },
+    /// Splits the kit's key among relatives: any THRESHOLD of the SHARES open the kit
+    /// sealed to it, fewer say nothing of it. Writes a sheet per relative and the sealed
+    /// kit into a new directory; the key itself is kept nowhere.
+    Split {
+        #[arg(long, default_value_t = 3)]
+        threshold: u8,
+        #[arg(long, default_value_t = 5)]
+        shares: u8,
+        /// A directory that does not exist yet, created readable by its owner only.
+        #[arg(long)]
+        out: PathBuf,
+        /// Make a new split over the current one. The old shares still open every kit
+        /// already sealed to them: paper cannot be revoked.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Rebuilds the kit's key from shares typed on standard input, one per line, and
+    /// opens the sealed kit with it. Needs neither the state nor the vault: it runs on
+    /// any machine. Without --kit, says only whether the shares open their split.
+    Combine {
+        /// The sealed kit, `hlb emergency kit --sealed`.
+        #[arg(long)]
+        kit: Option<PathBuf>,
+        /// Write the opened kit to this file, readable by its owner only, rather than to
+        /// standard output.
+        #[arg(long, requires = "kit")]
+        out: Option<PathBuf>,
     },
 }
 

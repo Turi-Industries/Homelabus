@@ -1,7 +1,7 @@
-//! `hlb emergency`: the emergency vault (`hlb_engine::emergency`) and the printed kit
-//! (`hlb_backup_run::kit`).
+//! `hlb emergency`: the emergency vault (`hlb_engine::emergency`), the printed kit
+//! (`hlb_backup_run::kit`) and its split among relatives (`hlb_secrets::split`).
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -17,7 +17,14 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub async fn run(cli: &Cli, cmd: &EmergencyCmd) -> Result<ExitCode> {
     match cmd {
         EmergencyCmd::Vault { address, apply } => vault(cli, address.as_deref(), *apply).await,
-        EmergencyCmd::Kit { out } => kit(cli, out.as_deref()).await,
+        EmergencyCmd::Kit { out, sealed } => kit(cli, out.as_deref(), *sealed).await,
+        EmergencyCmd::Split {
+            threshold,
+            shares,
+            out,
+            replace,
+        } => split(cli, *threshold, *shares, out, *replace).await,
+        EmergencyCmd::Combine { kit, out } => combine(kit.as_deref(), out.as_deref()),
     }
 }
 
@@ -108,7 +115,7 @@ fn print(r: &Report, apply: bool) {
     }
 }
 
-async fn kit(cli: &Cli, out: Option<&Path>) -> Result<ExitCode> {
+async fn kit(cli: &Cli, out: Option<&Path>, sealed: bool) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
     if let Some(path) = out {
@@ -121,17 +128,180 @@ async fn kit(cli: &Cli, out: Option<&Path>) -> Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     }
+    let split = match (sealed, hlb_backup_run::kit::split(&state, &vault).await?) {
+        (false, _) => None,
+        (true, Some(split)) => Some(split),
+        (true, None) => {
+            eprintln!(
+                "🔴 No split to seal the kit to: `hlb emergency split --out <dir>` makes \
+                 one, a share for each relative."
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    };
     let kit = hlb_backup_run::kit::read(&state, &vault).await?;
     let printed = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
-    let sheet = hlb_backup_run::kit::render(&kit, &state.brand().await?.name, &printed);
+    let mut sheet = hlb_backup_run::kit::render(&kit, &state.brand().await?.name, &printed);
+    if let Some(split) = &split {
+        sheet = hlb_secrets::split::seal(&sheet, &split.recipient)?;
+    }
     hand_over(&state, &kit.fingerprint, &sheet, out).await?;
-    if let Some(path) = out {
-        println!(
+    match (out, &split) {
+        (Some(path), None) => println!(
             "The kit is in {} (fingerprint {}): print it, keep the sheet away from \
              the cluster, and delete the file.",
             path.display(),
             kit.fingerprint
+        ),
+        (Some(path), Some(split)) => println!(
+            "The kit is in {}, sealed to split {} (fingerprint {}): send it to each \
+             holder of a share, in place of the one they have. Their shares stay as \
+             they are.",
+            path.display(),
+            split.id(),
+            kit.fingerprint
+        ),
+        (None, _) => {}
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -> Result<ExitCode> {
+    let state = open_state(cli).await?;
+    let vault = open_vault(cli)?;
+    if let Some(old) = hlb_backup_run::kit::split(&state, &vault).await? {
+        if !replace {
+            eprintln!(
+                "🔴 Split {} ({} of {}) exists, its shares with your relatives. \
+                 --replace makes a new one: the old shares still open every kit already \
+                 sealed to them — paper cannot be revoked — and no kit sealed from now on.",
+                old.id(),
+                old.threshold,
+                old.count
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    if out.exists() {
+        eprintln!(
+            "🔴 {} exists: the shares go into a new directory, never among other files.",
+            out.display()
         );
+        return Ok(ExitCode::FAILURE);
+    }
+    let made = hlb_secrets::split::split(threshold, count)?;
+    let record = hlb_backup_run::kit::SplitRecord {
+        recipient: made.recipient.clone(),
+        threshold,
+        count,
+    };
+    let installation = state.brand().await?.name;
+    let kit = hlb_backup_run::kit::read(&state, &vault).await?;
+    let printed = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
+    let sheet = hlb_backup_run::kit::render(&kit, &installation, &printed);
+    let sealed = hlb_secrets::split::seal(&sheet, &made.recipient)?;
+    // Recorded before anything is written, as the kit is.
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "emergency-split",
+            &record.id(),
+            "ok",
+            Some(&format!("{threshold} of {count}")),
+        )
+        .await?;
+    let mut dir = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        dir.mode(0o700);
+    }
+    dir.create(out)?;
+    for share in &made.shares {
+        let sheet = hlb_backup_run::kit::render_share(share, &installation, &printed);
+        write_private(&out.join(format!("share-{}.txt", share.index())), &sheet)?;
+    }
+    write_private(&out.join("kit.age"), &sealed)?;
+    // 🔴 Recorded once every sheet exists: recorded first, a write that failed would
+    // leave the kit sealed from then on to shares nobody holds.
+    hlb_backup_run::kit::record_split(&state, &vault, &record).await?;
+    // The sealed kit holds today's material, and opens without the owner.
+    state
+        .attest_breakglass(EMERGENCY_KIT, "hlb emergency split", Some(&kit.fingerprint))
+        .await?;
+    println!(
+        "Split {}: any {threshold} of {count} shares open the kit. In {}:",
+        record.id(),
+        out.display()
+    );
+    let shares = format!("share-1.txt … share-{count}.txt");
+    println!("  {shares:<28} one printed sheet per relative");
+    println!(
+        "  {:<28} the sealed kit, sent to every one of them",
+        "kit.age"
+    );
+    println!("Then delete the directory. After any change to the kit, send them");
+    println!("`hlb emergency kit --sealed --out kit.age`; their shares stay as they are.");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Needs no state and no vault: run by relatives, on whatever machine they have.
+fn combine(kit: Option<&Path>, out: Option<&Path>) -> Result<ExitCode> {
+    if let Some(path) = out {
+        if path.exists() {
+            eprintln!(
+                "🔴 {} exists: the kit is never written over a file.",
+                path.display()
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    // Read before the shares are typed: a wrong path is said before anyone types 78
+    // letters three times.
+    let sealed = kit.map(std::fs::read_to_string).transpose()?;
+    eprintln!("Type each share as printed, then an empty line after the last:");
+    let mut lines = Vec::new();
+    for line in std::io::stdin().lock().lines() {
+        let line = line?;
+        match (line.trim().is_empty(), lines.is_empty()) {
+            (true, true) => continue,
+            (true, false) => break,
+            (false, _) => lines.push(line),
+        }
+    }
+    let shares = hlb_secrets::split::gather(&lines);
+    let key = match hlb_secrets::split::combine(&shares) {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("🔴 {e}");
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    let Some(sealed) = sealed else {
+        println!(
+            "These {} shares open split {}.",
+            shares.len(),
+            key.split_id()
+        );
+        return Ok(ExitCode::SUCCESS);
+    };
+    let plain = match key.open(&sealed) {
+        Ok(plain) => plain,
+        Err(e) => {
+            eprintln!("🔴 {e} — is it the kit sealed to split {}?", key.split_id());
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    match out {
+        None => print!("{plain}"),
+        Some(path) => {
+            write_private(path, &plain)?;
+            println!(
+                "The kit is in {}, readable by you only: the sheet says what to do.",
+                path.display()
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

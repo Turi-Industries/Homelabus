@@ -21,7 +21,7 @@ already have.
 | `history` | `hlb-gitops`, the git mirror of desired state — `operations-updates.md` |
 | `selfy` | `hlb-selfupdate`, not `hlb-updater` — `operations-updates.md` |
 | `access`, `crowdsec`, `pki`, `token` | `security.md` |
-| `emergency` | `hlb-engine::emergency` over `hlb-bitwarden` (the vault), `hlb-backup-run::kit` (the kit) — `security.md` |
+| `emergency` | `hlb-engine::emergency` over `hlb-bitwarden` (the vault), `hlb-backup-run::kit` (the kit), `hlb-secrets::split` (its split among relatives) — `security.md` |
 | `termix` | `hlb-engine::termix` over `hlb-termix`, its jobs through `hlb-orchestrator` — `security.md` |
 | `ingress` | `hlb-ingress`, Caddy and forward-auth — `security.md` |
 | `init`, `deps` | `hlb-bootstrap` — `security.md` and `storage.md` |

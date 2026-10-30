@@ -9,11 +9,17 @@ description = "Secret vault, encrypted with age."
 [dependencies]
 # Held at 0.11: 0.12 pulls p256 0.13 for its post-quantum recipients, whose
 # crypto-bigint 0.5 carries RUSTSEC-2026-0387 with no fixed release. The vault is x25519.
-age = "0.11"
+age = { version = "0.11", features = ["armor"] }
+# Shamir over GF(256) for the kit's split: Distrust's fork of `sharks`, whose
+# coefficients skip zero (RUSTSEC-2024-0398, never fixed there).
+bech32 = "0.9"
+blahaj = "0.7"
 rand = "0.10"
 secrecy = "0.10"
+sha2 = "0.11"
 thiserror.workspace = true
 tracing.workspace = true
+zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"

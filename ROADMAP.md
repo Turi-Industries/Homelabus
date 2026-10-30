@@ -800,6 +800,33 @@ three Tangs, and the third alone opens it.
     boot managers): not started; fwupd's `UEFI dbx` device carries the version.
 - The family without the owner: the emergency kit's key split among relatives (3 of 5),
   and a restore they rehearse once a year.
+  - ✅ The split — 2026-10-30. What is split is not the kit: it changes with every
+    destination and key, and five sheets to hand out again each time would be stale in
+    a drawer within a year. `hlb emergency split` draws a fresh age identity, cuts its
+    32 bytes by Shamir over GF(256) (`blahaj`, Distrust's fork of `sharks`, whose
+    coefficients skip zero — RUSTSEC-2024-0398, never fixed there) and forgets it:
+    only its PUBLIC half is kept (the vault's `kit-split`), so the kit can be sealed
+    to it again after any change — `hlb emergency kit --sealed`, a file safe to email
+    to every relative — without anyone's share moving; kept nowhere, the key needs no
+    protection of its own. Each share is printed with its index, the
+    threshold, the split's id (from the public half) and a checksum, in modhex — the
+    letters an AZERTY and a QWERTY keyboard place alike, as the disk recovery keys. `hlb
+    emergency combine` needs no state and no vault: it refuses a mistyped share by
+    name, shares of two splits, one given twice and fewer than the threshold, and
+    checks that what it rebuilt IS the split's key (its public half's id) before
+    decrypting `--kit`; without `--kit` it only says the shares open the split — the
+    yearly rehearsal's gesture. A new split leaves the old shares opening the sealed
+    kits already handed out: there is no revoking paper, and `--replace` says so. The
+    checksum is a CRC-16: every single mistyped letter and every swap of two is
+    refused (tested at every position), and a share ends with the line that completes
+    it, so one typed on the two lines it is printed on is one share. Held end to end
+    through the binary (`hlb-cli/tests/family_split.rs`): split where the state is,
+    three sheets typed back where there is none, two refused with nothing shown, the
+    kit sealed again opening with the same shares. Not done: a sealed kit is counted as
+    the kit (same fingerprint) — it holds today's material, but counts as printed the
+    day it is written, not the day each relative received it.
+  - Then: the rehearsal attested and expiring (`hlb_api::breakglass`), and the sealed kit
+    deposited somewhere a relative finds it without the owner.
 
 **3. An app without Rust, then the catalog on its own.** Gate: an app enters through a
 pull request to the catalog, with no `hlb` release.
