@@ -72,6 +72,13 @@ stayed healthy.
   module per kernel flavour (`zfs-virt`) and leaves `zfs-import`/`zfs-mount` OFF: after a
   reboot the pool stayed exported and `/tank/apps` was a directory on the root disk.
   Rocky, Arch and openSUSE carry no ZFS of their own: refused at preview.
+- **🔴 An encrypted dataset is NOT unlocked at boot, and says nothing.** Measured
+  2026-10-30 on Debian 12 (ZFS 2.1.11) and 13 (2.3.9), `keylocation=file://`: Debian
+  masks `zfs-load-key.service`, `zfs-mount` runs `zfs mount -a` without `-l` and
+  "Finishes" — keystatus `unavailable`, not mounted. Its mountpoint stays an EMPTY
+  directory on the parent dataset, in clear: a bind mount there writes plaintext, and
+  the app sees an empty volume (PostgreSQL would `initdb`). Load the keys before
+  `zfs-mount`, and keep Docker and NFS from starting when one fails.
 - **A failed `zpool` prints nothing on stdout,** which parses as "no pool" — the shape
   that invites creating one over a pool the module simply could not see.
 - **A package with no matching binary needs its own probe.** Nothing is called
