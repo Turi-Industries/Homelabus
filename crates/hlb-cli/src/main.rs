@@ -13,6 +13,7 @@ mod relay;
 mod restore;
 mod roles;
 mod seal;
+mod storage;
 mod termix;
 mod verify_boot;
 
@@ -1178,7 +1179,8 @@ enum StorageCmd {
         pool: Option<String>,
     },
 
-    /// Import a pool present on the disks, and create the app datasets.
+    /// Import a pool present on the disks, and create the app datasets — encrypted
+    /// under the key `hlb storage encrypt` put on this machine.
     ///
     /// ⚠️ Importing is reversible (`zpool export`). Creating a pool is NOT, and this
     /// command never does it: it tells you the `zpool create` to run, with the disks
@@ -1190,7 +1192,36 @@ enum StorageCmd {
         /// Dataset root for the app data, under the pool.
         #[arg(long, default_value = "apps")]
         root: String,
+        /// Create the datasets in clear, this machine having no dataset key.
+        #[arg(long)]
+        unencrypted: bool,
         /// Actually import and create.
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Encrypt a storage node's app datasets under a key of its own, unlocked at boot
+    /// before Docker and the NFS server start. Preview by default.
+    ///
+    /// The preview makes the key, in the vault; nothing is done until an emergency kit
+    /// printed since carries it. Each plain volume is then copied encrypted while its
+    /// app is stopped, checked, swapped in, and the plain one destroyed.
+    Encrypt {
+        /// The storage node, as `hlb cluster status` names it.
+        node: String,
+        /// The pool. Required when the node has more than one.
+        #[arg(long)]
+        pool: Option<String>,
+        /// Dataset root for the app data, under the pool.
+        #[arg(long, default_value = "apps")]
+        root: String,
+        /// SSH host, when the mesh has none recorded for this node.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long)]
         apply: bool,
     },
@@ -9737,6 +9768,31 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Storage(cmd) => {
             use hlb_bootstrap::zfs;
 
+            if let StorageCmd::Encrypt {
+                node,
+                pool,
+                root,
+                host,
+                user,
+                port,
+                apply,
+            } = cmd
+            {
+                let rt = tokio::runtime::Runtime::new()?;
+                return rt.block_on(storage::encrypt(
+                    &cli,
+                    storage::Target {
+                        node,
+                        pool: pool.as_deref(),
+                        root,
+                        host: host.as_deref(),
+                        user: user.as_deref(),
+                        port: *port,
+                    },
+                    *apply,
+                ));
+            }
+
             // Local only: the storage node is the machine you run this on. Driving it
             // over SSH would mean deciding which machine holds the pool from somewhere
             // that cannot see its disks.
@@ -9746,44 +9802,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(async {
                 use hlb_bootstrap::runner::Runner as _;
 
-                // ⚠️ A failing `zpool` is not an empty machine: ZFS may simply not be
-                // installed. The two are told apart, because one is fixed with a
-                // package and the other with disks.
-                let listed = runner
-                    .run(&[
-                        "zpool".into(),
-                        "list".into(),
-                        "-H".into(),
-                        "-o".into(),
-                        "name,health,free".into(),
-                        "-p".into(),
-                    ])
-                    .await;
-                let Ok(listed) = listed else {
-                    eprintln!("🔴 `zpool` is not available on this machine.");
-                    eprintln!("   ZFS is not installed, or this is not the storage node.");
-                    eprintln!("   hlb node deps <host> --apply   installs it on a storage node");
-                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
-                };
-                let importing = runner.run(&["zpool".into(), "import".into()]).await?;
-                let read = zfs::answered(
-                    listed.ok(),
-                    &listed.stdout,
-                    &listed.stderr,
-                    zfs::parse_pools,
-                )
-                .and_then(|imported| {
-                    zfs::answered(
-                        importing.ok(),
-                        &importing.stdout,
-                        &importing.stderr,
-                        zfs::parse_importable,
-                    )
-                    .map(|importable| (imported, importable))
-                });
-                let (imported, importable) = match read {
+                let (imported, importable) = match zfs::read_pools(&runner).await? {
                     Ok(pools) => pools,
-                    Err(why) => {
+                    Err(zfs::Unread::Missing) => {
+                        eprintln!("🔴 `zpool` is not available on this machine.");
+                        eprintln!("   ZFS is not installed, or this is not the storage node.");
+                        eprintln!(
+                            "   hlb node deps <host> --apply   installs it on a storage node"
+                        );
+                        return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                    }
+                    Err(zfs::Unread::Failed(why)) => {
                         eprintln!("🔴 `zpool` failed, so what the disks hold is unknown:");
                         eprintln!("   {}", why.replace('\n', "\n   "));
                         return Ok(ExitCode::FAILURE);
@@ -9808,7 +9837,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
-                    StorageCmd::Init { pool, root, apply } => {
+                    StorageCmd::Encrypt { .. } => unreachable!("handled above"),
+
+                    StorageCmd::Init {
+                        pool,
+                        root,
+                        unencrypted,
+                        apply,
+                    } => {
                         let d = zfs::PoolDecision::decide(&imported, &importable, pool.as_deref());
                         println!("{}\n", d.describe());
 
@@ -9902,6 +9938,29 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 println!("  {d}");
                             }
                         }
+                        // Encryption by default, declining it explicit — decided
+                        // 2026-10-29. The key is put here by `storage encrypt`, run where
+                        // the vault is: this machine has none.
+                        let keyed = runner
+                            .run(&["test".into(), "-s".into(), zfs::KEY_FILE.into()])
+                            .await?
+                            .ok();
+                        let encryption = if keyed {
+                            println!("\nNew ones are encrypted under {}.", zfs::KEY_FILE);
+                            zfs::encryption_options()
+                        } else if *unencrypted {
+                            println!("\n⚠️  New ones are created in clear (--unencrypted).");
+                            Vec::new()
+                        } else {
+                            eprintln!(
+                                "\n🔴 No dataset key on this machine ({}): they would be",
+                                zfs::KEY_FILE
+                            );
+                            eprintln!("   created in clear. From a manager, where the vault is:");
+                            eprintln!("     hlb storage encrypt <this node> --apply");
+                            eprintln!("   then run this again — or decline: --unencrypted");
+                            return Ok(ExitCode::FAILURE);
+                        };
                         if !*apply {
                             println!("\nPreview: nothing was created.");
                             println!("  hlb storage init --pool {name} --apply");
@@ -9911,10 +9970,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         for (d, nfs) in &wanted {
                             // `-p` creates the parents and does NOT fail on an existing
                             // dataset: this command must be safe to rerun after adding
-                            // an app to the catalog.
-                            let o = runner
-                                .run(&["zfs".into(), "create".into(), "-p".into(), d.clone()])
-                                .await?;
+                            // an app to the catalog. The options reach the volume
+                            // alone, never the parents `-p` makes.
+                            let mut create = vec!["zfs".into(), "create".into(), "-p".into()];
+                            create.extend(encryption.iter().cloned());
+                            create.push(d.clone());
+                            let o = runner.run(&create).await?;
                             if !o.ok() {
                                 eprintln!("🔴 {d}: {}", o.stderr.trim());
                                 return Ok(ExitCode::FAILURE);

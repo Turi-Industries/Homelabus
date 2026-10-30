@@ -77,8 +77,25 @@ stayed healthy.
   masks `zfs-load-key.service`, `zfs-mount` runs `zfs mount -a` without `-l` and
   "Finishes" — keystatus `unavailable`, not mounted. Its mountpoint stays an EMPTY
   directory on the parent dataset, in clear: a bind mount there writes plaintext, and
-  the app sees an empty volume (PostgreSQL would `initdb`). Load the keys before
-  `zfs-mount`, and keep Docker and NFS from starting when one fails.
+  the app sees an empty volume (PostgreSQL would `initdb`). `hlb-zfs-load-key.service`
+  loads and mounts them after `zfs-mount`, before `local-fs.target`, and FAILS unless
+  every one is mounted; Docker and the NFS server `Require` it. No
+  `ConditionPathExists` on the key: a skipped unit counts as started. ⚠️ `Requires=`
+  carries a restart of that unit to Docker — it is never restarted; a check runs its
+  script.
+- **ZFS cannot encrypt a dataset in place.** `hlb storage encrypt` copies each volume
+  (`send | recv -u -o encryption=…`, its local properties carried by `-o`: without
+  `-p` none travel, with it `encryption=off` would), swaps it in by two renames and
+  destroys the original — each shape in between named, so a run resumes. 🔴
+  `logicalreferenced` is NOT the check: encryption adds metadata (5 163 520 bytes
+  plain, 5 202 432 encrypted, same files). The file lists (path, size, mode, owner,
+  mtime) are compared; the bytes are `zfs recv`'s to check. 🔴 `zfs rename` unmounts
+  the dataset's own mount point ONLY: a container writing through a Docker volume
+  binding it (`o=bind`, Seafile's) kept the rename from failing and kept writing into
+  the original set aside — only the `destroy` after said "busy". So every app owning a
+  volume is stopped, and the copy waits until no other mount of that filesystem
+  remains, in any namespace (`zfs::holders_script`). An NFS client with a file open
+  does fail the rename, "dataset is busy".
 - **A failed `zpool` prints nothing on stdout,** which parses as "no pool" — the shape
   that invites creating one over a pool the module simply could not see.
 - **A package with no matching binary needs its own probe.** Nothing is called
@@ -100,6 +117,9 @@ On a node that carries a ZFS pool:
 
 ```sh
 hlb node add <host> --storage-node --apply   # + ZFS, + NFS server
-hlb storage init --apply                     # import, then the datasets
+hlb storage encrypt <node> --apply           # from a manager: its key, the boot unit
+hlb storage init --apply                     # import, then the datasets, encrypted
 hlb storage export --network 10.0.0.0/24     # the /etc/exports lines (all_squash)
 ```
+
+`storage init` refuses to create a dataset in clear unless told `--unencrypted`.

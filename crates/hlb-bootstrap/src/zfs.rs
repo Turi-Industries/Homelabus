@@ -240,6 +240,373 @@ pub fn export_line(path: &str, network: &str) -> String {
     )
 }
 
+/// The key of a storage node's encrypted datasets: 32 random bytes in hex, root's alone.
+/// One per node, and in the vault and on the emergency kit — the pool's disks carried
+/// to another machine open with it and nothing else.
+pub const KEY_FILE: &str = "/etc/hlb/zfs.key";
+/// What a dataset encrypted by Homelabus names as its `keylocation`.
+pub const KEY_LOCATION: &str = "file:///etc/hlb/zfs.key";
+
+/// The `zfs create` / `zfs recv` options that encrypt a dataset under [`KEY_FILE`]. Each
+/// dataset is its own encryption root: one encrypted in place of a plain one cannot
+/// inherit from a parent that is not.
+pub fn encryption_options() -> Vec<String> {
+    [
+        "encryption=aes-256-gcm",
+        "keyformat=hex",
+        &format!("keylocation={KEY_LOCATION}"),
+    ]
+    .iter()
+    .flat_map(|o| ["-o".to_string(), o.to_string()])
+    .collect()
+}
+
+pub const LOAD_KEY_UNIT: &str = "hlb-zfs-load-key.service";
+pub const LOAD_KEY_UNIT_PATH: &str = "/etc/systemd/system/hlb-zfs-load-key.service";
+pub const LOAD_KEY_SCRIPT: &str = "/usr/local/lib/hlb/zfs-load-key";
+
+/// Loads the key of every dataset encrypted under [`KEY_FILE`], mounts them, and FAILS
+/// unless every one is mounted.
+///
+/// Its own loop, never `zfs load-key -a` and `zfs mount -a`: a dataset someone else
+/// encrypted, its key typed at a prompt, would fail the boot unit — and keep Docker
+/// down over a pool that is not ours to judge.
+pub const LOAD_KEY_SCRIPT_CONTENT: &str = r#"#!/bin/sh
+# Written by Homelabus (`hlb storage encrypt`): the keys of the datasets encrypted
+# under /etc/hlb/zfs.key, loaded and mounted at boot. Fails unless every one of them
+# is mounted: Docker and the NFS server wait for it.
+set -eu
+roots=$(zfs list -H -o name,keylocation -t filesystem |
+	awk -F '\t' '$2 == "file:///etc/hlb/zfs.key" { print $1 }')
+[ -n "$roots" ] || exit 0
+printf '%s\n' "$roots" | while IFS= read -r root; do
+	[ "$(zfs get -H -o value keystatus "$root")" = available ] || zfs load-key "$root"
+done
+unmounted() {
+	zfs list -H -o name,encryptionroot,canmount,mounted -t filesystem |
+		awk -F '\t' -v roots="$roots" '
+			BEGIN { n = split(roots, r, "\n"); for (i = 1; i <= n; i++) ours[r[i]] = 1 }
+			($2 in ours) && $3 == "on" && $4 != "yes" { print $1 }'
+}
+# Listed parents first, so a child mounts on its parent and not beneath it.
+unmounted | while IFS= read -r dataset; do zfs mount "$dataset"; done
+left=$(unmounted)
+[ -z "$left" ] || { printf 'not mounted: %s\n' "$left" >&2; exit 1; }
+"#;
+
+/// 🔴 Debian masks `zfs-load-key.service`, and `zfs-mount` runs `zfs mount -a` without
+/// `-l`: an encrypted dataset stays locked and unmounted at boot, and "Finishes"
+/// (measured on ZFS 2.1 and 2.3). Its mount point is then an EMPTY directory of the
+/// plaintext parent — a bind mount there writes in clear, and PostgreSQL would `initdb`.
+///
+/// After `zfs-mount`, before `local-fs.target`, so before every ordinary service. No
+/// `ConditionPathExists` on the key: a skipped unit counts as started, and Docker would
+/// come up over the empty directories.
+pub const LOAD_KEY_UNIT_CONTENT: &str = "\
+# Written by Homelabus (`hlb storage encrypt`): the encrypted datasets' keys, loaded
+# and mounted before anything writes to them.
+[Unit]
+Description=Homelabus encrypted datasets, unlocked and mounted
+DefaultDependencies=no
+After=zfs-import.target zfs-mount.service
+Before=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/hlb/zfs-load-key
+
+[Install]
+WantedBy=zfs.target
+";
+
+/// What must not start while a dataset is locked: it would write beneath it, in clear.
+pub const GUARDED_UNITS: [&str; 2] = ["docker.service", "nfs-server.service"];
+
+/// The drop-in keeping `unit` down unless the datasets are mounted. ⚠️ `Requires=`
+/// also carries a RESTART of the load-key unit to Docker: it is never restarted, and
+/// what checks it again runs [`LOAD_KEY_SCRIPT`] itself.
+pub fn guard_path(unit: &str) -> String {
+    format!("/etc/systemd/system/{unit}.d/hlb-zfs-load-key.conf")
+}
+
+pub const GUARD_CONTENT: &str = "\
+# Written by Homelabus (`hlb storage encrypt`): never over a locked dataset.
+[Unit]
+Requires=hlb-zfs-load-key.service
+After=hlb-zfs-load-key.service
+";
+
+/// The steps that unlock the datasets at every boot, and hold Docker and the NFS server
+/// until they are. The key file is the caller's: it is compared, never overwritten.
+pub fn boot_steps() -> Vec<crate::provision::Step> {
+    use crate::provision::{Action, Phase, Step};
+    let install = |what: &str, path: String, content: &str, mode: u32| Step {
+        phase: Phase::Configuration,
+        what: what.to_string(),
+        action: Action::Install {
+            path,
+            content: content.to_string(),
+            mode,
+        },
+    };
+    let mut steps = vec![
+        install(
+            "the script that unlocks and mounts them",
+            LOAD_KEY_SCRIPT.into(),
+            LOAD_KEY_SCRIPT_CONTENT,
+            0o755,
+        ),
+        install(
+            "the unit that runs it at boot, before any service",
+            LOAD_KEY_UNIT_PATH.into(),
+            LOAD_KEY_UNIT_CONTENT,
+            0o644,
+        ),
+    ];
+    for unit in GUARDED_UNITS {
+        steps.push(install(
+            &format!("{unit} waits for it, and does not start if it fails"),
+            guard_path(unit),
+            GUARD_CONTENT,
+            0o644,
+        ));
+    }
+    let run = |what: &str, argv: &[&str]| Step {
+        phase: Phase::Services,
+        what: what.to_string(),
+        action: Action::Run(argv.iter().map(|s| s.to_string()).collect()),
+    };
+    steps.push(run("read the units", &["systemctl", "daemon-reload"]));
+    // `enable`, not `--now`: the datasets are unlocked already, and starting it is a
+    // job Docker's `Requires=` would then follow on every later restart of it.
+    steps.push(run(
+        "run it at every boot",
+        &["systemctl", "enable", LOAD_KEY_UNIT],
+    ));
+    steps
+}
+
+/// A filesystem dataset, as [`list_datasets`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dataset {
+    pub name: String,
+    /// `off`, or the cipher.
+    pub encryption: String,
+    /// `none` below an encryption root, `-` on a plain dataset.
+    pub keylocation: String,
+    pub mounted: bool,
+    pub mountpoint: String,
+    /// Bytes its files take: what a copy reads and writes.
+    pub referenced: Option<u64>,
+}
+
+impl Dataset {
+    /// Encrypted by Homelabus: its own root, keyed by [`KEY_FILE`].
+    pub fn ours(&self) -> bool {
+        self.encryption != "off" && self.keylocation == KEY_LOCATION
+    }
+}
+
+/// Command line listing the datasets [`parse_datasets`] reads, under `base`.
+pub fn list_datasets(base: &str) -> Vec<String> {
+    [
+        "zfs",
+        "list",
+        "-H",
+        "-p",
+        "-o",
+        "name,encryption,keylocation,mounted,mountpoint,referenced",
+        "-t",
+        "filesystem",
+        "-r",
+        base,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+pub fn parse_datasets(output: &str) -> Vec<Dataset> {
+    output
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            let [name, encryption, keylocation, mounted, mountpoint, referenced] = f.as_slice()
+            else {
+                return None;
+            };
+            Some(Dataset {
+                name: name.to_string(),
+                encryption: encryption.to_string(),
+                keylocation: keylocation.to_string(),
+                mounted: *mounted == "yes",
+                mountpoint: mountpoint.to_string(),
+                referenced: referenced.trim().parse().ok(),
+            })
+        })
+        .collect()
+}
+
+/// The encrypted copy of a volume while it is made, and the plain one until the copy is
+/// checked: both names are read back by a run that resumes.
+pub const COPY_SUFFIX: &str = ".hlb-enc";
+pub const PLAIN_SUFFIX: &str = ".hlb-plain";
+/// The snapshot a volume is copied from.
+pub const SNAPSHOT: &str = "hlb-encrypt";
+
+/// What encrypting a volume's dataset still needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Migration {
+    /// Encrypted under the node's key, nothing left over.
+    Done,
+    /// Encrypted, but by something else — an encrypted parent, a key typed at a prompt.
+    /// Not Homelabus's to unlock at boot, nor to copy.
+    Foreign,
+    /// Plain: copied encrypted, swapped, the plain one destroyed. `stale` is a copy an
+    /// interrupted run left, discarded first: the volume may have changed since.
+    Copy { stale: bool },
+    /// Interrupted between the two renames: the copy goes in place, then is checked.
+    Finish,
+    /// The copy is in place and checked; the plain one is left to destroy.
+    Clean,
+    /// A shape no run of Homelabus leaves. Nothing is done; it is said.
+    Stuck(String),
+}
+
+/// What each volume dataset under `base` needs — the `<app>/<volume>` level, as
+/// [`dataset_for`] names them — sorted by name.
+pub fn migrations(base: &str, datasets: &[Dataset]) -> Vec<(String, Migration)> {
+    let base = base.trim_end_matches('/');
+    let find = |name: &str| datasets.iter().find(|d| d.name == name);
+    let mut volumes: Vec<String> = datasets
+        .iter()
+        .filter_map(|d| {
+            let rest = d.name.strip_prefix(base)?.strip_prefix('/')?;
+            let (app, volume) = rest.split_once('/')?;
+            if volume.contains('/') {
+                return None;
+            }
+            let volume = volume
+                .strip_suffix(COPY_SUFFIX)
+                .or_else(|| volume.strip_suffix(PLAIN_SUFFIX))
+                .unwrap_or(volume);
+            Some(format!("{base}/{app}/{volume}"))
+        })
+        .collect();
+    volumes.sort();
+    volumes.dedup();
+    volumes
+        .into_iter()
+        .map(|v| {
+            let copy = find(&format!("{v}{COPY_SUFFIX}"));
+            let plain = find(&format!("{v}{PLAIN_SUFFIX}"));
+            let m = match (find(&v), copy, plain) {
+                (Some(d), None, None) if d.ours() => Migration::Done,
+                (Some(d), None, Some(_)) if d.ours() => Migration::Clean,
+                (Some(d), None, None) if d.encryption != "off" => Migration::Foreign,
+                (Some(d), copy, None) if d.encryption == "off" => Migration::Copy {
+                    stale: copy.is_some(),
+                },
+                (None, Some(c), Some(_)) if c.ours() => Migration::Finish,
+                (Some(_), _, Some(_)) => Migration::Stuck(format!(
+                    "both {v} and {v}{PLAIN_SUFFIX} exist: which holds the volume is \
+                     yours to say — zfs destroy -r the other"
+                )),
+                (None, None, Some(_)) => Migration::Stuck(format!(
+                    "{v} is missing and {v}{PLAIN_SUFFIX} holds it: zfs rename \
+                     {v}{PLAIN_SUFFIX} {v}"
+                )),
+                _ => Migration::Stuck(format!(
+                    "{v}: neither it nor its encrypted copy can be used — zfs list -r {v}"
+                )),
+            };
+            (v, m)
+        })
+        .collect()
+}
+
+/// A dataset's local properties a copy must carry — `zfs get -H -s local -o
+/// property,value all` — as `-o` options. ⚠️ `zfs send` without `-p` carries none, and
+/// with `-p` it would carry the plain dataset's `encryption=off` too. A local
+/// `mountpoint` is refused: the copy would claim the path the volume still holds.
+pub fn carried_properties(dataset: &str, output: &str) -> Result<Vec<String>, String> {
+    let mut options = Vec::new();
+    for l in output.lines().filter(|l| !l.trim().is_empty()) {
+        let Some((property, value)) = l.split_once('\t') else {
+            continue;
+        };
+        if property == "mountpoint" {
+            return Err(format!(
+                "{dataset} has mountpoint={value} set on it: its encrypted copy cannot \
+                 take the path while it holds it — zfs inherit mountpoint {dataset}, and \
+                 bind the path elsewhere if you need it"
+            ));
+        }
+        options.push("-o".to_string());
+        options.push(format!("{property}={value}"));
+    }
+    Ok(options)
+}
+
+/// The `sh -c` script copying `volume` encrypted, from its snapshot: `zfs send` writes
+/// to a pipe. A send that stops midway ends the stream early, and `zfs recv` refuses
+/// an incomplete one — the receiving side is what decides, so its status is the one
+/// read. Received unmounted (`-u`): it would mount over the path the volume holds.
+pub fn copy_script(volume: &str, properties: &[String]) -> String {
+    let mut recv = vec!["zfs".to_string(), "recv".into(), "-u".into()];
+    recv.extend(encryption_options());
+    recv.extend(properties.iter().cloned());
+    recv.push(format!("{volume}{COPY_SUFFIX}"));
+    format!(
+        "zfs send {} | {}",
+        quote(&format!("{volume}@{SNAPSHOT}")),
+        recv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
+    )
+}
+
+/// The `sh -c` script that prints one line per file under `path` — its relative path,
+/// size, mode, owner, group, modification time and link target — sorted, then hashed.
+/// Two trees giving the same hash hold the same files as the applications see them;
+/// the bytes themselves are checked by `zfs recv`, which refuses a stream whose
+/// checksum does not match. ⚠️ `logicalreferenced` is NOT a check: encryption adds
+/// metadata (5 163 520 bytes plain, 5 202 432 encrypted, for the same files).
+pub fn tree_script(path: &str) -> String {
+    format!(
+        "cd {} && find . -xdev -printf '%P\\t%s\\t%m\\t%U\\t%G\\t%T@\\t%l\\n' | LC_ALL=C sort \
+         | sha256sum",
+        quote(path)
+    )
+}
+
+/// The `sh -c` script printing every other place the dataset mounted at `path` is
+/// mounted, in any mount namespace: a Docker volume binding it, a container's view.
+///
+/// 🔴 `zfs rename` unmounts the dataset's own mount point and nothing else — measured
+/// with a container writing through a bind of it, the rename SUCCEEDED, and the
+/// container kept writing into the original set aside. Only the `destroy` after it
+/// failed "dataset is busy". So the copy waits until nothing else holds the volume.
+pub fn holders_script(path: &str) -> String {
+    format!(
+        "dev=$(awk -v mp={p} '$5 == mp && $9 == \"zfs\" {{ print $3; exit }}' \
+         /proc/self/mountinfo); [ -z \"$dev\" ] || cat /proc/[0-9]*/mountinfo 2>/dev/null \
+         | awk -v d=\"$dev\" -v mp={p} '$3 == d && $5 != mp {{ print $5 }}' | sort -u",
+        p = quote(path)
+    )
+}
+
+/// Single-quoted for `sh`, unless it needs no quoting.
+fn quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 /// Reads a `zpool` run, refusing a failed one.
 ///
 /// 🔴 A failed `zpool` prints nothing on stdout, which parses as "no pool": with the
@@ -256,6 +623,52 @@ pub fn answered<T>(
     } else {
         Err(stderr.trim().to_string())
     }
+}
+
+/// Why the pools could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unread {
+    /// No `zpool` at all: ZFS is not installed — fixed with a package, not with disks.
+    Missing,
+    /// `zpool` answered an error, with what it said.
+    Failed(String),
+}
+
+/// The pools `runner`'s machine has imported, and those on its disks it could import.
+/// ⚠️ A failing `zpool` is not an empty machine: see [`answered`].
+pub async fn read_pools(
+    runner: &dyn crate::Runner,
+) -> crate::runner::Result<Result<(Vec<Pool>, Vec<String>), Unread>> {
+    let run = |args: &[&str]| -> Vec<String> { args.iter().map(|a| a.to_string()).collect() };
+    // Locally a missing binary is an error; over SSH it is the shell's 127.
+    let listed = match runner
+        .run(&run(&[
+            "zpool",
+            "list",
+            "-H",
+            "-o",
+            "name,health,free",
+            "-p",
+        ]))
+        .await
+    {
+        Ok(o) if o.status != 127 => o,
+        _ => return Ok(Err(Unread::Missing)),
+    };
+    let importing = runner.run(&run(&["zpool", "import"])).await?;
+    Ok(
+        answered(listed.ok(), &listed.stdout, &listed.stderr, parse_pools)
+            .and_then(|imported| {
+                answered(
+                    importing.ok(),
+                    &importing.stdout,
+                    &importing.stderr,
+                    parse_importable,
+                )
+                .map(|importable| (imported, importable))
+            })
+            .map_err(Unread::Failed),
+    )
 }
 
 /// Where the kernel module comes from, on a storage node that lacks `zfs`.
@@ -388,6 +801,242 @@ mod tests {
         assert!(mountpoint("t/x", "legacy")
             .expect_err("legacy")
             .contains("fstab"));
+    }
+
+    fn ds(name: &str, encryption: &str, keylocation: &str) -> Dataset {
+        Dataset {
+            name: name.into(),
+            encryption: encryption.into(),
+            keylocation: keylocation.into(),
+            mounted: true,
+            mountpoint: format!("/{name}"),
+            referenced: Some(98_304),
+        }
+    }
+
+    #[test]
+    fn a_dataset_list_is_read_column_by_column() {
+        let out = "tank/apps/a/data\taes-256-gcm\tfile:///etc/hlb/zfs.key\tyes\t/tank/apps/a/data\t81310208\n\
+                   tank/apps/b/data\toff\t-\tno\t/srv/b data\t43008\n";
+        let d = parse_datasets(out);
+        assert_eq!(d.len(), 2);
+        assert!(d[0].ours() && d[0].mounted);
+        assert_eq!(d[0].referenced, Some(81_310_208));
+        assert!(!d[1].ours() && !d[1].mounted);
+        assert_eq!(d[1].mountpoint, "/srv/b data");
+        assert_eq!(
+            list_datasets("tank/apps").last().map(String::as_str),
+            Some("tank/apps")
+        );
+    }
+
+    #[test]
+    fn each_volume_says_what_encrypting_it_still_needs() {
+        let plain = |n: &str| ds(n, "off", "-");
+        let ours = |n: &str| ds(n, "aes-256-gcm", KEY_LOCATION);
+        let datasets = vec![
+            plain("tank/apps"),
+            plain("tank/apps/gitea"),
+            plain("tank/apps/gitea/data"),
+            plain("tank/apps/immich"),
+            ours("tank/apps/immich/data"),
+            ours("tank/apps/immich/cache"),
+            plain("tank/apps/immich/cache.hlb-plain"),
+            plain("tank/apps/jellyfin/media"),
+            ours("tank/apps/jellyfin/media.hlb-enc"),
+            ours("tank/apps/seafile/shared.hlb-enc"),
+            plain("tank/apps/seafile/shared.hlb-plain"),
+            ds("tank/apps/vault/data", "aes-256-gcm", "prompt"),
+            ds("tank/apps/n8n/data", "aes-256-gcm", "none"),
+            plain("tank/apps/x/lost.hlb-plain"),
+            plain("tank/apps/y/both"),
+            plain("tank/apps/y/both.hlb-plain"),
+            // Below a volume: not a volume of its own.
+            plain("tank/apps/gitea/data/deeper"),
+        ];
+        let got = migrations("tank/apps/", &datasets);
+        let want = [
+            ("tank/apps/gitea/data", Migration::Copy { stale: false }),
+            ("tank/apps/immich/cache", Migration::Clean),
+            ("tank/apps/immich/data", Migration::Done),
+            ("tank/apps/jellyfin/media", Migration::Copy { stale: true }),
+            ("tank/apps/n8n/data", Migration::Foreign),
+            ("tank/apps/seafile/shared", Migration::Finish),
+            ("tank/apps/vault/data", Migration::Foreign),
+        ];
+        for (name, m) in &want {
+            assert_eq!(
+                got.iter().find(|(n, _)| n == name).map(|(_, m)| m),
+                Some(m),
+                "{name}"
+            );
+        }
+        for stuck in ["tank/apps/x/lost", "tank/apps/y/both"] {
+            assert!(
+                matches!(
+                    got.iter().find(|(n, _)| n == stuck),
+                    Some((_, Migration::Stuck(why))) if why.contains("zfs ")
+                ),
+                "{stuck} must be refused with what to run: {got:?}"
+            );
+        }
+        assert_eq!(got.len(), want.len() + 2, "{got:?}");
+    }
+
+    #[test]
+    fn a_copy_carries_the_volumes_own_properties_but_never_its_path() {
+        let carried =
+            carried_properties("tank/apps/a/b", "compression\tlz4\nrecordsize\t1048576\n")
+                .expect("carried");
+        assert_eq!(
+            carried,
+            ["-o", "compression=lz4", "-o", "recordsize=1048576"]
+        );
+        let refused = carried_properties("tank/apps/a/b", "mountpoint\t/srv/b\n")
+            .expect_err("a local mountpoint");
+        assert!(
+            refused.contains("zfs inherit mountpoint tank/apps/a/b"),
+            "{refused}"
+        );
+
+        let s = copy_script("tank/apps/a/b c", &carried);
+        assert!(
+            s.starts_with("zfs send 'tank/apps/a/b c@hlb-encrypt' | zfs recv -u "),
+            "{s}"
+        );
+        for part in [
+            "encryption=aes-256-gcm",
+            "keyformat=hex",
+            "keylocation=file:///etc/hlb/zfs.key",
+            "compression=lz4",
+            "'tank/apps/a/b c.hlb-enc'",
+        ] {
+            assert!(s.contains(part), "{part}: {s}");
+        }
+    }
+
+    #[test]
+    fn a_holder_is_any_other_mount_of_the_same_filesystem() {
+        let s = holders_script("/tank/apps/a b/data");
+        // The device is read where the dataset itself is mounted, then looked for in
+        // every process's mount table — a container's included.
+        assert!(s.contains("/proc/self/mountinfo"), "{s}");
+        assert!(s.contains("/proc/[0-9]*/mountinfo"), "{s}");
+        assert!(s.contains("$5 != mp"), "{s}");
+        assert!(s.contains("'/tank/apps/a b/data'"), "{s}");
+    }
+
+    #[test]
+    fn nothing_writes_beneath_a_locked_dataset() {
+        // A skipped unit counts as started: the key's absence must FAIL it.
+        assert!(!LOAD_KEY_UNIT_CONTENT.contains("Condition"));
+        for line in [
+            "DefaultDependencies=no",
+            "After=zfs-import.target zfs-mount.service",
+            "Before=local-fs.target",
+            "RemainAfterExit=yes",
+            &format!("ExecStart={LOAD_KEY_SCRIPT}"),
+        ] {
+            assert!(LOAD_KEY_UNIT_CONTENT.lines().any(|l| l == line), "{line}");
+        }
+        let steps = boot_steps();
+        for unit in ["docker.service", "nfs-server.service"] {
+            assert!(
+                steps.iter().any(|s| matches!(&s.action,
+                    crate::provision::Action::Install { path, content, .. }
+                        if *path == guard_path(unit)
+                        && content.contains(&format!("Requires={LOAD_KEY_UNIT}"))
+                        && content.contains(&format!("After={LOAD_KEY_UNIT}")))),
+                "{unit}"
+            );
+        }
+        assert!(LOAD_KEY_SCRIPT_CONTENT.contains(KEY_LOCATION));
+    }
+
+    /// Runs the boot script against a `zfs` that answers from a table, as the real one
+    /// would: `(status, table after, stderr)`.
+    fn boot_script(table: &str, key_fails: bool) -> (i32, String, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let state = dir.path().join("table");
+        std::fs::write(&state, table).expect("table");
+        // Columns: name keylocation keystatus encryptionroot canmount mounted.
+        let fake = format!(
+            r#"#!/bin/sh
+t={state}
+col() {{ case "$1" in name) echo 1;; keylocation) echo 2;; keystatus) echo 3;; encryptionroot) echo 4;; canmount) echo 5;; mounted) echo 6;; esac; }}
+set_field() {{ awk -F '\t' -v OFS='\t' -v n="$1" -v c="$2" -v v="$3" '$1 == n {{ $c = v }} {{ print }}' "$t" > "$t.new" && mv "$t.new" "$t"; }}
+case "$1" in
+list)
+    cols=$4; idx=""
+    for c in $(echo "$cols" | tr , ' '); do idx="$idx $(col "$c")"; done
+    awk -F '\t' -v idx="$idx" 'BEGIN {{ n = split(idx, i, " ") }} {{ s = $i[1]; for (k = 2; k <= n; k++) s = s "\t" $i[k]; print s }}' "$t" ;;
+get) awk -F '\t' -v n="$6" -v c="$(col "$5")" '$1 == n {{ print $c }}' "$t" ;;
+load-key)
+    [ -z "${{KEY_FAILS:-}}" ] || {{ echo "Key load error: Failed to open key material file" >&2; exit 255; }}
+    set_field "$2" 3 available ;;
+mount)
+    root=$(awk -F '\t' -v n="$2" '$1 == n {{ print $4 }}' "$t")
+    [ "$root" = - ] || [ "$(awk -F '\t' -v r="$root" '$1 == r {{ print $3 }}' "$t")" = available ] || exit 1
+    set_field "$2" 6 yes ;;
+esac
+"#,
+            state = state.display()
+        );
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).expect("bin");
+        std::fs::write(bin.join("zfs"), fake).expect("fake zfs");
+        std::fs::write(dir.path().join("script"), LOAD_KEY_SCRIPT_CONTENT).expect("script");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "chmod +x {0}/zfs && sh {1}",
+                bin.display(),
+                dir.path().join("script").display()
+            ))
+            .env("PATH", &path)
+            .env("KEY_FAILS", if key_fails { "1" } else { "" })
+            .output()
+            .expect("sh runs");
+        (
+            out.status.code().unwrap_or(-1),
+            std::fs::read_to_string(&state).expect("table after"),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    #[test]
+    fn the_boot_script_unlocks_ours_and_fails_when_one_stays_locked() {
+        let table = "\
+tank\t-\t-\t-\ton\tyes
+tank/apps/a/data\tfile:///etc/hlb/zfs.key\tunavailable\ttank/apps/a/data\ton\tno
+tank/apps/a/data/sub\tnone\tunavailable\ttank/apps/a/data\ton\tno
+tank/apps/b/data\tfile:///etc/hlb/zfs.key\tavailable\ttank/apps/b/data\ton\tyes
+tank/private\tprompt\tunavailable\ttank/private\ton\tno
+";
+        let (status, after, stderr) = boot_script(table, false);
+        assert_eq!(status, 0, "{stderr}\n{after}");
+        for (name, unlocked) in [
+            ("tank/apps/a/data\t", true),
+            ("tank/apps/a/data/sub\t", true),
+            ("tank/apps/b/data\t", true),
+            // Someone else's, its key typed at a prompt: left alone, and not a failure.
+            ("tank/private\t", false),
+        ] {
+            let line = after.lines().find(|l| l.starts_with(name)).expect(name);
+            assert_eq!(line.ends_with("\tyes"), unlocked, "{line}");
+        }
+
+        let (status, after, stderr) = boot_script(table, true);
+        assert_ne!(
+            status, 0,
+            "a key that does not load must fail the unit:\n{after}"
+        );
+        assert!(stderr.contains("Key load error"), "{stderr}");
     }
 
     #[test]

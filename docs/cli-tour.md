@@ -481,7 +481,8 @@ exposure's ACME directory otherwise. The install and the nightly role pass see t
 
 ```sh
 ./target/debug/hlb storage status            # ZFS pools, and what would be done
-./target/debug/hlb storage init --apply      # import, then the datasets
+./target/debug/hlb storage encrypt nas-01    # from a manager: its key, then each volume copied encrypted
+./target/debug/hlb storage init --apply      # import, then the datasets — encrypted under that key
 ./target/debug/hlb storage export --network 10.0.0.0/24
 ./target/debug/hlb node add <host> --storage-node --apply
 ./target/debug/hlb garage status

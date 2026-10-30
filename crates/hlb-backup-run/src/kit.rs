@@ -1,7 +1,7 @@
 //! The emergency kit: what restores the vault, and therefore cannot live in it — the
 //! master key, the backup repository's password, how to reach each destination,
-//! Swarm's unlock key when autolock is on, and each encrypted disk's recovery key — on
-//! one sheet of paper, with the restic commands that bring Homelabus's state back
+//! Swarm's unlock key when autolock is on, each encrypted disk's recovery key and each
+//! storage node's dataset key — on one sheet of paper, with the restic commands that bring Homelabus's state back
 //! without Homelabus.
 //!
 //! ## 🔴 A kit printed before a change restores nothing
@@ -29,6 +29,10 @@ pub const SWARM_UNLOCK_SECRET: &str = "swarm-unlock-key";
 /// goes stale only then.
 pub const LUKS_RECOVERY_PREFIX: &str = "luks-recovery-";
 
+/// A storage node's dataset key is the secret of this prefix and the node's name, made
+/// by [`zfs_key`] when its datasets are about to be encrypted.
+pub const ZFS_KEY_PREFIX: &str = "zfs-key-";
+
 /// One destination, as the kit prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
@@ -48,6 +52,8 @@ pub struct Kit {
     pub swarm_unlock: Option<String>,
     /// `(node, key)`, by node: empty while no disk is encrypted.
     pub luks: Vec<(String, String)>,
+    /// `(node, key)`, by node: empty while no dataset is encrypted.
+    pub zfs: Vec<(String, String)>,
     pub fingerprint: String,
 }
 
@@ -57,6 +63,7 @@ struct Material {
     destinations: Vec<Destination>,
     swarm_unlock: Option<String>,
     luks: Vec<(String, String)>,
+    zfs: Vec<(String, String)>,
 }
 
 /// The kit's material, without creating anything.
@@ -70,13 +77,18 @@ async fn material(state: &State, vault: &Vault) -> Result<Material> {
         None => None,
     };
     // `secret_names` is ordered by name: the fingerprint does not move with the query.
-    let mut luks = Vec::new();
+    let (mut luks, mut zfs) = (Vec::new(), Vec::new());
     for (name, _) in state.secret_names().await? {
-        let Some(node) = name.strip_prefix(LUKS_RECOVERY_PREFIX) else {
-            continue;
+        let (keys, node) = match (
+            name.strip_prefix(LUKS_RECOVERY_PREFIX),
+            name.strip_prefix(ZFS_KEY_PREFIX),
+        ) {
+            (Some(node), _) => (&mut luks, node),
+            (_, Some(node)) => (&mut zfs, node),
+            (None, None) => continue,
         };
         if let Some(ct) = state.secret(&name).await? {
-            luks.push((node.to_string(), vault.decrypt(&ct)?));
+            keys.push((node.to_string(), vault.decrypt(&ct)?));
         }
     }
     let mut destinations = Vec::new();
@@ -92,6 +104,7 @@ async fn material(state: &State, vault: &Vault) -> Result<Material> {
         destinations,
         swarm_unlock,
         luks,
+        zfs,
     })
 }
 
@@ -113,6 +126,26 @@ pub async fn recovery_key(state: &State, vault: &Vault, node: &str) -> Result<(S
     Ok((key, true))
 }
 
+/// `node`'s dataset key, made and stored the first time, as [`recovery_key`] is: 32
+/// random bytes in hex, ZFS's `keyformat=hex`. `true` when it was made now.
+pub async fn zfs_key(state: &State, vault: &Vault, node: &str) -> Result<(String, bool)> {
+    let name = format!("{ZFS_KEY_PREFIX}{node}");
+    if let Some(ct) = state.secret(&name).await? {
+        return Ok((vault.decrypt(&ct)?, false));
+    }
+    let mut bytes = [0u8; 32];
+    hlb_secrets::fill_random(&mut bytes);
+    let key: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let purpose = format!("dataset key of {node}'s storage");
+    if !state
+        .store_secret_if_absent(&name, &vault.encrypt(&key)?, &purpose)
+        .await?
+    {
+        return Box::pin(zfs_key(state, vault, node)).await;
+    }
+    Ok((key, true))
+}
+
 /// What a kit printed now would carry, as a fingerprint.
 pub async fn fingerprint(state: &State, vault: &Vault) -> Result<String> {
     let m = material(state, vault).await?;
@@ -122,6 +155,7 @@ pub async fn fingerprint(state: &State, vault: &Vault) -> Result<String> {
         &m.destinations,
         m.swarm_unlock.as_deref(),
         &m.luks,
+        &m.zfs,
     ))
 }
 
@@ -133,6 +167,7 @@ pub fn fingerprint_of(
     destinations: &[Destination],
     swarm_unlock: Option<&str>,
     luks: &[(String, String)],
+    zfs: &[(String, String)],
 ) -> String {
     let mut h = Sha256::new();
     for part in [public_key, restic.unwrap_or("")] {
@@ -151,12 +186,14 @@ pub fn fingerprint_of(
         h.update(b"swarm-unlock\0");
         h.update(k.as_bytes());
     }
-    // Likewise: nothing hashed until a disk is encrypted.
-    for (node, key) in luks {
-        h.update(b"luks-recovery\0");
-        for part in [node, key] {
-            h.update(part.as_bytes());
-            h.update([0]);
+    // Likewise: nothing hashed until a disk, or a dataset, is encrypted.
+    for (tag, keys) in [(&b"luks-recovery\0"[..], luks), (b"zfs-key\0", zfs)] {
+        for (node, key) in keys {
+            h.update(tag);
+            for part in [node, key] {
+                h.update(part.as_bytes());
+                h.update([0]);
+            }
         }
     }
     h.finalize()
@@ -176,12 +213,14 @@ pub async fn read(state: &State, vault: &Vault) -> Result<Kit> {
             &m.destinations,
             m.swarm_unlock.as_deref(),
             &m.luks,
+            &m.zfs,
         ),
         master_key: vault.secret_key(),
         restic_password: m.restic,
         destinations: m.destinations,
         swarm_unlock: m.swarm_unlock,
         luks: m.luks,
+        zfs: m.zfs,
     })
 }
 
@@ -273,6 +312,20 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
             line(&format!("     {key}"));
         }
     }
+    if !kit.zfs.is_empty() {
+        n += 1;
+        line("");
+        line(&format!(
+            "{n}. Each storage node's dataset key — its pool's disks, in that machine or"
+        ));
+        line("   another, open with it alone. Saved in /etc/hlb/zfs.key (mode 0400), then:");
+        line("   zfs load-key -a && zfs mount -a");
+        for (node, key) in &kit.zfs {
+            line("");
+            line(&format!("   {node}"));
+            line(&format!("     {key}"));
+        }
+    }
     s
 }
 
@@ -291,7 +344,7 @@ mod tests {
     #[test]
     fn the_fingerprint_moves_with_anything_the_kit_holds() {
         let of = |public, restic, credentials: &str, unlock| {
-            fingerprint_of(public, restic, &[dest(Some(credentials))], unlock, &[])
+            fingerprint_of(public, restic, &[dest(Some(credentials))], unlock, &[], &[])
         };
         let luks = |key: &str| {
             fingerprint_of(
@@ -299,6 +352,17 @@ mod tests {
                 Some("pw"),
                 &[dest(Some("AK:SK"))],
                 None,
+                &[("deb1".to_string(), key.to_string())],
+                &[],
+            )
+        };
+        let zfs = |key: &str| {
+            fingerprint_of(
+                "age1pub",
+                Some("pw"),
+                &[dest(Some("AK:SK"))],
+                None,
+                &[],
                 &[("deb1".to_string(), key.to_string())],
             )
         };
@@ -310,7 +374,8 @@ mod tests {
             of("age1other", Some("pw"), "AK:SK", None),
             of("age1pub", Some("pw2"), "AK:SK", None),
             of("age1pub", Some("pw"), "AK:SK2", None),
-            fingerprint_of("age1pub", Some("pw"), &[], None, &[]),
+            fingerprint_of("age1pub", Some("pw"), &[], None, &[], &[]),
+            zfs("cbdefghi"),
             luks("cbdefghi"),
             of("age1pub", None, "AK:SK", None),
             unlocked.clone(),
@@ -326,6 +391,9 @@ mod tests {
             of("age1pub", Some("pw"), "AK:SK", Some("SWMKEY-1-b"))
         );
         assert_ne!(luks("cbdefghi"), luks("cbdefghj"));
+        assert_ne!(zfs("cbdefghi"), zfs("cbdefghj"));
+        // The same key as a disk's or as a pool's is not the same kit.
+        assert_ne!(luks("cbdefghi"), zfs("cbdefghi"));
     }
 
     #[tokio::test]
@@ -345,6 +413,29 @@ mod tests {
         assert_ne!(printed, fingerprint(&state, &vault).await.expect("now"));
         let kit = read(&state, &vault).await.expect("kit");
         assert_eq!(kit.luks, vec![("deb1".to_string(), key)]);
+    }
+
+    #[tokio::test]
+    async fn a_dataset_key_is_made_once_in_zfs_hex_and_stales_the_kit() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let vault = Vault::init(d.path().join("k")).expect("vault");
+        let state = State::in_memory().await.expect("state");
+        let printed = fingerprint(&state, &vault).await.expect("fingerprint");
+
+        let (key, made) = zfs_key(&state, &vault, "deb2").await.expect("made");
+        assert!(made);
+        // `keyformat=hex` takes exactly 64 hex digits: 32 bytes.
+        assert_eq!(key.len(), 64);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()), "{key}");
+        assert_eq!(
+            zfs_key(&state, &vault, "deb2").await.expect("again"),
+            (key.clone(), false),
+            "a second preview must not change the key the datasets will know"
+        );
+        assert_ne!(printed, fingerprint(&state, &vault).await.expect("now"));
+        let kit = read(&state, &vault).await.expect("kit");
+        assert_eq!(kit.zfs, vec![("deb2".to_string(), key)]);
+        assert!(kit.luks.is_empty(), "a dataset key is not a disk's");
     }
 
     #[test]
@@ -369,7 +460,14 @@ mod tests {
             .collect();
         assert_eq!(
             before,
-            fingerprint_of("age1pub", Some("pw"), &[dest(Some("AK:SK"))], None, &[])
+            fingerprint_of(
+                "age1pub",
+                Some("pw"),
+                &[dest(Some("AK:SK"))],
+                None,
+                &[],
+                &[]
+            )
         );
     }
 
@@ -383,6 +481,10 @@ mod tests {
             luks: vec![(
                 "a-storage-node-with-a-long-name".into(),
                 "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv".into(),
+            )],
+            zfs: vec![(
+                "deb2".into(),
+                "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
             )],
             fingerprint: "0123456789abcdef".into(),
         };
@@ -399,6 +501,9 @@ mod tests {
             "a-storage-node-with-a-long-name",
             "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv",
             "7. Each encrypted disk's recovery key",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "8. Each storage node's dataset key",
+            "/etc/hlb/zfs.key",
         ] {
             assert!(sheet.contains(needed), "{needed} missing from:\n{sheet}");
         }
