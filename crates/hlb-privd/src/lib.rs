@@ -19,6 +19,7 @@ mod apps;
 pub mod backup;
 mod identity;
 mod mail;
+mod roles;
 mod signup;
 mod swarm;
 
@@ -187,6 +188,8 @@ impl Privd {
             Intent::CreateMailbox(i) => serde_json::to_value(mail::create_mailbox(self, i).await)?,
             Intent::PurgeAlias(i) => serde_json::to_value(mail::purge_alias(self, i).await)?,
             Intent::SignUp(i) => serde_json::to_value(signup::sign_up(self, i).await)?,
+            Intent::SyncRoles(i) => serde_json::to_value(roles::sync(self, i).await)?,
+            Intent::PortalRoles(i) => serde_json::to_value(roles::portal(self, i).await)?,
         })
     }
 }

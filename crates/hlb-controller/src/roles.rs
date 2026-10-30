@@ -10,9 +10,10 @@ use std::sync::Arc;
 
 use crate::extract::{Json, Path, Query};
 use axum::extract::State as AxumState;
+use hlb_api::intent::RolesSynced;
 use hlb_api::roles::{AccessOverview, AppAccess, PersonQuotaRequest, QuotaRequest, RoleRequest};
 use hlb_api::{ActionResult, ActionStep, StepState};
-use hlb_engine::roles::{human, Inputs, Outcome, RoleSync};
+use hlb_engine::roles::{human, Inputs};
 use hlb_users::access::{self, Entry};
 use hlb_users::{MailLimits, RoleDef};
 
@@ -481,25 +482,10 @@ pub async fn role_quota(
     answer(&s, auth.identity(), "role-quota", &format!("{id}/{app}"), r).await
 }
 
-/// Republishes the routes when the app sits behind the portal: its groups are in the
-/// Caddyfile, and nothing else carries them to Caddy.
+/// Carries the app's roles to the portal, when it sits behind it.
 async fn republish(s: &AppState, app: &str) -> Result<(), String> {
-    let behind_portal = match s.state.app_manifest(app).await {
-        Ok(m) => access::entry_of(&m) == Some(Entry::Portal),
-        Err(_) => false,
-    };
-    if !behind_portal {
-        return Ok(());
-    }
-    let (Some(orch), Some(install)) = (&s.orchestrator, &s.install) else {
-        return Err(
-            "the controller reaches no Docker: `hlb ingress --apply` publishes the routes".into(),
-        );
-    };
-    hlb_engine::ingress::publish(orch.as_ref(), &s.state, Some(&install.vault))
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("the portal still checks the old roles — {e}"))
+    let asked = hlb_api::intent::PortalRoles { app: app.into() };
+    s.privd().ask(asked).await.map_err(|e| e.to_string())?
 }
 
 /// Lets a role into an installed app.
@@ -713,21 +699,9 @@ pub async fn person_quota(
 }
 
 /// Runs the sync: what PocketID and the apps hold, made to match.
-pub async fn sync(s: &AppState, apply: bool) -> Result<hlb_engine::roles::Report, String> {
-    let (Some(orch), Some(install)) = (&s.orchestrator, &s.install) else {
-        return Err("the controller has no vault or no Docker: `hlb role sync --apply` runs it from a manager".into());
-    };
-    let reach = |u: &str| u.to_string();
-    RoleSync {
-        state: &s.state,
-        vault: &install.vault,
-        orchestrator: orch.as_ref(),
-        reach: &reach,
-        now: crate::auth::now(),
-    }
-    .run(apply)
-    .await
-    .map_err(|e| e.to_string())
+async fn sync(s: &AppState, apply: bool) -> Result<RolesSynced, String> {
+    let asked = hlb_api::intent::SyncRoles { apply };
+    s.privd().ask(asked).await.map_err(|e| e.to_string())?
 }
 
 /// A sync now, in the background: an applied change reaches PocketID in seconds, not
@@ -738,18 +712,17 @@ pub fn sync_soon(s: Arc<AppState>) {
     }
     tokio::spawn(async move {
         match sync(&s, true).await {
-            Ok(r) if r.failed() => tracing::error!(
-                "role sync: {}",
-                r.lines
+            Ok(r) => {
+                let failed: Vec<String> = r
+                    .steps
                     .iter()
-                    .filter_map(|l| match &l.outcome {
-                        Outcome::Failed(e) => Some(format!("{} — {}: {e}", l.subject, l.change)),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            ),
-            Ok(_) => {}
+                    .filter(|e| e.state == StepState::Failed)
+                    .map(|e| format!("{}: {}", e.description, e.error.as_deref().unwrap_or("")))
+                    .collect();
+                if !failed.is_empty() {
+                    tracing::error!("role sync: {}", failed.join(" · "));
+                }
+            }
             Err(e) => tracing::warn!("role sync: {e}"),
         }
     });
@@ -776,32 +749,7 @@ pub async fn sync_access(
 ) -> ActionReply {
     let (steps, blockers, warnings) = match sync(&s, q.apply).await {
         Err(e) => (Vec::new(), vec![e], Vec::new()),
-        Ok(report) => (
-            report
-                .lines
-                .iter()
-                .map(|l| {
-                    let (state, error) = match &l.outcome {
-                        Outcome::ToDo => (StepState::Planned, None),
-                        Outcome::Done => (StepState::Done, None),
-                        // Not done, and not a failure: retried at the next pass.
-                        Outcome::Waiting(why) => (StepState::Planned, Some(why.clone())),
-                        // 🔴 Never `Done`: Homelabus could not do it.
-                        Outcome::NotConfigured(why) => {
-                            (StepState::Unimplemented, Some(why.clone()))
-                        }
-                        Outcome::Failed(why) => (StepState::Failed, Some(why.clone())),
-                    };
-                    ActionStep {
-                        description: format!("{}: {}", l.subject, l.change),
-                        state,
-                        error,
-                    }
-                })
-                .collect(),
-            Vec::new(),
-            report.notes,
-        ),
+        Ok(r) => (r.steps, Vec::new(), r.notes),
     };
     let r = result(
         "make PocketID and the apps hold the roles".into(),

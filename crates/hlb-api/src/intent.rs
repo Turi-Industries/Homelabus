@@ -52,6 +52,8 @@ pub enum Intent {
     CreateAlias(CreateAlias),
     CreateMailbox(CreateMailbox),
     SignUp(SignUp),
+    SyncRoles(SyncRoles),
+    PortalRoles(PortalRoles),
 }
 
 macro_rules! asks {
@@ -89,6 +91,8 @@ asks! {
     CreateAlias => Result<String, Refusal>,
     CreateMailbox => Acted,
     SignUp => SignedUp,
+    SyncRoles => Result<RolesSynced, String>,
+    PortalRoles => Result<(), String>,
 }
 
 /// The answer of an action that may not even be planned.
@@ -309,6 +313,30 @@ pub struct SignedUp {
     pub result: ActionResult,
     /// 🔴 PocketID's single-use enrolment link: shown once, never stored nor logged.
     pub enrolment_link: Option<String>,
+}
+
+/// Make PocketID and the apps hold the roles: preview what differs, or put it right.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncRoles {
+    pub apply: bool,
+}
+
+/// What a role sync found or did, one step per thing that differed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RolesSynced {
+    pub steps: Vec<crate::ActionStep>,
+    /// What the rule could not do as asked.
+    pub notes: Vec<String>,
+}
+
+/// Carry an app's roles to the portal, after they changed: the groups of an app
+/// behind it are in the Caddyfile, and nothing else takes them to Caddy. Nothing to do
+/// for an app that signs its people in itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortalRoles {
+    pub app: String,
 }
 
 #[cfg(test)]

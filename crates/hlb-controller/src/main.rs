@@ -1615,7 +1615,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             move || {
                 let (shared, notif) = (shared.clone(), notif_roles.clone());
                 async move {
-                    match hlb_controller::roles::sync(&shared, true).await {
+                    match shared.privd().sync_roles(true).await {
                         Ok(r) => {
                             let failed: Vec<String> = r
                                 .lines
