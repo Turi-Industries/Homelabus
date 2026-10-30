@@ -37,7 +37,12 @@ the outside, which is the whole problem.
   session or the audit chain: a web write is an intent in `intent/record.rs`, asked
   with `AppState::record`; `no_web_module_writes_the_state` refuses the rest. A value it carries (a
   session's, an invitation's) is left out of its hand-written `Debug`; an
-  `Option<Option<_>>` is two fields, since JSON says `null` for both.
+  `Option<Option<_>>` is two fields, since JSON says `null` for both. Deployed, the web
+  side (uid 8420, no capability) mounts the state's DIRECTORY read-only — a file bind
+  would keep reading a `-wal` SQLite has replaced — so `hlb fleet controller` refuses
+  one holding the key or closed to that uid (`/root`, the lab's until 2026-10-30). The
+  socket lives there too, not in `/run`: a tmpfs, and a bind whose source a reboot
+  removed stops Swarm starting the task.
 - **An API token carries a ROLE, not an identity.** Enough to read state, wrong as soon
   as a request acts FOR someone: without a binding, a stolen token would create aliases
   on anyone's mailbox. An unbound `admin` token is therefore refused where a bound

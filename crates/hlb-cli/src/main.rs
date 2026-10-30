@@ -3668,7 +3668,12 @@ async fn fleet(cli: &Cli, cmd: &FleetCmd) -> Result<ExitCode, Box<dyn std::error
             eprintln!("   give the state one of its own, the key outside it.");
             eprintln!("     hlb stop hlb-controller --apply    # if one runs");
             eprintln!("     install -d -m 0755 {dir}");
-            eprintln!("     mv {}* {dir}/", state_path.display());
+            eprintln!("     mv {} {dir}/", state_path.display());
+            // Not a glob: `hlb.db*` takes every copy set aside beside it too.
+            eprintln!(
+                "     mv {0}-wal {0}-shm {dir}/    # when present: the -wal holds the last writes",
+                state_path.display()
+            );
             eprintln!("     export HLB_STATE={dir}/hlb.db");
             eprintln!("   then run this again.");
             return Ok(ExitCode::FAILURE);

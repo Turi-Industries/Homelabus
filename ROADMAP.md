@@ -598,7 +598,8 @@ three Tangs, and the third alone opens it.
     directory mounted `:ro`, reads it live while the daemon writes, and its writes are
     refused by the kernel; it can open it only while the daemon holds it open (the
     `-wal` and `-shm` files go with the last connection). The web side's own data —
-    sessions, preferences, mutes, announcements — goes to a database of its own.
+    sessions, preferences, mutes, announcements — stays in it, written by intent: the
+    CLI reads sessions too, and one file keeps the backup and the restore one.
   - **What it still gives an intruder in the web side**: whatever a signed-in person's
     intents can do — the web side vouches for who asks. No secret read, no host path,
     no image outside the catalog, no `exec`. Destroy-level intents carrying a fresh
@@ -631,6 +632,27 @@ three Tangs, and the third alone opens it.
     read the state only (`roles::opened_by`, `pki::ending`, `access::pocketid_public`…)
     and stay; `main.rs`'s Termix, emergency-vault, upkeep, prune and PKI loops still
     run in the binary beside the web side.
+  - ✅ Stage 2 — 2026-10-30: two processes, one image. `hlb-privd` — `hlb.db`
+    read-write, the vault, Docker, the volumes, every loop, the agents' mTLS leaf —
+    answers on `<state directory>/privd.sock`, to uid 8420 alone; `hlb-controller` is
+    the web side: uid 8420, root read-only, every capability dropped, the state's
+    directory mounted read-only at `/state`, nothing else. Its writes are intents
+    (`intent/record.rs`); drifts, alerts and the fleet stay in the daemon's memory,
+    asked by intent rather than persisted; the one secret it receives is its own sign-in
+    client's (`SignInClient`). The one-process mode stays, for the demonstration and the
+    browser suite's empty controller. Mounted whole, the state's directory must be its
+    own: `/root` is closed to uid 8420 and holds the key, so `fleet controller` refuses
+    it and says how to move it; the socket sits there, not in `/run`, a tmpfs a reboot
+    empties under a bind. **Proven on the lab** (deb1): the state moved to
+    `/var/lib/homelabus`, deployed; `docker inspect` of the web side shows one bind,
+    read-only, `CapDrop ALL`; a shell in it has no capability (`CapEff` 0), cannot write
+    `hlb.db` nor anything else, finds no key, Docker socket, volume, certificate or
+    secret in its environment; every parameterless read route answers as before (36
+    succeed, the five others with their expected refusal), the 20 assertions read with
+    none broken, an announcement is written through the daemon and audited under the
+    token's name. Not exercised there: the daemon's mTLS poll — no agent runs on the
+    lab. Left for stage 3: the intents re-derived and bounded (a local destination's
+    path, the guide's automations, the `id_token` above).
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to
