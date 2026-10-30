@@ -650,8 +650,8 @@ three Tangs, and the third alone opens it.
     secret in its environment; every parameterless read route answers as before (36
     succeed, the five others with their expected refusal), the 20 assertions read with
     none broken, an announcement is written through the daemon and audited under the
-    token's name. Not exercised there: the daemon's mTLS poll — no agent runs on the
-    lab. Left for stage 3: the intents re-derived and bounded (a local destination's
+    token's name; the agents deployed after, the daemon polls them over mTLS with the
+    leaf now issued to `hlb-privd`, and the web side shows both nodes. Left for stage 3: the intents re-derived and bounded (a local destination's
     path, the guide's automations, the `id_token` above).
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
