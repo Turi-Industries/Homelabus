@@ -747,6 +747,24 @@ three Tangs, and the third alone opens it.
   a provider driven by its API (deSEC). CAA with `accounturi` (RFC 8657), certspotter,
   and a nightly drift check of NS, DS, CAA and the WHOIS statuses. DANE/TLSA beside
   MTA-STS.
+  - The drift check first: it needs no provider chosen and watches the theft itself —
+    a registrar's support moving the NS. **Measured** 2026-10-30: the two DoH resolvers
+    `public_dns` already asks give NS, DS and CAA in the same JSON (`type` 2, 43, 257),
+    with `AD` set when the chain validated; Google writes a DS digest in capitals and
+    either may reorder, so a reading is lowercased and sorted before it is compared.
+    The registry's side is RDAP (IANA's `dns.json`, 592 TLDs): `.com`'s gives the six
+    EPP locks, the registrar and the expiry, `.fr`'s the status and the DS it holds —
+    but `.eu`, `.de`, `.io`, `.be` and `.ch` have NO RDAP, and `.eu`'s port-43 WHOIS
+    shows no status at all (registrar, NS, keys), `.de`'s one word (`connect`). So the
+    registry is read where RDAP exists and said "not read, no RDAP for .eu" elsewhere,
+    the DNS half covering every TLD alike. Designed: the zone is found by walking up
+    from the exposure's domain to the first name holding NS; the first reading is
+    shown and accepted by `hlb domain accept --apply` (preview by default) as the
+    baseline; each night the daemon reads again and a change of NS, DS, validation,
+    CAA, registrar or locks is a critical notification keyed by what moved; a reading
+    that could not be made is not a change. Said beside it, not alerted: no transfer
+    lock where the statuses are known, a zone not signed, no CAA, an expiry within 30
+    days.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach
