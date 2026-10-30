@@ -917,11 +917,7 @@ pub async fn record_plan(
     // 🔴 A plan targeting an unknown route would be accepted here and would fail at
     // execution, weeks later, on a 404 that points nowhere. We check against the
     // document the router is built with.
-    let known = crate::openapi::routes()
-        .iter()
-        .any(|r| r.mutates() && r.verb == d.method && compatible_paths(&r.path, &d.path));
-
-    if !known {
+    if plannable(&d.method, &d.path).is_none() {
         return action_error(
             &s,
             auth.identity(),
@@ -962,6 +958,25 @@ pub async fn record_plan(
     respond(&s, auth.identity(), "plan-record", &d.name, r).await
 }
 
+/// The route a plan of this request would replay, if it is one a plan may name: a
+/// route with a preview, which a replay asks with `apply=false` — any other would act
+/// —, and not a public one, whose body carries what opens it.
+fn plannable(method: &str, path: &str) -> Option<&'static crate::openapi::Route> {
+    // A segment a fetch resolves (`..`), cuts (`?`, `#`) or the router reads as another
+    // (`//`) would send the replay elsewhere than the route matched here.
+    let plain = path
+        .split('/')
+        .skip(1)
+        .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && !seg.contains(['?', '#']));
+    crate::openapi::routes().iter().find(|r| {
+        plain
+            && r.verb == method
+            && r.preview == Some(true)
+            && !r.public
+            && compatible_paths(&r.path, path)
+    })
+}
+
 /// Does a route path (`/api/apps/{name}/install`) accept this concrete path?
 ///
 /// ⚠️ Segment-by-segment comparison: a `{param}` accepts anything, the rest must match
@@ -998,11 +1013,13 @@ pub async fn list_plans(
             .unwrap_or_default()
             .into_iter()
             .map(
-                |(name, method, path, _body, summary, created_by, age_s)| hlb_api::NamedPlan {
+                |(name, method, path, body, summary, created_by, age_s)| hlb_api::NamedPlan {
+                    route: plannable(&method, &path).map(|r| r.path.clone()),
                     name,
                     summary,
                     method,
                     path,
+                    body,
                     created_by,
                     age_s,
                 },
@@ -1037,11 +1054,7 @@ mod tests {
         // 🔴 A plan targeting an unknown route would be accepted here and would fail at
         // execution, weeks later, on a 404 that points nowhere — at the precise moment
         // you were counting on it.
-        let exists = |method: &str, path: &str| {
-            crate::openapi::routes()
-                .iter()
-                .any(|r| r.mutates() && r.verb == method && compatible_paths(&r.path, path))
-        };
+        let exists = |method: &str, path: &str| super::plannable(method, path).is_some();
 
         assert!(exists("POST", "/api/apps/gitea/install"));
         assert!(exists("POST", "/api/apps/immich/backup"));
@@ -1049,6 +1062,25 @@ mod tests {
         assert!(!exists("DELETE", "/api/apps/gitea/install"));
         // A read is not an action: replaying one would do nothing worth a name.
         assert!(!exists("GET", "/api/apps/gitea"));
+    }
+
+    #[test]
+    fn a_plan_replays_a_preview_and_nothing_else() {
+        // 🔴 Replaying asks the route with `apply=false`, which a route declaring no
+        // preview ignores: the Bitwarden assistant would mint a token at the replay.
+        // A public route's body carries what opens it (a sign-up's invitation), and
+        // the plans list is read by every viewer.
+        let exists = |method: &str, path: &str| super::plannable(method, path).is_some();
+        assert!(!exists("POST", "/api/bitwarden"));
+        assert!(!exists("POST", "/api/plans"));
+        assert!(!exists("POST", "/api/signup"));
+        // What a fetch resolves or cuts away addresses another route than the one
+        // matched here.
+        assert!(!exists("POST", "/api/apps/../install"));
+        assert!(!exists("POST", "/api/apps/./install"));
+        assert!(!exists("POST", "/api/apps/x?apply=true/install"));
+        assert!(!exists("POST", "/api/apps/x#/install"));
+        assert!(!exists("POST", "/api/apps//install"));
     }
 
     #[test]

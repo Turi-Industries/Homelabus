@@ -71,6 +71,37 @@ export function proposal<P extends Previewable, V extends Verb & keyof paths[P]>
 	};
 }
 
+/**
+ * A saved plan proposed again: its request as it was filed, previewed anew — what it
+ * describes may have changed since, and applying still takes the panel's three beats.
+ * `null` when it cannot be replayed: no route takes it any more, or its body is not
+ * the JSON a preview sends.
+ */
+export function replay(title: string, plan: Schemas['NamedPlan']): Proposal | null {
+	if (plan.route === null) return null;
+	let body: object | undefined;
+	try {
+		body = plan.body === '' ? undefined : (JSON.parse(plan.body) as object);
+	} catch {
+		return null;
+	}
+	const method = plan.method as Schemas['PlanRequest']['method'];
+	// The path is the concrete one filed — no template left for the client to fill.
+	const call = api[method as 'POST'] as unknown as (
+		path: string,
+		init: object
+	) => Promise<Answer<ActionResult>>;
+	return {
+		title,
+		send: (apply, confirmed) =>
+			call(plan.path, {
+				params: { query: { apply } },
+				body: confirmed === null ? body : { ...(body ?? {}), confirmed }
+			}),
+		plan: { method, path: plan.path, body: plan.body === '' ? null : plan.body }
+	};
+}
+
 type Stage =
 	| { kind: 'closed' }
 	| { kind: 'previewing'; proposal: Proposal }

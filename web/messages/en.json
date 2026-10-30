@@ -474,6 +474,8 @@
 	"plans_no_prepared_plan": "No prepared plan. Preview an action, then file it under a name to execute it later.",
 	"plans_replay_explanation": "Each plan is filed exactly as it was previewed. Replaying it reruns its preview — not the execution: what it describes may have changed since.",
 	"plans_by": "by {author} {age} ago",
+	"plans_preview_again": "Preview again",
+	"plans_no_route": "No route takes this plan any more: it is kept, and cannot be replayed.",
 	"portal_your_applications": "Your applications",
 	"portal_access_explanation": "These applications exist and are exposed. Homelabus does not decide your access rights: your identity carries them.",
 	"portal_no_exposed_application": "No exposed application for now.",

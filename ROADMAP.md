@@ -660,7 +660,16 @@ three Tangs, and the third alone opens it.
     account the web side vouches for (accepted above). ✅ `SetDestinationClasses`
     now: the web side changes a declared destination's classes; its location and
     secret are `hlb backup dest add`'s, as root, and the route refuses another at
-    preview.
+    preview. Read and found bounded already: the guide's automations come from
+    the catalog the daemon reads, and the one value the web side chooses, the
+    domain, is parsed by the daemon (`install::basis`) — nothing that would open a
+    Caddyfile block passes. The kit's fingerprint is decrypted in the daemon since
+    stage 2; the web side receives sixteen hex digits. ✅ Plans replay: `/api/plans`
+    gives the body and the route, and the plans screen's "Preview again" opens the
+    action panel on a new preview of the request as filed; a plan may name only a
+    route with a preview, not a public one, and no segment that sends a fetch
+    elsewhere — a replay of the Bitwarden assistant's route would have minted a
+    token. Left: the destroy-level `id_token`, the owner's call.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to

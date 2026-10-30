@@ -421,6 +421,20 @@ pub async fn seed_from(
         .add_mailbox("sacha", "sacha", "home.example", true)
         .await?;
 
+    // A plan filed for a quiet hour, so the plans screen has one to preview again:
+    // Vikunja is the app the catalog has changed.
+    state
+        .save_named_plan(
+            "vikunja-sunday",
+            "POST",
+            "/api/apps/vikunja/upgrade",
+            "",
+            "upgrade vikunja to the catalog's manifest",
+            "lena",
+            Some("on Sunday morning, nobody uses it then"),
+        )
+        .await?;
+
     // --- Aliases: the four states of `alias::State` -----------------------------
     let day = 86_400;
     // Permanent.

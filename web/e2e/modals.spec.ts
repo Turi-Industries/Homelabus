@@ -47,6 +47,25 @@ for (const { page: url, button, title } of opened) {
 	});
 }
 
+test('a saved plan is previewed again, never applied', async ({ page }) => {
+	// A replay is the request as filed, asked with `apply=false`: what it describes may
+	// have changed, so the panel's three beats are owed again.
+	const acted: string[] = [];
+	page.on('request', (r) => {
+		const u = new URL(r.url());
+		if (!['GET', 'HEAD'].includes(r.method())) acted.push(`${r.method()} ${u.pathname}${u.search}`);
+	});
+	await page.goto('/plans');
+	await settle(page);
+
+	await page.getByRole('button', { name: said('plans_preview_again') }).first().click();
+	const panel = page.getByRole('dialog', { name: said('action_panel_label') });
+	await expect(panel.getByText(said('action_preview_nothing_changed_yet'))).toBeVisible();
+	expect(acted).toEqual(['POST /api/apps/vikunja/upgrade?apply=false']);
+	await page.keyboard.press('Escape');
+	await expect(panel).toBeHidden();
+});
+
 test('the shortcuts overlay goes on the Escape it lists', async ({ page }) => {
 	await page.goto('/');
 	await settle(page);

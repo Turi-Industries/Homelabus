@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { panel, type ActionResult, type Proposal } from './action.svelte.ts';
+import { panel, replay, type ActionResult, type Proposal } from './action.svelte.ts';
+import type { Schemas } from './api/client.ts';
 import type { Answer } from './resource.svelte.ts';
 
 // Only what the panel reads here; an invitation's answer adds the `link` it shows once.
@@ -43,5 +44,31 @@ describe('the action panel', () => {
 		expect(panel.stage.kind).toBe('applied');
 		expect('result' in panel.stage && 'link' in panel.stage.result && panel.stage.result.link).toBe('https://example.test/signup#invitation=x');
 		panel.close();
+	});
+});
+
+describe('a saved plan', () => {
+	const filed = (over: Partial<Schemas['NamedPlan']>) =>
+		({
+			name: 'sunday',
+			summary: 'upgrade vikunja',
+			method: 'POST',
+			path: '/api/apps/vikunja/upgrade',
+			body: '',
+			route: '/api/apps/{name}/upgrade',
+			created_by: 'lena',
+			age_s: 60,
+			attention: 'ok',
+			...over
+		}) as Schemas['NamedPlan'];
+
+	it('is proposed again as the very request it was filed with', () => {
+		const again = replay('sunday', filed({ body: '{"replicas":2}', path: '/api/apps/vikunja/scale', route: '/api/apps/{name}/scale' }));
+		expect(again?.plan).toEqual({ method: 'POST', path: '/api/apps/vikunja/scale', body: '{"replicas":2}' });
+	});
+
+	it('is not offered again when no route takes it, or its body is not JSON', () => {
+		expect(replay('gone', filed({ route: null }))).toBeNull();
+		expect(replay('torn', filed({ body: '{"replicas":' }))).toBeNull();
 	});
 });

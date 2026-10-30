@@ -3861,6 +3861,10 @@
           "attention": {
             "$ref": "#/components/schemas/Attention"
           },
+          "body": {
+            "description": "The request's JSON body as previewed; empty when it had none.",
+            "type": "string"
+          },
           "created_by": {
             "type": "string"
           },
@@ -3873,6 +3877,13 @@
           "path": {
             "type": "string"
           },
+          "route": {
+            "description": "The route template the request is replayed through; `None` when no route\ntakes it any more, or none that previews — then it is kept, never replayed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "summary": {
             "description": "The summary read at save time: THIS is the text that was approved.",
             "type": "string"
@@ -3881,10 +3892,12 @@
         "required": [
           "age_s",
           "attention",
+          "body",
           "created_by",
           "method",
           "name",
           "path",
+          "route",
           "summary"
         ],
         "type": "object"

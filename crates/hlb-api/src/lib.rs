@@ -2906,6 +2906,11 @@ judged! {
         pub summary: String,
         pub method: String,
         pub path: String,
+        /// The request's JSON body as previewed; empty when it had none.
+        pub body: String,
+        /// The route template the request is replayed through; `None` when no route
+        /// takes it any more, or none that previews — then it is kept, never replayed.
+        pub route: Option<String>,
         pub created_by: String,
         /// The plan's age, in seconds.
         pub age_s: i64,

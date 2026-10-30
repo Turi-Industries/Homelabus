@@ -478,6 +478,8 @@
 	"plans_no_prepared_plan": "Aucun plan préparé. Prévisualisez une action, puis enregistrez-la sous un nom pour l'exécuter plus tard.",
 	"plans_replay_explanation": "Chaque plan est enregistré exactement tel qu'il a été prévisualisé. Le rejouer relance son aperçu — pas l'exécution : ce qu'il décrit a pu changer depuis.",
 	"plans_by": "par {author} il y a {age}",
+	"plans_preview_again": "Prévisualiser à nouveau",
+	"plans_no_route": "Plus aucune route ne prend ce plan : il est gardé, et ne peut pas être rejoué.",
 	"portal_your_applications": "Vos applications",
 	"portal_access_explanation": "Ces applications existent et sont exposées. Homelabus ne décide pas de vos droits d'accès : c'est votre identité qui les porte.",
 	"portal_no_exposed_application": "Aucune application exposée pour l'instant.",

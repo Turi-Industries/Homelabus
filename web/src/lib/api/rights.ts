@@ -23,3 +23,15 @@ export function allowed<P extends Route>(
 	if (right === 'public') return true;
 	return can?.[right as Right] ?? false;
 }
+
+/**
+ * [`allowed`] for a route known only at run time — a saved plan's, as the controller
+ * names it. A route or method the table does not hold offers nothing.
+ */
+export function allowedAt(can: Rights | undefined, path: string, method: string): boolean {
+	if (!(path in requires)) return false;
+	const right = (requires[path as Route] as Record<string, string>)[method];
+	if (right === undefined) return false;
+	if (right === 'public') return true;
+	return can?.[right as Right] ?? false;
+}
