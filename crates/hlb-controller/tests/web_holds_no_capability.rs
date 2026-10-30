@@ -81,6 +81,28 @@ fn named(code: &str, caps: &BTreeSet<String>) -> BTreeSet<String> {
         .collect()
 }
 
+/// A binary's composition root, exempt from the scans below: `main.rs` composes the
+/// demonstration and the one-process controller, `bin/hlb-privd` the daemon. Matched
+/// by path, so a web module named `main.rs` elsewhere is still read.
+fn root(f: &Path) -> Option<Root> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    if f == src.join("main.rs") {
+        Some(Root::Controller)
+    } else if f == src.join("bin/hlb-privd/main.rs") {
+        Some(Root::Daemon)
+    } else {
+        None
+    }
+}
+
+/// Which root: the controller's carries the floors, being the one every scan has read
+/// since the first.
+#[derive(PartialEq)]
+enum Root {
+    Controller,
+    Daemon,
+}
+
 #[test]
 fn no_web_module_names_a_capability() {
     let caps = capabilities();
@@ -98,11 +120,11 @@ fn no_web_module_names_a_capability() {
     for f in &files {
         let code = production(f);
         let names = named(&code, &caps);
-        if f.file_name().is_some_and(|n| n == "main.rs") {
-            // The daemon's composition root holds them on purpose — and seeing them
-            // there proves the matcher reads real code.
+        if let Some(r) = root(f) {
+            // The composition roots hold them on purpose — and seeing them there
+            // proves the matcher reads real code.
             assert!(
-                names.len() >= 5,
+                r == Root::Daemon || names.len() >= 5,
                 "main.rs names only {names:?}: the scan reads nothing"
             );
             continue;
@@ -147,7 +169,7 @@ fn no_web_module_reaches_the_daemon() {
     let mut found = Vec::new();
     for f in scan::rust_files(&src) {
         let reaches = reaches_the_daemon(&production(&f));
-        if f.file_name().is_some_and(|n| n == "main.rs") {
+        if root(&f).is_some() {
             assert!(
                 reaches,
                 "main.rs starts no daemon loop: the scan reads nothing"
@@ -278,11 +300,11 @@ fn no_web_module_writes_the_state() {
             .iter()
             .filter(|w| code.contains(&format!(".{w}(")))
             .collect();
-        if f.file_name().is_some_and(|n| n == "main.rs") {
-            // The daemon's loops still run there, and write: seeing them proves the
-            // matcher reads real code.
+        if let Some(r) = root(&f) {
+            // The daemon's loops still run in the controller's, and write: seeing them
+            // proves the matcher reads real code.
             assert!(
-                !called.is_empty(),
+                r == Root::Daemon || !called.is_empty(),
                 "main.rs writes nothing: the scan reads nothing"
             );
             continue;

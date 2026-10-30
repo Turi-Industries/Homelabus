@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Daemon: read API and background loops."
+description = "The web side, and the hlb-privd daemon it asks."
 
 [lib]
 name = "hlb_controller"
@@ -13,6 +13,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "hlb-controller"
 path = "src/main.rs"
+
+# The daemon. In this crate, not hlb-privd: its alert rules measure through the
+# controller's PromQL allowlist.
+[[bin]]
+name = "hlb-privd"
+path = "src/bin/hlb-privd/main.rs"
 
 [dependencies]
 hlb-types.workspace = true
