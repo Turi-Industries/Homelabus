@@ -58,6 +58,15 @@ pub enum Error {
     #[error("unknown app \"{0}\"")]
     UnknownApp(String),
 
+    /// A domain reading the state holds and this binary cannot read: an error, since
+    /// a baseline read as none would compare nothing, and alert on nothing.
+    #[error("unreadable stored domain reading \"{key}\": {source}")]
+    StoredDomain {
+        key: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+
     #[error("no role \"{0}\" — `hlb role list` names them")]
     UnknownRole(String),
 
@@ -2464,6 +2473,41 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// The domain's reading accepted by `hlb domain accept`: what later readings are
+    /// compared with.
+    pub async fn domain_baseline(&self) -> Result<Option<hlb_api::domain::Reading>> {
+        self.domain_setting("domain-baseline").await
+    }
+
+    pub async fn set_domain_baseline(&self, r: &hlb_api::domain::Reading) -> Result<()> {
+        self.put_domain_setting("domain-baseline", r).await
+    }
+
+    /// The domain's last reading, the night's or the CLI's.
+    pub async fn domain_reading(&self) -> Result<Option<hlb_api::domain::Reading>> {
+        self.domain_setting("domain-reading").await
+    }
+
+    pub async fn record_domain_reading(&self, r: &hlb_api::domain::Reading) -> Result<()> {
+        self.put_domain_setting("domain-reading", r).await
+    }
+
+    async fn domain_setting(&self, key: &'static str) -> Result<Option<hlb_api::domain::Reading>> {
+        self.setting(key)
+            .await?
+            .map(|v| serde_json::from_str(&v).map_err(|source| Error::StoredDomain { key, source }))
+            .transpose()
+    }
+
+    async fn put_domain_setting(
+        &self,
+        key: &'static str,
+        r: &hlb_api::domain::Reading,
+    ) -> Result<()> {
+        let v = serde_json::to_string(r).map_err(|source| Error::StoredDomain { key, source })?;
+        self.put_setting(key, Some(&v)).await
     }
 
     /// The ACME account Homelabus opened in Stalwart for its public name's certificate.
@@ -7350,6 +7394,47 @@ mod tests {
         )];
         s.record_mail_records(&now).await.expect("record");
         assert_eq!(s.mail_records().await.expect("read"), now);
+    }
+
+    #[tokio::test]
+    async fn the_domains_baseline_and_reading_are_kept_apart() {
+        use hlb_api::domain::{DnsSide, Reading, Registry};
+        let s = State::in_memory().await.expect("state");
+        assert!(s.domain_baseline().await.expect("read").is_none());
+        let reading = |ns: &str| Reading {
+            zone: "home.example".into(),
+            read_at: 1,
+            dns: Ok(DnsSide::new(vec![ns.into()], vec![], false, vec![])),
+            registry: Registry::NotRead {
+                why: "no RDAP for .example".into(),
+            },
+        };
+        s.set_domain_baseline(&reading("ns1.example"))
+            .await
+            .expect("accept");
+        s.record_domain_reading(&reading("ns1.thief.example"))
+            .await
+            .expect("record");
+        assert_eq!(
+            s.domain_baseline().await.expect("read"),
+            Some(reading("ns1.example"))
+        );
+        assert_eq!(
+            s.domain_reading().await.expect("read"),
+            Some(reading("ns1.thief.example"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_baseline_this_binary_cannot_read_is_an_error_not_none() {
+        let s = State::in_memory().await.expect("state");
+        s.put_setting("domain-baseline", Some("{\"zone\": 3}"))
+            .await
+            .expect("write");
+        assert!(matches!(
+            s.domain_baseline().await,
+            Err(Error::StoredDomain { .. })
+        ));
     }
 
     #[tokio::test]

@@ -764,7 +764,18 @@ three Tangs, and the third alone opens it.
     CAA, registrar or locks is a critical notification keyed by what moved; a reading
     that could not be made is not a change. Said beside it, not alerted: no transfer
     lock where the statuses are known, a zone not signed, no CAA, an expiry within 30
-    days.
+    days. ✅ Built 2026-10-30 (`hlb_api::domain`, `hlb_engine::domain`, `hlb domain
+    watch` / `accept`, the daemon's nightly pass beside the mail records). 🔴 Found on
+    its first real run: `www.desec.io` is a CNAME, and the resolver's NS answer carries
+    the TARGET's records — the walk took `www` for a zone. `PublicDns::query` keeps
+    the records the name itself owns; `lookup`, for mail, still follows the CNAME.
+    Read against the internet: `desec.io` (signed, CAA with `accounturi`, `.io` said
+    not read), `google.com` (MarkMonitor, the six locks, not signed), `afnic.fr`
+    (signed, `active` only: no transfer lock and no CAA, both advised); a baseline
+    accepted, one name server forged in it, `watch` named the name servers and the
+    delegation and exited 1. Left: the inbox and a screen (an unwatched domain is a
+    log line tonight); WHOIS for the TLDs without RDAP, parsed per registry; the
+    nightly pass not run on the lab, whose exposure is internal — nothing to watch.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach

@@ -39,6 +39,21 @@ impl PublicDns {
     /// quoted or not, depending on which answered. `Ok(empty)` when the name holds
     /// none; `Err` when no resolver could say.
     pub async fn lookup(&self, name: &str, kind: &str) -> Result<Vec<String>, String> {
+        let body = self.answer(name, kind).await?;
+        answers(&body, kind)
+    }
+
+    /// The `kind` records `name` ITSELF holds — never those of a CNAME's target, which
+    /// the answer carries too: `www`'s NS would read as its target's, a zone of its
+    /// own — and whether the resolver validated them (`AD`), false for a zone not
+    /// signed as for one that fails.
+    pub async fn query(&self, name: &str, kind: &str) -> Result<(Vec<String>, bool), String> {
+        let body = self.answer(name, kind).await?;
+        let validated = body.get("AD").and_then(serde_json::Value::as_bool) == Some(true);
+        Ok((answers_at(&body, kind, name)?, validated))
+    }
+
+    async fn answer(&self, name: &str, kind: &str) -> Result<serde_json::Value, String> {
         let mut why = Vec::new();
         for r in &self.resolvers {
             match self.ask(r, name, kind).await {
@@ -49,7 +64,12 @@ impl PublicDns {
         Err(why.join("; "))
     }
 
-    async fn ask(&self, resolver: &str, name: &str, kind: &str) -> Result<Vec<String>, String> {
+    async fn ask(
+        &self,
+        resolver: &str,
+        name: &str,
+        kind: &str,
+    ) -> Result<serde_json::Value, String> {
         let resp = self
             .http
             .get(resolver)
@@ -62,19 +82,38 @@ impl PublicDns {
             .map_err(|e| e.to_string())?;
         // A DNS answer is a few kilobytes; one a megabyte long is not one.
         let body = crate::bounded(resp, 1024 * 1024).await?;
-        let body: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-        answers(&body, kind)
+        serde_json::from_slice(&body).map_err(|e| e.to_string())
     }
+}
+
+/// The data of a JSON answer's records of `kind` owned by `name` itself.
+pub fn answers_at(body: &serde_json::Value, kind: &str, name: &str) -> Result<Vec<String>, String> {
+    let owner = |n: &str| n.trim_end_matches('.').to_ascii_lowercase();
+    let name = owner(name);
+    answers_where(body, kind, |a| {
+        a.get("name").and_then(serde_json::Value::as_str).map(owner) == Some(name.clone())
+    })
 }
 
 /// The data of a JSON answer's records of `kind`. NXDOMAIN is no record, which is an
 /// answer; SERVFAIL and the rest are not.
 pub fn answers(body: &serde_json::Value, kind: &str) -> Result<Vec<String>, String> {
+    answers_where(body, kind, |_| true)
+}
+
+fn answers_where(
+    body: &serde_json::Value,
+    kind: &str,
+    keep: impl Fn(&serde_json::Value) -> bool,
+) -> Result<Vec<String>, String> {
     const NOERROR: u64 = 0;
     const NXDOMAIN: u64 = 3;
     let code = match kind {
         "TXT" => 16,
         "MX" => 15,
+        "NS" => 2,
+        "DS" => 43,
+        "CAA" => 257,
         other => return Err(format!("{other} is not a type read here")),
     };
     match body.get("Status").and_then(serde_json::Value::as_u64) {
@@ -90,6 +129,7 @@ pub fn answers(body: &serde_json::Value, kind: &str) -> Result<Vec<String>, Stri
         .into_iter()
         .flatten()
         .filter(|a| a.get("type").and_then(serde_json::Value::as_u64) == Some(code))
+        .filter(|a| keep(a))
         .filter_map(|a| a.get("data").and_then(|d| d.as_str()).map(str::to_string))
         .collect())
 }
@@ -108,6 +148,27 @@ mod tests {
             ],
         });
         assert_eq!(answers(&body, "TXT").expect("read"), ["\"v=spf1 mx -all\""]);
+    }
+
+    #[test]
+    fn a_cnames_target_holds_its_records_and_the_name_itself_holds_none() {
+        // Cloudflare's answer for `www.desec.io NS`, 2026-10-30.
+        let body = serde_json::json!({
+            "Status": 0,
+            "Answer": [
+                { "name": "www.desec.io", "type": 5, "data": "desec.io." },
+                { "name": "desec.io", "type": 2, "data": "ns1.desec.io." },
+                { "name": "desec.io", "type": 2, "data": "ns2.desec.org." },
+            ],
+        });
+        assert_eq!(answers(&body, "NS").expect("read").len(), 2);
+        assert!(answers_at(&body, "NS", "www.desec.io")
+            .expect("read")
+            .is_empty());
+        assert_eq!(
+            answers_at(&body, "NS", "DESEC.io.").expect("read"),
+            ["ns1.desec.io.", "ns2.desec.org."]
+        );
     }
 
     #[test]

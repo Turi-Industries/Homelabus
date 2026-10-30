@@ -10,6 +10,7 @@
 //! (`Unimplemented`), **never** as successful.
 
 pub mod access;
+pub mod domain;
 pub mod emergency;
 pub mod ingress;
 pub mod install;

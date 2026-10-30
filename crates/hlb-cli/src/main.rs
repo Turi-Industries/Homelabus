@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 mod disk;
+mod domain;
 mod emergency;
 mod exposure;
 mod mail;
@@ -294,6 +295,11 @@ enum Command {
     /// resolves them.
     #[command(subcommand)]
     Mail(MailCmd),
+
+    /// The house's domain, watched for the theft no machine sees: name servers moved
+    /// by a registrar's support, a lock lifted, a transfer begun.
+    #[command(subcommand)]
+    Domain(DomainCmd),
 
     /// Read the manifests' assertions from the running apps now — what each must keep
     /// true, by its effect — and record them for the inbox.
@@ -1520,6 +1526,21 @@ enum RelayCmd {
     },
     /// Send remote domains by their MX again.
     Remove {
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DomainCmd {
+    /// Read the zone holding the exposure's domain — NS, DS, DNSSEC validation and CAA
+    /// from a public resolver; registrar, locks, delegation and expiry from the
+    /// registry's RDAP, where its TLD has one — record it, and compare it with the
+    /// baseline. Exits 1 on anything moved, or with no baseline.
+    Watch,
+    /// Make the reading taken now the baseline every later one is compared with.
+    /// Preview by default.
+    Accept {
         #[arg(long)]
         apply: bool,
     },
@@ -7449,6 +7470,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Mail(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(mail::run(&cli, cmd))
+        }
+
+        Command::Domain(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(domain::run(&cli, cmd))
         }
 
         Command::User(cmd) => {

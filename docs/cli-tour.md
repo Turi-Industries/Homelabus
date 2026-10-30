@@ -483,6 +483,17 @@ to add:
 ./target/debug/hlb mail dns example.org
 ```
 
+The domain itself is watched the same night: its name servers, DS, DNSSEC and CAA as
+the internet resolves them, its registrar, locks and expiry from the registry's RDAP
+where its TLD publishes one. A theft through a registrar's support moves these first;
+once a reading is accepted, any change is a critical alert:
+
+```sh
+./target/debug/hlb domain watch              # read, advise; exits 1 on a change, or before a baseline
+./target/debug/hlb domain accept             # preview: what would become the baseline
+./target/debug/hlb domain accept --apply
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its

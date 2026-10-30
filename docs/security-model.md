@@ -181,6 +181,10 @@ plan around them.
   cluster autolock` then seals the unlock key to each manager, over the SSH address the
   mesh recorded, and each unlocks itself after every start of Docker; a manager
   joined by hand, with no address recorded, waits for a person and the kit's key.
-- **Your domain is not watched.** There is no DNSSEC and no alert if the registrar
-  record changes. A registrar with a registry lock is recommended.
+- **Your domain is watched, not protected.** `hlb domain` reads its name servers, DS,
+  DNSSEC validation and CAA from a public resolver, and its registrar, locks and
+  delegation over RDAP; once a reading is accepted, a change is a critical alert the
+  next night. It tells you of a theft, it does not prevent one, and many ccTLDs
+  (`.eu`, `.de`, `.io`, `.ch`) publish no RDAP — there only the DNS half is read.
+  Homelabus signs no zone yet. A registrar with a registry lock is recommended.
 - **One maintainer.** No change is reviewed by a second person before it is merged.

@@ -122,6 +122,7 @@ macro_rules! judged {
 pub mod assertions;
 pub mod breakglass;
 pub mod diagnostic;
+pub mod domain;
 pub mod intent;
 pub mod invitation;
 pub mod issues;

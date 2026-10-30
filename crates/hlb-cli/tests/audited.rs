@@ -28,6 +28,10 @@ const EXEMPT: &[(&str, &str)] = &[
     ("MailCmd::Dns", "records what the DNS lookups observed"),
     ("MailCmd::Queue", "records what Stalwart's queue holds"),
     (
+        "DomainCmd::Watch",
+        "records what the DNS and the registry answered",
+    ),
+    (
         "NodeCmd::Deps",
         "runs on a machine before it joins: there is no state on it to write to",
     ),

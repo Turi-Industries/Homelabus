@@ -8,6 +8,7 @@
 pub mod alerts;
 pub mod aliases;
 pub mod assertions;
+pub mod domain;
 pub mod mail_dns;
 pub mod mail_queue;
 pub mod notify;

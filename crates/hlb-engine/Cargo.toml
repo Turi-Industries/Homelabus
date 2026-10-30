@@ -41,14 +41,14 @@ rustls-pemfile = "2"
 tokio = { workspace = true, features = ["time"] }
 # A guide's `sql` automation reaches the app's database through `hlb_guide::SqlWriter`.
 async-trait.workspace = true
+# The domain's registry, read over RDAP (`domain.rs`).
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 async-trait.workspace = true
 serde_yaml_ng.workspace = true
 tempfile = "3"
-# The live roles test reads PocketID's token preview, as an app would get it.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
 [lints]
 workspace = true

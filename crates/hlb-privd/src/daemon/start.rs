@@ -737,6 +737,7 @@ pub async fn start(
             _ => None,
         };
         let dns = Arc::new(hlb_mail::public_dns::PublicDns::default());
+        let internet = Arc::new(hlb_engine::domain::Public::default());
         let st = state.clone();
         let rx = shutdown_rx.clone();
         let notif_as = notif.clone();
@@ -748,6 +749,7 @@ pub async fn start(
             move || {
                 let (reader, st, notif) = (reader.clone(), st.clone(), notif_as.clone());
                 let (mail, dns, master_key) = (mail.clone(), dns.clone(), master_key.clone());
+                let internet = internet.clone();
                 async move {
                     let now = crate::now();
                     // Opened at each pass, as the backup loop does: a key rotated by
@@ -775,6 +777,26 @@ pub async fn start(
                                 &door,
                             ))
                             .await;
+                    }
+                    match super::domain::read_and_record(&st, internet.as_ref(), now).await {
+                        Ok(drifts) => {
+                            for d in drifts {
+                                let line =
+                                    format!("{}: was {}, now {}", d.what.label(), d.was, d.now);
+                                tracing::error!("🔴 domain {line}");
+                                notif
+                                    .tell(&hlb_notify::Notification::critical(
+                                        // Keyed by what moved, so a second change of
+                                        // the same thing is the same alert.
+                                        &format!("domain:{}", d.what.key()),
+                                        "The house's domain moved: if nobody here did \
+                                         this, call the registrar now",
+                                        &line,
+                                    ))
+                                    .await;
+                            }
+                        }
+                        Err(e) => tracing::warn!("domain not read: {e}"),
                     }
                     let Some(mail) = mail else { return };
                     match super::mail_dns::read_and_record(&st, &mail, dns.as_ref(), now).await {
