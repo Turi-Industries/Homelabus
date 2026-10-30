@@ -36,8 +36,7 @@ pub async fn state(state: &State, kit: Option<&str>) -> Vec<Safeguard> {
             .find(|(id, ..)| id == &g.id)
             .map(|(_, age, by)| (*age, by.clone()));
         let proved = match proof(&g.id) {
-            // A rehearsal is recorded only on its code, and withdrawn by a new split.
-            None | Some(Proof::Deposit) | Some(Proof::Rehearsal) => attested,
+            None | Some(Proof::Deposit) => attested,
             // 🔴 The restore drill is a point Homelabus holds the trace of. A human
             // attestation must not be able to declare it done: it is precisely the
             // safeguard you believe held and that is not.
@@ -50,6 +49,15 @@ pub async fn state(state: &State, kit: Option<&str>) -> Vec<Safeguard> {
             Some(Proof::Kit) => {
                 let printed = state.breakglass_note(&g.id).await.unwrap_or(None);
                 attested.filter(|_| printed.is_some() && printed.as_deref() == kit)
+            }
+            // Recorded only on its code, withdrawn by a new split — and the family
+            // opening the kit they hold proves nothing once it is not today's.
+            Some(Proof::Rehearsal) => {
+                let sealed = state
+                    .breakglass_note(hlb_api::breakglass::FAMILY_KIT)
+                    .await
+                    .unwrap_or(None);
+                attested.filter(|_| sealed.is_some() && sealed.as_deref() == kit)
             }
         };
         if let Some((age, by)) = proved {
@@ -204,6 +212,49 @@ mod tests {
             "changed since"
         );
         assert_eq!(kit(state(&s, None).await), None, "nothing to compare with");
+    }
+
+    #[tokio::test]
+    async fn a_rehearsal_counts_only_while_the_familys_kit_is_current() {
+        use hlb_api::breakglass::{EMERGENCY_KIT, FAMILY_KIT, FAMILY_REHEARSAL};
+        let s = State::in_memory().await.expect("state");
+        let family = |g: Vec<Safeguard>| {
+            g.into_iter()
+                .find(|g| g.id == FAMILY_REHEARSAL)
+                .expect("the safeguard")
+                .attested_ago_s
+        };
+        s.attest_breakglass(FAMILY_KIT, "hlb emergency split", Some("0123abcd"))
+            .await
+            .expect("sealed");
+        assert_eq!(
+            family(state(&s, Some("0123abcd")).await),
+            None,
+            "never opened"
+        );
+        s.attest_breakglass(FAMILY_REHEARSAL, "hlb emergency rehearsed", Some("lbkd"))
+            .await
+            .expect("rehearsed");
+        assert!(family(state(&s, Some("0123abcd")).await).is_some());
+        // 🔴 A destination added, the plain kit printed again: the owner's sheet is
+        // current, the family's copy is not.
+        s.attest_breakglass(EMERGENCY_KIT, "hlb emergency kit", Some("ffff0000"))
+            .await
+            .expect("printed");
+        assert_eq!(
+            family(state(&s, Some("ffff0000")).await),
+            None,
+            "theirs is old"
+        );
+        s.attest_breakglass(FAMILY_KIT, "hlb emergency kit --sealed", Some("ffff0000"))
+            .await
+            .expect("sealed again");
+        assert!(family(state(&s, Some("ffff0000")).await).is_some());
+        assert_eq!(
+            family(state(&s, None).await),
+            None,
+            "nothing to compare with"
+        );
     }
 
     #[tokio::test]

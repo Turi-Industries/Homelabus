@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use hlb_api::breakglass::{EMERGENCY_KIT, FAMILY_REHEARSAL};
+use hlb_api::breakglass::{EMERGENCY_KIT, FAMILY_KIT, FAMILY_REHEARSAL};
 use hlb_bitwarden::emergency::Verdict;
 use hlb_engine::emergency::{EmergencyVault, Report};
 use hlb_engine::roles::Outcome;
@@ -149,6 +149,15 @@ async fn kit(cli: &Cli, out: Option<&Path>, sealed: bool) -> Result<ExitCode> {
         sheet = hlb_secrets::split::seal(&sealed, &split.recipient)?;
     }
     hand_over(&state, &kit.fingerprint, &sheet, out).await?;
+    if split.is_some() {
+        state
+            .attest_breakglass(
+                FAMILY_KIT,
+                "hlb emergency kit --sealed",
+                Some(&kit.fingerprint),
+            )
+            .await?;
+    }
     match (out, &split) {
         (Some(path), None) => println!(
             "The kit is in {} (fingerprint {}): print it, keep the sheet away from \
@@ -235,9 +244,11 @@ async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -
     // New shares were never rehearsed, whatever the old ones were.
     state.forget_breakglass(FAMILY_REHEARSAL).await?;
     // The sealed kit holds today's material, and opens without the owner.
-    state
-        .attest_breakglass(EMERGENCY_KIT, "hlb emergency split", Some(&kit.fingerprint))
-        .await?;
+    for id in [EMERGENCY_KIT, FAMILY_KIT] {
+        state
+            .attest_breakglass(id, "hlb emergency split", Some(&kit.fingerprint))
+            .await?;
+    }
     println!(
         "Split {}: any {threshold} of {count} shares open the kit. In {}:",
         record.id(),

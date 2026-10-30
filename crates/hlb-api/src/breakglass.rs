@@ -131,6 +131,10 @@ pub const EMERGENCY_VAULT: &str = "emergency-vault";
 pub const EMERGENCY_KIT: &str = "emergency-kit";
 /// The family's: the holders of the kit's shares opened it together, without the owner.
 pub const FAMILY_REHEARSAL: &str = "family-rehearsal";
+/// Not a safeguard: the fingerprint of the last kit sealed for the family, which the
+/// rehearsal's proof reads. Its own row, since a plain kit printed after a change makes
+/// [`EMERGENCY_KIT`] current again while the family's copy stays the old one.
+pub const FAMILY_KIT: &str = "family-kit-sealed";
 
 /// What proves a safeguard Homelabus verifies itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +147,7 @@ pub enum Proof {
     /// A kit printed with what is current: its fingerprint is kept with the attestation.
     Kit,
     /// The rehearsal code read off the sealed kit, which only its shares open, given
-    /// back — and burned.
+    /// back — and burned; counted while the last kit sealed for them is current.
     Rehearsal,
 }
 
@@ -251,14 +255,15 @@ pub fn safeguards() -> Vec<Safeguard> {
         },
         Safeguard {
             id: FAMILY_REHEARSAL.into(),
-            title: "The family opened the kit without the owner".into(),
-            why: "The day the owner is gone, a kit nobody else can open is no kit: its \
-                  shares must be held, and the holders able to use them."
+            title: "The family can open today's kit without the owner".into(),
+            why: "The day the owner is gone, a kit nobody else can open is no kit, and \
+                  one they open from before a change restores nothing."
                 .into(),
-            comment: "Each relative holds a share of hlb emergency split. Once a year, \
-                      send them hlb emergency kit --sealed; having opened it together, they \
-                      give you the rehearsal code it ends with, for hlb emergency rehearsed \
-                      <code>."
+            comment: "Each relative holds a share of hlb emergency split. After any change, \
+                      and once a year, send them hlb emergency kit --sealed; having opened \
+                      it together, they give you the rehearsal code it ends with, for hlb \
+                      emergency rehearsed <code>. It stops counting when what the kit holds \
+                      changes, until the family has the new one."
                 .into(),
             attested_ago_s: None,
             attested_by: None,

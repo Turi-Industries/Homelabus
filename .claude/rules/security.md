@@ -369,7 +369,9 @@ the outside, which is the whole problem.
   sealed kit ends with a code only its opened text shows, `hlb emergency rehearsed`
   checks it and BURNS it — kept, the code read once would prove every later year
   without anyone opening anything. A new split draws a new code and withdraws the
-  rehearsal: the new shares were never tried.
+  rehearsal: the new shares were never tried. 🔴 It counts while the FAMILY's copy is
+  current (`FAMILY_KIT`, its own fingerprint), not the owner's: one plain kit printed
+  after a new destination made the safeguard green over a sealed kit that predates it.
 - **`hlb secrets-rekey` never races the controller.** It holds the old key in memory and
   writes secrets under it: refused while its Swarm service runs, `--apply` requires
   `--controller-stopped` for one run by hand, and the rewrite is a compare-and-swap

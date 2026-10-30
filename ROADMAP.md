@@ -822,9 +822,8 @@ three Tangs, and the third alone opens it.
     it, so one typed on the two lines it is printed on is one share. Held end to end
     through the binary (`hlb-cli/tests/family_split.rs`): split where the state is,
     three sheets typed back where there is none, two refused with nothing shown, the
-    kit sealed again opening with the same shares. Not done: a sealed kit is counted as
-    the kit (same fingerprint) — it holds today's material, but counts as printed the
-    day it is written, not the day each relative received it.
+    kit sealed again opening with the same shares. A sealed kit is counted as the kit
+    (same fingerprint), from the day it is written, not the day each relative got it.
   - ✅ The rehearsal — 2026-10-30. Proved, not attested (`family-rehearsal`,
     `Proof::Rehearsal`): the sealed kit ends with a rehearsal code — 64 bits of modhex,
     kept in the vault so a kit sealed again carries the same one — that only its opened
@@ -835,6 +834,9 @@ three Tangs, and the third alone opens it.
     opens, the code comes back. A new split draws a new code and withdraws the
     rehearsal. It ages as every attestation does (180 days, then a notice), not after
     a year: one expiry serves every safeguard, and twice a year is no harm.
+    And it counts only while the family's copy is today's: the last kit sealed for them
+    keeps its own fingerprint (`family-kit-sealed`), since a plain kit printed after a
+    change makes `emergency-kit` current again while theirs restores the old house.
   - Left: the sealed kit deposited where a relative finds it without the owner — today
     it is a file the owner sends.
 
