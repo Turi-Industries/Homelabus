@@ -123,6 +123,8 @@ monitoring, updates and routes have their own `operations-*.md`.
   moments can diverge, and you would execute something other than what you read.
   Replaying reruns the preview, not the execution. A plan targeting an unknown route is
   refused AT SAVE TIME — accepted, it would fail weeks later on a 404 pointing nowhere.
+  ⚠️ Nothing replays one yet (2026-10-30): the body is stored, `/api/plans` drops it,
+  and the plans screen promises a replay no button does.
 - **A path template is compared segment by segment.** A prefix comparison would let
   `/api/apps/gitea/install/really` through, which does not exist.
 - **A runbook written by hand is wrong the day you need it.** This one is generated from

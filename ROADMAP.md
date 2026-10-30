@@ -577,9 +577,49 @@ three Tangs, and the third alone opens it.
     booted the disk is open: the controller holds Docker's socket, which is root —
     splitting it into a minimal privileged daemon behind a narrow API, the interface
     unprivileged, is its own item. Backups are already encrypted before they leave.
-- The controller split: a minimal privileged daemon holds Docker's socket behind a
-  narrow API, the HTTP API and the interface run unprivileged — today a flaw in the
-  controller is root on its node.
+- **The controller split** — decided 2026-10-30 (owner): a privileged executor. Today
+  the controller holds Docker's socket, the vault's key, `/var/lib/docker/volumes`
+  read-write and `DAC_OVERRIDE`: a flaw in any of its routes is root on its node and
+  every secret. **Measured** the same day, route by route (92 operations, 20 loops):
+  38 need nothing but reading the state, 7 read Docker (`nodes`, `tasks`), 16 write
+  only web data (sessions, preferences, mutes, announcements), 9 write desired state a
+  loop then applies (roles, quotas, destinations), 11 decrypt a secret per request, 17
+  drive Docker, 11 call an admin client (PocketID, Stalwart, Vaultwarden, the database
+  provisioners). A narrow API relaying `ServiceSpec`s would protect nothing — a spec
+  binds any host path —, so the boundary is INTENTS: the web side asks "install gitea
+  at this domain", "back up now", "give lena this role"; the daemon re-derives
+  everything from the catalog and its own state, and refuses what it cannot derive.
+  - **The state cannot stay one writable file.** Whoever writes `hlb.db` forges any
+    secret (the vault is age X25519: encrypting needs only its PUBLIC key), mints a
+    token or a session (unkeyed SHA-256 fingerprints), rewrites the audit chain
+    (unkeyed), sets `users.role`, and edits `apps.manifest` — read back with a YAML
+    parse only, then deployed, its jobs `exec`ed, by root. So the daemon alone writes
+    `hlb.db`; the web side reads it. **Measured:** a container under another uid, the
+    directory mounted `:ro`, reads it live while the daemon writes, and its writes are
+    refused by the kernel; it can open it only while the daemon holds it open (the
+    `-wal` and `-shm` files go with the last connection). The web side's own data —
+    sessions, preferences, mutes, announcements — goes to a database of its own.
+  - **What it still gives an intruder in the web side**: whatever a signed-in person's
+    intents can do — the web side vouches for who asks. No secret read, no host path,
+    no image outside the catalog, no `exec`. Destroy-level intents carrying a fresh
+    PocketID `id_token` the daemon verifies itself would close even that, later.
+  - **Stages**, each gated: (1) the intents, in process — a crate the handlers call
+    instead of the orchestrator, the vault and the admin clients, and a test refusing
+    those types in the web modules; the suite unchanged. (2) Two processes — the
+    daemon (socket, vault, volumes, the loops, `hlb.db`), the web service with none of
+    them, a Unix socket between them whose peer is checked (`SO_PEERCRED`); gate on the
+    lab: `docker inspect` of the web service shows no socket, no key, no capability, a
+    shell in it reads no secret and writes nothing in `hlb.db`, every screen and
+    assertion as before. (3) Intents re-derived and bounded: a local destination's
+    path, the guide's automations, the `id_token` above.
+  - Found by the same reading, fixed at once (2026-10-30): a destination could name
+    ANY secret of the vault as its credentials, signed with to a location the caller
+    chose (`operate`); the Bitwarden assistant replaced a token of the name it was
+    given — the deadman's included. Found, not fixed: the plans screen says a plan
+    "replays its preview", and nothing replays it — `/api/plans` drops the body; a
+    local destination's path is any host path, bound read-write by the backup pass;
+    three read routes decrypt the whole emergency kit to show its fingerprint; the
+    `drifts` screen reads the reconcile loop's memory, which stage 2 must persist.
 - ✅ ZFS native encryption — 2026-10-30: `hlb storage encrypt <node>`, from a manager,
   puts the node's dataset key in the vault and on the emergency kit (`zfs-key-<node>`,
   covered by its fingerprint; refused until the kit is printed with it), writes it to
