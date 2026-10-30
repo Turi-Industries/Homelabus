@@ -302,10 +302,10 @@ pub(crate) async fn nodes_summary(s: &AppState) -> Vec<hlb_api::NodeSummary> {
 
     // The tasks, to say what each node hosts. A failure here must not deprive us of the
     // node list: we show the nodes without their tasks.
-    let tasks = match &s.orchestrator {
-        Some(o) => task_summaries(o.as_ref(), None).await,
-        None => Vec::new(),
-    };
+    let tasks = swarm(s, None)
+        .await
+        .map(|v| task_summaries(&v))
+        .unwrap_or_default();
 
     let mut out = Vec::new();
     for (address, status) in poll.iter() {
@@ -414,9 +414,8 @@ async fn node_detail(
             .is_some_and(|n| hostname.as_deref().is_some_and(|h| n == h) || n == address)
     };
 
-    let tasks = match &s.orchestrator {
-        Some(o) => task_summaries(o.as_ref(), None)
-            .await
+    let tasks = match swarm(&s, None).await {
+        Some(v) => task_summaries(&v)
             .into_iter()
             .filter(|t| on_this_node(&t.node))
             .collect(),
@@ -453,11 +452,9 @@ async fn node_detail(
     // itself. A node whose hostname has never been reported stays `None` rather than
     // being guessed — draining the wrong machine empties it silently, and the mistake
     // only shows when the apps have already moved.
-    let swarm = match &s.orchestrator {
-        Some(o) => o
-            .nodes()
-            .await
-            .unwrap_or_default()
+    let swarm = match swarm(&s, None).await {
+        Some(v) => v
+            .nodes
             .into_iter()
             .find(|n| summary.hostname.as_deref() == Some(n.hostname.as_str()))
             .map(|n| hlb_api::SwarmNode {
@@ -502,7 +499,7 @@ async fn topology(
 }
 
 pub(crate) async fn topology_now(s: &AppState) -> hlb_api::Topology {
-    let Some(o) = &s.orchestrator else {
+    let Some(hlb_api::intent::SwarmView { nodes, tasks }) = swarm(s, None).await else {
         // In demonstration mode, a fabricated topology: without it, the screen that
         // justifies the interface's existence would be empty and impossible to write.
         if s.demo {
@@ -519,9 +516,6 @@ pub(crate) async fn topology_now(s: &AppState) -> hlb_api::Topology {
         };
     };
 
-    let nodes = o.nodes().await.unwrap_or_default();
-    let tasks = o.tasks(None).await.unwrap_or_default();
-
     // Only LIVE replicas count for anti-affinity: a dead task shares nothing any more,
     // and including it would surface violations that are already resolved.
     let placements: Vec<(String, String)> = tasks
@@ -530,15 +524,15 @@ pub(crate) async fn topology_now(s: &AppState) -> hlb_api::Topology {
         .filter_map(|t| t.node_id.clone().map(|n| (t.service.clone(), n)))
         .collect();
 
-    let violations = hlb_orchestrator::cluster::anti_affinity_violations(&placements, &nodes);
-    let groups = hlb_orchestrator::cluster::group_by_domain(&nodes);
+    let violations = hlb_types::swarm::anti_affinity_violations(&placements, &nodes);
+    let groups = hlb_types::swarm::group_by_domain(&nodes);
     let total = nodes.len();
 
     hlb_api::Topology {
         // What the failure simulator needs to know to judge the quorum.
         managers: nodes
             .iter()
-            .filter(|n| n.role == hlb_orchestrator::cluster::NodeRole::Manager)
+            .filter(|n| n.role == hlb_types::swarm::NodeRole::Manager)
             .map(|n| n.id.clone())
             .collect(),
         domains: groups
@@ -594,14 +588,29 @@ async fn tasks(
     _auth: Authorized<CanRead>,
     AxumState(s): AxumState<Arc<AppState>>,
 ) -> Json<Vec<hlb_api::TaskSummary>> {
-    let Some(o) = &s.orchestrator else {
-        return Json(Vec::new());
-    };
-
-    Json(task_summaries(o.as_ref(), None).await)
+    Json(
+        swarm(&s, None)
+            .await
+            .map(|v| task_summaries(&v))
+            .unwrap_or_default(),
+    )
 }
 
-/// The tasks as the API shows them, `service` filtering by name.
+/// What runs where, asked of the privileged side. `None` = no orchestrator.
+pub(crate) async fn swarm(
+    s: &AppState,
+    service: Option<&str>,
+) -> Option<hlb_api::intent::SwarmView> {
+    s.privd()
+        .ask(hlb_api::intent::Swarm {
+            service: service.map(str::to_string),
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+/// The tasks as the API shows them.
 ///
 /// 🔴 `node` is the node's HOSTNAME — what the agent, the node screens and the causal
 /// chain know a machine by. A task carries Swarm's id for it, and that id was passed
@@ -609,15 +618,11 @@ async fn tasks(
 /// cluster every node listed no service and no failure reached its machine. Only the
 /// demonstration, whose tasks name hostnames, showed them. A node Swarm no longer lists
 /// keeps its id.
-pub(crate) async fn task_summaries(
-    o: &dyn hlb_orchestrator::Orchestrator,
-    service: Option<&str>,
-) -> Vec<hlb_api::TaskSummary> {
-    let nodes = o.nodes().await.unwrap_or_default();
-    o.tasks(service)
-        .await
-        .unwrap_or_default()
-        .into_iter()
+pub(crate) fn task_summaries(view: &hlb_api::intent::SwarmView) -> Vec<hlb_api::TaskSummary> {
+    let nodes = &view.nodes;
+    view.tasks
+        .iter()
+        .cloned()
         .map(|t| hlb_api::TaskSummary {
             alive: t.is_alive(),
             failed: t.has_failed(),
@@ -2073,8 +2078,8 @@ async fn app_detail(
 
     // Each source is optional: an error on one must not deprive you of the whole
     // screen. A half-filled detail stays useful; a 500 does not.
-    let tasks = match &s.orchestrator {
-        Some(o) => task_summaries(o.as_ref(), Some(&name)).await,
+    let tasks = match swarm(&s, Some(&name)).await {
+        Some(v) => task_summaries(&v),
         // ⚠️ The same precedent as the topology: without an orchestrator, the demo
         // fabricates tasks. Without them the causal chain would stop at the first link
         // everywhere, and the screen we want to write would be invisible.
@@ -4029,9 +4034,7 @@ pub(crate) mod tests {
             updated_at: None,
         }];
         let e = state_with_orchestrator(st, Arc::new(o));
-        let o = e.orchestrator.clone().expect("orchestrator");
-
-        let tasks = task_summaries(o.as_ref(), None).await;
+        let tasks = task_summaries(&swarm(&e, None).await.expect("orchestrator"));
         assert_eq!(tasks[0].node.as_deref(), Some("deb2"), "{tasks:?}");
     }
 

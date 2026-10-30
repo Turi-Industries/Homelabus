@@ -37,6 +37,7 @@ pub enum Intent {
     Scale(Scale),
     NodeAvailability(NodeAvailability),
     Nodes(Nodes),
+    Swarm(Swarm),
     Install(Install),
     Upgrade(Upgrade),
     CatalogChanges(CatalogChanges),
@@ -66,6 +67,7 @@ asks! {
     Scale => ActionResult,
     NodeAvailability => ActionResult,
     Nodes => Option<Result<Vec<hlb_types::swarm::NodeInfo>, String>>,
+    Swarm => Option<SwarmView>,
     Install => Acted,
     Upgrade => Acted,
     CatalogChanges => Vec<String>,
@@ -113,6 +115,21 @@ pub struct NodeAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Nodes {}
+
+/// What runs where: the nodes, and the tasks of one service or of all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Swarm {
+    pub service: Option<String>,
+}
+
+/// Swarm's nodes and tasks, as read. A side that failed to read is empty: the screens
+/// show the nodes without their tasks rather than nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmView {
+    pub nodes: Vec<hlb_types::swarm::NodeInfo>,
+    pub tasks: Vec<hlb_types::swarm::TaskInfo>,
+}
 
 /// Install an application from the catalog, or resume its interrupted install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

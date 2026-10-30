@@ -145,6 +145,9 @@ impl Privd {
             Intent::Nodes(hlb_api::intent::Nodes {}) => {
                 serde_json::to_value(swarm::nodes(self).await)?
             }
+            Intent::Swarm(hlb_api::intent::Swarm { service }) => {
+                serde_json::to_value(swarm::view(self, service.as_deref()).await)?
+            }
             Intent::Install(i) => serde_json::to_value(apps::install(self, i).await)?,
             Intent::Upgrade(i) => serde_json::to_value(apps::upgrade(self, i).await)?,
             Intent::CatalogChanges(hlb_api::intent::CatalogChanges { app }) => {

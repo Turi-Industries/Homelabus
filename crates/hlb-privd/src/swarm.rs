@@ -217,3 +217,13 @@ pub(crate) async fn nodes(p: &Privd) -> Option<Result<Vec<hlb_types::swarm::Node
     let o = p.orchestrator.as_ref()?;
     Some(o.nodes().await.map_err(|e| e.to_string()))
 }
+
+/// The nodes and the tasks, each empty when it could not be read. `None` = no
+/// orchestrator.
+pub(crate) async fn view(p: &Privd, service: Option<&str>) -> Option<hlb_api::intent::SwarmView> {
+    let o = p.orchestrator.as_ref()?;
+    Some(hlb_api::intent::SwarmView {
+        nodes: o.nodes().await.unwrap_or_default(),
+        tasks: o.tasks(service).await.unwrap_or_default(),
+    })
+}
