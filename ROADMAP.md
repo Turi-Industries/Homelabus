@@ -776,6 +776,25 @@ three Tangs, and the third alone opens it.
     delegation and exited 1. Left: the inbox and a screen (an unwatched domain is a
     log line tonight); WHOIS for the TLDs without RDAP, parsed per registry; the
     nightly pass not run on the lab, whose exposure is internal — nothing to watch.
+  - CAA with `accounturi` next. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
+    offline where no CA was to be reached): Caddy keeps its account in
+    `/data/caddy/acme/<directory, ':' and '/' as '-'>/users/<email>/<local part>.json`,
+    the URI its `location` (`acme-v02.api.letsencrypt.org-directory` for Let's
+    Encrypt). 🔴 With an `email` and no issuer named — Homelabus's Caddyfile in
+    production — Caddy tries Let's Encrypt THEN ZeroSSL for every name outside the
+    wildcard (the wildcard's own `tls` has Let's Encrypt only): a CAA naming one account
+    would cut the fallback silently, and ZeroSSL's account does not exist until first
+    used, so it cannot be pinned. ✅ `cert_issuer acme` in the global block: one
+    authority, `acme_ca` still honoured (adapted). Stalwart opens its own account for
+    `mail.<domain>`: 0.16.27 and 1.0.0 both carry an `accountUri` property (read from
+    the binaries; to prove through `x:AcmeProvider/get` in `live_mail`'s certificate
+    test, which runs Caddy, Stalwart and Pebble together). Designed: the reading takes
+    the house's accounts — Caddy's by `exec_in_service` reading that file, Stalwart's
+    by JMAP — on Let's Encrypt's production only; the CAA judged is the one governing
+    the exposure's names (climbing from its domain to the zone, the first set found);
+    one that refuses an account is critical (renewals fail 30 days before expiry),
+    none pinned is advised with the exact lines, `0 issue "letsencrypt.org;
+    accounturi=<uri>"` per account, `issuewild` judged for a wildcard.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach

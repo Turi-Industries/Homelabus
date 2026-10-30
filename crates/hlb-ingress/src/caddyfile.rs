@@ -382,6 +382,10 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
             wildcard: _,
         } => {
             let _ = writeln!(out, "\temail {email}");
+            // One authority, one account: with an email and no issuer named, Caddy 2.11
+            // falls back to ZeroSSL for every name outside the wildcard (measured), an
+            // account no CAA `accounturi` can name before its first use.
+            let _ = writeln!(out, "\tcert_issuer acme");
             if let Some(ca) = ca {
                 let _ = writeln!(out, "\tacme_ca {ca}");
             } else if *staging {
@@ -1576,6 +1580,15 @@ spec:
             out.contains("are NOT"),
             "the warning must be visible:\n{out}"
         );
+    }
+
+    #[test]
+    fn certificates_come_from_one_authority_with_no_fallback() {
+        for cfg in [with_acme(false), with_acme(true)] {
+            let out = render(&[gitea()], &cfg);
+            assert!(out.contains("\tcert_issuer acme\n"), "{out}");
+            assert!(!out.contains("zerossl"), "{out}");
+        }
     }
 
     #[test]
