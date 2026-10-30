@@ -1297,7 +1297,7 @@ pub async fn resize(
 }
 
 // ---------------------------------------------------------------------------
-// Destinations de backup
+// Backup destinations
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
@@ -1373,6 +1373,17 @@ pub async fn destination(
              \"invalid signature\""
                 .to_string(),
         );
+    }
+
+    // 🔴 The pass decrypts the secret named here and signs requests to this location with
+    // it: any other name would hand another secret of the vault — another destination's
+    // key — to a server the caller chose. `hlb backup dest add` stores it under this one.
+    let own = format!("backup-dest-{name}");
+    if let Some(c) = d.credentials_secret.as_deref().filter(|c| *c != own) {
+        blockers.push(format!(
+            "credentials_secret \"{c}\" is not this destination's: only \"{own}\", which \
+             `hlb backup dest add {name} --location {location} --access-key <key>` stores"
+        ));
     }
 
     let applied = q.apply && blockers.is_empty();
