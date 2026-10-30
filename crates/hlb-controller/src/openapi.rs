@@ -519,9 +519,13 @@ mod tests {
         let mut s = crate::api::tests::base_state(std::sync::Arc::new(st), false);
         s.demo = true;
         s.public_status = true;
-        s.catalog = Some(std::sync::Arc::new(
+        let catalog = std::sync::Arc::new(
             hlb_catalog::Catalog::load(&s.catalog_dir).expect("the repository's catalog"),
-        ));
+        );
+        s.privd = hlb_privd::Privd::new(s.state.clone())
+            .with_mail(None, &s.mail_domain)
+            .with_catalog(Some(catalog.clone()));
+        s.catalog = Some(catalog);
         *s.last_poll.write().await = crate::demo::nodes(now);
         *s.drifts.write().await = crate::demo::drifts();
         *s.alerts.write().await = crate::demo::alerts(now as i64);

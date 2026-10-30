@@ -330,6 +330,13 @@ impl Legacy {
     }
 }
 
+/// What the daemon's own loops hold beside the privileged side, until those loops move
+/// into it: the web side's `AppState` carries none of it.
+struct Held {
+    install: Option<Arc<hlb_controller::api::InstallContext>>,
+    orchestrator: Option<Arc<dyn Orchestrator>>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -1484,11 +1491,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Account provisioning. Without these two, sign-up records an account and
+    // nothing else — the state is named `Empty` and a re-run from the command line
+    // finishes it.
+    let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
+        (Some(u), Some(k)) => {
+            tracing::info!(url = %u, "PocketID configured: the identities will be created");
+            Some(Arc::new(hlb_identity::PocketId::new(u, k)))
+        }
+        (Some(_), None) => {
+            tracing::warn!(
+                "--pocketid-url without --pocketid-key: the identities will NOT be created"
+            );
+            None
+        }
+        _ => {
+            tracing::info!(
+                "PocketID not configured: sign-up will leave the accounts without an identity"
+            );
+            None
+        }
+    };
+    let mail = match (
+        &cli.stalwart_url,
+        &cli.stalwart_admin,
+        &cli.stalwart_password,
+    ) {
+        (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
+            u,
+            hlb_mail::Auth::Basic {
+                user: a.clone(),
+                password: p.clone(),
+            },
+        ))),
+        _ => None,
+    };
+    let mail_domain = cli.mail_domain.clone().unwrap_or_else(|| "local".into());
+    // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
+    // from starting: the rest of the API keeps all its value, and the message says
+    // what is missing.
+    let catalog = match hlb_catalog::Catalog::load(&cli.catalog) {
+        Ok(c) => {
+            tracing::info!(apps = c.len(), directory = %cli.catalog.display(), "catalog loaded");
+            Some(Arc::new(c))
+        }
+        Err(e) => {
+            tracing::warn!(
+                directory = %cli.catalog.display(),
+                "unreadable catalog ({e}) — installing from the interface will be unavailable"
+            );
+            None
+        }
+    };
+    let backup =
+        (!cli.demo).then(|| Arc::new(pass_config) as Arc<dyn hlb_controller::backup::BackUpNow>);
+    // 🔴 The capabilities go to the privileged side, and to the daemon's own loops
+    // below: the web side's `AppState` holds none of them, only the door.
+    let privd = hlb_privd::Privd::new(state.clone())
+        .with_orchestrator(orch_api.clone())
+        .with_catalog(catalog.clone())
+        .with_install(install.clone())
+        .with_identity(identity)
+        .with_mail(mail, &mail_domain)
+        .with_backup(backup);
+    let held = Arc::new(Held {
+        install,
+        orchestrator: orch_api,
+    });
+
     let shared = Arc::new(api::AppState {
         state,
-        install,
-        backup: (!cli.demo)
-            .then(|| Arc::new(pass_config) as Arc<dyn hlb_controller::backup::BackUpNow>),
+        privd,
         started_at: std::time::Instant::now(),
         version: env!("CARGO_PKG_VERSION"),
         last_poll,
@@ -1503,48 +1576,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         beat: cli.heartbeat.clone(),
         mirror: cli.git_mirror.clone(),
         public_url: cli.public_url.clone(),
-        orchestrator: orch_api,
         demo: cli.demo,
         public_status: cli.public_status,
-        // Account provisioning. Without these two, sign-up records an account and
-        // nothing else — the state is named `Empty` and a re-run from the command line
-        // finishes it.
-        identity: match (&cli.pocketid_url, &cli.pocketid_key) {
-            (Some(u), Some(k)) => {
-                tracing::info!(url = %u, "PocketID configured: the identities will be created");
-                Some(Arc::new(hlb_identity::PocketId::new(u, k)))
-            }
-            (Some(_), None) => {
-                tracing::warn!(
-                    "--pocketid-url without --pocketid-key: the identities will NOT be created"
-                );
-                None
-            }
-            _ => {
-                tracing::info!(
-                    "PocketID not configured: sign-up will leave the accounts without an identity"
-                );
-                None
-            }
-        },
-        mail: match (
-            &cli.stalwart_url,
-            &cli.stalwart_admin,
-            &cli.stalwart_password,
-        ) {
-            (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
-                u,
-                hlb_mail::Auth::Basic {
-                    user: a.clone(),
-                    password: p.clone(),
-                },
-            ))),
-            _ => None,
-        },
-        mail_domain: cli.mail_domain.clone().unwrap_or_else(|| "local".into()),
-        // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
-        // from starting: the rest of the API keeps all its value, and the message says
-        // what is missing.
+        mail_domain,
         catalog_dir: cli.catalog.clone(),
         // ⚠️ Loaded ONCE at startup, like the catalog. A theme file edited while the
         // controller runs takes effect at the next restart — the same contract the
@@ -1568,19 +1602,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Beside `custom_themes`, and for the same reason `catalog_dir` sits beside the
         // catalog: a theme may name a typeface, which is a file in this directory.
         themes_dir: cli.themes.clone(),
-        catalog: match hlb_catalog::Catalog::load(&cli.catalog) {
-            Ok(c) => {
-                tracing::info!(apps = c.len(), directory = %cli.catalog.display(), "catalog loaded");
-                Some(Arc::new(c))
-            }
-            Err(e) => {
-                tracing::warn!(
-                    directory = %cli.catalog.display(),
-                    "unreadable catalog ({e}) — installing from the interface will be unavailable"
-                );
-                None
-            }
-        },
+        catalog,
     });
 
     // A day of measurements for the home's curves, read from what the agents last
@@ -1655,15 +1677,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // notified; one never set up stays in the inbox as a safeguard never proved.
     if !cli.demo {
         let shared = shared.clone();
+        let held = held.clone();
         let notif_vault = notif.clone();
         tracing::info!(interval = cli.emergency_secs, "emergency vault loop");
         tasks.push(tokio::spawn(loops::every(
             Duration::from_secs(cli.emergency_secs),
             shutdown_rx.clone(),
             move || {
+                let held = held.clone();
                 let (shared, notif) = (shared.clone(), notif_vault.clone());
                 async move {
-                    let Some(install) = &shared.install else {
+                    let Some(install) = &held.install else {
                         return;
                     };
                     let reach = |u: &str| u.to_string();
@@ -1727,6 +1751,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // that was not, is notified.
     if !cli.demo {
         let shared = shared.clone();
+        let held = held.clone();
         let notif_upkeep = notif.clone();
         let network = cli.platform_network.clone();
         tracing::info!(interval = cli.upkeep_secs, "destinations upkeep loop");
@@ -1734,10 +1759,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Duration::from_secs(cli.upkeep_secs),
             shutdown_rx.clone(),
             move || {
+                let held = held.clone();
                 let (shared, notif, network) =
                     (shared.clone(), notif_upkeep.clone(), network.clone());
                 async move {
-                    let Some(install) = &shared.install else {
+                    let Some(install) = &held.install else {
                         return;
                     };
                     let reach = |u: &str| u.to_string();
@@ -1803,16 +1829,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // says what to do.
     if !cli.demo {
         let shared = shared.clone();
+        let held = held.clone();
         let notif_termix = notif.clone();
         tracing::info!(interval = cli.termix_secs, "termix loop");
         tasks.push(tokio::spawn(loops::every(
             Duration::from_secs(cli.termix_secs),
             shutdown_rx.clone(),
             move || {
+                let held = held.clone();
                 let (shared, notif) = (shared.clone(), notif_termix.clone());
                 async move {
-                    let (Some(install), Some(orch)) = (&shared.install, &shared.orchestrator)
-                    else {
+                    let (Some(install), Some(orch)) = (&held.install, &held.orchestrator) else {
                         return;
                     };
                     let reach = |u: &str| u.to_string();
@@ -1867,16 +1894,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The images every update leaves behind, on every node. A failure is notified: the
     // disk it would have freed is the one the journal and Docker's state live on.
     if !cli.demo {
-        let shared = shared.clone();
+        let held = held.clone();
         let notif_prune = notif.clone();
         tracing::info!(interval = cli.prune_secs, "image prune loop");
         tasks.push(tokio::spawn(loops::every(
             Duration::from_secs(cli.prune_secs),
             shutdown_rx.clone(),
             move || {
-                let (shared, notif) = (shared.clone(), notif_prune.clone());
+                let held = held.clone();
+                let notif = notif_prune.clone();
                 async move {
-                    let Some(orch) = &shared.orchestrator else {
+                    let Some(orch) = &held.orchestrator else {
                         return;
                     };
                     let report = match hlb_engine::prune::run(orch.as_ref(), true).await {
@@ -1920,6 +1948,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.demo {
         if let (Some(own), Some(_)) = (cli.controller_cert.clone(), &cli.controller_ca) {
             let shared = shared.clone();
+            let held = held.clone();
             let notif_pki = notif.clone();
             let agent_service = cli.agent_service.clone();
             tracing::info!(interval = cli.pki_secs, "certificate renewal loop");
@@ -1927,6 +1956,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Duration::from_secs(cli.pki_secs),
                 shutdown_rx.clone(),
                 move || {
+                    let held = held.clone();
                     let (shared, notif, own, agent_service) = (
                         shared.clone(),
                         notif_pki.clone(),
@@ -1935,7 +1965,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     async move {
                         use hlb_engine::pki;
-                        let (Some(install), Some(orch)) = (&shared.install, &shared.orchestrator)
+                        let (Some(install), Some(orch)) = (&held.install, &held.orchestrator)
                         else {
                             return;
                         };

@@ -48,6 +48,9 @@ pub type LastPoll = Arc<tokio::sync::RwLock<std::collections::BTreeMap<String, A
 
 pub struct AppState {
     pub state: Arc<State>,
+    /// 🔴 The only way to Docker, the vault and the admin clients: private to
+    /// `hlb-privd`, so a handler wanting one of them does not compile.
+    pub privd: hlb_privd::Privd,
     pub started_at: std::time::Instant,
     pub version: &'static str,
     pub last_poll: LastPoll,
@@ -65,13 +68,6 @@ pub struct AppState {
     pub signin: Arc<crate::signin::SignInSlot>,
     /// Rate limiting. See `crate::throughput` for what it protects.
     pub throughput: Arc<crate::throughput::RateLimiter>,
-    /// Account provisioning: identity and mailbox.
-    ///
-    /// 🔴 Without them, sign-up creates an account in the database and NOTHING else —
-    /// the `Empty` state, which the management screen shows in red and a re-run repairs.
-    /// That is honest, but it is not self-service: someone must finish it by hand.
-    pub identity: Option<Arc<hlb_identity::PocketId>>,
-    pub mail: Option<Arc<hlb_mail::Stalwart>>,
     /// The domain of the addresses created.
     pub mail_domain: String,
     /// The application catalog. `None` = directory absent or unreadable; the screens
@@ -98,10 +94,6 @@ pub struct AppState {
     pub public_status: bool,
     /// Demonstration mode: some views are fabricated for want of an orchestrator.
     pub demo: bool,
-    /// The orchestrator, to read the Swarm tasks. `None` = Docker unreachable, or
-    /// demonstration mode: the screens say so rather than show an empty list you would
-    /// take for "no task is running".
-    pub orchestrator: Option<Arc<dyn hlb_orchestrator::Orchestrator>>,
     /// The current state of the alerts, written by `AlertLoop`.
     ///
     /// Same pattern as `last_poll`: the loop writes, the API reads.
@@ -125,19 +117,6 @@ pub struct AppState {
     /// The time-series database. `None` = not deployed: the graphs show "unavailable"
     /// **while saying how to install it**, rather than a flat curve.
     pub series: Option<Arc<crate::promql::Metrics>>,
-    /// What the executor needs in order to really install an app.
-    ///
-    /// 🔴 Grouped rather than scattered across `AppState`: the install route needs the
-    /// vault AND the database clients AND the registry, and a field added to one place
-    /// and forgotten in the other is how a capability silently stops being provisioned.
-    /// Everything in here is `Option`: a missing client makes the executor record
-    /// `Unimplemented` for that action, which is visible, instead of pretending.
-    pub install: Option<Arc<InstallContext>>,
-    /// "Back up now": the backup loop's own pass, held to one app.
-    ///
-    /// `None` = this controller runs no pass (the demonstration). The route then says
-    /// so, never a step done.
-    pub backup: Option<Arc<dyn crate::backup::BackUpNow>>,
     /// 🔴 `true` = croire `X-Forwarded-For`.
     ///
     /// To be set ONLY if a trusted proxy really is in front: otherwise every attacker
@@ -149,17 +128,8 @@ pub struct AppState {
 impl AppState {
     /// The privileged side, which every handler asks instead of holding Docker, the
     /// vault or an admin client itself.
-    ///
-    /// ⚠️ Assembled from this state's own fields while the handlers move onto it one
-    /// module at a time; once none reads those fields, they move into it for good.
-    pub fn privd(&self) -> hlb_privd::Privd {
-        hlb_privd::Privd::new(self.state.clone())
-            .with_orchestrator(self.orchestrator.clone())
-            .with_catalog(self.catalog.clone())
-            .with_install(self.install.clone())
-            .with_identity(self.identity.clone())
-            .with_mail(self.mail.clone(), &self.mail_domain)
-            .with_backup(self.backup.clone())
+    pub fn privd(&self) -> &hlb_privd::Privd {
+        &self.privd
     }
 }
 
@@ -2907,9 +2877,8 @@ pub(crate) mod tests {
             custom_themes: Vec::new(),
             themes_dir: std::path::PathBuf::new(),
             catalog_dir: "../../catalog".into(),
+            privd: hlb_privd::Privd::new(st.clone()).with_mail(None, "local"),
             state: st,
-            install: None,
-            backup: None,
             started_at: std::time::Instant::now(),
             version: "test",
             last_poll: Default::default(),
@@ -2924,14 +2893,23 @@ pub(crate) mod tests {
             beat: None,
             mirror: None,
             public_url: None,
-            orchestrator: None,
             demo: false,
             catalog: None,
             public_status: false,
-            identity: None,
-            mail: None,
             mail_domain: "local".into(),
         }
+    }
+
+    /// `base_state` with the catalog on both sides: the screens browse it, and the
+    /// privileged side installs from it.
+    fn state_with_catalog(st: State, cat: hlb_catalog::Catalog) -> AppState {
+        let mut s = base_state(Arc::new(st), true);
+        let cat = Arc::new(cat);
+        s.privd = hlb_privd::Privd::new(s.state.clone())
+            .with_mail(None, &s.mail_domain)
+            .with_catalog(Some(cat.clone()));
+        s.catalog = Some(cat);
+        s
     }
 
     /// An orchestrator that records what it was asked to do.
@@ -3168,11 +3146,11 @@ pub(crate) mod tests {
     }
 
     fn state_with_backup(st: State, b: Arc<FakeBackup>) -> Arc<AppState> {
-        let mut e = app_state(st, true);
-        if let Some(m) = Arc::get_mut(&mut e) {
-            m.backup = Some(b);
-        }
-        e
+        let mut e = base_state(Arc::new(st), true);
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_backup(Some(b));
+        Arc::new(e)
     }
 
     /// A state carrying an orchestrator, to exercise the routes that really act.
@@ -3184,11 +3162,11 @@ pub(crate) mod tests {
         st: State,
         o: Arc<dyn hlb_orchestrator::Orchestrator>,
     ) -> Arc<AppState> {
-        let mut e = app_state(st, true);
-        if let Some(m) = Arc::get_mut(&mut e) {
-            m.orchestrator = Some(o);
-        }
-        e
+        let mut e = base_state(Arc::new(st), true);
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_orchestrator(Some(o));
+        Arc::new(e)
     }
 
     /// A state whose status page is published.
@@ -4916,11 +4894,9 @@ pub(crate) mod tests {
         o: Arc<FakeOrch>,
         key: &std::path::Path,
     ) -> Arc<AppState> {
-        let mut e = app_state(st, true);
-        let m = Arc::get_mut(&mut e).expect("sole owner");
-        m.catalog = Some(Arc::new(cat));
-        m.orchestrator = Some(o);
-        m.install = Some(Arc::new(InstallContext {
+        let mut e = base_state(Arc::new(st), true);
+        let cat = Arc::new(cat);
+        let install = InstallContext {
             vault: hlb_secrets::Vault::open_or_init(key).expect("vault"),
             registry: hlb_registry::RegistryClient::new(),
             // 🔴 No database client: the executor must record the provisioning as
@@ -4929,8 +4905,14 @@ pub(crate) mod tests {
             mariadb: None,
             storage: Default::default(),
             api: hlb_guide::HttpApi::default(),
-        }));
-        e
+        };
+        e.privd = hlb_privd::Privd::new(e.state.clone())
+            .with_mail(None, &e.mail_domain)
+            .with_catalog(Some(cat.clone()))
+            .with_orchestrator(Some(o))
+            .with_install(Some(Arc::new(install)));
+        e.catalog = Some(cat);
+        Arc::new(e)
     }
 
     #[tokio::test]
@@ -5299,10 +5281,7 @@ steps:
             .await
             .expect("installed");
         // No orchestrator: nothing in the plan can run.
-        let mut e = app_state(st, true);
-        if let Some(m) = Arc::get_mut(&mut e) {
-            m.catalog = Some(Arc::new(cat));
-        }
+        let e = Arc::new(state_with_catalog(st, cat));
         let (s, v) = post(
             router(e.clone()),
             "/api/apps/vikunja/upgrade?apply=true",
@@ -5352,10 +5331,7 @@ steps:
             return;
         };
         let st = State::in_memory().await.expect("base");
-        let mut e = app_state(st, true);
-        if let Some(m) = Arc::get_mut(&mut e) {
-            m.catalog = Some(Arc::new(cat));
-        }
+        let e = Arc::new(state_with_catalog(st, cat));
 
         let (s, v) = post(
             router(e.clone()),
@@ -5386,36 +5362,7 @@ steps:
         };
 
         let st = State::in_memory().await.expect("base");
-        let mut e = AppState {
-            custom_themes: Vec::new(),
-            themes_dir: std::path::PathBuf::new(),
-            catalog_dir: "../../catalog".into(),
-            state: Arc::new(st),
-            install: None,
-            backup: None,
-            started_at: std::time::Instant::now(),
-            version: "test",
-            last_poll: Default::default(),
-            ui_dir: None,
-            no_auth: true,
-            signin: Default::default(),
-            throughput: Arc::new(crate::throughput::RateLimiter::new()),
-            trusted_proxy: false,
-            series: None,
-            alerts: Default::default(),
-            drifts: Default::default(),
-            beat: None,
-            mirror: None,
-            public_url: None,
-            orchestrator: None,
-            demo: false,
-            catalog: None,
-            public_status: false,
-            identity: None,
-            mail: None,
-            mail_domain: "local".into(),
-        };
-        e.catalog = Some(Arc::new(cat));
+        let e = state_with_catalog(st, cat);
         let r = router(Arc::new(e));
 
         let resp = r
@@ -5467,8 +5414,8 @@ steps:
         let Ok(cat) = hlb_catalog::Catalog::load("../../catalog") else {
             return;
         };
-        let mut e = app_state(State::in_memory().await.expect("base"), true);
-        Arc::get_mut(&mut e).expect("sole owner").catalog = Some(Arc::new(cat));
+        let st = State::in_memory().await.expect("base");
+        let e = Arc::new(state_with_catalog(st, cat));
 
         let (s, v) = post(
             router(e),
@@ -5495,35 +5442,7 @@ steps:
             return;
         };
         let st = State::in_memory().await.expect("base");
-        let r = router(Arc::new(AppState {
-            custom_themes: Vec::new(),
-            themes_dir: std::path::PathBuf::new(),
-            catalog_dir: "../../catalog".into(),
-            state: Arc::new(st),
-            install: None,
-            backup: None,
-            started_at: std::time::Instant::now(),
-            version: "test",
-            last_poll: Default::default(),
-            ui_dir: None,
-            no_auth: true,
-            signin: Default::default(),
-            throughput: Arc::new(crate::throughput::RateLimiter::new()),
-            trusted_proxy: false,
-            series: None,
-            alerts: Default::default(),
-            drifts: Default::default(),
-            beat: None,
-            mirror: None,
-            public_url: None,
-            orchestrator: None,
-            demo: false,
-            catalog: Some(Arc::new(cat)),
-            public_status: false,
-            identity: None,
-            mail: None,
-            mail_domain: "local".into(),
-        }));
+        let r = router(Arc::new(state_with_catalog(st, cat)));
 
         let resp = r
             .oneshot(
@@ -6621,8 +6540,9 @@ steps:
     /// An app state whose mail goes to `fake`, at `home.example`.
     fn with_mail(st: State, fake: &crate::fake_mail::stalwart::FakeStalwart) -> Arc<AppState> {
         let mut s = base_state(Arc::new(st), false);
-        s.mail = Some(fake.client.clone());
         s.mail_domain = "home.example".into();
+        s.privd = hlb_privd::Privd::new(s.state.clone())
+            .with_mail(Some(fake.client.clone()), &s.mail_domain);
         Arc::new(s)
     }
 
