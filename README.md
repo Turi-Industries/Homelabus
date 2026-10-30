@@ -68,11 +68,11 @@ later without reinstalling anything.
 
 ## The apps
 
-Twelve applications today: **Immich** (photos), **Vaultwarden** (passwords),
+Thirteen applications today: **Immich** (photos), **Vaultwarden** (passwords),
 **Seafile** (files), **Jellyfin** (films and music), **Gitea** (code), **Vikunja**
-(tasks), **n8n** (automations), **Fluxer** (chat and calls), **Bulwark** and
-**Roundcube** (webmail), **Termix** (a terminal for your machines) and **LibreSpeed**
-(a speed test).
+(tasks), **Mealie** (recipes), **n8n** (automations), **Fluxer** (chat and calls),
+**Bulwark** and **Roundcube** (webmail), **Termix** (a terminal for your machines)
+and **LibreSpeed** (a speed test).
 
 Beneath them, Homelabus runs the services they share and installs each one only when
 an app needs it: PostgreSQL, MariaDB, Valkey, PocketID (sign-in), Stalwart (mail),
