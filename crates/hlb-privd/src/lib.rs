@@ -80,6 +80,7 @@ fn now() -> i64 {
 ///
 /// Every client is `Option`: `None` = not configured, unreachable, or the
 /// demonstration, and each intent says so in its answer rather than fail.
+#[derive(Clone)]
 pub struct Privd {
     state: Arc<State>,
     orchestrator: Option<Arc<dyn Orchestrator>>,
@@ -194,6 +195,33 @@ impl Privd {
             .ok()
     }
 
+    /// The web side's sign-in client, read from the vault, and the root its issuer
+    /// chains to.
+    async fn sign_in_client(&self) -> hlb_api::intent::SignInSetup {
+        let vault = self.install.as_ref().map(|c| &c.vault);
+        let trusted_root = hlb_engine::ingress::trusted_root(&self.state, vault).await;
+        let read = |name: &'static str| async move {
+            let ct = self.state.secret(name).await.ok().flatten()?;
+            vault?.decrypt(&ct).ok()
+        };
+        let client = match (
+            self.state.app_domain("pocket-id").await.ok().flatten(),
+            read(hlb_engine::access::CONTROLLER_OIDC_ID).await,
+            read(hlb_engine::access::CONTROLLER_OIDC_SECRET).await,
+        ) {
+            (Some(domain), Some(id), Some(secret)) => Some(hlb_api::intent::OidcClient {
+                issuer: format!("https://{domain}"),
+                id,
+                secret,
+            }),
+            _ => None,
+        };
+        hlb_api::intent::SignInSetup {
+            trusted_root,
+            client,
+        }
+    }
+
     /// Republishes the routes after something changed which apps they serve. Nothing
     /// to do without an orchestrator: there is no Caddy to tell.
     async fn republish(&self) -> Result<(), String> {
@@ -259,6 +287,9 @@ impl Privd {
             Intent::BackUp(i) => serde_json::to_value(backup::back_up(self, i).await)?,
             Intent::KitFingerprint(hlb_api::intent::KitFingerprint {}) => {
                 serde_json::to_value(self.kit_fingerprint().await)?
+            }
+            Intent::SignInClient(hlb_api::intent::SignInClient {}) => {
+                serde_json::to_value(self.sign_in_client().await)?
             }
             Intent::Alerts(hlb_api::intent::Alerts {}) => {
                 serde_json::to_value(&*self.alerts.read().await)?

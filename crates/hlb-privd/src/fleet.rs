@@ -324,6 +324,17 @@ pub fn from_wire(
         .collect()
 }
 
+/// Resolves `tasks.<service>` to the addresses of every task.
+///
+/// This is Swarm's DNS mechanism for reaching each instance of a service rather than the
+/// VIP. Outside a Swarm overlay, resolution simply fails — that is not an error, just
+/// the absence of agents.
+pub async fn resolve_tasks(service: &str) -> Result<Vec<String>, std::io::Error> {
+    let name = format!("tasks.{service}:0");
+    let addrs = tokio::net::lookup_host(name).await?;
+    Ok(addrs.map(|a| a.ip().to_string()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

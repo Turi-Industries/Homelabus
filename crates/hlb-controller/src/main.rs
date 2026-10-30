@@ -1,69 +1,42 @@
-//! `hlb-controller` — the daemon.
+//! `hlb-controller` — the web side: the API, the interface, signing people in.
 //!
-//! Three responsibilities: serving the read API, running the background loops, and
-//! beating the heart the NAS watches.
+//! Given `--privd-socket`, it holds nothing privileged: it reads `hlb.db` read-only and
+//! asks every privileged thing of `hlb-privd` over that socket. Without it, it starts
+//! the daemon in its own process — the demonstration, the browser suite, a run by hand
+//! on one machine.
 //!
 //! 🟢 **An important property**: the controller is NOT in the critical path of
 //! traffic. Swarm keeps running the deployed services without it. Stopping it loses the
 //! steering, not the service — which makes its updates and restarts far less delicate.
-//!
 
-use hlb_controller::{agents, api, signin};
+use hlb_controller::{api, signin};
 use hlb_privd::daemon::{self, schedule};
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_state::State;
 
-/// How often the notifications quiet hours held are looked at: within five minutes of
-/// the morning, and a pass is one read of a table that is usually empty.
-const HELD_NOTIFICATIONS_SECS: u64 = 300;
+/// The settings reaching a real system: a demonstration's fictional apps would be
+/// backed up, provisioned or exported there, so `--demo` refuses each of them.
+const DEMO_REFUSES: [&str; 8] = [
+    "postgres_admin",
+    "mariadb_admin",
+    "pocketid_url",
+    "heartbeat",
+    "backup_repo",
+    "git_mirror",
+    "stalwart_url",
+    "privd_socket",
+];
 
 #[derive(Parser)]
-#[command(name = "hlb-controller", version, about = "Homelabus daemon")]
+#[command(name = "hlb-controller", version, about = "Homelabus web side")]
 struct Cli {
     /// The API's listen address.
     #[arg(long, default_value = "127.0.0.1:8420", env = "HLB_LISTEN")]
     listen: String,
-
-    #[arg(long, default_value = "hlb.db", env = "HLB_STATE")]
-    state: std::path::PathBuf,
-
-    /// ntfy server for the alerts. Without one, they stay in the logs.
-    #[arg(long, env = "HLB_NTFY_URL")]
-    ntfy_url: Option<String>,
-
-    #[arg(long, default_value = "homelab", env = "HLB_NTFY_TOPIC")]
-    ntfy_topic: String,
-
-    /// PostgreSQL admin URL. Without it, the databases are NOT dumped.
-    #[arg(long, env = "HLB_POSTGRES_ADMIN", conflicts_with = "demo")]
-    postgres_admin: Option<String>,
-
-    /// MariaDB admin URL. Without it, the apps that need MariaDB are installed with
-    /// their database recorded as unimplemented rather than silently skipped.
-    #[arg(long, env = "HLB_MARIADB_ADMIN", conflicts_with = "demo")]
-    mariadb_admin: Option<String>,
-
-    /// Root under which `tier: local` volumes are bound, e.g. `/tank/apps`.
-    #[arg(long, env = "HLB_STORAGE_ROOT")]
-    storage_root: Option<String>,
-
-    /// NFS server for the `tier: nfs` volumes. 🔴 Without it, installing an app that
-    /// declares one is refused rather than silently given a local volume.
-    #[arg(long, env = "HLB_NFS_SERVER")]
-    nfs_server: Option<String>,
-
-    /// The exported root on that server, e.g. `/tank/media`.
-    #[arg(long, env = "HLB_NFS_EXPORT")]
-    nfs_export: Option<String>,
-
-    /// Docker network where the platform services are reachable by name.
-    #[arg(long, default_value = "hlb_platform", env = "HLB_PLATFORM_NETWORK")]
-    platform_network: String,
 
     /// Directory of the web UI. Absent: API only.
     ///
@@ -97,17 +70,6 @@ struct Cli {
     #[arg(long, env = "HLB_PUBLIC_URL")]
     public_url: Option<String>,
 
-    /// PocketID URL, to create the identities from the interface.
-    #[arg(long, env = "HLB_POCKETID_URL", conflicts_with = "demo")]
-    pocketid_url: Option<String>,
-
-    /// PocketID API key.
-    ///
-    /// ⚠️ Through an environment variable preferably: a key passed as a command argument
-    /// is visible to the whole system through `ps`.
-    #[arg(long, env = "HLB_POCKETID_KEY", hide_env_values = true)]
-    pocketid_key: Option<String>,
-
     /// 🔴 Publish the status page, WITHOUT authentication.
     ///
     /// It then reveals the list of your exposed services and your open incidents. For a
@@ -116,32 +78,12 @@ struct Cli {
     #[arg(long, env = "HLB_PUBLIC_STATUS")]
     public_status: bool,
 
-    /// Application catalog directory.
-    ///
-    /// Without it, the interface can neither browse the catalog nor install: it SAYS so
-    /// rather than show an empty list you would take for a catalog with no
-    /// applications.
-    #[arg(long, default_value = "catalog", env = "HLB_CATALOG")]
-    catalog: std::path::PathBuf,
-
     /// Directory of themes this installation declares, one YAML file each.
     ///
     /// Absent by default and absent without complaint: most installations use the three
     /// shipped themes and never create this directory.
     #[arg(long, default_value = "themes", env = "HLB_THEMES")]
     themes: std::path::PathBuf,
-
-    /// Alert-rule evaluation interval, in seconds.
-    #[arg(long, default_value = "60", env = "HLB_ALERTS_SECS")]
-    alerts_secs: u64,
-
-    /// VictoriaMetrics URL, for the interface's graphs.
-    ///
-    /// Without it, the metrics screens show "unavailable" while saying how to install it
-    /// — rather than a flat curve you would take for an idle
-    /// machine.
-    #[arg(long, env = "HLB_METRICS_URL")]
-    metrics_url: Option<String>,
 
     /// Start with demonstration data, in memory, without Docker.
     ///
@@ -156,7 +98,7 @@ struct Cli {
     /// Used to develop the interface: the cases you need to see — an app never backed
     /// up, a dead off-site, an expired alias still receiving — are the ones
     /// you never have to hand.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = DEMO_REFUSES)]
     demo: bool,
 
     /// How much the demonstration holds: `large` adds 1,000 accounts, 300 invitations,
@@ -180,127 +122,13 @@ struct Cli {
     #[arg(long, env = "HLB_INSECURE_NO_AUTH")]
     insecure_no_auth: bool,
 
-    /// Reconciliation interval.
-    #[arg(long, default_value = "60", env = "HLB_RECONCILE_SECS")]
-    reconcile_secs: u64,
+    /// The daemon's socket (`hlb-privd --socket`). Given, this process holds no
+    /// capability and reads the state read-only; absent, it runs the daemon itself.
+    #[arg(long, env = "HLB_PRIVD_SOCKET")]
+    privd_socket: Option<std::path::PathBuf>,
 
-    /// Correct the detected gaps. Without this flag: detection only.
-    #[arg(long, env = "HLB_RECONCILE_APPLY")]
-    reconcile_apply: bool,
-
-    /// Heartbeat file, to be placed OUTSIDE the cluster.
-    #[arg(long, env = "HLB_HEARTBEAT", conflicts_with = "demo")]
-    heartbeat: Option<std::path::PathBuf>,
-
-    #[arg(long, default_value = "30", env = "HLB_HEARTBEAT_SECS")]
-    heartbeat_secs: u64,
-
-    /// restic repository served when no destination is declared. The backup loop runs
-    /// without it: the declared destinations are what decide.
-    #[arg(long, env = "HLB_BACKUP_REPO", conflicts_with = "demo")]
-    backup_repo: Option<String>,
-
-    #[arg(long, default_value = "hlb-master.key", env = "HLB_MASTER_KEY")]
-    master_key: std::path::PathBuf,
-
-    /// Git mirror of the desired state.
-    #[arg(long, env = "HLB_GIT_MIRROR", conflicts_with = "demo")]
-    git_mirror: Option<std::path::PathBuf>,
-
-    /// Name of the agents' Swarm service. The `tasks.<name>` DNS resolves to ALL the
-    /// tasks, which allows polling each node individually.
-    #[arg(long, default_value = "hlb-agent", env = "HLB_AGENT_SERVICE")]
-    agent_service: String,
-
-    #[arg(long, default_value = "8421", env = "HLB_AGENT_PORT")]
-    agent_port: u16,
-
-    /// The controller's CLIENT certificate (PEM: certificate + key). Enables mTLS.
-    #[arg(long, env = "HLB_CONTROLLER_CERT")]
-    controller_cert: Option<std::path::PathBuf>,
-
-    /// The cluster CA: it, and it alone, validates the agents.
-    #[arg(long, env = "HLB_CONTROLLER_CA")]
-    controller_ca: Option<std::path::PathBuf>,
-
-    /// How often the agents are polled.
-    #[arg(long, default_value = "60", env = "HLB_AGENT_POLL_SECS")]
-    agent_poll_secs: u64,
-
-    /// How often the backup deadlines are examined.
-    #[arg(long, default_value = "600", env = "HLB_BACKUP_CHECK_SECS")]
-    backup_check_secs: u64,
-
-    /// How often the manifests' assertions are read from the running apps. Once a day:
-    /// a door reopened is seen by the next morning, and some reads open a database
-    /// connection each.
-    #[arg(long, default_value = "86400", env = "HLB_ASSERTIONS_SECS")]
-    assertions_secs: u64,
-
-    /// How often Stalwart's queue is read. A message waiting an hour is in the inbox
-    /// within a quarter of one more.
-    #[arg(long, default_value = "900", env = "HLB_MAIL_QUEUE_SECS")]
-    mail_queue_secs: u64,
-
-    /// How often the manifests' scheduled jobs are looked at; each runs when it is due
-    /// (a day or a week after its last run), not at every look.
-    #[arg(long, default_value = "3600", env = "HLB_JOBS_SECS")]
-    jobs_secs: u64,
-
-    /// How often PocketID's groups, the apps' restrictions, quotas and members are made
-    /// to hold the roles again. Every change made here syncs at once; this catches what
-    /// was changed elsewhere — a group edited in PocketID, a quota in Seafile.
-    #[arg(long, default_value = "3600", env = "HLB_ROLES_SECS")]
-    roles_secs: u64,
-
-    /// How often the emergency vault's account is verified and every recovery sign-in
-    /// deposited. Once a day: a password generated by an install reaches Vaultwarden by
-    /// the next morning, and an account given too much is seen.
-    #[arg(long, default_value = "86400", env = "HLB_EMERGENCY_SECS")]
-    emergency_secs: u64,
-
-    /// How often every node's Termix account and key, and Termix's hosts, are made to
-    /// hold. Once a day: a node that joined appears in Termix by the next morning, one
-    /// that left is gone from it, and an account changed by hand is put back.
-    #[arg(long, default_value = "86400", env = "HLB_TERMIX_SECS")]
-    termix_secs: u64,
-
-    /// How often the backup destinations are looked at: each one proved more than a week
-    /// ago is proved again — a policy changed since is seen —, and kept to the retention
-    /// policy where it can be erased anyway.
-    #[arg(long, default_value = "86400", env = "HLB_UPKEEP_SECS")]
-    upkeep_secs: u64,
-
-    /// How often every node's unused images are removed. Once a day: an update leaves
-    /// its previous image on every node that ran it, on the root disk.
-    #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
-    prune_secs: u64,
-
-    /// How often the fleet's mTLS certificates are looked at, and those ending within
-    /// 30 days issued again. Once a day leaves a month of retries before one ends.
-    #[arg(long, default_value = "86400", env = "HLB_PKI_SECS")]
-    pki_secs: u64,
-
-    /// How often the expired temporary aliases are purged.
-    ///
-    /// ⚠️ One hour: an alias therefore survives at most one hour too long. Going lower
-    /// would bring nothing — expiry is on the order of a day — and would multiply the
-    /// calls to Stalwart.
-    #[arg(long, default_value = "3600", env = "HLB_ALIAS_PURGE_SECS")]
-    alias_purge_secs: u64,
-
-    /// Default mail domain, for mailboxes that carry none.
-    #[arg(long, env = "HLB_MAIL_DOMAIN")]
-    mail_domain: Option<String>,
-
-    #[arg(long, env = "HLB_STALWART_URL", conflicts_with = "demo")]
-    stalwart_url: Option<String>,
-
-    #[arg(long, env = "HLB_STALWART_ADMIN")]
-    stalwart_admin: Option<String>,
-
-    #[arg(long, env = "HLB_STALWART_PASSWORD")]
-    stalwart_password: Option<String>,
+    #[command(flatten)]
+    daemon: daemon::Config,
 }
 
 /// Settings renamed to English, still read under their French names when the English
@@ -331,23 +159,16 @@ impl Legacy {
     }
 }
 
-/// What the daemon's own loops hold beside the privileged side, until those loops move
-/// into it: the web side's `AppState` carries none of it.
-struct Held {
-    install: Option<Arc<hlb_privd::InstallContext>>,
-    orchestrator: Option<Arc<dyn Orchestrator>>,
-}
-
-/// VictoriaMetrics as the alert loop reads it: through the PromQL relay, whose
-/// allowlist then holds the shipped rules too. Here and not in `promql.rs`, so no web
-/// module names the daemon.
-struct Victoria(Arc<hlb_controller::promql::Metrics>);
-
-#[async_trait::async_trait]
-impl daemon::Measure for Victoria {
-    async fn samples(&self, query: &str) -> Result<Vec<hlb_metrics::Sample>, String> {
-        self.0.instant_samples(query).await
-    }
+/// The alert rules' measurements, through the PromQL relay: its allowlist holds the
+/// shipped rules too.
+fn measure(
+    series: &Option<Arc<hlb_controller::promql::Metrics>>,
+) -> Option<Arc<dyn daemon::Measure>> {
+    let m = series.clone()?;
+    Some(Arc::new(daemon::Query(move |q: String| {
+        let m = m.clone();
+        async move { m.instant_samples(&q).await }
+    })))
 }
 
 #[tokio::main]
@@ -370,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let legacy = Legacy::read(|k| std::env::var(k).ok());
     if defaulted("alerts_secs") {
         if let Some(secs) = legacy.alerts_secs {
-            cli.alerts_secs = secs;
+            cli.daemon.alerts_secs = secs;
         }
     }
     if defaulted("public_status") {
@@ -378,65 +199,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cli.public_status = public;
         }
     }
-    // Read before the state is opened, which creates it: the vault's key may be created
-    // for a new installation only, never beside one that exists.
-    let state_existed = cli.state.exists();
 
-    let state = if cli.demo {
-        tracing::warn!(
-            "🎭 DEMONSTRATION MODE — in-memory database, fictional data. \
-             --state is ignored, nothing is read or written on disk."
-        );
-        let s = State::in_memory().await?;
-        let catalog = hlb_catalog::Catalog::load(&cli.catalog).ok();
-        hlb_privd::demo::seed_at(&s, cli.demo_scale, catalog.as_ref()).await?;
-        Arc::new(s)
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut tasks = Vec::new();
+    let series = cli.daemon.metrics_url.as_ref().map(|u| {
+        tracing::info!(url = %u, "time-series database configured");
+        Arc::new(hlb_controller::promql::Metrics::new(u))
+    });
+
+    let (state, privd) = if cli.demo {
+        demonstration(&cli).await?
+    } else if let Some(socket) = &cli.privd_socket {
+        tracing::info!(socket = %socket.display(), "web side: the daemon answers every intent");
+        let state = wait_for_daemon(&cli.daemon.state, socket).await;
+        let privd = hlb_privd::Privd::new(state.clone()).through(socket);
+        (state, privd)
     } else {
-        Arc::new(State::open(&cli.state).await?)
+        tracing::warn!(
+            "one process: the web side holds the daemon's capabilities — `hlb fleet \
+             controller` deploys them apart (--privd-socket)"
+        );
+        if series.is_none() {
+            tracing::info!(
+                "no time-series database (--metrics-url): the alert rules are not evaluated"
+            );
+        }
+        let started =
+            daemon::start(cli.daemon.clone(), measure(&series), shutdown_rx.clone()).await?;
+        tasks.extend(started.tasks);
+        (started.state, started.privd)
     };
-    // The one place the controller may create the vault's key; everything after opens
-    // it, so a key missing later is said rather than replaced.
-    if !cli.demo {
-        if let Err(e) = hlb_secrets::Vault::open_for_state(&cli.master_key, state_existed) {
-            tracing::error!("{e}");
-        }
-    }
-
-    // The platform's admin credentials live in the vault, generated at install: a flag
-    // still wins, but none is needed for what Homelabus installed itself.
-    let mut ntfy_account = None;
-    if !cli.demo && cli.master_key.exists() {
-        if let Ok(vault) = hlb_secrets::Vault::open(&cli.master_key) {
-            match hlb_engine::access::from_vault(&state, &vault).await {
-                Ok(a) => {
-                    ntfy_account = a.ntfy_publisher.clone();
-                    if cli.postgres_admin.is_none() {
-                        cli.postgres_admin = a.postgres_admin;
-                    }
-                    if cli.mariadb_admin.is_none() {
-                        cli.mariadb_admin = a.mariadb_admin;
-                    }
-                    if let (None, None, Some((url, user, password))) =
-                        (&cli.stalwart_url, &cli.stalwart_password, a.stalwart_admin)
-                    {
-                        cli.stalwart_url = Some(url);
-                        cli.stalwart_admin = Some(user);
-                        cli.stalwart_password = Some(password);
-                    }
-                    if let (None, None, Some((url, key))) =
-                        (&cli.pocketid_url, &cli.pocketid_key, a.pocketid)
-                    {
-                        cli.pocketid_url = Some(url);
-                        cli.pocketid_key = Some(key);
-                    }
-                }
-                Err(e) => tracing::warn!("platform credentials unreadable from the vault: {e}"),
-            }
-        }
-    }
 
     // Published by Homelabus's own ingress, the controller knows its address, its
-    // issuer and its mail domain from the state, and its sign-in client from the vault
+    // issuer and its mail domain from the state, and its sign-in client from the daemon
     // — what `hlb config exposure` and `hlb fleet controller` recorded. A flag still
     // wins. `derived` remembers which: a sign-in nobody configured by hand must not
     // stop the controller from starting.
@@ -446,12 +241,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // issuer is unverifiable and nobody signs in.
     let mut trusted_root = None;
     if !cli.demo {
-        let vault = cli
-            .master_key
-            .exists()
-            .then(|| hlb_secrets::Vault::open(&cli.master_key).ok())
-            .flatten();
-        trusted_root = hlb_engine::ingress::trusted_root(&state, vault.as_ref()).await;
         if let Ok(Some(e)) = state.exposure().await {
             if cli.public_url.is_none() {
                 cli.public_url = Some(format!("https://{}", e.controller_host()));
@@ -459,807 +248,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // address, which the rate limit then counts on.
                 cli.trusted_proxy = true;
             }
-            if cli.mail_domain.is_none() {
-                cli.mail_domain = Some(e.domain.clone());
+            if cli.daemon.mail_domain.is_none() {
+                cli.daemon.mail_domain = Some(e.domain.clone());
             }
         }
-        if cli.oidc_issuer.is_none() && cli.master_key.exists() {
-            let issuer = state.app_domain("pocket-id").await.ok().flatten();
-            let vault = hlb_secrets::Vault::open(&cli.master_key).ok();
-            let read = |name: &'static str| {
-                let vault = vault.as_ref();
-                let state = &state;
-                async move {
-                    let ct = state.secret(name).await.ok().flatten()?;
-                    vault?.decrypt(&ct).ok()
-                }
-            };
-            if let (Some(domain), Some(id), Some(secret)) = (
-                issuer,
-                read(hlb_engine::access::CONTROLLER_OIDC_ID).await,
-                read(hlb_engine::access::CONTROLLER_OIDC_SECRET).await,
-            ) {
-                cli.oidc_issuer = Some(format!("https://{domain}"));
-                cli.oidc_client_id = id;
-                cli.oidc_client_secret = Some(secret);
-                derived_signin = true;
-            }
-        }
-    }
-
-    // The orchestrator can be absent at startup (Docker not ready yet). We report it
-    // without refusing to start: the read API stays useful, and reconciliation will
-    // retry.
-    //
-    // ⚠️ In demonstration mode we do not even connect: finding a real Docker and
-    // starting to reconcile fictional apps would delete or redeploy real
-    // services.
-    let orchestrator = if cli.demo {
-        None
-    } else {
-        match SwarmOrchestrator::connect().await {
-            Ok(o) => Some(Arc::new(o)),
-            Err(e) => {
-                tracing::warn!("Docker unreachable at startup ({e}) — reconciliation suspended");
-                None
-            }
-        }
-    };
-
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut tasks = Vec::new();
-
-    // Written by the polling loop, read through `Intent::Fleet`.
-    let last_poll: hlb_privd::fleet::Polled = Default::default();
-    if cli.demo {
-        // We exercise the real sharing path, not a special case: the interface reads
-        // exactly the same structure as in production.
-        *last_poll.write().await = hlb_controller::demo::nodes_at(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            cli.demo_scale,
-        );
-        // And the day behind that state, for the home's curves.
-        let running = state
-            .installed_apps()
-            .await?
-            .iter()
-            .filter(|(_, st)| st == "running")
-            .count();
-        let now = hlb_controller::auth::now();
-        state
-            .record_history(&hlb_controller::demo::history(
-                &*last_poll.read().await,
-                running,
-                now,
-            ))
-            .await?;
-    }
-
-    // With no ntfy configured, the alerts go to the logs rather than nowhere.
-    let notif = cli.ntfy_url.as_ref().map(|u| {
-        tracing::info!(server = %u, subject = %cli.ntfy_topic, "alerts ntfy active");
-        let client = hlb_notify::NtfyClient::new(u, &cli.ntfy_topic);
-        // The catalog's ntfy refuses anyone without an account: without this one, every
-        // alert would be a 403 in the log.
-        Arc::new(match &ntfy_account {
-            Some((user, password)) => client.signed_in_as(user, password),
-            None => {
-                tracing::warn!(
-                    "no ntfy account in the vault: publishing anonymously, which the \
-                     catalog's ntfy refuses"
-                );
-                client
-            }
-        })
-    });
-    if notif.is_none() {
-        tracing::warn!("no ntfy configured: the alerts will stay in the logs");
-    }
-    let notif = daemon::Notifier::new(notif, state.clone());
-    // What quiet hours held back, delivered once the installation's morning comes.
-    {
-        let notif = notif.clone();
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(HELD_NOTIFICATIONS_SECS),
-            shutdown_rx.clone(),
-            move || {
-                let notif = notif.clone();
-                async move {
-                    let f = notif.flush(hlb_controller::auth::now()).await;
-                    if f.sent > 0 {
-                        tracing::info!(
-                            sent = f.sent,
-                            left = f.left,
-                            "held notifications delivered"
-                        );
-                    }
-                }
-            },
-        )));
-    }
-
-    // Cloned before the reconciliation loop consumes the value: the heartbeat needs its
-    // own reference to CHECK that Docker answers before claiming all is well.
-    //
-    let orch_health = orchestrator.clone();
-    // The gaps of the last pass, shared with the API: reconciliation's deliberate
-    // non-actions used to come out only in the logs, that is to say
-    // nowhere.
-    let drift_state: daemon::DriftState = Default::default();
-    // And a third reference for the API, which reads the Swarm tasks: the reconciliation
-    // loop consumes the value right after.
-    let orch_api = orchestrator
-        .clone()
-        .map(|o| o as Arc<dyn hlb_orchestrator::Orchestrator>);
-
-    // Started at "now": the heartbeat grants the first pass its window, and no more.
-    let reconciled: daemon::LastReconciled = Arc::new(std::sync::atomic::AtomicI64::new(
-        hlb_controller::auth::now(),
-    ));
-    if let Some(orch) = orchestrator {
-        let rl = Arc::new(
-            hlb_privd::daemon::ReconcileLoop::new(orch, state.clone())
-                .apply(cli.reconcile_apply)
-                .published_in(drift_state.clone())
-                .reports_to(reconciled.clone()),
-        );
-        let rx = shutdown_rx.clone();
-        let mirror = cli.git_mirror.clone();
-        let st = state.clone();
-        tracing::info!(
-            interval = cli.reconcile_secs,
-            correction = cli.reconcile_apply,
-            "reconciliation loop"
-        );
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.reconcile_secs),
-            rx,
-            move || {
-                let (rl, mirror, st) = (rl.clone(), mirror.clone(), st.clone());
-                async move {
-                    let r = rl.tick().await;
-                    // Each pass samples the exposed apps for the status page's history.
-                    schedule::sample_uptime(&st).await;
-                    if !r.is_clean() {
-                        tracing::warn!(errors = r.errors.len(), "incomplete reconciliation");
-                    } else if r.acted > 0 {
-                        tracing::info!(corrected = r.acted, "gaps corrected");
-
-                        // Will only produce a commit if the DESIRED state moved.
-                        // A reconciliation that brings reality back into line changes
-                        // nothing desired: its silence is intended.
-                        if let Some(g) = &mirror {
-                            if let Err(e) = export(g, &st, "correction by reconciliation").await {
-                                tracing::warn!("Git mirror not updated: {e}");
-                            }
-                        }
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 The purge of the temporary aliases. Without it, "temporary" is a lie: Stalwart
-    // has no notion of expiry, and an address given "for thirty days" receives
-    // indefinitely.
-    {
-        let mail = match (
-            &cli.stalwart_url,
-            &cli.stalwart_admin,
-            &cli.stalwart_password,
-        ) {
-            (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
-                u,
-                hlb_mail::Auth::Basic {
-                    user: a.clone(),
-                    password: p.clone(),
-                },
-            ))),
-            _ => None,
-        };
-        if mail.is_none() {
-            tracing::warn!(
-                "Stalwart not configured: the expired temporary aliases will NOT be \
-                 removed, and will keep receiving"
-            );
-        }
-
-        let purge = Arc::new(hlb_privd::daemon::AliasPurgeLoop::new(
-            state.clone(),
-            mail,
-            cli.mail_domain.clone().unwrap_or_else(|| "local".into()),
-        ));
-        let rx = shutdown_rx.clone();
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.alias_purge_secs),
-            rx,
-            move || {
-                let purge = purge.clone();
-                async move {
-                    let r = purge.tick().await;
-                    if r.retires > 0 {
-                        tracing::info!(retires = r.retires, "expired aliases removed");
-                    }
-                    // 🔴 We log on what stays OPEN, not on the error count: a purge
-                    // with no error that removed nothing leaves as many doors open
-                    // as a purge that failed loudly.
-                    if !r.is_clean() {
-                        tracing::error!(
-                            open = r.still_open(),
-                            errors = r.errors.len(),
-                            "expired addresses still active"
-                        );
-                    }
-                }
-            },
-        )));
-    }
-
-    // The status page's uptime history: samples are taken by the reconciliation loop
-    // above (one per exposed app per tick, no new timer for that part); this is only
-    // the retention side, pruning what has aged out of the 90-day window it keeps.
-    // Once a day: at the sampling cadence, 90 days of history is small enough that
-    // pruning does not need to be frequent.
-    {
-        let retention = Arc::new(schedule::UptimeRetentionLoop::new(state.clone(), 90));
-        let rx = shutdown_rx.clone();
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(86_400),
-            rx,
-            move || {
-                let retention = retention.clone();
-                async move {
-                    match retention.tick().await {
-                        Ok(removed) if removed > 0 => {
-                            tracing::info!(removed, "uptime samples pruned");
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!("uptime pruning failed this pass: {e}"),
-                    }
-                }
-            },
-        )));
-    }
-
-    // A guide's `recheck`: the prerequisites a person handled once — the DNS record, the
-    // router — read again every night, and put back in the inbox when they stopped
-    // being true. The catalog is the guides' source, as for `hlb ack`.
-    if !cli.demo {
-        let st = state.clone();
-        let rx = shutdown_rx.clone();
-        let (catalog_dir, master_key) = (cli.catalog.clone(), cli.master_key.clone());
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(86_400),
-            rx,
-            move || {
-                let (st, catalog_dir, master_key) =
-                    (st.clone(), catalog_dir.clone(), master_key.clone());
-                async move {
-                    let catalog = match hlb_catalog::Catalog::load(&catalog_dir) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::warn!("guide re-check skipped: unreadable catalog ({e})");
-                            return;
-                        }
-                    };
-                    let vault = hlb_secrets::Vault::open(&master_key).ok();
-                    let guides = |app: &str| {
-                        catalog
-                            .get(app)
-                            .map(|e| e.guide.steps.clone())
-                            .unwrap_or_default()
-                    };
-                    match hlb_engine::recheck_guides(&st, vault.as_ref(), guides).await {
-                        Ok(found) => {
-                            for (app, id, r) in found {
-                                match r {
-                                    hlb_engine::Recheck::Reopened(why) => {
-                                        tracing::error!(app, step = id, "🔴 no longer true: {why}")
-                                    }
-                                    hlb_engine::Recheck::Forced(why) => tracing::info!(
-                                        app,
-                                        step = id,
-                                        "still false, kept as attested with --force: {why}"
-                                    ),
-                                    hlb_engine::Recheck::Holds
-                                    | hlb_engine::Recheck::Unknown(_) => {}
-                                }
-                            }
-                        }
-                        Err(e) => tracing::warn!("guide re-check failed this pass: {e}"),
-                    }
-                }
-            },
-        )));
-    }
-
-    if let Some(path) = cli.heartbeat.clone() {
-        let hb = Arc::new(schedule::Heartbeat::new(path.clone()));
-        let rx = shutdown_rx.clone();
-        let st = state.clone();
-        let orch = orch_health.clone();
-        let (reconciled, reconcile_secs) = (reconciled.clone(), cli.reconcile_secs);
-        tracing::info!(file = %path.display(), "heartbeat (conditional)");
-
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.heartbeat_secs),
-            rx,
-            move || {
-                let hb = hb.clone();
-                let st = st.clone();
-                let orch = orch.clone();
-                let reconciled = reconciled.clone();
-                async move {
-                    // 🔴 We CHECK before beating. An unconditional beat only proves a
-                    // thread survived: the controller could have an unreadable database
-                    // and a dead Docker, and leave the watchdog green over an unusable
-                    // system.
-                    let health = hlb_metrics::Health {
-                        // A real query, not a flag: it is the read that fails when the
-                        // disk is full or the database corrupted.
-                        readable_state: st.installed_apps().await.is_ok(),
-                        orchestrator_reachable: match &orch {
-                            Some(o) => o.ping().await.is_ok(),
-                            None => false,
-                        },
-                        // 🔴 Read from the reconciliation loop's own last pass: it is
-                        // a task of its own, and one that died or hangs left this
-                        // timer beating — the watchdog green over a cluster nobody
-                        // reconciled.
-                        recent_reconciliation: schedule::reconciled_recently(
-                            reconciled.load(std::sync::atomic::Ordering::Relaxed),
-                            hlb_controller::auth::now(),
-                            reconcile_secs,
-                        ),
-                    };
-
-                    match hb.beat_if_healthy(&health).await {
-                        Ok(true) => {}
-                        Ok(false) => {} // already logged, with the shortcomings
-                        Err(e) => tracing::error!("heartbeat impossible: {e}"),
-                    }
-                }
-            },
-        )));
-    }
-
-    // Git mirror initialised at startup: the repository must reflect the current state
-    // even if nothing changes afterwards. Otherwise a stable cluster would leave no trace.
-    if let Some(g) = &cli.git_mirror {
-        match export(g, &state, "state at controller startup").await {
-            Ok(()) => tracing::info!(mirror = %g.display(), "state archived in Git"),
-            Err(e) => tracing::warn!("Git mirror unavailable: {e}"),
-        }
-    }
-
-    // 🔴 The SAME pass as `hlb backup run`: every declared destination, the databases,
-    // the SQLite files and Homelabus's own state. It starts without `--backup-repo`
-    // too — the declared destinations are what decide, and an installation with none
-    // hears about it on every pass rather than never. "Back up now" runs it too, held
-    // to one app: the route once drove a provider of its own over `--backup-repo`.
-    let pass_config = hlb_privd::backup::PassConfig {
-        master_key: cli.master_key.clone(),
-        state_path: cli.state.clone(),
-        fallback_repo: cli.backup_repo.clone(),
-        network: cli.platform_network.clone(),
-        postgres_admin: cli.postgres_admin.clone(),
-        mariadb_admin: cli.mariadb_admin.clone(),
-    };
-    if !cli.demo {
-        let bl = Arc::new(schedule::BackupLoop::new(
-            state.clone(),
-            hlb_backup::Schedule::default(),
-        ));
-        let st = state.clone();
-        let rx = shutdown_rx.clone();
-        let notif_bck = notif.clone();
-        let config = pass_config.clone();
-        tracing::info!("backup loop");
-
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.backup_check_secs),
-            rx,
-            move || {
-                let (bl, st, notif, config) =
-                    (bl.clone(), st.clone(), notif_bck.clone(), config.clone());
-                async move {
-                    let mut failures = Vec::new();
-                    let outcome = config
-                        .run(&st, None, false, &mut |e| match e {
-                            hlb_backup_run::Event::Done {
-                                what, destination, ..
-                            } => tracing::info!(%what, %destination, "backed up"),
-                            hlb_backup_run::Event::Failed {
-                                what,
-                                destination,
-                                error,
-                            } => {
-                                tracing::error!(%what, ?destination, "backup failed: {error}");
-                                failures.push((what, destination, error));
-                            }
-                            hlb_backup_run::Event::NotCovered { what, why } => {
-                                tracing::warn!(%what, "🔴 NOT backed up: {why}")
-                            }
-                        })
-                        .await;
-                    match outcome {
-                        Ok(_) => {}
-                        Err(hlb_backup_run::Error::Vault(e)) => {
-                            tracing::error!("vault unreadable, nothing backed up: {e}");
-                            return;
-                        }
-                        // Only the state database can still interrupt a pass: said like
-                        // any failure, never a log line nobody reads.
-                        Err(e) => {
-                            tracing::error!("backup pass interrupted: {e}");
-                            failures.push(("the backup pass".to_string(), None, e.to_string()));
-                        }
-                    }
-                    // 🟠 Important, not critical: an isolated failure may be caught up
-                    // on the next pass. What is critical is the DRIFT, just below.
-                    for (what, destination, error) in failures {
-                        let target = destination.unwrap_or_else(|| "-".into());
-                        notif
-                            .tell(&hlb_notify::Notification::important(
-                                &format!("backup:{what}:{target}"),
-                                &format!("Backup of {what} to {target} failed"),
-                                &error,
-                            ))
-                            .await;
-                    }
-
-                    if let Ok(late) = bl.overdue_apps().await {
-                        for app in late {
-                            tracing::error!(app, "🔴 no successful backup for too long");
-                            // 🔴 Critical: an app you believe backed up and that no
-                            // longer is is the worst possible state.
-                            notif
-                                .tell(&hlb_notify::Notification::critical(
-                                    &format!("overdue:{app}"),
-                                    &format!("{app} is no longer backed up"),
-                                    "No successful backup for too long.",
-                                ))
-                                .await;
-                        }
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 The manifests' assertions, read by their EFFECT: a door the configuration
-    // closes and someone — a restore, a `docker service update`, an app's own settings
-    // page — reopened is in the inbox the next morning, and notified.
-    if !cli.demo {
-        let reader = Arc::new(hlb_guide::assertions::LiveReader::new(
-            orch_api.clone(),
-            cli.postgres_admin.clone(),
-            cli.mariadb_admin.clone(),
-        ));
-        // The mail records with them, judged from a public resolver: a DKIM key nobody
-        // published files every mail as spam, and nothing in the house says so.
-        let mail = match (
-            &cli.stalwart_url,
-            &cli.stalwart_admin,
-            &cli.stalwart_password,
-        ) {
-            (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
-                u,
-                hlb_mail::Auth::Basic {
-                    user: a.clone(),
-                    password: p.clone(),
-                },
-            ))),
-            _ => None,
-        };
-        let dns = Arc::new(hlb_mail::public_dns::PublicDns::default());
-        let st = state.clone();
-        let rx = shutdown_rx.clone();
-        let notif_as = notif.clone();
-        let master_key = cli.master_key.clone();
-        tracing::info!(interval = cli.assertions_secs, "assertions loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.assertions_secs),
-            rx,
-            move || {
-                let (reader, st, notif) = (reader.clone(), st.clone(), notif_as.clone());
-                let (mail, dns, master_key) = (mail.clone(), dns.clone(), master_key.clone());
-                async move {
-                    let now = hlb_controller::auth::now();
-                    // Opened at each pass, as the backup loop does: a key rotated by
-                    // `hlb secrets-rekey` is read the next night.
-                    let vault = hlb_secrets::Vault::open(&master_key).ok();
-                    let pass = hlb_privd::daemon::assertions::read_every_app(
-                        &st,
-                        vault.as_ref(),
-                        reader.as_ref(),
-                        now,
-                    )
-                    .await;
-                    tracing::info!(
-                        read = pass.read,
-                        broken = pass.broken.len(),
-                        unknown = pass.unknown,
-                        "assertions read"
-                    );
-                    for door in pass.broken {
-                        tracing::error!("🔴 {door}");
-                        notif
-                            .tell(&hlb_notify::Notification::critical(
-                                &format!("assertion:{door}"),
-                                "A running app does not hold what its manifest says",
-                                &door,
-                            ))
-                            .await;
-                    }
-                    let Some(mail) = mail else { return };
-                    match hlb_privd::daemon::mail_dns::read_and_record(
-                        &st,
-                        &mail,
-                        dns.as_ref(),
-                        now,
-                    )
-                    .await
-                    {
-                        Ok(wrong) => {
-                            for record in wrong {
-                                tracing::error!("🔴 mail record {record}");
-                                notif
-                                    .tell(&hlb_notify::Notification::critical(
-                                        // Keyed by the record, not by what was found.
-                                        &format!(
-                                            "mail-record:{}",
-                                            record.split(' ').next().unwrap_or("")
-                                        ),
-                                        "A DNS record the house's mail needs is wrong",
-                                        &record,
-                                    ))
-                                    .await;
-                            }
-                        }
-                        Err(e) => tracing::warn!("mail records not read: {e}"),
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 Stalwart's queue: a message that cannot leave — port 25 closed, a relay
-    // refusing it — is retried for three days while its sender believes it sent.
-    if !cli.demo {
-        if let (Some(u), Some(a), Some(p)) = (
-            &cli.stalwart_url,
-            &cli.stalwart_admin,
-            &cli.stalwart_password,
-        ) {
-            let mail = Arc::new(hlb_mail::Stalwart::new(
-                u,
-                hlb_mail::Auth::Basic {
-                    user: a.clone(),
-                    password: p.clone(),
-                },
-            ));
-            let st = state.clone();
-            let rx = shutdown_rx.clone();
-            let notif_mq = notif.clone();
-            tracing::info!(interval = cli.mail_queue_secs, "mail queue loop");
-            tasks.push(tokio::spawn(schedule::every(
-                Duration::from_secs(cli.mail_queue_secs),
-                rx,
-                move || {
-                    let (mail, st, notif) = (mail.clone(), st.clone(), notif_mq.clone());
-                    async move {
-                        let now = hlb_controller::auth::now();
-                        match hlb_privd::daemon::mail_queue::read_and_record(&st, &mail, now).await
-                        {
-                            Ok(pass) => {
-                                if pass.cut {
-                                    tracing::warn!(
-                                        "Stalwart answered part of its queue: what is \
-                                         late may be more than the inbox says"
-                                    );
-                                }
-                                for (domain, line) in pass.newly_late {
-                                    tracing::error!("🔴 mail waiting: {line}");
-                                    notif
-                                        .tell(&hlb_notify::Notification::important(
-                                            &format!("mail-waiting:{domain}"),
-                                            "Mail to another domain is not leaving",
-                                            &line,
-                                        ))
-                                        .await;
-                                }
-                            }
-                            Err(e) => tracing::warn!("mail queue not read: {e}"),
-                        }
-                    }
-                },
-            )));
-        }
-    }
-
-    // The manifests' scheduled jobs, in each app's own container. A failure is
-    // notified and stays in the inbox until a run succeeds.
-    if !cli.demo {
-        if let Some(orch) = orch_api.clone() {
-            let st = state.clone();
-            let rx = shutdown_rx.clone();
-            let notif_jobs = notif.clone();
-            tracing::info!(interval = cli.jobs_secs, "scheduled jobs loop");
-            tasks.push(tokio::spawn(schedule::every(
-                Duration::from_secs(cli.jobs_secs),
-                rx,
-                move || {
-                    let (orch, st, notif) = (orch.clone(), st.clone(), notif_jobs.clone());
-                    async move {
-                        let now = hlb_controller::auth::now();
-                        let pass = hlb_engine::jobs::run_due(orch.as_ref(), &st, now).await;
-                        if pass.ran > 0 {
-                            tracing::info!(ran = pass.ran, failed = pass.failed.len(), "jobs run");
-                        }
-                        for failed in pass.failed {
-                            tracing::error!("🔴 job {failed}");
-                            notif
-                                .tell(&hlb_notify::Notification::important(
-                                    // Keyed by the job, not by what it printed.
-                                    &format!("job:{}", failed.split(':').next().unwrap_or("")),
-                                    "A scheduled job of an app failed",
-                                    &failed,
-                                ))
-                                .await;
-                        }
-                    }
-                },
-            )));
-        }
-    }
-
-    // The outcome of each image update `hlb update apply` recorded, success included.
-    if !cli.demo {
-        let st = state.clone();
-        let rx = shutdown_rx.clone();
-        let notif_updates = notif.clone();
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(60),
-            rx,
-            move || {
-                let (st, notif) = (st.clone(), notif_updates.clone());
-                async move {
-                    let now = hlb_controller::auth::now();
-                    daemon::notify::notify_update_runs(&st, &notif, now).await;
-                }
-            },
-        )));
-    }
-
-    // Agent polling: this is what gives the per-node view of disk space, which
-    // the controller cannot obtain otherwise.
-    {
-        // 🔴 mTLS as soon as both files are there. In the clear, any container on the
-        // overlay can map the fleet's disks.
-        let poller = match (&cli.controller_cert, &cli.controller_ca) {
-            (Some(c), Some(a)) => {
-                let cert = tokio::fs::read_to_string(c).await?;
-                let ca = tokio::fs::read_to_string(a).await?;
-                match hlb_privd::fleet::AgentPoller::with_mtls(
-                    cli.agent_port,
-                    Duration::from_secs(10),
-                    &cert,
-                    &ca,
-                    &format!("tasks.{}", cli.agent_service),
-                ) {
-                    Ok(p) => {
-                        tracing::info!("polling the agents over mTLS");
-                        Arc::new(p)
-                    }
-                    Err(e) => return Err(e.into()),
+        match privd.ask(hlb_api::intent::SignInClient {}).await {
+            Ok(setup) => {
+                trusted_root = setup.trusted_root;
+                if let (None, Some(c)) = (&cli.oidc_issuer, setup.client) {
+                    cli.oidc_issuer = Some(c.issuer);
+                    cli.oidc_client_id = c.id;
+                    cli.oidc_client_secret = Some(c.secret);
+                    derived_signin = true;
                 }
             }
-            (None, None) => {
-                tracing::error!(
-                    "🔴 agents polled over PLAIN HTTP — supply --controller-cert \
-                     and --controller-ca"
-                );
-                Arc::new(hlb_privd::fleet::AgentPoller::new(
-                    cli.agent_port,
-                    Duration::from_secs(10),
-                ))
-            }
-            // Only one of the two: refuse rather than fall back to the clear while the
-            // operator believes they enabled mTLS.
-            _ => {
-                return Err(
-                    "incomplete mTLS configuration: --controller-cert AND --controller-ca \
-                     are required together"
-                        .into(),
-                )
-            }
-        };
-        let service = cli.agent_service.clone();
-        let rx = shutdown_rx.clone();
-        let latest = last_poll.clone();
-        let notif_ag = notif.clone();
-        tracing::info!(service = %service, "agent polling loop");
-
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.agent_poll_secs),
-            rx,
-            move || {
-                let (poller, service, latest, notif) = (
-                    poller.clone(),
-                    service.clone(),
-                    latest.clone(),
-                    notif_ag.clone(),
-                );
-                async move {
-                    // `tasks.<service>` resolves to every task; a VIP
-                    // classic one would give only one at random.
-                    let addresses = match resolve_tasks(&service).await {
-                        Ok(a) if !a.is_empty() => a,
-                        Ok(_) => {
-                            tracing::debug!("no agent deployed");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::debug!("agents not resolved: {e}");
-                            return;
-                        }
-                    };
-
-                    let statuses = poller.poll_all(&addresses).await;
-                    // Published for `/metrics` before any analysis: even a pass where
-                    // everything is wrong must be visible in supervision.
-                    *latest.write().await = statuses.clone();
-
-                    let health = agents::ClusterHealth::from_statuses(
-                        &statuses,
-                        &hlb_agent::Thresholds::default(),
-                    );
-
-                    for (addr, s) in &statuses {
-                        if let agents::AgentStatus::Reporting(r) = s {
-                            for (d, p) in r.problems(&hlb_agent::Thresholds::default()) {
-                                tracing::warn!(
-                                    node = %r.hostname, path = %d.path,
-                                    "{:.0} % used — {}", d.used_percent(), p.describe()
-                                );
-                            }
-                        } else {
-                            tracing::warn!(address = %addr, "agent unreachable");
-                        }
-                    }
-
-                    if health.needs_attention() {
-                        tracing::error!(
-                            unreachable = health.unreachable,
-                            saturated = ?health.saturated,
-                            "🔴 cluster to watch"
-                        );
-                        // A full disk stops the databases; a mute node can mean its data
-                        // is no longer being backed up. Both deserve waking someone up.
-                        //
-                        notif
-                            .tell(&hlb_notify::Notification::critical(
-                                "cluster",
-                                "Cluster to watch",
-                                &format!(
-                                    "{} unreachable, saturated: {}",
-                                    health.unreachable,
-                                    if health.saturated.is_empty() {
-                                        "none".to_string()
-                                    } else {
-                                        health.saturated.join(", ")
-                                    }
-                                ),
-                            ))
-                            .await;
-                    }
-                }
-            },
-        )));
+            Err(e) => tracing::warn!("the sign-in client could not be asked for: {e}"),
+        }
     }
 
     // 🔴 The refusal to start. An open API exposes the fleet's state, the audit log and
@@ -1275,85 +279,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!("🔴 no access token: the API would accept nobody.");
         tracing::error!("   Create one: hlb token create <name> --role admin --apply");
         tracing::error!("   Or accept it open: --insecure-no-auth");
+        let _ = shutdown_tx.send(true);
         return Err("no access token".into());
     }
     if cli.insecure_no_auth {
         tracing::error!(
             "🔴 API WITHOUT AUTHENTICATION — fleet state, audit log and secret names \
              accessible to anyone who reaches this port."
-        );
-    }
-
-    // The alert-rule evaluation.
-    //
-    // 🔴 They existed and were only evaluated by the CLI, so only when someone typed
-    // `hlb metrics check`: the rules described what needed watching without anyone
-    // watching it.
-    let series = cli.metrics_url.as_ref().map(|u| {
-        tracing::info!(url = %u, "time-series database configured");
-        Arc::new(hlb_controller::promql::Metrics::new(u))
-    });
-
-    if cli.demo {
-        // Same reason as the alerts: without an orchestrator, reconciliation does not
-        // run, and the drift screen would be empty.
-        *drift_state.write().await = hlb_controller::demo::drifts();
-    }
-
-    let alerts_state: daemon::AlertsState = Default::default();
-    if cli.demo {
-        // Without VictoriaMetrics the loop does not run: we place fabricated alerts, or
-        // the alerts screen would be empty and impossible to write.
-        *alerts_state.write().await = hlb_controller::demo::alerts(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-        );
-    }
-
-    match &series {
-        Some(m) => {
-            let loop_body = Arc::new(daemon::AlertLoop::new(
-                Arc::new(Victoria(m.clone())),
-                notif.clone(),
-                state.clone(),
-            ));
-            // The loop and the API share the SAME structure: the API reads what the
-            // loop has just written, with no copy and no extra synchronisation.
-            let shared = loop_body.active.clone();
-            let to_api = alerts_state.clone();
-            let interval = Duration::from_secs(cli.alerts_secs);
-            tasks.push(tokio::spawn(schedule::every(
-                interval,
-                shutdown_rx.clone(),
-                move || {
-                    let (b, shared, to_api) = (loop_body.clone(), shared.clone(), to_api.clone());
-                    async move {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0);
-                        let r = b.tick(now).await;
-                        *to_api.write().await = shared.read().await.clone();
-
-                        if r.triggered > 0 || r.unknowns > 0 {
-                            tracing::info!(
-                                evaluated = r.evaluated,
-                                triggered = r.triggered,
-                                // Counted separately: "zero fired" with ten unknowns
-                                // is NOT "all is well".
-                                unknowns = r.unknowns,
-                                "alert evaluation"
-                            );
-                        }
-                    }
-                },
-            )));
-        }
-        None => tracing::info!(
-            "no time-series database (--metrics-url): the alert rules are not evaluated"
-        ),
+        )
     }
 
     // Signing people in. Optional: without it, only tokens
@@ -1459,129 +392,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // 🔴 Assembled at startup, once. An install triggered from the interface then runs
-    // the SAME executor as `hlb install` — the alternative would have been to shell out
-    // to the CLI, which recomputes the plan instead of replaying it, and would execute
-    // something other than what was previewed.
-    let vault = if cli.demo {
-        Ok(hlb_secrets::Vault::ephemeral())
-    } else {
-        hlb_secrets::Vault::open(&cli.master_key)
-    };
-    let install = match vault {
-        Ok(vault) => {
-            let postgres = match &cli.postgres_admin {
-                Some(url) => match hlb_platform::PostgresProvisioner::connect(url).await {
-                    Ok(p) => Some(p),
-                    Err(e) => {
-                        tracing::warn!("PostgreSQL unreachable ({e}): databases NOT provisioned");
-                        None
-                    }
-                },
-                None => None,
-            };
-            let mariadb = match &cli.mariadb_admin {
-                Some(url) => match hlb_platform::MariadbProvisioner::connect(url).await {
-                    Ok(m) => Some(m),
-                    Err(e) => {
-                        tracing::warn!("MariaDB unreachable ({e}): databases NOT provisioned");
-                        None
-                    }
-                },
-                None => None,
-            };
-            Some(Arc::new(hlb_privd::InstallContext {
-                vault,
-                registry: hlb_registry::RegistryClient::new(),
-                postgres,
-                mariadb,
-                storage: hlb_engine::StorageConfig {
-                    local_root: cli.storage_root.clone(),
-                    nfs_server: cli.nfs_server.clone(),
-                    nfs_export: cli.nfs_export.clone(),
-                },
-                api: hlb_guide::HttpApi::default(),
-            }))
-        }
-        Err(e) => {
-            // Not fatal: everything that does not install keeps working. But say it
-            // loudly — an install attempted from the interface will refuse, and the
-            // reason must already be in the logs.
-            tracing::error!("vault unreadable ({e}): installing from the interface is disabled");
-            None
-        }
-    };
-
-    // Account provisioning. Without these two, sign-up records an account and
-    // nothing else — the state is named `Empty` and a re-run from the command line
-    // finishes it.
-    let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
-        (Some(u), Some(k)) => {
-            tracing::info!(url = %u, "PocketID configured: the identities will be created");
-            Some(Arc::new(hlb_identity::PocketId::new(u, k)))
-        }
-        (Some(_), None) => {
-            tracing::warn!(
-                "--pocketid-url without --pocketid-key: the identities will NOT be created"
-            );
-            None
-        }
-        _ => {
-            tracing::info!(
-                "PocketID not configured: sign-up will leave the accounts without an identity"
-            );
-            None
-        }
-    };
-    let mail = match (
-        &cli.stalwart_url,
-        &cli.stalwart_admin,
-        &cli.stalwart_password,
-    ) {
-        (Some(u), Some(a), Some(p)) => Some(Arc::new(hlb_mail::Stalwart::new(
-            u,
-            hlb_mail::Auth::Basic {
-                user: a.clone(),
-                password: p.clone(),
-            },
-        ))),
-        _ => None,
-    };
-    let mail_domain = cli.mail_domain.clone().unwrap_or_else(|| "local".into());
+    let mail_domain = cli
+        .daemon
+        .mail_domain
+        .clone()
+        .unwrap_or_else(|| "local".into());
     // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
     // from starting: the rest of the API keeps all its value, and the message says
     // what is missing.
-    let catalog = match hlb_catalog::Catalog::load(&cli.catalog) {
+    let catalog = match hlb_catalog::Catalog::load(&cli.daemon.catalog) {
         Ok(c) => {
-            tracing::info!(apps = c.len(), directory = %cli.catalog.display(), "catalog loaded");
+            tracing::info!(apps = c.len(), directory = %cli.daemon.catalog.display(), "catalog loaded");
             Some(Arc::new(c))
         }
         Err(e) => {
             tracing::warn!(
-                directory = %cli.catalog.display(),
+                directory = %cli.daemon.catalog.display(),
                 "unreadable catalog ({e}) — installing from the interface will be unavailable"
             );
             None
         }
     };
-    let backup =
-        (!cli.demo).then(|| Arc::new(pass_config) as Arc<dyn hlb_privd::backup::BackUpNow>);
-    // 🔴 The capabilities go to the privileged side, and to the daemon's own loops
-    // below: the web side's `AppState` holds none of them, only the door.
-    let privd = hlb_privd::Privd::new(state.clone())
-        .with_orchestrator(orch_api.clone())
-        .with_catalog(catalog.clone())
-        .with_install(install.clone())
-        .with_identity(identity)
-        .with_mail(mail, &mail_domain)
-        .with_backup(backup)
-        .with_published(alerts_state, drift_state)
-        .with_mirror(cli.git_mirror.clone())
-        .with_fleet(last_poll.clone());
-    let held = Arc::new(Held {
-        install,
-        orchestrator: orch_api,
-    });
 
     let shared = Arc::new(api::AppState {
         state,
@@ -1594,13 +425,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         throughput: Arc::new(hlb_controller::throughput::RateLimiter::new()),
         trusted_proxy: cli.trusted_proxy,
         series: series.clone(),
-        beat: cli.heartbeat.clone(),
-        mirror: cli.git_mirror.clone(),
+        beat: cli.daemon.heartbeat.clone(),
+        mirror: cli.daemon.git_mirror.clone(),
         public_url: cli.public_url.clone(),
         demo: cli.demo,
         public_status: cli.public_status,
         mail_domain,
-        catalog_dir: cli.catalog.clone(),
+        catalog_dir: cli.daemon.catalog.clone(),
         // ⚠️ Loaded ONCE at startup, like the catalog. A theme file edited while the
         // controller runs takes effect at the next restart — the same contract the
         // catalog already has, rather than a second, surprising one.
@@ -1645,425 +476,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )));
     }
-    // 🔴 The roles, made true where they are read. A group edited by hand in PocketID,
-    // a client's restriction lifted, a quota changed in Seafile: put back, and a
-    // failure notified — a door the roles say is closed must not stay open quietly.
-    if !cli.demo {
-        let shared = shared.clone();
-        let notif_roles = notif.clone();
-        tracing::info!(interval = cli.roles_secs, "roles loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.roles_secs),
-            shutdown_rx.clone(),
-            move || {
-                let (shared, notif) = (shared.clone(), notif_roles.clone());
-                async move {
-                    match shared.privd().sync_roles(true).await {
-                        Ok(r) => {
-                            let failed: Vec<String> = r
-                                .lines
-                                .iter()
-                                .filter_map(|l| match &l.outcome {
-                                    hlb_engine::roles::Outcome::Failed(e) => {
-                                        Some(format!("{} — {}: {e}", l.subject, l.change))
-                                    }
-                                    _ => None,
-                                })
-                                .collect();
-                            tracing::info!(
-                                changed = r.lines.len(),
-                                unchanged = r.unchanged,
-                                failed = failed.len(),
-                                "roles synced"
-                            );
-                            if !failed.is_empty() {
-                                notif
-                                    .tell(&hlb_notify::Notification::critical(
-                                        "roles-sync",
-                                        "PocketID or an app does not hold the roles",
-                                        &failed.join("\n"),
-                                    ))
-                                    .await;
-                            }
-                        }
-                        Err(e) => tracing::warn!("roles not synced: {e}"),
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 The emergency vault: its account verified, every recovery sign-in deposited.
-    // An account that no longer verifies withdraws the safeguard at once and is
-    // notified; one never set up stays in the inbox as a safeguard never proved.
-    if !cli.demo {
-        let shared = shared.clone();
-        let held = held.clone();
-        let notif_vault = notif.clone();
-        tracing::info!(interval = cli.emergency_secs, "emergency vault loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.emergency_secs),
-            shutdown_rx.clone(),
-            move || {
-                let held = held.clone();
-                let (shared, notif) = (shared.clone(), notif_vault.clone());
-                async move {
-                    let Some(install) = &held.install else {
-                        return;
-                    };
-                    let reach = |u: &str| u.to_string();
-                    let run = hlb_engine::emergency::EmergencyVault {
-                        state: &shared.state,
-                        vault: &install.vault,
-                        reach: &reach,
-                        now: hlb_controller::auth::now(),
-                    }
-                    .run(None, true)
-                    .await;
-                    let r = match run {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::warn!("emergency vault not run: {e}");
-                            return;
-                        }
-                    };
-                    let mut wrong: Vec<String> = r
-                        .checks
-                        .iter()
-                        .filter_map(|c| match &c.verdict {
-                            hlb_bitwarden::emergency::Verdict::Wrong(w) => {
-                                Some(format!("{}: {w}", c.what))
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    wrong.extend(r.lines.iter().filter_map(|l| match &l.outcome {
-                        hlb_engine::roles::Outcome::Failed(e) => {
-                            Some(format!("{} — {}: {e}", l.subject, l.change))
-                        }
-                        _ => None,
-                    }));
-                    tracing::info!(
-                        verified = r.verified(),
-                        written = r.lines.len(),
-                        unchanged = r.unchanged,
-                        failed = wrong.len(),
-                        "emergency vault"
-                    );
-                    if !wrong.is_empty() {
-                        notif
-                            .tell(&hlb_notify::Notification::critical(
-                                "emergency-vault",
-                                "The emergency vault does not hold the recovery sign-ins",
-                                &wrong.join("\n"),
-                            ))
-                            .await;
-                    } else if let Some(why) = &r.stopped {
-                        tracing::info!("emergency vault: {why}");
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 The destinations, proved again every week, and kept to the retention policy
-    // where they can be erased anyway: without it every repository only grew, until the
-    // disk the databases share was full. A failure, or a destination found erasable
-    // that was not, is notified.
-    if !cli.demo {
-        let shared = shared.clone();
-        let held = held.clone();
-        let notif_upkeep = notif.clone();
-        let network = cli.platform_network.clone();
-        tracing::info!(interval = cli.upkeep_secs, "destinations upkeep loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.upkeep_secs),
-            shutdown_rx.clone(),
-            move || {
-                let held = held.clone();
-                let (shared, notif, network) =
-                    (shared.clone(), notif_upkeep.clone(), network.clone());
-                async move {
-                    let Some(install) = &held.install else {
-                        return;
-                    };
-                    let reach = |u: &str| u.to_string();
-                    let lines = match hlb_backup_run::upkeep::run(
-                        &shared.state,
-                        &install.vault,
-                        &network,
-                        &reach,
-                        &hlb_backup::RetentionPolicy::default(),
-                        hlb_controller::auth::now(),
-                    )
-                    .await
-                    {
-                        Ok(l) => l,
-                        Err(e) => {
-                            tracing::warn!("destinations not looked at: {e}");
-                            return;
-                        }
-                    };
-                    let mut said = Vec::new();
-                    for l in &lines {
-                        tracing::info!(
-                            destination = %l.destination,
-                            proof = l.proof.verdict(),
-                            retention = ?l.retention,
-                            "destination upkeep"
-                        );
-                        let _ = shared
-                            .state
-                            .audit(
-                                "controller",
-                                hlb_types::Role::Admin,
-                                "backup-dest-prove",
-                                &l.destination,
-                                l.proof.verdict(),
-                                Some(l.proof.detail()),
-                            )
-                            .await;
-                        if let hlb_backup_run::upkeep::Retention::Failed(why) = &l.retention {
-                            said.push(format!("{}: the retention failed — {why}", l.destination));
-                        }
-                        if let hlb_backup::erasure::Erasure::Unproven { why } = &l.proof {
-                            said.push(format!("{}: not proven — {why}", l.destination));
-                        }
-                    }
-                    if !said.is_empty() {
-                        notif
-                            .tell(&hlb_notify::Notification::important(
-                                "destinations-upkeep",
-                                "A backup destination could not be proved or pruned",
-                                &said.join("\n"),
-                            ))
-                            .await;
-                    }
-                }
-            },
-        )));
-    }
-
-    // The nodes in Termix: each node's account and key, a host per node, its shares. A
-    // failure is notified — a node Termix can no longer open is found the day it is
-    // needed otherwise. Not set up yet (no API key handed over) stays quiet: the guide
-    // says what to do.
-    if !cli.demo {
-        let shared = shared.clone();
-        let held = held.clone();
-        let notif_termix = notif.clone();
-        tracing::info!(interval = cli.termix_secs, "termix loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.termix_secs),
-            shutdown_rx.clone(),
-            move || {
-                let held = held.clone();
-                let (shared, notif) = (shared.clone(), notif_termix.clone());
-                async move {
-                    let (Some(install), Some(orch)) = (&held.install, &held.orchestrator) else {
-                        return;
-                    };
-                    let reach = |u: &str| u.to_string();
-                    let run = hlb_engine::termix::NodeAccess {
-                        state: &shared.state,
-                        vault: &install.vault,
-                        orchestrator: orch.as_ref(),
-                        reach: &reach,
-                    }
-                    .run(true)
-                    .await;
-                    let r = match run {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::warn!("termix not synced: {e}");
-                            return;
-                        }
-                    };
-                    let failed: Vec<String> = r
-                        .lines
-                        .iter()
-                        .filter_map(|l| match &l.outcome {
-                            hlb_engine::roles::Outcome::Failed(e)
-                            | hlb_engine::roles::Outcome::NotConfigured(e) => {
-                                Some(format!("{} — {}: {e}", l.subject, l.change))
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    tracing::info!(
-                        changed = r.lines.len(),
-                        unchanged = r.unchanged,
-                        failed = failed.len(),
-                        "termix synced"
-                    );
-                    if !failed.is_empty() {
-                        notif
-                            .tell(&hlb_notify::Notification::critical(
-                                "termix-nodes",
-                                "Termix cannot open every node",
-                                &failed.join("\n"),
-                            ))
-                            .await;
-                    } else if let Some(why) = &r.stopped {
-                        tracing::info!("termix: {why}");
-                    }
-                }
-            },
-        )));
-    }
-
-    // The images every update leaves behind, on every node. A failure is notified: the
-    // disk it would have freed is the one the journal and Docker's state live on.
-    if !cli.demo {
-        let held = held.clone();
-        let notif_prune = notif.clone();
-        tracing::info!(interval = cli.prune_secs, "image prune loop");
-        tasks.push(tokio::spawn(schedule::every(
-            Duration::from_secs(cli.prune_secs),
-            shutdown_rx.clone(),
-            move || {
-                let held = held.clone();
-                let notif = notif_prune.clone();
-                async move {
-                    let Some(orch) = &held.orchestrator else {
-                        return;
-                    };
-                    let report = match hlb_engine::prune::run(orch.as_ref(), true).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::warn!("images not pruned: {e}");
-                            return;
-                        }
-                    };
-                    let mut failed = Vec::new();
-                    for (node, outcome) in &report {
-                        match outcome {
-                            hlb_engine::prune::Outcome::Freed(size) => {
-                                tracing::info!(node = %node, freed = %size, "images pruned")
-                            }
-                            hlb_engine::prune::Outcome::Failed(why) => {
-                                failed.push(format!("{node}: {why}"))
-                            }
-                            hlb_engine::prune::Outcome::ToDo
-                            | hlb_engine::prune::Outcome::Waiting(_) => {}
-                        }
-                    }
-                    if !failed.is_empty() {
-                        notif
-                            .tell(&hlb_notify::Notification::important(
-                                "image-prune",
-                                "Unused images were not removed everywhere",
-                                &failed.join("\n"),
-                            ))
-                            .await;
-                    }
-                }
-            },
-        )));
-    }
-
-    // 🔴 The fleet's mTLS leaves end after 90 days, and on that morning every agent
-    // refuses the controller: renewed here a month before, handed to their services
-    // under the update policy. A failure, or a leaf still ending after the pass, is
-    // notified every day; the inbox says it too (`certificate_expiring`).
-    if !cli.demo {
-        if let (Some(own), Some(_)) = (cli.controller_cert.clone(), &cli.controller_ca) {
-            let shared = shared.clone();
-            let held = held.clone();
-            let notif_pki = notif.clone();
-            let agent_service = cli.agent_service.clone();
-            tracing::info!(interval = cli.pki_secs, "certificate renewal loop");
-            tasks.push(tokio::spawn(schedule::every(
-                Duration::from_secs(cli.pki_secs),
-                shutdown_rx.clone(),
-                move || {
-                    let held = held.clone();
-                    let (shared, notif, own, agent_service) = (
-                        shared.clone(),
-                        notif_pki.clone(),
-                        own.clone(),
-                        agent_service.clone(),
-                    );
-                    async move {
-                        use hlb_engine::pki;
-                        let (Some(install), Some(orch)) = (&held.install, &held.orchestrator)
-                        else {
-                            return;
-                        };
-                        let now = hlb_controller::auth::now();
-                        // What this process was started with, whatever the state says:
-                        // after a rollback it is the old leaf.
-                        let observed = match tokio::fs::read_to_string(&own)
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|pem| {
-                                hlb_agent::pki::not_after(&pem).map_err(|e| e.to_string())
-                            }) {
-                            Ok(t) => vec![(pki::CONTROLLER_SERVICE.to_string(), t)],
-                            Err(e) => {
-                                tracing::warn!("own certificate unreadable: {e}");
-                                Vec::new()
-                            }
-                        };
-                        let run = pki::Renewal {
-                            state: &shared.state,
-                            vault: &install.vault,
-                            orchestrator: orch.as_ref(),
-                            agent_service: &agent_service,
-                            now,
-                            observed,
-                            inside: Some(pki::CONTROLLER_SERVICE),
-                        }
-                        .run(true)
-                        .await;
-                        let mut said = Vec::new();
-                        match run {
-                            Ok(lines) => {
-                                for l in lines {
-                                    match l.outcome {
-                                        pki::Outcome::Renewed { not_after } => tracing::info!(
-                                            service = %l.service,
-                                            ends = %pki::date(not_after),
-                                            "certificate renewed"
-                                        ),
-                                        pki::Outcome::Failed(why) => {
-                                            said.push(format!("{}: not renewed — {why}", l.service))
-                                        }
-                                        pki::Outcome::Fine
-                                        | pki::Outcome::Absent
-                                        | pki::Outcome::WouldRenew => {}
-                                    }
-                                }
-                            }
-                            Err(e) => said.push(format!("the renewal did not run: {e}")),
-                        }
-                        // Still ending after the pass: renewing failed, or nothing here
-                        // can renew it.
-                        if let Ok(known) = shared.state.leaf_expiries().await {
-                            for (service, t) in pki::ending(&known, now) {
-                                said.push(format!(
-                                    "{service}: ends {} ({} days left)",
-                                    pki::date(t),
-                                    pki::days_left(t, now)
-                                ));
-                            }
-                        }
-                        if !said.is_empty() {
-                            said.push("hlb pki renew --apply".into());
-                            tracing::error!("🔴 {}", said.join("; "));
-                            notif
-                                .tell(&hlb_notify::Notification::critical(
-                                    "pki-renewal",
-                                    "An mTLS certificate of the fleet is not renewed",
-                                    &said.join("\n"),
-                                ))
-                                .await;
-                        }
-                    }
-                },
-            )));
-        }
-    }
 
     let app = api::router(shared);
 
@@ -2096,24 +508,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Archives the desired state into the Git mirror.
-async fn export(
-    path: &std::path::Path,
-    state: &State,
-    message: &str,
-) -> Result<(), hlb_privd::mirror::MirrorError> {
-    hlb_privd::mirror::export(path, state, message).await
+/// The demonstration: an in-memory state seeded with fictional data, and a privileged
+/// side holding no real system — no Docker, a vault held in memory. What its loops would
+/// publish is fabricated, or the alerts, drift and fleet screens would be empty and
+/// impossible to write.
+async fn demonstration(
+    cli: &Cli,
+) -> Result<(Arc<State>, hlb_privd::Privd), Box<dyn std::error::Error>> {
+    tracing::warn!(
+        "🎭 DEMONSTRATION MODE — in-memory database, fictional data. \
+         --state is ignored, nothing is read or written on disk."
+    );
+    let s = State::in_memory().await?;
+    let catalog = hlb_catalog::Catalog::load(&cli.daemon.catalog).ok();
+    hlb_privd::demo::seed_at(&s, cli.demo_scale, catalog.as_ref()).await?;
+    let state = Arc::new(s);
+    let now = hlb_controller::auth::now();
+
+    // We exercise the real sharing path, not a special case: the interface reads
+    // exactly the same structure as in production.
+    let fleet: hlb_privd::fleet::Polled = Default::default();
+    *fleet.write().await = hlb_controller::demo::nodes_at(now as u64, cli.demo_scale);
+    // And the day behind that state, for the home's curves.
+    let running = state
+        .installed_apps()
+        .await?
+        .iter()
+        .filter(|(_, st)| st == "running")
+        .count();
+    state
+        .record_history(&hlb_controller::demo::history(
+            &*fleet.read().await,
+            running,
+            now,
+        ))
+        .await?;
+    let drifts: daemon::DriftState =
+        Arc::new(tokio::sync::RwLock::new(hlb_controller::demo::drifts()));
+    let alerts: daemon::AlertsState =
+        Arc::new(tokio::sync::RwLock::new(hlb_controller::demo::alerts(now)));
+
+    // 🔴 `--master-key` is ignored too: an install from a demo started at the
+    // repository root would decrypt with the real one.
+    let install = hlb_privd::InstallContext {
+        vault: hlb_secrets::Vault::ephemeral(),
+        registry: hlb_registry::RegistryClient::new(),
+        postgres: None,
+        mariadb: None,
+        storage: hlb_engine::StorageConfig {
+            local_root: cli.daemon.storage_root.clone(),
+            nfs_server: cli.daemon.nfs_server.clone(),
+            nfs_export: cli.daemon.nfs_export.clone(),
+        },
+        api: hlb_guide::HttpApi::default(),
+    };
+    let mail_domain = cli.daemon.mail_domain.as_deref().unwrap_or("local");
+    let privd = hlb_privd::Privd::new(state.clone())
+        .with_catalog(catalog.map(Arc::new))
+        .with_install(Some(Arc::new(install)))
+        .with_mail(None, mail_domain)
+        .with_published(alerts, drifts)
+        .with_fleet(fleet);
+    Ok((state, privd))
 }
 
-/// Resolves `tasks.<service>` to the addresses of every task.
-///
-/// This is Swarm's DNS mechanism for reaching each instance of a service rather than the
-/// VIP. Outside a Swarm overlay, resolution simply fails — that is not an error, just
-/// the absence of agents.
-async fn resolve_tasks(service: &str) -> Result<Vec<String>, std::io::Error> {
-    let name = format!("tasks.{service}:0");
-    let addrs = tokio::net::lookup_host(name).await?;
-    Ok(addrs.map(|a| a.ip().to_string()).collect())
+/// The state, once the daemon has opened and migrated it: read-only, it can be opened
+/// only while the daemon holds it, and the two services start in no set order.
+async fn wait_for_daemon(path: &std::path::Path, socket: &std::path::Path) -> Arc<State> {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        match State::open_read_only(path).await {
+            Ok(s) if socket.exists() => return Arc::new(s),
+            Ok(_) => tracing::info!(socket = %socket.display(), "waiting for the daemon's socket"),
+            Err(e) => tracing::info!(state = %path.display(), "waiting for the daemon: {e}"),
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(10));
+    }
 }
 
 /// Ctrl-C or SIGTERM (what Docker sends).

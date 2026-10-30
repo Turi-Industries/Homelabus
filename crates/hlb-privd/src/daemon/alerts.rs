@@ -51,6 +51,21 @@ pub trait Measure: Send + Sync {
     async fn samples(&self, query: &str) -> Result<Vec<hlb_metrics::Sample>, String>;
 }
 
+/// A [`Measure`] made of a function, for the composition roots: the PromQL relay whose
+/// allowlist the rules go through lives in a crate this one cannot name.
+pub struct Query<F>(pub F);
+
+#[async_trait::async_trait]
+impl<F, Fut> Measure for Query<F>
+where
+    F: Fn(String) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = Result<Vec<hlb_metrics::Sample>, String>> + Send,
+{
+    async fn samples(&self, query: &str) -> Result<Vec<hlb_metrics::Sample>, String> {
+        (self.0)(query.to_string()).await
+    }
+}
+
 /// What one evaluation pass produced.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AlertReport {

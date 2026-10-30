@@ -44,6 +44,10 @@ pub enum Error {
     #[error("migration : {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
 
+    /// Opened read-only, a database its writer has not brought to this binary's schema.
+    #[error("the state is at migration {applied}, this binary reads {latest}: the daemon migrates it when it starts")]
+    NotMigrated { applied: i64, latest: i64 },
+
     #[error("unreadable stored manifest for \"{app}\": {source}")]
     StoredManifest {
         app: String,
@@ -623,6 +627,42 @@ impl State {
             .foreign_keys(true);
 
         Self::from_options(opts).await
+    }
+
+    /// Opens the database at `path` for reading only — the web side's, while the daemon
+    /// alone writes it.
+    ///
+    /// Never created and never migrated: the daemon does both. A database older than
+    /// this binary's migrations is refused ([`Error::NotMigrated`]) rather than read
+    /// with columns missing — the web side waits for the daemon instead.
+    pub async fn open_read_only(path: impl AsRef<Path>) -> Result<Self> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path.as_ref())
+            .read_only(true)
+            // No `journal_mode`: setting one is a write. WAL is the writer's, and stays.
+            .foreign_keys(true);
+        // Readers do not serialise: four answer four screens at once.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await?;
+        let latest = sqlx::migrate!("./migrations")
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .unwrap_or(0);
+        let applied: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success")
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(None);
+        if applied.unwrap_or(0) < latest {
+            return Err(Error::NotMigrated {
+                applied: applied.unwrap_or(0),
+                latest,
+            });
+        }
+        Ok(Self { pool })
     }
 
     /// An in-memory database, for tests and the demonstration.
@@ -6278,6 +6318,47 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[tokio::test]
+    async fn a_reader_sees_the_writer_live_and_cannot_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hlb.db");
+        let empty = dir.path().join("empty.db");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(
+            matches!(
+                State::open_read_only(&empty).await,
+                Err(Error::NotMigrated { applied: 0, .. })
+            ),
+            "a database nobody migrated is read with its tables missing"
+        );
+        assert!(
+            State::open_read_only(dir.path().join("absent.db"))
+                .await
+                .is_err(),
+            "a reader created the database"
+        );
+        assert!(!dir.path().join("absent.db").exists());
+
+        let daemon = State::open(&path).await.unwrap();
+        let web = State::open_read_only(&path).await.unwrap();
+        daemon
+            .audit("a", hlb_types::Role::Admin, "x", "y", "ok", None)
+            .await
+            .unwrap();
+        assert_eq!(web.audit_trail(10).await.unwrap().len(), 1);
+        assert!(
+            web.audit("web", hlb_types::Role::Admin, "x", "y", "ok", None)
+                .await
+                .is_err(),
+            "the reader wrote"
+        );
+        daemon
+            .audit("b", hlb_types::Role::Admin, "x", "y", "ok", None)
+            .await
+            .unwrap();
+        assert_eq!(web.audit_trail(10).await.unwrap().len(), 2, "not live");
     }
 
     #[tokio::test]

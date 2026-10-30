@@ -13,9 +13,11 @@ pub mod mail_queue;
 pub mod notify;
 pub mod reconcile;
 pub mod schedule;
+pub mod start;
 
-pub use alerts::{AlertLoop, AlertReport, AlertsState, Measure};
+pub use alerts::{AlertLoop, AlertReport, AlertsState, Measure, Query};
 pub use aliases::{AliasPurgeLoop, PurgeReport};
 pub use notify::Notifier;
 pub use reconcile::{DriftState, LastReconciled, ReconcileLoop, TickReport};
 pub use schedule::every;
+pub use start::{start, Config, StartError, Started};

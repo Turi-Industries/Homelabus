@@ -51,6 +51,7 @@ pub enum Intent {
     BackUp(BackUp),
     PurgeAlias(PurgeAlias),
     KitFingerprint(KitFingerprint),
+    SignInClient(SignInClient),
     Alerts(Alerts),
     Drifts(Drifts),
     Fleet(Fleet),
@@ -127,6 +128,7 @@ asks! {
     BackUp => ActionResult,
     PurgeAlias => ActionResult,
     KitFingerprint => Option<String>,
+    SignInClient => SignInSetup,
     Alerts => Vec<crate::ActiveAlert>,
     Drifts => Vec<crate::DriftSummary>,
     Fleet => std::collections::BTreeMap<String, Result<serde_json::Value, String>>,
@@ -297,6 +299,44 @@ pub struct PurgeAlias {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KitFingerprint {}
+
+/// What the web side needs to sign people in through PocketID, as `hlb fleet
+/// controller` registered it — the web side opens no vault.
+///
+/// 🔴 The one secret the web side is handed: its OWN client's, which it must present to
+/// PocketID at every sign-in. The intent names no secret, so it can be asked for no other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignInClient {}
+
+/// The answer to [`SignInClient`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignInSetup {
+    /// The root the ingress's certificates chain to when no public authority signed
+    /// them: without it PocketID's issuer is unverifiable. A certificate, not a key.
+    pub trusted_root: Option<String>,
+    /// `None` until PocketID is installed and the client registered.
+    pub client: Option<OidcClient>,
+}
+
+/// The web side's sign-in client in PocketID.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OidcClient {
+    pub issuer: String,
+    pub id: String,
+    pub secret: String,
+}
+
+// By hand: a derived `Debug` would print the secret into whatever logs an answer.
+impl std::fmt::Debug for OidcClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcClient")
+            .field("issuer", &self.issuer)
+            .field("id", &self.id)
+            .field("secret", &"…")
+            .finish()
+    }
+}
 
 /// The alerts the daemon's last evaluation found, muted ones included, before the
 /// mutes are applied: the web side applies them at answer time, so a mute set a second

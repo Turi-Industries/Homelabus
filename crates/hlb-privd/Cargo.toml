@@ -24,6 +24,8 @@ hlb-mail.workspace = true
 hlb-backup.workspace = true
 hlb-backup-run.workspace = true
 hlb-gitops.workspace = true
+# What the emergency vault's checks say, for the nightly loop's notification.
+hlb-bitwarden.workspace = true
 # The agents' poller.
 hlb-agent.workspace = true
 futures.workspace = true

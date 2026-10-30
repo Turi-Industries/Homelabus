@@ -234,7 +234,26 @@ mod tests {
         // `open_or_init` beside an existing state made a new key whenever the real one
         // was not where the controller looked — and encrypted with it from then on.
         let (mut guarded, mut opened, mut offenders) = (0, 0, Vec::new());
-        for (name, code) in production_sources() {
+        // The daemon's composition opens it at start-up, in `hlb-privd`: read with the
+        // controller's own, or the one creation would be counted nowhere.
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for e in std::fs::read_dir(dir).expect("hlb-privd's sources") {
+                let path = e.expect("entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("source");
+                    let code = text.split_once("\n#[cfg(test)]").map_or(&*text, |(c, _)| c);
+                    out.push((path.display().to_string(), code.to_string()));
+                }
+            }
+        }
+        let mut sources = production_sources();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hlb-privd/src"),
+            &mut sources,
+        );
+        for (name, code) in sources {
             guarded += code.matches(concat!("Vault::", "open_for_state(")).count();
             opened += code.matches(concat!("Vault::", "open(")).count();
             if code.contains(concat!("Vault::", "open_or_init(")) {
