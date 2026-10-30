@@ -32,9 +32,10 @@ the outside, which is the whole problem.
   Each intent struct is `deny_unknown_fields`, and the dispatch has no `_ =>` arm. The
   answers round-trip through JSON in process too, so the wire is the one the suite
   runs; across processes it is a Unix socket (`hlb_privd::wire`) answering ONE uid, read
-  from the kernel (`SO_PEERCRED`) before the intent is — never the socket's path. 🔴 `hlb.db` is written by `hlb-privd` alone —
-  whoever writes it forges a secret, a session or the audit chain: a web write is an
-  intent in `intent/record.rs`, asked with `AppState::record`. A value it carries (a
+  from the kernel (`SO_PEERCRED`) before the intent is — never the socket's path.
+  🔴 `hlb.db` is written by `hlb-privd` alone — whoever writes it forges a secret, a
+  session or the audit chain: a web write is an intent in `intent/record.rs`, asked
+  with `AppState::record`; `no_web_module_writes_the_state` refuses the rest. A value it carries (a
   session's, an invitation's) is left out of its hand-written `Debug`; an
   `Option<Option<_>>` is two fields, since JSON says `null` for both.
 - **An API token carries a ROLE, not an identity.** Enough to read state, wrong as soon
