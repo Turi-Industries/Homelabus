@@ -137,6 +137,10 @@ passes while guarding nothing.
   "missing field `fix`" in code that had no such field; a suite that passed on the other
   checkout's code would have said nothing. `scripts/worktree-target.sh` reflinks a
   worktree its own; `instructions.rs` refuses `target` in `worktree.symlinkDirectories`.
+- **A second `[[bin]]` makes `cargo run -p <crate>` refuse to choose.** `hlb-privd`
+  joined `hlb-controller` and the browser suite, which starts the controller so,
+  failed in CI only: the stop gate runs it when `web/` moved. `default-run` names
+  the one meant.
 - **In-memory SQLite** requires `max_connections(1)`, or each connection sees a
   different database.
 - **`SystemTime::now()` has no nanosecond resolution on macOS.** A unique id built on it

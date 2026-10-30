@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "The web side, and the hlb-privd daemon it asks."
+# `cargo run -p hlb-controller`, as the browser suite and the docs start it, with two
+# binaries in the package.
+default-run = "hlb-controller"
 
 [lib]
 name = "hlb_controller"
