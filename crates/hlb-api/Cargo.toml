@@ -8,6 +8,8 @@ description = "Controller API types, shared by the server and the UI."
 
 [dependencies]
 hlb-types.workspace = true
+# A role as the web side asks for it to be written.
+hlb-users.workspace = true
 serde.workspace = true
 utoipa.workspace = true
 

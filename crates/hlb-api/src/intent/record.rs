@@ -119,3 +119,124 @@ pub struct IssueAliasToken {
     /// it once.
     pub fingerprint: String,
 }
+
+/// Create a role, or change one's name, level and mail limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PutRole {
+    pub role: hlb_users::role::RoleDef,
+    pub by: String,
+}
+
+/// Delete a role. `true` when there was one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteRole {
+    pub id: String,
+}
+
+/// A role's storage quota in an app; `None` removes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRoleQuota {
+    pub role: String,
+    pub app: String,
+    pub bytes: Option<u64>,
+}
+
+/// Let a role into an app. `true` when it was not let in already.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowRole {
+    pub app: String,
+    pub role: String,
+    pub by: String,
+}
+
+/// Stop letting a role into an app. `true` when it was let in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DenyRole {
+    pub app: String,
+    pub role: String,
+}
+
+/// A person's own quota in an app, or theirs taken away so their role's applies again.
+///
+/// ⚠️ Two fields, not the state's `Option<Option<u64>>`: JSON says `null` for both
+/// `None` and `Some(None)`, and "no quota at all" would arrive as "their role's".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetPersonQuota {
+    pub user: String,
+    pub app: String,
+    /// `false` = their own taken away; `bytes` is then ignored.
+    pub own: bool,
+    /// Their own quota; `None` = none at all.
+    pub bytes: Option<u64>,
+    pub by: String,
+}
+
+/// Give a person a role.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetUserRole {
+    pub user: String,
+    pub role: String,
+    pub granted_by: Option<String>,
+}
+
+/// Keep an invitation, by its value's fingerprint.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateInvitation {
+    /// The link's value. 🔴 Never printed.
+    pub presented: String,
+    pub created_by: String,
+    pub role: String,
+    pub now: i64,
+    pub duration_s: i64,
+    pub max_uses: i64,
+    pub note: Option<String>,
+}
+
+impl std::fmt::Debug for CreateInvitation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateInvitation")
+            .field("created_by", &self.created_by)
+            .field("role", &self.role)
+            .field("max_uses", &self.max_uses)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Use up a pending invitation by its short reference. `true` when one was pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeInvitation {
+    pub reference: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intent::Intent;
+
+    #[test]
+    fn no_quota_at_all_does_not_arrive_as_the_roles_quota() {
+        let none_at_all: Intent = SetPersonQuota {
+            user: "lena".into(),
+            app: "immich".into(),
+            own: true,
+            bytes: None,
+            by: "camille".into(),
+        }
+        .into();
+        let wire = serde_json::to_value(&none_at_all).expect("serialise");
+        let back: Intent = serde_json::from_value(wire).expect("deserialise");
+        let Intent::SetPersonQuota(q) = back else {
+            panic!("another intent came back")
+        };
+        assert_eq!(q.own.then_some(q.bytes), Some(None));
+    }
+}

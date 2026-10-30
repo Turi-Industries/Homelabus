@@ -2,6 +2,10 @@
 //! writes `hlb.db`.
 
 use hlb_api::intent::{
+    AllowRole, CreateInvitation, DeleteRole, DenyRole, PutRole, RevokeInvitation, SetPersonQuota,
+    SetRoleQuota, SetUserRole,
+};
+use hlb_api::intent::{
     Audit, BindIdentity, CloseSession, CloseSessionByReference, IssueAliasToken, OpenSession,
     Refusal, TouchSession, TouchToken,
 };
@@ -123,4 +127,73 @@ pub(crate) async fn issue_alias_token(p: &Privd, i: IssueAliasToken) -> Result<(
         .set_token_mailbox(&i.name, Some(&i.mailbox))
         .await
         .map_err(internal)
+}
+
+pub(crate) async fn put_role(p: &Privd, i: PutRole) -> Result<(), String> {
+    p.state
+        .put_role(&i.role, &i.by)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn delete_role(p: &Privd, i: DeleteRole) -> Result<bool, String> {
+    p.state.delete_role(&i.id).await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_role_quota(p: &Privd, i: SetRoleQuota) -> Result<(), String> {
+    p.state
+        .set_role_quota(&i.role, &i.app, i.bytes)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn allow_role(p: &Privd, i: AllowRole) -> Result<bool, String> {
+    p.state
+        .allow_role(&i.app, &i.role, &i.by)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn deny_role(p: &Privd, i: DenyRole) -> Result<bool, String> {
+    p.state
+        .deny_role(&i.app, &i.role)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_person_quota(p: &Privd, i: SetPersonQuota) -> Result<(), String> {
+    let quota = i.own.then_some(i.bytes);
+    p.state
+        .set_person_quota(&i.user, &i.app, quota, &i.by)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn set_user_role(p: &Privd, i: SetUserRole) -> Result<(), String> {
+    p.state
+        .set_user_role(&i.user, &i.role, i.granted_by.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn create_invitation(p: &Privd, i: CreateInvitation) -> Result<(), String> {
+    p.state
+        .create_invitation(
+            &i.presented,
+            &i.created_by,
+            &i.role,
+            i.now,
+            i.duration_s,
+            i.max_uses,
+            i.note.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn revoke_invitation(p: &Privd, i: RevokeInvitation) -> Result<bool, String> {
+    p.state
+        .revoke_invitation(&i.reference)
+        .await
+        .map_err(|e| e.to_string())
 }

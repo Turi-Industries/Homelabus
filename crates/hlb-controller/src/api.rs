@@ -150,7 +150,16 @@ impl AppState {
             outcome: outcome.to_string(),
             detail: detail.map(str::to_string),
         };
-        self.privd.ask(asked).await.map_err(|e| e.to_string())?
+        self.record(asked).await
+    }
+
+    /// Asks the privileged side for a record of the state, which only it writes: an
+    /// answer that did not come back and a refusal read alike.
+    pub async fn record<A, T>(&self, intent: A) -> Result<T, String>
+    where
+        A: hlb_api::intent::Ask<Answer = Result<T, String>>,
+    {
+        self.privd.ask(intent).await.map_err(|e| e.to_string())?
     }
 }
 

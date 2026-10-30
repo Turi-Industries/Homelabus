@@ -331,10 +331,11 @@ pub async fn put_role(
     if applied {
         apply_step(
             &mut step,
-            s.state
-                .put_role(&role, auth.actor().name())
-                .await
-                .map_err(|e| e.to_string()),
+            s.record(hlb_api::intent::PutRole {
+                role: role.clone(),
+                by: auth.actor().name().to_string(),
+            })
+            .await,
         );
     }
     let r = result(
@@ -386,11 +387,9 @@ pub async fn delete_role(
     if applied {
         apply_step(
             &mut step,
-            s.state
-                .delete_role(&id)
+            s.record(hlb_api::intent::DeleteRole { id: id.clone() })
                 .await
-                .map(|_| ())
-                .map_err(|e| e.to_string()),
+                .map(|_| ()),
         );
     }
     let r = result(
@@ -453,10 +452,12 @@ pub async fn role_quota(
     if applied {
         apply_step(
             &mut step,
-            s.state
-                .set_role_quota(&id, &app, bytes)
-                .await
-                .map_err(|e| e.to_string()),
+            s.record(hlb_api::intent::SetRoleQuota {
+                role: id.clone(),
+                app: app.clone(),
+                bytes,
+            })
+            .await,
         );
     }
     let cli = match bytes {
@@ -530,9 +531,14 @@ pub async fn allow_role(
     let applied = q.apply && blockers.is_empty();
     let mut step = planned(format!("let \"{id}\" into {app}"));
     if applied {
-        let done = match s.state.allow_role(&app, &id, auth.actor().name()).await {
+        let asked = hlb_api::intent::AllowRole {
+            app: app.clone(),
+            role: id.clone(),
+            by: auth.actor().name().to_string(),
+        };
+        let done = match s.record(asked).await {
             Ok(_) => republish(&s, &app).await,
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e),
         };
         apply_step(&mut step, done);
     }
@@ -585,9 +591,13 @@ pub async fn deny_role(
     let applied = q.apply && blockers.is_empty();
     let mut step = planned(format!("stop letting \"{id}\" into {app}"));
     if applied {
-        let done = match s.state.deny_role(&app, &id).await {
+        let asked = hlb_api::intent::DenyRole {
+            app: app.clone(),
+            role: id.clone(),
+        };
+        let done = match s.record(asked).await {
             Ok(_) => republish(&s, &app).await,
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e),
         };
         apply_step(&mut step, done);
     }
@@ -669,10 +679,14 @@ pub async fn person_quota(
     if applied {
         apply_step(
             &mut step,
-            s.state
-                .set_person_quota(&account, &app, quota, auth.actor().name())
-                .await
-                .map_err(|e| e.to_string()),
+            s.record(hlb_api::intent::SetPersonQuota {
+                user: account.clone(),
+                app: app.clone(),
+                own: quota.is_some(),
+                bytes: quota.flatten(),
+                by: auth.actor().name().to_string(),
+            })
+            .await,
         );
     }
     let r = result(

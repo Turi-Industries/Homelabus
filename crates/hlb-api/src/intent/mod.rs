@@ -65,6 +65,15 @@ pub enum Intent {
     BindIdentity(BindIdentity),
     TouchToken(TouchToken),
     IssueAliasToken(IssueAliasToken),
+    PutRole(PutRole),
+    DeleteRole(DeleteRole),
+    SetRoleQuota(SetRoleQuota),
+    AllowRole(AllowRole),
+    DenyRole(DenyRole),
+    SetPersonQuota(SetPersonQuota),
+    SetUserRole(SetUserRole),
+    CreateInvitation(CreateInvitation),
+    RevokeInvitation(RevokeInvitation),
 }
 
 macro_rules! asks {
@@ -112,6 +121,15 @@ asks! {
     BindIdentity => Result<bool, String>,
     TouchToken => Result<(), String>,
     IssueAliasToken => Result<(), Refusal>,
+    PutRole => Result<(), String>,
+    DeleteRole => Result<bool, String>,
+    SetRoleQuota => Result<(), String>,
+    AllowRole => Result<bool, String>,
+    DenyRole => Result<bool, String>,
+    SetPersonQuota => Result<(), String>,
+    SetUserRole => Result<(), String>,
+    CreateInvitation => Result<(), String>,
+    RevokeInvitation => Result<bool, String>,
 }
 
 /// The answer of an action that may not even be planned.

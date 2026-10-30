@@ -363,19 +363,16 @@ pub async fn create_invitation(
         hlb_secrets::fill_random(&mut raw);
         let value = hlb_types::token::base32(&raw);
 
-        match s
-            .state
-            .create_invitation(
-                &value,
-                auth.actor().name(),
-                &role.id,
-                crate::auth::now(),
-                duration,
-                uses,
-                d.note.as_deref(),
-            )
-            .await
-        {
+        let asked = hlb_api::intent::CreateInvitation {
+            presented: value.clone(),
+            created_by: auth.actor().name().to_string(),
+            role: role.id.clone(),
+            now: crate::auth::now(),
+            duration_s: duration,
+            max_uses: uses,
+            note: d.note.clone(),
+        };
+        match s.record(asked).await {
             Ok(()) => {
                 step.state = StepState::Done;
                 link = Some(hlb_api::invitation::link_path(&value));
@@ -429,7 +426,10 @@ pub async fn revoke_invitation(
     let mut blockers = Vec::new();
 
     if applied {
-        match s.state.revoke_invitation(&reference).await {
+        let asked = hlb_api::intent::RevokeInvitation {
+            reference: reference.clone(),
+        };
+        match s.record(asked).await {
             Ok(true) => step.state = StepState::Done,
             Ok(false) => {
                 step.state = StepState::Failed;
@@ -598,11 +598,12 @@ pub async fn change_role(
     };
 
     if applied {
-        match s
-            .state
-            .set_user_role(&account, &role.id, Some(auth.actor().name()))
-            .await
-        {
+        let asked = hlb_api::intent::SetUserRole {
+            user: account.clone(),
+            role: role.id.clone(),
+            granted_by: Some(auth.actor().name().to_string()),
+        };
+        match s.record(asked).await {
             Ok(()) => {
                 step.state = StepState::Done;
                 // Its groups in PocketID now, not at the loop's next pass.
@@ -745,11 +746,12 @@ pub async fn change_roles(
             if h.role.as_deref() == Some(role.id.as_str()) {
                 step.description = format!("{account}: already \"{}\"", role.label());
             } else if applied {
-                match s
-                    .state
-                    .set_user_role(account, &role.id, Some(auth.actor().name()))
-                    .await
-                {
+                let asked = hlb_api::intent::SetUserRole {
+                    user: account.clone(),
+                    role: role.id.clone(),
+                    granted_by: Some(auth.actor().name().to_string()),
+                };
+                match s.record(asked).await {
                     Ok(()) => step.state = StepState::Done,
                     Err(e) => {
                         step.state = StepState::Failed;

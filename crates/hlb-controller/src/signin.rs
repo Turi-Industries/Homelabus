@@ -373,13 +373,7 @@ pub async fn return_to(
         user: account.clone(),
         sub: identity.sub.clone(),
     };
-    match s
-        .privd()
-        .ask(asked)
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r)
-    {
+    match s.record(asked).await {
         Ok(true) => {}
         Ok(false) => {
             let _ = s
@@ -420,13 +414,7 @@ pub async fn return_to(
         duration_s: SESSION_DURATION_S,
         user_agent: agent,
     };
-    if let Err(e) = s
-        .privd()
-        .ask(asked)
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r)
-    {
+    if let Err(e) = s.record(asked).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("session could not be opened: {e}\n"),

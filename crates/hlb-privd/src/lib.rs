@@ -204,6 +204,21 @@ impl Privd {
             Intent::IssueAliasToken(i) => {
                 serde_json::to_value(record::issue_alias_token(self, i).await)?
             }
+            Intent::PutRole(i) => serde_json::to_value(record::put_role(self, i).await)?,
+            Intent::DeleteRole(i) => serde_json::to_value(record::delete_role(self, i).await)?,
+            Intent::SetRoleQuota(i) => serde_json::to_value(record::set_role_quota(self, i).await)?,
+            Intent::AllowRole(i) => serde_json::to_value(record::allow_role(self, i).await)?,
+            Intent::DenyRole(i) => serde_json::to_value(record::deny_role(self, i).await)?,
+            Intent::SetPersonQuota(i) => {
+                serde_json::to_value(record::set_person_quota(self, i).await)?
+            }
+            Intent::SetUserRole(i) => serde_json::to_value(record::set_user_role(self, i).await)?,
+            Intent::CreateInvitation(i) => {
+                serde_json::to_value(record::create_invitation(self, i).await)?
+            }
+            Intent::RevokeInvitation(i) => {
+                serde_json::to_value(record::revoke_invitation(self, i).await)?
+            }
         })
     }
 }
