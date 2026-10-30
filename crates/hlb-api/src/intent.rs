@@ -51,6 +51,7 @@ pub enum Intent {
     DefaultMailbox(DefaultMailbox),
     CreateAlias(CreateAlias),
     CreateMailbox(CreateMailbox),
+    SignUp(SignUp),
 }
 
 macro_rules! asks {
@@ -87,6 +88,7 @@ asks! {
     DefaultMailbox => Acted,
     CreateAlias => Result<String, Refusal>,
     CreateMailbox => Acted,
+    SignUp => SignedUp,
 }
 
 /// The answer of an action that may not even be planned.
@@ -272,6 +274,41 @@ pub struct CreateMailbox {
     /// The account the web side vouches is asking; `None` = nobody signed in.
     pub account: Option<String>,
     pub local: String,
+}
+
+/// Create an account from an invitation, or preview it without using the link.
+///
+/// 🔴 The invitation IS the authorization: nobody is signed in yet, so the privileged
+/// side checks the link itself rather than take the web side's word for it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignUp {
+    /// The invitation token, as the URL fragment carried it.
+    pub invitation: String,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub apply: bool,
+}
+
+// By hand: a derived `Debug` would print the token into whatever logs an intent.
+impl std::fmt::Debug for SignUp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignUp")
+            .field("invitation", &"…")
+            .field("name", &self.name)
+            .field("display_name", &self.display_name)
+            .field("apply", &self.apply)
+            .finish()
+    }
+}
+
+/// A sign-up's plan or outcome. Applied, `result.applied` false means refused before
+/// anything was written; true means the account exists, whatever its steps say.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignedUp {
+    pub result: ActionResult,
+    /// 🔴 PocketID's single-use enrolment link: shown once, never stored nor logged.
+    pub enrolment_link: Option<String>,
 }
 
 #[cfg(test)]

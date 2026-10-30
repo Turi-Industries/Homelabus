@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::extract::{Json, Path, Query};
 use axum::extract::State as AxumState;
+use hlb_api::intent::SignedUp;
 use hlb_api::{ActionResult, ActionStep, StepState};
 
 use crate::actions::ActionQuery;
@@ -852,257 +853,39 @@ pub async fn signup(
     body: Option<Json<SignupRequest>>,
 ) -> ActionReply<Registered> {
     let d = body.map(|Json(d)| d).unwrap_or_default();
-    let now = crate::auth::now();
-    let mut blockers = Vec::new();
+    let name = d.name.clone();
+    let signed_up = s
+        .privd()
+        .ask(hlb_api::intent::SignUp {
+            invitation: d.invitation,
+            name: d.name,
+            display_name: d.display_name,
+            apply: q.apply,
+        })
+        .await;
+    let SignedUp {
+        result,
+        enrolment_link,
+    } = match signed_up {
+        Ok(a) => a,
+        Err(e) => return Err(crate::actions::privd_error(e)),
+    };
 
-    // The name becomes both the address's local part AND the PocketID identifier.
-    if let Err(e) = hlb_users::validate_name(&d.name) {
-        blockers.push(e.to_string());
-    }
-
-    // What is taken is said only to whoever holds a link that opens: to anyone else
-    // the preview was a directory of the household's names. An unreadable state reads
-    // as no link — it opens nothing either.
-    let invited = s
-        .state
-        .invitation_open(&d.invitation, now)
-        .await
-        .unwrap_or(false);
-    if invited && blockers.is_empty() {
-        blockers.extend(name_taken(&s, &d.name).await);
-    }
-
-    // ⚠️ We do not CONSUME the invitation in preview: you must be able to check your
-    // name without burning the link. Validity is checked without a side effect.
-    let preview_only = !q.apply;
-
-    if preview_only {
-        let r = ActionResult {
-            applied: false,
-            summary: format!("create the account \"{}\"", d.name),
-            steps: vec![
-                step("create the PocketID identity"),
-                step("open the mailbox"),
-                step("record the account"),
-            ],
-            cli_command: format!("hlb user add {} --apply", d.name),
-            blockers,
-            warnings: Vec::new(),
-            confirmation_required: None,
-        };
+    if !q.apply {
         return Ok(Json(Registered {
-            result: r,
+            result,
             enrolment_link: None,
         }));
     }
-
-    if !blockers.is_empty() {
-        return refuse_signup(&s, &d.name, blockers).await;
+    if !result.applied {
+        return refuse_signup(&s, &name, result).await;
     }
-
-    // 1. The invitation, consumed BEFORE anything: single use guaranteed by the transaction.
-    let Ok(Some(role)) = s
-        .state
-        .consume_invitation(&d.invitation, &d.name, now)
-        .await
-    else {
-        // Unknown, expired or already used: indistinguishable on purpose.
-        return refuse_signup(
-            &s,
-            &d.name,
-            vec!["invalid, expired or already used invitation — ask for a new link".to_string()],
-        )
-        .await;
-    };
-
-    let mut steps = Vec::new();
-
-    // 2. The account in the database, straight away: that is what makes the state
-    // visible even if the rest fails.
-    // Created, never upserted: a sign-up racing another for the same name since the
-    // check above stops here, rather than rewriting the role of the account it lost to.
-    let mut e = step("record the account");
-    match s.state.create_user(&d.name, &role).await {
-        Ok(true) => e.state = StepState::Done,
-        Ok(false) => {
-            e.state = StepState::Failed;
-            e.error = Some(format!("the name \"{}\" is already taken", d.name));
-            steps.push(e);
-            return finish_signup(&s, &d.name, steps, None).await;
-        }
-        Err(err) => {
-            e.state = StepState::Failed;
-            e.error = Some(err.to_string());
-            steps.push(e);
-            return finish_signup(&s, &d.name, steps, None).await;
-        }
-    }
-    steps.push(e);
-    // Who granted it: the invitation, whose creator the audit log names.
-    let _ = s
-        .state
-        .set_user_role(&d.name, &role, Some("invitation"))
-        .await;
-
-    // 3. The PocketID identity.
-    //
-    // ⚠️ It comes BEFORE the mailbox: an identity with no mailbox lets the person sign
-    // in and receive nothing; a mailbox with no identity leaves mail nobody can read.
-    // The first state is the less bad of the two — you can at least reach the person
-    // some other way.
-    let mut e = step("create the PocketID identity");
-    let mut enrolment_link = None;
-
-    match &s.identity {
-        Some(pid) => {
-            let display_name = d.display_name.clone().unwrap_or_else(|| d.name.clone());
-            let address = format!("{}@{}", d.name, s.mail_domain);
-            match pid
-                .create_user(&d.name, Some(&address), &display_name, &[])
-                .await
-            {
-                Ok(u) => {
-                    e.state = StepState::Done;
-                    let _ = s.state.upsert_user_pocket_id(&d.name, &u.id).await;
-
-                    // 🔴 PocketID has NO password: passkey authentication. So we do not
-                    // hand over an initial secret but a single-use token, shown once
-                    // and never recorded.
-                    match pid.one_time_token(&u.id, "12h").await {
-                        Ok(token) => {
-                            let public = hlb_engine::access::pocketid_public(&s.state)
-                                .await
-                                .unwrap_or_else(|| pid.issuer().to_string());
-                            enrolment_link =
-                                Some(hlb_engine::access::enrolment_link(&public, &token));
-                        }
-                        Err(err) => {
-                            // The account exists but nobody can sign in to it: that is
-                            // not a creation failure, it is a link to redo. We say so
-                            // without marking the step as failed.
-                            e.error = Some(format!(
-                                "identity created, but the enrolment link failed \
-                                 ({err}) — make another with \"hlb user link {}\"",
-                                d.name
-                            ));
-                        }
-                    }
-                }
-                Err(err) => {
-                    e.state = StepState::Failed;
-                    e.error = Some(err.to_string());
-                }
-            }
-        }
-        None => {
-            e.state = StepState::Unimplemented;
-            e.error = Some(
-                "PocketID not configured on this controller — finish with \"hlb user add \
-                 <name> --apply\", which picks up where this stopped"
-                    .into(),
-            );
-        }
-    }
-    steps.push(e);
-
-    // 4. The mailbox.
-    let mut e = step("open the mailbox");
-    match &s.mail {
-        // 🔴 An account Stalwart holds already is refused, never adopted: an app's own
-        // (`vikunja@`) would have become this person's, its mail with it.
-        Some(mail) => match hlb_engine::mailbox::create(
-            &s.state,
-            mail,
-            &d.name,
-            &d.name,
-            &s.mail_domain,
-            true,
-            hlb_engine::mailbox::Existing::Refuse,
-        )
-        .await
-        {
-            Ok(Ok(_)) => e.state = StepState::Done,
-            Ok(Err(refusal)) => {
-                e.state = StepState::Failed;
-                e.error = Some(refusal);
-            }
-            Err(err) => {
-                e.state = StepState::Failed;
-                e.error = Some(err.to_string());
-            }
-        },
-        None => {
-            e.state = StepState::Unimplemented;
-            e.error = Some(
-                "Stalwart not configured on this controller — the mailbox does not \
-                 exist, and the address will receive nothing"
-                    .into(),
-            );
-        }
-    }
-    steps.push(e);
-
     // Their role's apps open to them now, not at the next hourly pass.
     crate::roles::sync_soon(s.clone());
-
-    finish_signup(&s, &d.name, steps, enrolment_link).await
+    finish_signup(&s, &name, result, enrolment_link).await
 }
 
-/// Why `name` cannot be signed up: an account has it, or the address it would take is
-/// reserved, an app's or another person's. 🔴 A state that cannot be read is a refusal,
-/// never a free name.
-async fn name_taken(s: &AppState, name: &str) -> Vec<String> {
-    let mut blockers = Vec::new();
-    match s.state.users().await {
-        Ok(u) if u.iter().any(|(n, _, _)| n == name) => {
-            blockers.push(format!("the name \"{name}\" is already taken"));
-        }
-        Ok(_) => {}
-        Err(e) => blockers.push(format!("the accounts cannot be read: {e}")),
-    }
-    match hlb_engine::mailbox::refusal(&s.state, name, name, &s.mail_domain).await {
-        Ok(Some(r)) => blockers.push(r),
-        Ok(None) => {}
-        Err(e) => blockers.push(format!("the mailboxes cannot be read: {e}")),
-    }
-    // Asked before the invitation is used: found only at the mailbox step, the person
-    // would be left with an account and no address.
-    if let Some(mail) = &s.mail {
-        let found = match mail.domain_id(&s.mail_domain).await {
-            Ok(id) => mail.find_account(name, &id).await.map(|a| a.is_some()),
-            Err(hlb_mail::Error::UnknownDomain(_)) => Ok(false),
-            Err(e) => Err(e),
-        };
-        match found {
-            Ok(false) => {}
-            Ok(true) => blockers.push(format!(
-                "{name}@{} exists already in the mail server — choose another name",
-                s.mail_domain
-            )),
-            Err(e) => blockers.push(format!("the mail server cannot be read: {e}")),
-        }
-    }
-    blockers
-}
-
-fn step(what: &str) -> ActionStep {
-    ActionStep {
-        description: what.to_string(),
-        state: StepState::Planned,
-        error: None,
-    }
-}
-
-async fn refuse_signup(s: &AppState, name: &str, blockers: Vec<String>) -> ActionReply<Registered> {
-    let r = ActionResult {
-        applied: false,
-        summary: format!("create the account \"{name}\""),
-        steps: Vec::new(),
-        cli_command: format!("hlb user add {name} --apply"),
-        blockers,
-        warnings: Vec::new(),
-        confirmation_required: None,
-    };
+async fn refuse_signup(s: &AppState, name: &str, r: ActionResult) -> ActionReply<Registered> {
     // The name is whatever an anonymous caller sent: kept short and printable, it
     // cannot forge a line of the log nor fill it.
     let printable = |t: &str, max: usize| -> String {
@@ -1132,19 +915,9 @@ async fn refuse_signup(s: &AppState, name: &str, blockers: Vec<String>) -> Actio
 async fn finish_signup(
     s: &AppState,
     name: &str,
-    steps: Vec<ActionStep>,
+    r: ActionResult,
     link: Option<String>,
 ) -> ActionReply<Registered> {
-    let r = ActionResult {
-        applied: true,
-        summary: format!("account \"{name}\" created"),
-        steps,
-        cli_command: format!("hlb user add {name} --apply"),
-        blockers: Vec::new(),
-        warnings: Vec::new(),
-        confirmation_required: None,
-    };
-
     let issue = if r.succeeded() { "ok" } else { "failed" };
     let _ = s
         .state

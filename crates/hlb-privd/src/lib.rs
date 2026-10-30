@@ -19,6 +19,7 @@ mod apps;
 pub mod backup;
 mod identity;
 mod mail;
+mod signup;
 mod swarm;
 
 #[derive(Debug, thiserror::Error)]
@@ -50,6 +51,14 @@ pub struct InstallContext {
     /// The apps' own APIs, for the guides' `api` steps: this side is on the overlay,
     /// and reaches them by name.
     pub api: hlb_guide::HttpApi,
+}
+
+/// Seconds since the epoch, the state's unit of time.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// What the privileged side holds, and the only door to it.
@@ -177,6 +186,7 @@ impl Privd {
             Intent::CreateAlias(i) => serde_json::to_value(mail::create_alias(self, i).await)?,
             Intent::CreateMailbox(i) => serde_json::to_value(mail::create_mailbox(self, i).await)?,
             Intent::PurgeAlias(i) => serde_json::to_value(mail::purge_alias(self, i).await)?,
+            Intent::SignUp(i) => serde_json::to_value(signup::sign_up(self, i).await)?,
         })
     }
 }

@@ -3,14 +3,7 @@
 use hlb_api::intent::{Acted, CreateAlias, CreateMailbox, PurgeAlias, Refusal};
 use hlb_api::{ActionResult, ActionStep, StepState};
 
-use crate::Privd;
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
+use crate::{now, Privd};
 
 /// Purges one of the account's own expired-but-still-active aliases.
 ///
