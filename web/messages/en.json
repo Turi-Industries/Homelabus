@@ -1885,6 +1885,7 @@
 	"safeguard_pocketid_restored": "PocketID restore rehearsed",
 	"safeguard_emergency_vault": "recovery sign-ins in the emergency vault",
 	"safeguard_emergency_kit": "emergency kit printed and current",
+	"safeguard_family_rehearsal": "kit opened by the family, without the owner",
 	"inbox_later": "Later",
 	"inbox_until_tomorrow": "Until tomorrow",
 	"inbox_for_a_week": "For a week",

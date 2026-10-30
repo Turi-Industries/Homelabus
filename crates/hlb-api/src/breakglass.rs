@@ -15,9 +15,9 @@
 //! So it asks for a **dated attestation**, and lets it expire. A break-glass never
 //! exercised is not a break-glass — the same reasoning as the restore drills.
 //!
-//! Three it proves itself, and no hand attests: the restore drill, the emergency vault's
-//! verified deposit, and an emergency kit printed since what it holds last changed
-//! ([`proof`]).
+//! Four it proves itself, and no hand attests: the restore drill, the emergency vault's
+//! verified deposit, an emergency kit printed since what it holds last changed, and the
+//! family having opened it without the owner ([`proof`]).
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -129,6 +129,8 @@ pub const DRILL: &str = "pocketid-restored";
 pub const EMERGENCY_VAULT: &str = "emergency-vault";
 /// The emergency kit's: printed since what it holds last changed.
 pub const EMERGENCY_KIT: &str = "emergency-kit";
+/// The family's: the holders of the kit's shares opened it together, without the owner.
+pub const FAMILY_REHEARSAL: &str = "family-rehearsal";
 
 /// What proves a safeguard Homelabus verifies itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +142,9 @@ pub enum Proof {
     Deposit,
     /// A kit printed with what is current: its fingerprint is kept with the attestation.
     Kit,
+    /// The rehearsal code read off the sealed kit, which only its shares open, given
+    /// back — and burned.
+    Rehearsal,
 }
 
 /// The proof of a safeguard Homelabus verifies itself; `None` for one a person attests.
@@ -149,6 +154,7 @@ pub fn proof(id: &str) -> Option<Proof> {
         DRILL => Some(Proof::Drill),
         EMERGENCY_VAULT => Some(Proof::Deposit),
         EMERGENCY_KIT => Some(Proof::Kit),
+        FAMILY_REHEARSAL => Some(Proof::Rehearsal),
         _ => None,
     }
 }
@@ -237,6 +243,22 @@ pub fn safeguards() -> Vec<Safeguard> {
             comment: "hlb emergency kit, printed and kept away from the cluster. A kit \
                       printed before the master key, the repository's password or a \
                       destination changed no longer counts."
+                .into(),
+            attested_ago_s: None,
+            attested_by: None,
+            verifiable: true,
+            resolution_day: false,
+        },
+        Safeguard {
+            id: FAMILY_REHEARSAL.into(),
+            title: "The family opened the kit without the owner".into(),
+            why: "The day the owner is gone, a kit nobody else can open is no kit: its \
+                  shares must be held, and the holders able to use them."
+                .into(),
+            comment: "Each relative holds a share of hlb emergency split. Once a year, \
+                      send them hlb emergency kit --sealed; having opened it together, they \
+                      give you the rehearsal code it ends with, for hlb emergency rehearsed \
+                      <code>."
                 .into(),
             attested_ago_s: None,
             attested_by: None,

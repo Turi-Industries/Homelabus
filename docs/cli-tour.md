@@ -149,7 +149,13 @@ vault, so it runs on a relative's laptop; without `--kit` it only checks the sha
 ./target/debug/hlb emergency kit --sealed --out /tmp/kit.age   # after a change: send it again
 ./target/debug/hlb emergency combine                         # type 3 shares: do they open it?
 ./target/debug/hlb emergency combine --kit kit.age --out kit.txt
+./target/debug/hlb emergency rehearsed cbde-fghi-jkln-rtuv   # the code that ends the opened kit
 ```
+
+Once a year the family opens the kit without the owner: the opened kit ends with a
+rehearsal code, which they give back. Homelabus checks it against the one it sealed in
+and burns it — the safeguard is proved by that, never ticked by hand, and a new split
+withdraws it.
 
 Termix gets every node: on each, an account `hlb-termix` with no right beyond a shell,
 and a key Homelabus generates, accepted from Termix's own node only; in Termix, a host

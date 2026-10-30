@@ -5,7 +5,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use hlb_api::breakglass::EMERGENCY_KIT;
+use hlb_api::breakglass::{EMERGENCY_KIT, FAMILY_REHEARSAL};
 use hlb_bitwarden::emergency::Verdict;
 use hlb_engine::emergency::{EmergencyVault, Report};
 use hlb_engine::roles::Outcome;
@@ -25,6 +25,7 @@ pub async fn run(cli: &Cli, cmd: &EmergencyCmd) -> Result<ExitCode> {
             replace,
         } => split(cli, *threshold, *shares, out, *replace).await,
         EmergencyCmd::Combine { kit, out } => combine(kit.as_deref(), out.as_deref()),
+        EmergencyCmd::Rehearsed { code } => rehearsed(cli, code).await,
     }
 }
 
@@ -143,7 +144,9 @@ async fn kit(cli: &Cli, out: Option<&Path>, sealed: bool) -> Result<ExitCode> {
     let printed = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
     let mut sheet = hlb_backup_run::kit::render(&kit, &state.brand().await?.name, &printed);
     if let Some(split) = &split {
-        sheet = hlb_secrets::split::seal(&sheet, &split.recipient)?;
+        let code = hlb_backup_run::kit::rehearsal_code(&state, &vault).await?;
+        let sealed = hlb_backup_run::kit::render_sealed(&sheet, &code);
+        sheet = hlb_secrets::split::seal(&sealed, &split.recipient)?;
     }
     hand_over(&state, &kit.fingerprint, &sheet, out).await?;
     match (out, &split) {
@@ -199,7 +202,9 @@ async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -
     let kit = hlb_backup_run::kit::read(&state, &vault).await?;
     let printed = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
     let sheet = hlb_backup_run::kit::render(&kit, &installation, &printed);
-    let sealed = hlb_secrets::split::seal(&sheet, &made.recipient)?;
+    let code = hlb_secrets::split::draw_code();
+    let sealed = hlb_backup_run::kit::render_sealed(&sheet, &code);
+    let sealed = hlb_secrets::split::seal(&sealed, &made.recipient)?;
     // Recorded before anything is written, as the kit is.
     state
         .audit(
@@ -226,6 +231,9 @@ async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -
     // 🔴 Recorded once every sheet exists: recorded first, a write that failed would
     // leave the kit sealed from then on to shares nobody holds.
     hlb_backup_run::kit::record_split(&state, &vault, &record).await?;
+    hlb_backup_run::kit::set_rehearsal_code(&state, &vault, &code).await?;
+    // New shares were never rehearsed, whatever the old ones were.
+    state.forget_breakglass(FAMILY_REHEARSAL).await?;
     // The sealed kit holds today's material, and opens without the owner.
     state
         .attest_breakglass(EMERGENCY_KIT, "hlb emergency split", Some(&kit.fingerprint))
@@ -243,6 +251,51 @@ async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -
     );
     println!("Then delete the directory. After any change to the kit, send them");
     println!("`hlb emergency kit --sealed --out kit.age`; their shares stay as they are.");
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn rehearsed(cli: &Cli, code: &str) -> Result<ExitCode> {
+    let state = open_state(cli).await?;
+    let vault = open_vault(cli)?;
+    let Some(split) = hlb_backup_run::kit::split(&state, &vault).await? else {
+        eprintln!(
+            "🔴 No split: there is no family to have rehearsed. `hlb emergency split` first."
+        );
+        return Ok(ExitCode::FAILURE);
+    };
+    let proved = hlb_backup_run::kit::redeem_rehearsal(&state, &vault, code).await?;
+    // Recorded either way: a wrong code is someone trying to paint the safeguard green.
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "emergency-rehearsed",
+            &split.id(),
+            if proved { "ok" } else { "failed" },
+            None,
+        )
+        .await?;
+    if !proved {
+        eprintln!(
+            "🔴 Not the rehearsal code waiting for split {}: mistyped, given already, or \
+             read off a kit sealed to an earlier split. Send the family `hlb emergency kit \
+             --sealed` again and read the code at the end of the kit they open.",
+            split.id()
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    state
+        .attest_breakglass(
+            FAMILY_REHEARSAL,
+            "hlb emergency rehearsed",
+            Some(&split.id()),
+        )
+        .await?;
+    println!(
+        "Recorded: the family opened the kit of split {} without you. The code is burned; \
+         the next kit you seal carries a new one, for next year.",
+        split.id()
+    );
     Ok(ExitCode::SUCCESS)
 }
 

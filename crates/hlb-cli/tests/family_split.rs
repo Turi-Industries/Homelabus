@@ -114,6 +114,24 @@ fn three_relatives_open_the_kit_without_the_cluster_and_two_cannot() {
         "{refused:?}"
     );
 
+    // The code at the end of what the family opened proves the rehearsal, once.
+    let opened = String::from_utf8(opened.stdout).expect("utf-8");
+    let code = opened
+        .lines()
+        .last()
+        .expect("the rehearsal code ends the kit")
+        .trim()
+        .to_string();
+    let wrong = owner(
+        house.path(),
+        &["emergency", "rehearsed", "cbde-fghi-jkln-rtuv"],
+    );
+    assert!(!wrong.status.success(), "{wrong:?}");
+    let proved = owner(house.path(), &["emergency", "rehearsed", &code]);
+    assert!(proved.status.success(), "{proved:?}");
+    let again = owner(house.path(), &["emergency", "rehearsed", &code]);
+    assert!(!again.status.success(), "a code proves one rehearsal");
+
     // The kit sealed again after the split opens with the same shares.
     let resealed = house.path().join("kit-again.age");
     let again = owner(

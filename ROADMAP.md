@@ -825,8 +825,18 @@ three Tangs, and the third alone opens it.
     kit sealed again opening with the same shares. Not done: a sealed kit is counted as
     the kit (same fingerprint) — it holds today's material, but counts as printed the
     day it is written, not the day each relative received it.
-  - Then: the rehearsal attested and expiring (`hlb_api::breakglass`), and the sealed kit
-    deposited somewhere a relative finds it without the owner.
+  - ✅ The rehearsal — 2026-10-30. Proved, not attested (`family-rehearsal`,
+    `Proof::Rehearsal`): the sealed kit ends with a rehearsal code — 64 bits of modhex,
+    kept in the vault so a kit sealed again carries the same one — that only its opened
+    text shows. The owner types it back (`hlb emergency rehearsed <code>`), which
+    checks it, burns it and attests the safeguard; a wrong code is audited as failed.
+    Burned because a code read once would otherwise prove every year to come; the next
+    kit sealed carries a new one, so the yearly gesture is: seal, send, the family
+    opens, the code comes back. A new split draws a new code and withdraws the
+    rehearsal. It ages as every attestation does (180 days, then a notice), not after
+    a year: one expiry serves every safeguard, and twice a year is no harm.
+  - Left: the sealed kit deposited where a relative finds it without the owner — today
+    it is a file the owner sends.
 
 **3. An app without Rust, then the catalog on its own.** Gate: an app enters through a
 pull request to the catalog, with no `hlb` release.

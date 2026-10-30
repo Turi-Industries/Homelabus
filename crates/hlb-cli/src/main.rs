@@ -1488,6 +1488,12 @@ enum EmergencyCmd {
         #[arg(long, requires = "kit")]
         out: Option<PathBuf>,
     },
+    /// Records the family's rehearsal: the code at the end of the sealed kit, which
+    /// only those who opened it with their shares have read. Burned once given.
+    Rehearsed {
+        /// As read off the opened kit: four groups of four letters.
+        code: String,
+    },
 }
 
 #[derive(Subcommand)]

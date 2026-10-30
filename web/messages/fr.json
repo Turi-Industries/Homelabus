@@ -1889,6 +1889,7 @@
 	"safeguard_pocketid_restored": "restauration de PocketID répétée",
 	"safeguard_emergency_vault": "connexions de secours dans le coffre d'urgence",
 	"safeguard_emergency_kit": "kit d'urgence imprimé et à jour",
+	"safeguard_family_rehearsal": "kit ouvert par la famille, sans le propriétaire",
 	"inbox_later": "Plus tard",
 	"inbox_until_tomorrow": "Jusqu'à demain",
 	"inbox_for_a_week": "Pendant une semaine",

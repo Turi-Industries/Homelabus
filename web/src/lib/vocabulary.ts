@@ -33,7 +33,8 @@ export const SAFEGUARDS: Record<string, () => string> = {
 	'vaultwarden-local': m.safeguard_vaultwarden_local,
 	'pocketid-restored': m.safeguard_pocketid_restored,
 	'emergency-vault': m.safeguard_emergency_vault,
-	'emergency-kit': m.safeguard_emergency_kit
+	'emergency-kit': m.safeguard_emergency_kit,
+	'family-rehearsal': m.safeguard_family_rehearsal
 };
 
 /**

@@ -384,6 +384,30 @@ fn identity_from_bytes(bytes: &[u8]) -> Option<Identity> {
     identity
 }
 
+/// A short code to be read off a page and typed back: 64 bits in modhex, four groups.
+pub fn draw_code() -> String {
+    let mut bytes = [0u8; 8];
+    crate::fill_random(&mut bytes);
+    let letters = modhex(&bytes);
+    letters
+        .as_bytes()
+        .chunks(4)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// A code as typed, compared: case, spaces and dashes left out.
+pub fn same_code(typed: &str, code: &str) -> bool {
+    let bare = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    !bare(code).is_empty() && bare(typed) == bare(code)
+}
+
 /// CRC-16/CCITT-FALSE. Not a hash: a CRC catches EVERY error shorter than its 16 bits —
 /// a letter mistyped, two swapped — where a truncated hash misses one in 65 536.
 fn crc16(bytes: &[u8]) -> u16 {

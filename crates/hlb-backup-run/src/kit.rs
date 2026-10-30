@@ -87,6 +87,72 @@ pub async fn record_split(state: &State, vault: &Vault, split: &SplitRecord) -> 
     Ok(())
 }
 
+/// The code a sealed kit carries for the family's rehearsal: read by whoever opened it,
+/// given back to the owner, burned once given. Kept, so a kit sealed again after a
+/// change carries the same one until it is used.
+pub const REHEARSAL_SECRET: &str = "kit-rehearsal-code";
+
+/// The rehearsal code a kit sealed now carries — the one waiting, or a new one.
+pub async fn rehearsal_code(state: &State, vault: &Vault) -> Result<String> {
+    if let Some(ct) = state.secret(REHEARSAL_SECRET).await? {
+        return Ok(vault.decrypt(&ct)?);
+    }
+    let code = hlb_secrets::split::draw_code();
+    if !state
+        .store_secret_if_absent(REHEARSAL_SECRET, &vault.encrypt(&code)?, REHEARSAL_PURPOSE)
+        .await?
+    {
+        return Box::pin(rehearsal_code(state, vault)).await;
+    }
+    Ok(code)
+}
+
+const REHEARSAL_PURPOSE: &str = "the family's rehearsal code, on the sealed kit";
+
+/// Makes `code` the one waiting, over any other: a new split's shares were never
+/// rehearsed, and a code read off a kit sealed to the old split proves nothing of them.
+pub async fn set_rehearsal_code(state: &State, vault: &Vault, code: &str) -> Result<()> {
+    let ct = vault.encrypt(code)?;
+    if !state
+        .store_secret_if_absent(REHEARSAL_SECRET, &ct, REHEARSAL_PURPOSE)
+        .await?
+    {
+        state.rotate_secret(REHEARSAL_SECRET, &ct).await?;
+    }
+    Ok(())
+}
+
+/// `true` when `typed` is the code waiting — which is then burned: given once, it would
+/// otherwise prove next year's rehearsal without one.
+pub async fn redeem_rehearsal(state: &State, vault: &Vault, typed: &str) -> Result<bool> {
+    let Some(ct) = state.secret(REHEARSAL_SECRET).await? else {
+        return Ok(false);
+    };
+    if !hlb_secrets::split::same_code(typed, &vault.decrypt(&ct)?) {
+        return Ok(false);
+    }
+    state.forget_secret(REHEARSAL_SECRET).await?;
+    Ok(true)
+}
+
+/// The kit as sealed: the sheet, and the rehearsal its holders give back.
+pub fn render_sealed(sheet: &str, code: &str) -> String {
+    let mut s = sheet.to_string();
+    for l in [
+        "",
+        "REHEARSAL — for the holders of the shares. Once a year they open this kit",
+        "together, without the owner, to know they can. Having opened it, give the",
+        "owner this code: `hlb emergency rehearsed <code>` records that the family",
+        "can, and burns it.",
+        "",
+    ] {
+        s.push_str(l);
+        s.push('\n');
+    }
+    s.push_str(&format!("   {code}\n"));
+    s
+}
+
 /// One destination, as the kit prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Destination {
@@ -605,6 +671,47 @@ mod tests {
             .await
             .expect("replaced");
         assert_eq!(split(&state, &vault).await.expect("read"), Some(second));
+    }
+
+    #[tokio::test]
+    async fn a_rehearsal_code_proves_once_and_a_new_split_replaces_it() {
+        let d = tempfile::tempdir().expect("temp dir");
+        let vault = Vault::init(d.path().join("k")).expect("vault");
+        let state = State::in_memory().await.expect("state");
+        assert!(!redeem_rehearsal(&state, &vault, "").await.expect("none"));
+
+        let code = rehearsal_code(&state, &vault).await.expect("drawn");
+        assert_eq!(
+            rehearsal_code(&state, &vault).await.expect("again"),
+            code,
+            "a kit sealed again carries the code the family may already have read"
+        );
+        assert!(!redeem_rehearsal(&state, &vault, "cbde-fghi-jkln-rtuv")
+            .await
+            .expect("wrong"));
+        let typed = code.to_uppercase().replace('-', " ");
+        assert!(redeem_rehearsal(&state, &vault, &typed)
+            .await
+            .expect("given"));
+        assert!(
+            !redeem_rehearsal(&state, &vault, &code)
+                .await
+                .expect("twice"),
+            "a code given once proves nothing a second time"
+        );
+        let next = rehearsal_code(&state, &vault).await.expect("next");
+        assert_ne!(next, code);
+
+        let split = hlb_secrets::split::draw_code();
+        set_rehearsal_code(&state, &vault, &split)
+            .await
+            .expect("set");
+        assert!(!redeem_rehearsal(&state, &vault, &next).await.expect("old"));
+        assert!(redeem_rehearsal(&state, &vault, &split).await.expect("new"));
+
+        let sealed = render_sealed("THE KIT\n", &split);
+        assert!(sealed.starts_with("THE KIT\n"));
+        assert!(sealed.contains(&split) && sealed.contains("hlb emergency rehearsed"));
     }
 
     #[test]

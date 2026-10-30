@@ -365,7 +365,11 @@ the outside, which is the whole problem.
   split's id before decrypting. A share's checksum is a CRC, not a truncated hash:
   every single mistyped letter and every swap of two is caught, where a hash misses
   one in 65 536. Recorded only once every sheet is written, or the kit would be sealed
-  from then on to shares nobody holds.
+  from then on to shares nobody holds. The yearly rehearsal is proved, not attested: the
+  sealed kit ends with a code only its opened text shows, `hlb emergency rehearsed`
+  checks it and BURNS it — kept, the code read once would prove every later year
+  without anyone opening anything. A new split draws a new code and withdraws the
+  rehearsal: the new shares were never tried.
 - **`hlb secrets-rekey` never races the controller.** It holds the old key in memory and
   writes secrets under it: refused while its Swarm service runs, `--apply` requires
   `--controller-stopped` for one run by hand, and the rewrite is a compare-and-swap

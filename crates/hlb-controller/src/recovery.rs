@@ -7,9 +7,10 @@
 //! can ask for them to be attested, keep the date, and turn red again when the
 //! attestation ages.
 //!
-//! Three it proves itself ([`hlb_api::breakglass::proof`]), and no hand attests: the
+//! Four it proves itself ([`hlb_api::breakglass::proof`]), and no hand attests: the
 //! restore drill by its trace, the emergency vault by its last verified deposit, the
-//! emergency kit by the fingerprint it was printed with — which must still be today's.
+//! emergency kit by the fingerprint it was printed with — which must still be today's —
+//! and the family's rehearsal by the code they read off the kit they opened.
 
 use hlb_api::breakglass::{proof, safeguards, Proof, Safeguard};
 use hlb_state::State;
@@ -35,7 +36,8 @@ pub async fn state(state: &State, kit: Option<&str>) -> Vec<Safeguard> {
             .find(|(id, ..)| id == &g.id)
             .map(|(_, age, by)| (*age, by.clone()));
         let proved = match proof(&g.id) {
-            None | Some(Proof::Deposit) => attested,
+            // A rehearsal is recorded only on its code, and withdrawn by a new split.
+            None | Some(Proof::Deposit) | Some(Proof::Rehearsal) => attested,
             // 🔴 The restore drill is a point Homelabus holds the trace of. A human
             // attestation must not be able to declare it done: it is precisely the
             // safeguard you believe held and that is not.
@@ -103,6 +105,10 @@ pub async fn attest(
                 Proof::Kit => {
                     "this safeguard is not attested: it is proved by printing the kit \
                      (\"hlb emergency kit\")"
+                }
+                Proof::Rehearsal => {
+                    "this safeguard is not attested: it is proved by the code the family \
+                     reads off the kit they opened (\"hlb emergency rehearsed <code>\")"
                 }
             }
             .into(),
