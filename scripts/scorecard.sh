@@ -80,17 +80,26 @@ row "3 never stolen" "nodes per protection level (A verified boot … D a virtua
 row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tangs (lab, 2026-10-29: enc2, Debian 13, from \`node preseed --encrypt\` to \`node bind-disk\` — away from both Tangs, nothing mounted after 2 min, the initrd's SSH alone answering; its disk on another TPM, Tangs up, closed; the kit's key opens it. Level A, 2026-10-29: enc3, UEFI and Secure Boot — GRUB chosen in the firmware, Tangs up, it waits; the kit's key opens it)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
+# The history restarted as one commit (2026-10-27) holding every app and every crate:
+# an app added there reads as needing all of the Rust, whatever it needed, so those
+# are said apart instead of counted — counted, the row read "0 of 12" for good.
+root=$(git rev-list --max-parents=0 HEAD | tail -1)
 apps=0
 pure=0
+before=0
 for manifest in catalog/*/manifest.yaml; do
     [[ $manifest == catalog/_platform/* ]] && continue
-    apps=$((apps + 1))
-    added=$(git log --diff-filter=A --format=%h -- "$manifest" | tail -1)
+    added=$(git log --diff-filter=A --format=%H -- "$manifest" | tail -1)
     [[ -n $added ]] || continue
+    if [[ $added == "$root" ]]; then
+        before=$((before + 1))
+        continue
+    fi
+    apps=$((apps + 1))
     rust=$(git show --numstat --format= "$added" -- 'crates/*/src/**' | awk '{s += $1 + $2} END {print s + 0}')
     ((rust == 0)) && pure=$((pure + 1))
 done
-row "4 no Rust" "apps whose first commit changed no Rust under \`crates/*/src\`" "$pure of $apps" "every app added from now on"
+row "4 no Rust" "apps whose first commit changed no Rust under \`crates/*/src\`" "$pure of $apps added since the history restarted ($before predate it, uncounted)" "every app added from now on"
 
 # 5. Always available ---------------------------------------------------------------
 row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"
