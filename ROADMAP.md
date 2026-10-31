@@ -803,6 +803,32 @@ three Tangs, and the third alone opens it.
     other refused. Left: `validationmethods` is not judged — no account says which
     challenge its next renewal takes; and the accounts were not read through a real
     Swarm (the lab's exposure is internal).
+  - Certificate Transparency — what CAA and the drift check cannot see: a domain
+    moved for an hour and moved back between two nights (DNS-01 and the CAA both the
+    thief's meanwhile), or an authority ignoring the CAA. **Measured** 2026-10-31:
+    Cert Spotter's API (`api.certspotter.com/v1/issuances`, `include_subdomains`)
+    answers without a key, 10 requests per window (`x-ratelimit-limit`), the unexpired
+    certificates oldest first, a precertificate and its certificate as ONE issuance
+    (by `tbs_sha256`), paged by `after=<id>` — the `Link` says `next` even on the last
+    page, whose follower is `[]`. desec.io: 10 issuances, all Let's Encrypt; afnic.fr:
+    24, Let's Encrypt, Sectigo and Amazon. Its `pubkey_sha256` is the SHA-256 of the
+    SPKI's DER: desec.io's served certificate matches its issuance of 2026-10-12, and
+    the one of 2026-08-14 matches nothing the site still holds. Stalwart's
+    `x:Certificate/get` answers each certificate's PEM, its key masked (`****`), on
+    0.16.27 and 1.0.0. Designed: an issuance is the house's when its key is one the
+    house holds — Caddy's certificates (`/data/caddy/certificates/**.crt`, by
+    `exec_in_service`) and Stalwart's, read AFTER Cert Spotter, so one issued between
+    the two is held by then. The account cannot decide it: no log says which account
+    asked. Watched: the exposure's domain and its subdomains, not the zone — an
+    owner's site hosted elsewhere at the apex would ring every renewal. An issuance
+    with another key is critical (`ct:<id>`) when one of its names is the house's —
+    one its certificates carry or an app is routed at, a wildcard matching either
+    way —, said beside otherwise. Each night reads after the last id judged and
+    advances; those it found foreign stay listed and alerted until `hlb domain
+    accept --apply`, whose preview shows them, and which on a first reading takes
+    every unexpired issuance as the baseline (the house's own previous certificate
+    among them, its key gone with the renewal). A reading that could not be made —
+    the API, Caddy or Stalwart not read — judges nothing and does not advance.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach
