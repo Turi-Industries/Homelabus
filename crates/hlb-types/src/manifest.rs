@@ -124,6 +124,16 @@ pub struct Spec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
 
+    /// Arguments after the image's own entrypoint, which stays: `command` replaces it,
+    /// so a manifest adding three settings had to restate it, and an image moving its
+    /// entrypoint would be overridden in silence. Takes no token, as `command`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+
+    /// How its process is run and stopped.
+    #[serde(default, skip_serializing_if = "Process::is_default")]
+    pub process: Process,
+
     /// What the running app must keep true — each door the configuration above
     /// closes, read back by its effect every night into the inbox.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -598,6 +608,13 @@ pub struct Companion {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
 
+    /// After the image's own entrypoint, as the app's `args`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Process::is_default")]
+    pub process: Process,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<Healthcheck>,
 
@@ -763,13 +780,86 @@ pub struct SecuritySpec {
     pub user: Option<String>,
     /// Directories given an empty in-memory filesystem at every start: what an image
     /// writes outside its volumes — a socket, a heartbeat, a rendered configuration —
-    /// under a read-only root. Nothing written there survives the task.
+    /// under a read-only root. Nothing written there survives the task. A path, or
+    /// `{ path, size }`: `/dev/shm` is 64 MiB unless given one, which a browser or
+    /// PostgreSQL's parallel queries outgrow.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tmpfs: Vec<String>,
+    pub tmpfs: Vec<Tmpfs>,
     /// Ports published on the host. Empty by default - and forbidden on `proxy-header`.
     /// `25` is TCP; `"7882/udp"` says its protocol — LiveKit's media arrives over UDP.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub published_ports: Vec<PublishedPort>,
+}
+
+/// An in-memory directory. Its size is memory: what is written there counts against
+/// the service's limit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "TmpfsWritten", into = "TmpfsWritten")]
+#[schemars(with = "TmpfsWritten")]
+pub struct Tmpfs {
+    pub path: String,
+    /// Absent: no bound but the service's memory limit.
+    pub size: Option<Bytes>,
+}
+
+impl From<&str> for Tmpfs {
+    fn from(path: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            size: None,
+        }
+    }
+}
+
+/// How a tmpfs is written: a path — as every manifest frozen before sizes was —, or a
+/// path and its size.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TmpfsWritten {
+    Path(String),
+    Sized(SizedTmpfs),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SizedTmpfs {
+    pub path: String,
+    /// Read as text, so a size refused says why rather than "no variant matched".
+    pub size: String,
+}
+
+impl TryFrom<TmpfsWritten> for Tmpfs {
+    type Error = String;
+    fn try_from(w: TmpfsWritten) -> Result<Self, String> {
+        Ok(match w {
+            TmpfsWritten::Path(path) => Self { path, size: None },
+            TmpfsWritten::Sized(SizedTmpfs { path, size }) => Self {
+                path,
+                size: Some(Bytes::try_from(size)?),
+            },
+        })
+    }
+}
+
+impl From<Tmpfs> for TmpfsWritten {
+    fn from(t: Tmpfs) -> Self {
+        match t.size {
+            None => Self::Path(t.path),
+            Some(size) => Self::Sized(SizedTmpfs {
+                path: t.path,
+                size: size.into(),
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for Tmpfs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.size {
+            None => write!(f, "{}", self.path),
+            Some(size) => write!(f, "{} ({})", self.path, String::from(size)),
+        }
+    }
 }
 
 /// A port published on the node, by its protocol.
@@ -842,6 +932,58 @@ impl From<PublishedPort> for PortWritten {
             Protocol::Udp => Self::Text(p.to_string()),
         }
     }
+}
+
+/// How a container's process is run and stopped: the options of Swarm's container spec
+/// a manifest may set — none loosens isolation (no host network, device or privilege:
+/// those have no field). Measured on 577 apps of two public stores, these are the
+/// whole tail once isolation is kept; each reaches Swarm in `hlb-orchestrator`
+/// through a destructuring with no `..`, so a field added here is mapped or fails to
+/// compile.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Process {
+    /// A minimal init as PID 1, reaping what a forking process leaves behind: without
+    /// it zombies pile up until the task can fork no more.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub init: bool,
+    /// Seconds between the stop signal and `SIGKILL`. Absent is Swarm's 10: a database
+    /// flushing more than that is killed mid-write at every update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_grace_secs: Option<u64>,
+    /// The signal that asks it to stop, `SIGINT` for an app that ignores `SIGTERM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_signal: Option<String>,
+    /// The directory it starts in, absolute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    /// The name it sees as its own; never a name others reach it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Resource limits by name (`nofile`), as `ulimit` reads them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ulimits: std::collections::BTreeMap<String, Ulimit>,
+    /// Kernel settings of its own network namespace only (`net.*`): any other would
+    /// be the node's.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sysctls: std::collections::BTreeMap<String, String>,
+    /// Supplementary groups, by name or number.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
+}
+
+impl Process {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A resource limit: what the process starts with, and the most it may raise it to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Ulimit {
+    pub soft: u64,
+    pub hard: u64,
 }
 
 impl Default for SecuritySpec {

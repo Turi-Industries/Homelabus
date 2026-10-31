@@ -60,6 +60,11 @@ pub struct ServiceSpec {
     pub replicas: u64,
     /// Empty means the image's own entrypoint.
     pub command: Vec<String>,
+    /// After the entrypoint, the image's own or `command`. Empty means the image's own
+    /// arguments.
+    pub args: Vec<String>,
+    /// How the process is run and stopped, from the manifest.
+    pub process: hlb_types::Process,
     pub env: Vec<(String, String)>,
     /// Swarm placement constraints, e.g. `node.labels.tier==heavy`.
     pub constraints: Vec<String>,
@@ -118,6 +123,8 @@ impl ServiceSpec {
             image: image.into(),
             replicas: 1,
             command: Vec::new(),
+            args: Vec::new(),
+            process: hlb_types::Process::default(),
             env: Vec::new(),
             constraints: Vec::new(),
             labels: Vec::new(),

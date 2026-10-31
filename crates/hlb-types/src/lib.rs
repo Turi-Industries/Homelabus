@@ -31,8 +31,9 @@ pub use binding::{redact, substitute, Token};
 pub use capability::{CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier};
 pub use manifest::{
     ApiVersion, AuthRoute, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image,
-    ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, RecoveryLogin,
-    Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, UpdateChannel, UpdatePolicy,
+    ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, Process,
+    RecoveryLogin, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, Tmpfs, Ulimit, UpdateChannel,
+    UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -219,23 +220,31 @@ pub fn validate(m: &Manifest) -> Result<()> {
             _ => None,
         })
         .collect();
-    let services = std::iter::once((m.metadata.name.as_str(), &m.spec.security, app_paths)).chain(
-        m.spec.companions.iter().map(|c| {
-            let paths = c.storage.iter().map(|v| v.path.as_str()).collect();
-            (c.name.as_str(), &c.security, paths)
-        }),
-    );
-    for (service, security, volumes) in services {
-        for (i, dir) in security.tmpfs.iter().enumerate() {
+    let services = std::iter::once((
+        m.metadata.name.as_str(),
+        &m.spec.security,
+        m.spec.swarm.memory,
+        app_paths,
+    ))
+    .chain(m.spec.companions.iter().map(|c| {
+        let paths = c.storage.iter().map(|v| v.path.as_str()).collect();
+        (c.name.as_str(), &c.security, c.memory, paths)
+    }));
+    for (service, security, memory, volumes) in services {
+        for (i, t) in security.tmpfs.iter().enumerate() {
+            let dir = &t.path;
             let clean = dir.starts_with('/')
                 && dir != "/"
                 && !dir.split('/').any(|seg| seg == "." || seg == "..");
             let why = if !clean {
                 Some("not an absolute directory of its own")
-            } else if security.tmpfs[..i].contains(dir) {
+            } else if security.tmpfs[..i].iter().any(|o| o.path == *dir) {
                 Some("given twice")
             } else if volumes.contains(&dir.as_str()) {
                 Some("a volume's path, whose data it would hide")
+            // Filled past the limit, the service is killed before the tmpfs is full.
+            } else if t.size.zip(memory).is_some_and(|(s, m)| s > m.limit) {
+                Some("larger than the service's memory limit")
             } else {
                 None
             };
@@ -482,7 +491,8 @@ pub fn validate(m: &Manifest) -> Result<()> {
     // A command reaches Swarm as written: nothing gives it its tokens, and a secret
     // would be readable in `ps` by every account of the node if something did.
     let commands = std::iter::once(&m.spec.command)
-        .chain(m.spec.companions.iter().map(|c| &c.command))
+        .chain(std::iter::once(&m.spec.args))
+        .chain(m.spec.companions.iter().flat_map(|c| [&c.command, &c.args]))
         .flatten();
     for arg in commands {
         if !binding::tokens_in(arg).is_empty() || !binding::generated_secrets(arg).is_empty() {
@@ -492,6 +502,17 @@ pub fn validate(m: &Manifest) -> Result<()> {
                 m.metadata.name
             )));
         }
+    }
+
+    let processes = std::iter::once((m.metadata.name.as_str(), &m.spec.process)).chain(
+        m.spec
+            .companions
+            .iter()
+            .map(|c| (c.name.as_str(), &c.process)),
+    );
+    for (service, process) in processes {
+        validate_process(process)
+            .map_err(|why| Error::Validation(format!("{}: {service}'s {why}", m.metadata.name)))?;
     }
 
     // A companion becomes a DNS name on the Swarm network.
@@ -751,6 +772,98 @@ pub fn validate(m: &Manifest) -> Result<()> {
 /// installations of one catalog ran different code, and neither was the image anyone
 /// had tried. The digest is the one the catalog was tested with; `hlb catalog images
 /// --apply` moves it, never a person typing it.
+/// Every value Swarm would refuse at deploy time — after the manifest is frozen — or
+/// that would reach past the container, refused here instead.
+fn validate_process(p: &Process) -> std::result::Result<(), String> {
+    /// Swarm waits this long for each task of an update, one at a time: past an hour,
+    /// a value is a typo of minutes for seconds.
+    const MAX_GRACE_SECS: u64 = 3600;
+    /// The limits Docker knows by name; any other is refused at deploy time.
+    const ULIMITS: [&str; 15] = [
+        "core",
+        "cpu",
+        "data",
+        "fsize",
+        "locks",
+        "memlock",
+        "msgqueue",
+        "nice",
+        "nofile",
+        "nproc",
+        "rss",
+        "rtprio",
+        "rttime",
+        "sigpending",
+        "stack",
+    ];
+    if p.stop_grace_secs.is_some_and(|s| s > MAX_GRACE_SECS) {
+        return Err(format!("stopGraceSecs is over {MAX_GRACE_SECS}"));
+    }
+    if let Some(sig) = &p.stop_signal {
+        let rest = sig.strip_prefix("SIG").unwrap_or_default();
+        if rest.is_empty()
+            || !rest
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'+')
+        {
+            return Err(format!(
+                "stopSignal {sig:?} is not a signal's name (SIGINT)"
+            ));
+        }
+    }
+    if let Some(dir) = &p.working_dir {
+        if !dir.starts_with('/') || dir.split('/').any(|seg| seg == "." || seg == "..") {
+            return Err(format!("workingDir {dir:?} is not an absolute directory"));
+        }
+    }
+    if let Some(h) = &p.hostname {
+        let label = !h.is_empty()
+            && h.len() <= 63
+            && !h.starts_with('-')
+            && !h.ends_with('-')
+            && h.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !label {
+            return Err(format!(
+                "hostname {h:?} is not a name of lowercase letters, digits and hyphens"
+            ));
+        }
+    }
+    for (name, l) in &p.ulimits {
+        if !ULIMITS.contains(&name.as_str()) {
+            return Err(format!("ulimit {name:?} is not one Docker knows"));
+        }
+        if l.soft > l.hard {
+            return Err(format!("ulimit {name}'s soft limit is over its hard one"));
+        }
+    }
+    for (key, value) in &p.sysctls {
+        let named = key.strip_prefix("net.").is_some_and(|k| {
+            !k.is_empty()
+                && k.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        });
+        if !named {
+            return Err(format!(
+                "sysctl {key:?} is not the container's own: only `net.*` lives in its namespace"
+            ));
+        }
+        if value.is_empty() || value.contains(['\n', '\r']) {
+            return Err(format!("sysctl {key} has no value on one line"));
+        }
+    }
+    for g in &p.groups {
+        if g.is_empty()
+            || !g
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
+        {
+            return Err(format!("group {g:?} is not a group's name or number"));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_catalog_images(m: &Manifest) -> Result<()> {
     let images = std::iter::once(("the app", &m.spec.image)).chain(
         m.spec
@@ -2207,6 +2320,82 @@ spec:
             validate(&manifest(&app)).is_err(),
             "the app's own command too"
         );
+        // Nor its arguments, which reach `ps` the same way.
+        assert!(with("      args: [\"--key={{ secret.key }}\"]\n")
+            .expect_err("a token in a companion's arguments")
+            .contains("command takes none"));
+        let app = format!("{BASE}  args: [\"{{{{ secret.key }}}}\"]\n");
+        assert!(
+            validate(&manifest(&app)).is_err(),
+            "the app's own arguments"
+        );
+    }
+
+    #[test]
+    fn a_process_is_refused_where_swarm_or_the_node_would_refuse_it() {
+        let with = |process: &str| {
+            let app = format!("{BASE}  process: {process}\n");
+            let companion = format!(
+                "{BASE}  companions:\n    - name: q\n      image: {{ repo: a/b, tag: \"1\" }}\n      \
+                 process: {process}\n"
+            );
+            let (a, c) = (validate(&manifest(&app)), validate(&manifest(&companion)));
+            assert_eq!(
+                a.is_ok(),
+                c.is_ok(),
+                "{process}: the app and a companion alike"
+            );
+            a.map_err(|e| e.to_string())
+        };
+        assert_eq!(
+            with(
+                "{ init: true, stopGraceSecs: 60, stopSignal: SIGINT, workingDir: /app, \
+                 hostname: zabbix-server, ulimits: { nofile: { soft: 65536, hard: 65536 } }, \
+                 sysctls: { net.ipv4.ip_forward: \"1\" }, groups: [audio, \"44\"] }"
+            ),
+            Ok(())
+        );
+        assert_eq!(with("{ stopSignal: SIGRTMIN+3 }"), Ok(()));
+        for (bad, why) in [
+            ("{ stopGraceSecs: 3601 }", "over 3600"),
+            ("{ stopSignal: INT }", "signal"),
+            ("{ stopSignal: SIG }", "signal"),
+            ("{ workingDir: app }", "absolute"),
+            ("{ workingDir: /app/../etc }", "absolute"),
+            ("{ hostname: Zabbix }", "lowercase"),
+            ("{ hostname: a.b }", "lowercase"),
+            ("{ hostname: -a }", "lowercase"),
+            (
+                "{ ulimits: { files: { soft: 1, hard: 1 } } }",
+                "Docker knows",
+            ),
+            (
+                "{ ulimits: { nofile: { soft: 2, hard: 1 } } }",
+                "over its hard",
+            ),
+            ("{ sysctls: { kernel.shmmax: \"1\" } }", "namespace"),
+            ("{ sysctls: { vm.overcommit_memory: \"1\" } }", "namespace"),
+            ("{ sysctls: { net.: \"1\" } }", "namespace"),
+            ("{ sysctls: { net.ipv4.ip_forward: \"\" } }", "no value"),
+            ("{ groups: [\"a:b\"] }", "group"),
+        ] {
+            assert!(
+                with(bad).expect_err(bad).contains(why),
+                "{bad} refused for {why}"
+            );
+        }
+        // Not a field: what would loosen isolation has nowhere to be written.
+        for loose in [
+            "{ privileged: true }",
+            "{ networkMode: host }",
+            "{ devices: [/dev/dri] }",
+        ] {
+            assert!(
+                serde_yaml_ng::from_str::<Manifest>(&format!("{BASE}  process: {loose}\n"))
+                    .is_err(),
+                "{loose} refused as unknown"
+            );
+        }
     }
 
     #[test]
@@ -2256,7 +2445,9 @@ spec:
             validate(&manifest(&y)).map_err(|e| e.to_string())
         };
         assert_eq!(with("[/tmp, /run/fluxer]"), Ok(()));
+        assert_eq!(with("[/tmp, { path: /dev/shm, size: 256M }]"), Ok(()));
         for (bad, why) in [
+            ("[{ path: /data, size: 1G }]", "volume"),
             ("[tmp]", "absolute"),
             ("[/]", "absolute"),
             ("[/run/../etc]", "absolute"),
@@ -2268,6 +2459,56 @@ spec:
                 "{bad} refused for being {why}"
             );
         }
+    }
+
+    #[test]
+    fn a_tmpfs_larger_than_its_service_s_memory_is_refused() {
+        let with = |size: &str| {
+            let y = format!(
+                "{BASE}  swarm:\n    memory: {{ reserve: 128M, limit: 512M }}\n  \
+                 security:\n    tmpfs: [{{ path: /dev/shm, size: {size} }}]\n"
+            );
+            validate(&manifest(&y)).map_err(|e| e.to_string())
+        };
+        assert_eq!(with("512M"), Ok(()));
+        assert!(with("1G").expect_err("1G").contains("memory limit"));
+    }
+
+    #[test]
+    fn a_tmpfs_written_as_a_path_is_still_written_so() {
+        // A manifest frozen before sizes reads, and writes back, as it was.
+        let y = format!("{BASE}  security:\n    tmpfs: [/tmp, {{ path: /dev/shm, size: 1G }}]\n");
+        let m = manifest(&y);
+        assert_eq!(
+            m.spec.security.tmpfs,
+            [
+                Tmpfs::from("/tmp"),
+                Tmpfs {
+                    path: "/dev/shm".into(),
+                    size: Some(manifest::Bytes(1 << 30))
+                }
+            ]
+        );
+        let written = serde_json::to_value(&m.spec.security.tmpfs).expect("written");
+        assert_eq!(
+            written,
+            serde_json::json!(["/tmp", { "path": "/dev/shm", "size": "1G" }])
+        );
+        assert!(
+            serde_yaml_ng::from_str::<Manifest>(&format!(
+                "{BASE}  security:\n    tmpfs: [{{ path: /tmp, sise: 1G }}]\n"
+            ))
+            .is_err(),
+            "a misspelt key is refused"
+        );
+        let nothing = serde_yaml_ng::from_str::<Manifest>(&format!(
+            "{BASE}  security:\n    tmpfs: [{{ path: /tmp, size: 0M }}]\n"
+        ))
+        .expect_err("no room");
+        assert!(
+            nothing.to_string().contains("a size of nothing"),
+            "{nothing}"
+        );
     }
 
     #[test]

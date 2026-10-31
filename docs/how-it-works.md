@@ -105,9 +105,16 @@ hlb job                          # every installed app's jobs, and their last ru
 hlb job seafile gc --apply       # now
 ```
 
-A companion starts the way its image needs, with a `command` and `files` of its own as
-the app has — NATS takes JetStream from its command line only. A command takes no token:
-a value Homelabus fills goes in a variable or a file, never where `ps` shows it.
+A companion starts the way its image needs, with a `command`, `args` and `files` of its
+own as the app has — NATS takes JetStream from its command line only. `args` follow the
+image's own entrypoint, `command` replaces it. Neither takes a token: a value Homelabus
+fills goes in a variable or a file, never where `ps` shows it.
+
+The app and each companion may also say how their process runs and stops — `process: {
+init, stopGraceSecs, stopSignal, workingDir, hostname, ulimits, sysctls, groups }` —
+and size a tmpfs (`{ path: /dev/shm, size: 256M }`). Nothing there loosens isolation:
+`sysctls` are the container's own `net.*`, and host network, devices or privileges
+have no field.
 
 A companion has no route of its own. The app may hand it one path of its host —
 Seafile's notification server answers `/notification`, websockets included — and that

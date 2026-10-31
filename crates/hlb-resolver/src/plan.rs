@@ -108,6 +108,10 @@ pub enum Action {
         files: Vec<(String, String)>,
         /// The image's entrypoint replaced; empty keeps it.
         command: Vec<String>,
+        /// After the entrypoint; empty keeps the image's own arguments.
+        args: Vec<String>,
+        /// How the process is run and stopped.
+        process: hlb_types::Process,
         /// Swarm's reservation and limit, from the manifest.
         memory: Option<hlb_types::Memory>,
     },
@@ -243,6 +247,8 @@ impl fmt::Display for Action {
                 healthcheck,
                 files,
                 command,
+                args,
+                process,
                 memory,
             } => {
                 write!(f, "deploy {name} ×{replicas} from {image}")?;
@@ -256,7 +262,27 @@ impl fmt::Display for Action {
                     d.push("rootfs ro".to_string());
                 }
                 if !hardening.tmpfs.is_empty() {
-                    d.push(format!("tmpfs {}", hardening.tmpfs.join(", ")));
+                    d.push(format!(
+                        "tmpfs {}",
+                        hardening
+                            .tmpfs
+                            .iter()
+                            .map(|t| t.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                // What the container's own namespace is given is read before it is.
+                if !process.sysctls.is_empty() {
+                    d.push(format!(
+                        "sysctl {}",
+                        process
+                            .sysctls
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
                 if hardening.no_new_privileges {
                     d.push("no-new-privileges".to_string());
@@ -303,6 +329,9 @@ impl fmt::Display for Action {
                 // What runs in place of the image's own start, read before it does.
                 if !command.is_empty() {
                     d.push(format!("runs {}", command.join(" ")));
+                }
+                if !args.is_empty() {
+                    d.push(format!("arguments {}", args.join(" ")));
                 }
                 if !env.is_empty() {
                     d.push(format!("{} variables", env.len()));

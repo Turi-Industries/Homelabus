@@ -176,7 +176,8 @@ An app is a folder under `catalog/` holding its `manifest.yaml` and, if it needs
 - **Read the image, not its documentation.** Every setting is checked against the
   source of the version pinned: a variable the image does not read is a declaration
   nobody reads, and the app runs on its default. Look at its entrypoint too — an image
-  whose entrypoint is a bare CLI runs nothing without its command.
+  whose entrypoint is a bare CLI runs nothing without its arguments (`args`, which
+  follow the entrypoint; `command` replaces it, and drops whatever it started first).
 - **Close every door, and declare it.** Sign-up, local passwords, a default
   administrator, a first-run wizard: each one closed by the configuration has an
   `assertion` that reads it back from the running app — its own endpoint, its task's

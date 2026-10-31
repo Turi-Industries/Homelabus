@@ -477,6 +477,18 @@ impl SwarmOrchestrator {
     fn to_bollard(spec: &ServiceSpec) -> bollard::models::ServiceSpec {
         let mut labels: HashMap<String, String> = spec.labels.iter().cloned().collect();
         labels.insert(MANAGED_LABEL.to_string(), "true".to_string());
+        // No `..`: a field the manifest gains is mapped here, or this stops compiling —
+        // a declaration nobody reads would leave the app on Swarm's default in silence.
+        let hlb_types::Process {
+            init,
+            stop_grace_secs,
+            stop_signal,
+            working_dir,
+            hostname,
+            ulimits,
+            sysctls,
+            groups,
+        } = &spec.process;
 
         bollard::models::ServiceSpec {
             name: Some(spec.name.clone()),
@@ -489,7 +501,32 @@ impl SwarmOrchestrator {
                     } else {
                         Some(spec.command.clone())
                     },
+                    args: (!spec.args.is_empty()).then(|| spec.args.clone()),
                     env: Some(spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect()),
+                    init: init.then_some(true),
+                    stop_grace_period: stop_grace_secs
+                        .and_then(|s| i64::try_from(s).ok())
+                        .map(|s| s * NS),
+                    stop_signal: stop_signal.clone(),
+                    dir: working_dir.clone(),
+                    hostname: hostname.clone(),
+                    ulimits: (!ulimits.is_empty()).then(|| {
+                        ulimits
+                            .iter()
+                            .map(|(name, l)| bollard::models::ResourcesUlimits {
+                                name: Some(name.clone()),
+                                soft: i64::try_from(l.soft).ok(),
+                                hard: i64::try_from(l.hard).ok(),
+                            })
+                            .collect()
+                    }),
+                    sysctls: (!sysctls.is_empty()).then(|| {
+                        sysctls
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect()
+                    }),
+                    groups: (!groups.is_empty()).then(|| groups.clone()),
 
                     // Hardening actually passed to Swarm, not merely declared in the
                     // manifest.
@@ -558,14 +595,15 @@ impl SwarmOrchestrator {
                                     read_only: Some(b.read_only),
                                     ..Default::default()
                                 }))
-                                .chain(spec.hardening.tmpfs.iter().map(|path| Mount {
-                                    target: Some(path.clone()),
+                                .chain(spec.hardening.tmpfs.iter().map(|t| Mount {
+                                    target: Some(t.path.clone()),
                                     typ: Some(MountType::TMPFS),
                                     // 🔴 Root's 0755 otherwise: Fluxer's api, run as
                                     // 65532, could not open its socket there (EACCES).
                                     // Sticky and open to all, as `/tmp` is.
                                     tmpfs_options: Some(bollard::models::MountTmpfsOptions {
                                         mode: Some(0o1777),
+                                        size_bytes: t.size.and_then(|b| i64::try_from(b.0).ok()),
                                         ..Default::default()
                                     }),
                                     ..Default::default()
@@ -1907,6 +1945,86 @@ mod tests {
             },
         );
         assert_eq!(order(&media), Some(Order::START_FIRST));
+    }
+
+    #[test]
+    fn every_process_setting_reaches_swarm() {
+        let mut spec = ServiceSpec::new("zabbix", "zabbix/server:7");
+        spec.args = vec!["-c".into(), "tcp_keepalives_idle=300".into()];
+        spec.process = hlb_types::Process {
+            init: true,
+            stop_grace_secs: Some(90),
+            stop_signal: Some("SIGINT".into()),
+            working_dir: Some("/app".into()),
+            hostname: Some("zabbix-server".into()),
+            ulimits: [(
+                "nofile".to_string(),
+                hlb_types::Ulimit {
+                    soft: 1024,
+                    hard: 65536,
+                },
+            )]
+            .into(),
+            sysctls: [("net.ipv4.ip_forward".to_string(), "1".to_string())].into(),
+            groups: vec!["audio".into()],
+        };
+        let c = SwarmOrchestrator::to_bollard(&spec)
+            .task_template
+            .and_then(|t| t.container_spec)
+            .expect("a container");
+        // The image's entrypoint is left alone: the arguments follow it.
+        assert_eq!(c.command, None);
+        assert_eq!(c.args, Some(spec.args.clone()));
+        assert_eq!(c.init, Some(true));
+        assert_eq!(c.stop_grace_period, Some(90 * NS));
+        assert_eq!(c.stop_signal.as_deref(), Some("SIGINT"));
+        assert_eq!(c.dir.as_deref(), Some("/app"));
+        assert_eq!(c.hostname.as_deref(), Some("zabbix-server"));
+        let nofile = &c.ulimits.expect("ulimits")[0];
+        assert_eq!(
+            (nofile.name.as_deref(), nofile.soft, nofile.hard),
+            (Some("nofile"), Some(1024), Some(65536))
+        );
+        assert_eq!(
+            c.sysctls.expect("sysctls").get("net.ipv4.ip_forward"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(c.groups, Some(vec!["audio".to_string()]));
+
+        // Nothing declared, Swarm's defaults: no field set to an empty value.
+        let c = SwarmOrchestrator::to_bollard(&ServiceSpec::new("a", "a:1"))
+            .task_template
+            .and_then(|t| t.container_spec)
+            .expect("a container");
+        assert_eq!(
+            (
+                c.args,
+                c.init,
+                c.stop_grace_period,
+                c.ulimits,
+                c.sysctls,
+                c.groups
+            ),
+            (None, None, None, None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_tmpfs_s_size_reaches_swarm() {
+        let mut spec = ServiceSpec::new("paperless", "paperless:2");
+        spec.hardening.tmpfs = vec![hlb_types::Tmpfs {
+            path: "/dev/shm".into(),
+            size: Some(hlb_types::manifest::Bytes(256 << 20)),
+        }];
+        let mounts = SwarmOrchestrator::to_bollard(&spec)
+            .task_template
+            .and_then(|t| t.container_spec)
+            .and_then(|c| c.mounts)
+            .expect("a mount");
+        assert_eq!(
+            mounts[0].tmpfs_options.as_ref().and_then(|o| o.size_bytes),
+            Some(256 << 20)
+        );
     }
 
     #[test]

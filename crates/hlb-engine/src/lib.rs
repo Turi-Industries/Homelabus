@@ -1033,6 +1033,8 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 healthcheck,
                 files,
                 command,
+                args,
+                process,
                 memory,
             } => {
                 // ⚠️ The plan was built BEFORE execution, so its `image` field still
@@ -1092,6 +1094,8 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 if !command.is_empty() {
                     spec = spec.command(command.clone());
                 }
+                spec.args = args.clone();
+                spec.process = process.clone();
                 for c in constraints {
                     spec = spec.constraint(c);
                 }
@@ -2654,6 +2658,35 @@ steps:
             .lock()
             .unwrap()
             .contains(&hlb_orchestrator::PLATFORM_NETWORK.to_string()));
+    }
+
+    #[tokio::test]
+    async fn the_arguments_and_process_planned_are_the_ones_deployed() {
+        let o = Fake::default();
+        let s = state().await;
+        let mut p = plan();
+        let process = hlb_types::Process {
+            init: true,
+            stop_grace_secs: Some(60),
+            ..Default::default()
+        };
+        for a in &mut p.actions {
+            if let Action::DeployService {
+                args, process: p, ..
+            } = a
+            {
+                *args = vec!["--port".into(), "3000".into()];
+                *p = process.clone();
+            }
+        }
+        Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .expect("run");
+        let spec = o.deployed_specs.lock().unwrap().pop().expect("deployed");
+        assert_eq!(spec.args, ["--port", "3000"]);
+        assert_eq!(spec.process, process);
     }
 
     #[tokio::test]

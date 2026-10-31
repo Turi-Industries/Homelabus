@@ -20,6 +20,13 @@ leaves open at first start (sign-up, a default administrator, a setup wizard, a 
 printed in the logs). A variable from the documentation that the image never reads is a
 declaration nobody reads: the app runs on its default and looks healthy.
 
+From the publisher's compose file: its `command` is the manifest's `args` (after the
+image's entrypoint, which stays), its `entrypoint` the manifest's `command`;
+`init`, `stop_grace_period`, `stop_signal`, `working_dir`, `hostname`, `ulimits`,
+`sysctls` (`net.*`) and `group_add` go under `process`; `shm_size` is a tmpfs `{ path:
+/dev/shm, size }`. `network_mode: host`, `privileged`, `devices` and `extra_hosts`
+reaching the host have no field: they are a decision (§4).
+
 ## 2. Start from the closest manifest
 
 | Shape | Start from |

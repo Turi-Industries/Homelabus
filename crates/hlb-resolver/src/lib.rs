@@ -305,6 +305,8 @@ pub fn resolve_with_guide(
                 .map(|f| (f.path.clone(), f.content.clone()))
                 .collect(),
             command: c.command.clone(),
+            args: c.args.clone(),
+            process: c.process.clone(),
             memory: c.memory,
         });
 
@@ -356,6 +358,8 @@ pub fn resolve_with_guide(
             .map(|f| (f.path.clone(), f.content.clone()))
             .collect(),
         command: m.spec.command.clone(),
+        args: m.spec.args.clone(),
+        process: m.spec.process.clone(),
         memory: m.spec.swarm.memory,
     });
 
@@ -1131,6 +1135,47 @@ steps:
             ]
         );
         assert!(env_of("gitea-cache").is_empty(), "it did not ask for them");
+    }
+
+    #[test]
+    fn arguments_and_process_reach_the_plan_for_the_app_and_each_companion() {
+        let m = manifest(
+            r#"  args: [--port, "3000"]
+  process: { init: true, stopGraceSecs: 60 }
+  companions:
+    - name: db
+      image: { repo: a/db, tag: "1" }
+      args: [-c, tcp_keepalives_idle=300]
+      process: { stopSignal: SIGINT, sysctls: { net.core.somaxconn: "1024" } }
+"#,
+        );
+        let p = resolve(&m, &InstallParams::default()).expect("plan");
+        let of = |service: &str| {
+            p.actions
+                .iter()
+                .find_map(|a| match a {
+                    Action::DeployService {
+                        name,
+                        args,
+                        process,
+                        ..
+                    } if name == service => Some((args.clone(), process.clone(), a.to_string())),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{service} deployed"))
+        };
+        let (args, process, _) = of("gitea");
+        assert_eq!(args, ["--port", "3000"]);
+        assert_eq!(process, m.spec.process);
+        let (args, process, shown) = of("gitea-db");
+        assert_eq!(args, ["-c", "tcp_keepalives_idle=300"]);
+        assert_eq!(process, m.spec.companions[0].process);
+        // What the container's namespace is given, and how it starts, read in the preview.
+        assert!(
+            shown.contains("arguments -c tcp_keepalives_idle=300"),
+            "{shown}"
+        );
+        assert!(shown.contains("sysctl net.core.somaxconn=1024"), "{shown}");
     }
 
     #[test]
