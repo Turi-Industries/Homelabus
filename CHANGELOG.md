@@ -39,6 +39,7 @@ watched every night, and the emergency kit can be split among relatives.
 - Close level A's two initramfs-tools holes on the lab: a PCR 11 barrier and panic=
 - Refuse a backup destination naming another destination's secret
 - Close plan G phase 2, recording the owner's decisions of 2026-10-31
+- Keep the demonstration's database from vanishing with its connection
 
 ### Changed
 
@@ -199,6 +200,7 @@ watched every night, and the emergency kit can be split among relatives.
 - Start five services after their image's entrypoint, not in its place
 - Measure the secret forms and install facts the next app will need: none missing
 - Measure the engines the next app will run: the tail is thin, its backup is not
+- Ignore minimatch's globparts amplification in bun audit, with why
 
 ## [0.2.1] — 2026-10-27
 
