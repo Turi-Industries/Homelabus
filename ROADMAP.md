@@ -140,7 +140,10 @@ exported — Homelabus never bills.
   again**, so each holds the latest in a mailbox of their own, the house up or not.
 - **No third-party DNS service** for the signed zone: the secondaries are the house's
   own machines. The registry and the registrar stay — no domain exists without them,
-  which is what the drift check and the registry lock are for.
+  which is what the drift check and the registry lock are for. **The house serves the
+  zone and the VPS keeps a copy**, built with phase 4: the house down, the VPS answers
+  alone; its host cannot forge the zone (DNSSEC, the key never leaves the house), only
+  stop it. A machine at a relative's, a third site, may join later.
 - **Every TLD alike**: the owner's domain is a `.eu`, which has no RDAP — a feature
   that works only where RDAP exists does not count as done.
 
@@ -758,8 +761,9 @@ and what needs real hardware or a public domain to be measured.
   — a data disk taken alone gives nothing, the whole machine everything; and `zfs send
   -w`, which would let a remote site keep a copy it cannot read.
 - The domain, the weakest point (every domain theft of 2024-2026 went through a
-  registrar's support): a hidden Knot primary at home signs the zone, at least two
-  secondaries serve it — the signing key never leaves the house; the simple level stays
+  registrar's support): Knot at home signs the zone and serves it, the VPS a secondary
+  of the house's own (decided 2026-10-31: no third-party DNS service; built with phase
+  4) — the signing key never leaves the house; the simple level stays
   a provider driven by its API (deSEC). CAA with `accounturi` (RFC 8657), certspotter,
   and a nightly drift check of NS, DS, CAA and the WHOIS statuses. DANE/TLSA beside
   MTA-STS.
@@ -1028,6 +1032,9 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
   without decrypting; moving house, a new ISP or a CGNAT change one WireGuard peer.
   Never in the Swarm — two sites cannot keep Raft through losing the bigger one, and a
   manager reads every secret — nor in Garage, read-only with a node missing.
+- The VPS as the signed zone's secondary (decided 2026-10-31): Knot at home signs and
+  serves, the VPS's Knot transfers the zone over WireGuard and answers alone while the
+  house is down. Both are the zone's NS; no third-party DNS service.
 - The lifeboat: vital apps restored nightly onto the VPS, stopped, started once by a
   health check — goal 2's rehearsal, nightly, on a real machine. `hlb site promote` and
   `hlb site return`, by hand: with two sites nothing tells "the house fell" from "the
