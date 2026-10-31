@@ -255,7 +255,12 @@ impl hlb_updater::BackupProvider for PlacedProvider {
             .map(|o| o as &dyn hlb_orchestrator::Orchestrator);
         let services = self.services.get(app).cloned().unwrap_or_default();
         let places = locate_volumes(orch, volumes, &services).await;
-        back_up_where_they_are(
+        // The copy a rollback restores: one taken live from a store that needs its
+        // service stopped would not open.
+        let stopped = stop_for_copy(&self.state, orch, app, volumes)
+            .await
+            .map_err(|e| e.to_string())??;
+        let taken = back_up_where_they_are(
             &self.state,
             orch,
             &self.network,
@@ -265,7 +270,15 @@ impl hlb_updater::BackupProvider for PlacedProvider {
             &places,
             None,
         )
-        .await
+        .await;
+        let Some((o, services)) = stopped else {
+            return taken;
+        };
+        match (restore::start(o, &self.state, &services).await, taken) {
+            (Ok(()), taken) => taken,
+            (Err(e), Ok(_)) => Err(e),
+            (Err(e), Err(t)) => Err(format!("{t}; and then {e}")),
+        }
     }
 }
 
@@ -282,6 +295,48 @@ async fn services_of(state: &State, app: &str) -> Result<Vec<String>> {
                 .map(|c| format!("{app}-{}", c.name)),
         )
         .collect())
+}
+
+/// Stops the services writing a volume of `app` its frozen manifest declares
+/// `copy: stopped`, held for the copy: what to start again after, `None` when
+/// every volume is copied live. `Err`: no copy is taken — never a live one instead.
+async fn stop_for_copy<'o>(
+    state: &State,
+    orchestrator: Option<&'o dyn hlb_orchestrator::Orchestrator>,
+    app: &str,
+    volumes: &[String],
+) -> Result<std::result::Result<Option<Stopped<'o>>, String>> {
+    let names = state.app_manifest(app).await?.spec.stopped_for_copy(app);
+    if names.is_empty() {
+        return Ok(Ok(None));
+    }
+    let Some(o) = orchestrator else {
+        return Ok(Err(format!(
+            "{} must be stopped for the copy, and no orchestrator can stop it",
+            names.join(", ")
+        )));
+    };
+    // Not `restore::replicas`, which leaves out a service it cannot read: one that
+    // may be running is not copied.
+    let mut services = Vec::new();
+    for s in &names {
+        match o.status(s).await {
+            Ok(st) => services.push((s.clone(), st.desired_replicas)),
+            Err(e) => {
+                return Ok(Err(format!(
+                    "whether {s} runs cannot be read, so it is not copied: {e}"
+                )))
+            }
+        }
+    }
+    let why = format!("backup copy of {}", volumes.join(", "));
+    if let Err(e) = restore::stop(o, state, &services, &why).await {
+        return Ok(Err(match restore::start(o, state, &services).await {
+            Ok(()) => e,
+            Err(again) => format!("{e}; and then {again}"),
+        }));
+    }
+    Ok(Ok(Some((o, services))))
 }
 
 /// Which machine holds each of `volumes`.
@@ -506,6 +561,9 @@ async fn snapshot<R: hlb_backup::restic::Runner>(
     Ok(last)
 }
 
+/// Services stopped for a copy, and the replicas to give each back.
+type Stopped<'o> = (&'o dyn hlb_orchestrator::Orchestrator, Vec<(String, u64)>);
+
 /// The tally of a pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Summary {
@@ -570,15 +628,44 @@ impl Pass<'_> {
                 continue;
             }
             let places = self.places(&app, &volumes).await?;
+            // 🔴 Due PER DESTINATION. Judged globally, the off-site would be skipped
+            // whenever the NAS was just served, and never receive anything. And by the
+            // VOLUMES' own age: read across kinds, the dump every pass records made a
+            // volume backed up once never due again.
+            let mut due = Vec::new();
             for d in &dests {
-                // 🔴 Due PER DESTINATION. Judged globally, the off-site would be skipped
-                // whenever the NAS was just served, and never receive anything. And by
-                // the VOLUMES' own age: read across kinds, the dump every pass records
-                // made a volume backed up once never due again.
-                if !self.is_due(&app, backup_kind::VOLUME, d).await? {
-                    continue;
+                if self.is_due(&app, backup_kind::VOLUME, d).await? {
+                    due.push(d);
                 }
-                let outcome = self.volumes_to(&app, d, &places, &pass).await;
+            }
+            if due.is_empty() {
+                continue;
+            }
+            // Stopped once for every destination: N stops for N copies otherwise.
+            let stopped = stop_for_copy(self.state, self.orchestrator, &app, &volumes).await?;
+            let mut outcomes = Vec::new();
+            for d in due {
+                let outcome = match &stopped {
+                    Ok(_) => self.volumes_to(&app, d, &places, &pass).await,
+                    Err(e) => Err(e.clone()),
+                };
+                outcomes.push((d, outcome));
+            }
+            // Started again before anything is recorded: a state error there would
+            // leave the service stopped until its hold ran out.
+            if let Ok(Some((o, services))) = &stopped {
+                if let Err(error) = restore::start(*o, self.state, services).await {
+                    emit(
+                        Event::Failed {
+                            what: format!("{app} started again after its copy"),
+                            destination: None,
+                            error,
+                        },
+                        &mut sum,
+                    );
+                }
+            }
+            for (d, outcome) in outcomes {
                 if outcome.is_ok() {
                     reached.entry(app.clone()).or_default().push(d.clone());
                 }
@@ -1389,6 +1476,40 @@ mod tests {
             .collect();
         // No admin URL: the dump is said not covered, which needs no Docker.
         assert_eq!(whats, ["gitea/gitea"], "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_volume_copied_stopped_is_not_copied_live_when_nothing_can_stop_it() {
+        // 🔴 Stalwart's RocksDB copied while it runs restored nothing, and restic said
+        // nothing: a copy taken anyway would be recorded fresh.
+        let state = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: { name: mail }\n\
+             spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n    \
+             - { kind: storage, name: data, path: /data, copy: stopped }\n",
+        )
+        .expect("manifest");
+        state.upsert_app("mail", &m, None).await.expect("app");
+        state
+            .add_volume("mail", "mail-data", "/unused", true, false)
+            .await
+            .expect("volume");
+        nas_declared(&state).await;
+        let mut p = pass(&state, &vault, Path::new("/unused"));
+        p.force = true;
+        p.only = Some("mail");
+        let mut events = Vec::new();
+        let sum = p.run(&mut |e| events.push(e)).await.expect("pass");
+        assert_eq!(sum.done, 0, "{events:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Failed { what, destination, error }
+                if what == "mail volumes" && destination.as_deref() == Some("nas")
+                    && error.contains("no orchestrator can stop it"))),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]

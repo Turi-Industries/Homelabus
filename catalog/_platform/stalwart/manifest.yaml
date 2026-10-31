@@ -20,6 +20,9 @@ spec:
       path: /var/lib/stalwart
       tier: local        # 🔴 never NFS: RocksDB + blobs
       backup: true
+      # RocksDB copied live does not open: restic reads its SSTs, then the
+      # MANIFEST naming one flushed in between.
+      copy: stopped
   ingress:
     # Only the web interface goes through the proxy. The mail ports are published on
     # the node itself, below: SMTP and IMAP are not HTTP, and a proof-of-work in front

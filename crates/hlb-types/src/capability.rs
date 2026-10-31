@@ -121,6 +121,9 @@ pub enum Capability {
         /// A SQLite database: forces a specific backup method.
         #[serde(default)]
         sqlite: bool,
+        /// How the nightly pass reads it.
+        #[serde(default, skip_serializing_if = "VolumeCopy::is_live")]
+        copy: VolumeCopy,
         /// Another app's volume of this `name`, mounted here: CrowdSec reading the log
         /// Caddy writes. Never created nor backed up by this app — its owner does both
         /// — and the service runs on the node that holds it.
@@ -244,6 +247,27 @@ pub enum StorageTier {
     Local,
     /// NFS from the NAS. ⚠️ Never for a database.
     Nfs,
+}
+
+/// How a backed-up volume is read for its copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VolumeCopy {
+    /// While its service runs: files each written whole. A SQLite database in it is
+    /// snapshotted apart, found by its header.
+    #[default]
+    Live,
+    /// Its service stopped for the copy and started again after. 🔴 A store whose
+    /// files only make sense together — RocksDB, LMDB —: restic reads them one after
+    /// another, and Stalwart's copy named an SST written after restic had passed it,
+    /// and did not open.
+    Stopped,
+}
+
+impl VolumeCopy {
+    pub fn is_live(&self) -> bool {
+        *self == Self::Live
+    }
 }
 
 fn default_true() -> bool {

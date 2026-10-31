@@ -70,6 +70,11 @@ monitoring, updates and routes have their own `operations-*.md`.
   nothing to do" from "there is something and I deliberately chose not to touch it". The
   refusal names the reason, and a test requires correctable and refused to be exactly
   complementary. A refusal is painted GREEN: it is a decision, not a failure.
+- **🔴 A service stopped for a while is HELD, or reconciliation starts it.** A restore
+  scaled the app to zero and recorded nothing: with `--reconcile-apply` (60 s) it came
+  back onto a volume half written. `restore::stop` holds what it stops
+  (`State::hold_services`, `Drift::Held`), `restore::start` releases it whatever
+  happened; a hold lapses after a day, for a process that died holding it.
 - **Reconciliation does not recreate a deleted service.** It did, from the image and the
   tier alone — no volume, no environment, no probe — and reported "1 gap corrected". The
   drift is reported with its refusal; `hlb install <app> --apply` redeploys a service

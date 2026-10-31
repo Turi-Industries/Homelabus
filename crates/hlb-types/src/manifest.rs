@@ -674,6 +674,29 @@ impl Spec {
                     .flat_map(|c| c.env.values().chain(c.files.iter().map(|f| &f.content))),
             )
     }
+
+    /// The services of `app` to stop while its volumes are copied: each one writing a
+    /// volume declared `copy: stopped` — the app's own, a companion's.
+    pub fn stopped_for_copy(&self, app: &str) -> Vec<String> {
+        let own = self.requires.iter().any(|c| {
+            matches!(
+                c,
+                crate::Capability::Storage {
+                    copy: crate::VolumeCopy::Stopped,
+                    ..
+                }
+            )
+        });
+        own.then(|| app.to_string())
+            .into_iter()
+            .chain(
+                self.companions
+                    .iter()
+                    .filter(|c| c.storage.iter().any(|v| !v.copy.is_live()))
+                    .map(|c| c.service(app)),
+            )
+            .collect()
+    }
 }
 
 /// A companion's volume.
@@ -690,6 +713,9 @@ pub struct CompanionVolume {
     /// while protecting nothing. The companion that is an exception says so.
     #[serde(default)]
     pub backup: bool,
+    /// How the nightly pass reads it, as an app volume.
+    #[serde(default, skip_serializing_if = "crate::VolumeCopy::is_live")]
+    pub copy: crate::VolumeCopy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

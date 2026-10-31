@@ -58,7 +58,9 @@ during an outage.
   Stalwart refused to start on it (`Corruption: … No such file`, played on deb1
   2026-10-31). A file that vanished mid-copy fails the pass (exit 3); one created after
   restic's listing is no error at all. An idle server's copy opens, so one good drill
-  proves nothing. The pass copies every `backup: true` volume while its service runs.
+  proves nothing. The pass copies a volume while its service runs unless it says
+  `copy: stopped`: then its services are held, stopped once for every destination and
+  started again — and a copy nothing can stop fails, never taken live instead.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.

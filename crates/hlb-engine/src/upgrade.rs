@@ -109,6 +109,8 @@ pub fn refusals(frozen: &Manifest, next: &Manifest) -> Vec<String> {
                 tier,
                 backup: _,
                 sqlite: _,
+                // How the pass copies it moves nothing: the next pass reads the new one.
+                copy: _,
                 owner,
             } => match storage(next, name) {
                 Some((_, o)) if o != *owner => out.push(format!(
@@ -228,6 +230,7 @@ fn storage(m: &Manifest, volume: &str) -> Option<(hlb_types::StorageTier, Option
             tier,
             backup: _,
             sqlite: _,
+            copy: _,
             owner,
         } if name == volume => Some((*tier, owner.clone())),
         _ => None,

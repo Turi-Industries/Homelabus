@@ -2187,6 +2187,7 @@ impl Need {
                 tier,
                 backup,
                 sqlite,
+                copy: _,
                 owner: _,
             } => Self::Volume {
                 name: name.clone(),
@@ -4734,6 +4735,7 @@ mod tests {
             tier,
             backup,
             sqlite,
+            copy: hlb_types::VolumeCopy::Live,
             owner: None,
         }
     }

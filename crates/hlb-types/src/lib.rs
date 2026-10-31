@@ -28,7 +28,9 @@ pub mod binding;
 
 pub use assertion::{Assertion, Check};
 pub use binding::{redact, substitute, Token};
-pub use capability::{CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier};
+pub use capability::{
+    CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier, VolumeCopy,
+};
 pub use manifest::{
     ApiVersion, AuthRoute, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image,
     ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, Process,
@@ -405,6 +407,7 @@ pub fn validate(m: &Manifest) -> Result<()> {
                 tier: _,
                 backup: _,
                 sqlite: _,
+                copy: _,
                 owner: _,
             } => true,
         };
@@ -556,16 +559,46 @@ pub fn validate(m: &Manifest) -> Result<()> {
             backup,
             sqlite,
             tier,
+            copy,
             path: _,
         } = c
         {
-            if owner == &m.metadata.name || *backup || *sqlite || *tier != StorageTier::Local {
+            if owner == &m.metadata.name
+                || *backup
+                || *sqlite
+                || *tier != StorageTier::Local
+                || !copy.is_live()
+            {
                 return Err(Error::Validation(format!(
                     "{}: volume \"{name}\" is {owner}'s — a volume of another app is \
-                     local, with backup and sqlite false: its owner keeps it",
+                     local, with backup and sqlite false and no copy of its own: its \
+                     owner keeps it",
                     m.metadata.name
                 )));
             }
+        }
+    }
+
+    // How a volume nobody backs up is copied is a declaration nobody reads.
+    let volumes = m.spec.requires.iter().filter_map(|c| match c {
+        Capability::Storage {
+            name, backup, copy, ..
+        } => Some((name.as_str(), *backup, *copy)),
+        _ => None,
+    });
+    let companions = m
+        .spec
+        .companions
+        .iter()
+        .flat_map(|c| c.storage.iter())
+        .map(|v| (v.name.as_str(), v.backup, v.copy));
+    for (name, backup, copy) in volumes.chain(companions) {
+        if !backup && !copy.is_live() {
+            return Err(Error::Validation(format!(
+                "{}: volume \"{name}\" says how its copy is taken, and is not backed up: \
+                 nothing would read it",
+                m.metadata.name
+            )));
         }
     }
 
@@ -2572,6 +2605,41 @@ spec:
             .unwrap_err()
             .to_string()
             .contains("NFS"));
+    }
+
+    #[test]
+    fn a_stopped_copy_stops_the_service_writing_the_volume_and_only_a_backed_up_one() {
+        let y = format!(
+            "{BASE}  requires:\n    - kind: storage\n      name: data\n      path: /data\n      \
+             copy: stopped\n  companions:\n    - name: index\n      \
+             image: {{ repo: a/b, tag: \"1\" }}\n      storage:\n        \
+             - {{ name: idx, path: /idx, backup: true, copy: stopped }}\n    \
+             - name: cache\n      image: {{ repo: a/c, tag: \"1\" }}\n      storage:\n        \
+             - {{ name: c, path: /c }}\n"
+        );
+        let m = manifest(&y);
+        assert_eq!(validate(&m).map_err(|e| e.to_string()), Ok(()));
+        assert_eq!(m.spec.stopped_for_copy("test"), ["test", "test-index"]);
+        let live = y.replace("      copy: stopped\n", "");
+        assert_eq!(
+            manifest(&live).spec.stopped_for_copy("test"),
+            ["test-index"]
+        );
+
+        // Not backed up, nothing reads how it would be copied.
+        let unread = y.replace("backup: true, ", "");
+        let e = validate(&manifest(&unread)).unwrap_err().to_string();
+        assert!(e.contains("\"idx\"") && e.contains("not backed up"), "{e}");
+        let unread = y.replace("/data\n", "/data\n      backup: false\n");
+        let e = validate(&manifest(&unread)).unwrap_err().to_string();
+        assert!(e.contains("\"data\"") && e.contains("not backed up"), "{e}");
+        // Another app's volume is copied the way its owner says.
+        let theirs = y.replace(
+            "/data\n",
+            "/data\n      owner: caddy\n      backup: false\n",
+        );
+        let e = validate(&manifest(&theirs)).unwrap_err().to_string();
+        assert!(e.contains("caddy's"), "{e}");
     }
 
     #[test]

@@ -1276,6 +1276,17 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    restore, which now asks for them whatever the flag (`tests/pass.rs`, proven to fail
    first). CrowdSec, ntfy and Grafana flagged in the catalog too: a volume on another
    node is not looked in, and only a flag makes its live copy fail out loud there.
+   ✅ (2) built 2026-10-31, the stop only: `copy: stopped` on a volume (an app's or a
+   companion's; refused on one not backed up or another app's), read from the frozen
+   manifest by the nightly pass AND the copy taken before an update. The services
+   writing such a volume are held, stopped once for every due destination and started
+   again whatever happened (`restore::stop`/`start`); with no orchestrator, or a service
+   whose state cannot be read, the copy FAILS — never taken live instead
+   (`tests/pass.rs`, proven to fail first). Stalwart's `data-v1` declares it. No `exec`
+   variant: Garage's `meta snapshot`, its one candidate, copies metadata whose blocks
+   are not backed up — whether `garage-meta` is backed up at all is the owner's call.
+   NATS is not declared, unmeasured. Left: Stalwart's downtime per pass, measured on the
+   lab.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

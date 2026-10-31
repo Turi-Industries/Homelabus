@@ -678,6 +678,8 @@ fn resolve_capability(
             tier,
             backup,
             sqlite,
+            // Read by the backup pass, from the frozen manifest: nothing to create.
+            copy: _,
             owner: None,
         } => {
             plan.push(Action::CreateVolume {
