@@ -49,6 +49,9 @@ during an outage.
   names: the web side may only change its classes (`SetDestinationClasses`, no path, no
   secret's name on the wire), and the daemon refuses a name it has no row for. Moving
   the off-site elsewhere would have kept it "fresh" on every screen.
+- **restic reading a repository mounted read-only waits for ever.** It retries its
+  lock every minute (`read-only file system`) and never fails: a drill reading a
+  destination by hand passes `--no-lock`.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.
