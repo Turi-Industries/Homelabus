@@ -550,6 +550,9 @@ pub struct ShippedMigration {
 #[derive(Clone)]
 pub struct State {
     pool: SqlitePool,
+    /// An in-memory database's second connection, never used: SQLite frees a shared
+    /// in-memory database when its LAST connection closes.
+    _keeper: Option<SqlitePool>,
 }
 
 /// `(mailbox, local, expires_at, active, hint, note)`, as `user_aliases` holds it.
@@ -671,7 +674,10 @@ impl State {
                 latest,
             });
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            _keeper: None,
+        })
     }
 
     /// An in-memory database, for tests and the demonstration.
@@ -679,15 +685,22 @@ impl State {
         let opts = SqliteConnectOptions::from_str(":memory:")
             .map_err(Error::Db)?
             .foreign_keys(true);
-        // 🔴 The database IS the connection. `sqlx` closes one idle for ten minutes and
-        // any older than thirty, then opens a fresh one — an empty database with no
-        // tables: half an hour in, the demonstration answered "no such table: apps".
+        // 🔴 The database lives as long as a connection to it. `sqlx` closes one idle
+        // for ten minutes and any older than thirty, and one it judges broken when it is
+        // released — a request cancelled mid-query — then opens a fresh one: alone, onto
+        // an empty database with no tables. Half an hour in, the demonstration answered
+        // "no such table: apps"; with the lifetimes lifted, the browser suite's
+        // controller still lost its tables mid-run, in CI. A second connection, held and
+        // never used, keeps it whatever the pool does.
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .min_connections(1)
             .idle_timeout(None)
             .max_lifetime(None);
-        Self::with_pool(pool, opts).await
+        let keeper = pool.clone().connect_with(opts.clone()).await?;
+        let mut state = Self::with_pool(pool, opts).await?;
+        state._keeper = Some(keeper);
+        Ok(state)
     }
 
     async fn from_options(opts: SqliteConnectOptions) -> Result<Self> {
@@ -699,7 +712,10 @@ impl State {
         let pool = pool.connect_with(opts).await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            _keeper: None,
+        })
     }
 
     /// Records the intention to install an app, freezing its manifest.
@@ -4950,6 +4966,31 @@ mod tests {
 
     async fn st() -> State {
         State::in_memory().await.expect("in-memory database")
+    }
+
+    #[tokio::test]
+    async fn the_memory_database_outlives_its_connection() {
+        let s = st().await;
+        s.set_timezone("Europe/Paris").await.expect("written");
+        // What `sqlx` does to a connection it judges broken on release — a request
+        // cancelled mid-query — before opening another to keep `min_connections`.
+        let mut c = s.pool.acquire().await.expect("the connection");
+        c.close_on_drop();
+        drop(c);
+        let zone = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match s.timezone().await {
+                    Ok(z) => break z,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            zone.ok().flatten().as_deref(),
+            Some("Europe/Paris"),
+            "a new connection opened onto an empty database"
+        );
     }
 
     #[tokio::test]
