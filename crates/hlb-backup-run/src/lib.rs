@@ -643,8 +643,32 @@ impl Pass<'_> {
         // -- SQLite: a snapshot, never the live file ---------------------------------
         // Due decided per app before any is taken: recorded, an app's first database
         // would make its second look done.
-        let mut sqlite = self.state.sqlite_volumes().await?;
-        sqlite.retain(|(app, _, _)| self.includes(app));
+        // 🔴 Every backed-up volume is looked in, flagged or not: the flag is a list kept
+        // by hand, and three of the catalog's six SQLite volumes were missing from it.
+        let mut sqlite = Vec::new();
+        for (app, volume, mountpoint, flagged) in self.state.backed_up_volumes().await? {
+            if !self.includes(&app) {
+                continue;
+            }
+            if !flagged {
+                match self.holds_sqlite(&app, &volume, &mountpoint).await? {
+                    Ok(false) => continue,
+                    Ok(true) => self.state.mark_sqlite(&app, &volume).await?,
+                    Err(error) => {
+                        emit(
+                            Event::Failed {
+                                what: format!("{app}/{volume} SQLite"),
+                                destination: None,
+                                error,
+                            },
+                            &mut sum,
+                        );
+                        continue;
+                    }
+                }
+            }
+            sqlite.push((app, volume, mountpoint));
+        }
         let mut due: BTreeMap<String, Option<Vec<Destination>>> = BTreeMap::new();
         for (app, _, _) in &sqlite {
             if !due.contains_key(app) {
@@ -859,6 +883,37 @@ impl Pass<'_> {
     ) -> Result<BTreeMap<placement::Place, Vec<String>>> {
         let services = services_of(self.state, app).await?;
         Ok(locate_volumes(self.orchestrator, volumes, &services).await)
+    }
+
+    /// Whether a volume no manifest flagged holds a SQLite database, by its header.
+    /// Only one on this machine is looked in: on another node the volume pass already
+    /// says where to run, and saying it again for each volume there would bury it.
+    async fn holds_sqlite(
+        &self,
+        app: &str,
+        volume: &str,
+        mountpoint: &str,
+    ) -> Result<std::result::Result<bool, String>> {
+        let volumes = [volume.to_string()];
+        let here = self
+            .places(app, &volumes)
+            .await?
+            .into_keys()
+            .all(|p| matches!(p, placement::Place::Here));
+        if !here || !Path::new(mountpoint).exists() {
+            return Ok(Ok(false));
+        }
+        let root = Path::new(mountpoint).to_path_buf();
+        // A photo library is a long walk: off the runtime's threads.
+        Ok(
+            match tokio::task::spawn_blocking(move || hlb_backup::sqlite::discover(&root)).await {
+                Ok(Ok(found)) => Ok(!found.is_empty()),
+                Ok(Err(e)) => Err(format!(
+                    "{mountpoint} could not be searched for SQLite databases: {e}"
+                )),
+                Err(e) => Err(format!("the search for SQLite databases stopped: {e}")),
+            },
+        )
     }
 
     /// Backs up an app's volumes to `d`, where they live.

@@ -1270,6 +1270,12 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    taking them out of the volume pass. The kill number for (2)'s stop: a mail server
    down long enough for a sender to give up — measured in days, against a stop that
    lasts restic's incremental pass over immutable SSTs.
+   ✅ (1) built 2026-10-31: the pass looks in every backed-up volume on its machine
+   (`Pass::holds_sqlite`, by header), snapshots what it finds and marks the volume
+   `sqlite` in the state — owed a snapshot from then on, its databases put back at a
+   restore, which now asks for them whatever the flag (`tests/pass.rs`, proven to fail
+   first). CrowdSec, ntfy and Grafana flagged in the catalog too: a volume on another
+   node is not looked in, and only a flag makes its live copy fail out loud there.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

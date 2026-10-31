@@ -15,6 +15,7 @@ spec:
       path: /var/cache/ntfy
       tier: local
       backup: true
+      sqlite: true       # cache.db, and auth.db: its accounts and tokens
   # 🔴 The image's entrypoint is `ntfy` alone: without `serve` it printed its help and
   # exited, and Swarm started it again — the catalog's ntfy never received an alert.
   args: [serve]

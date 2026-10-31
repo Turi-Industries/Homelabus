@@ -112,4 +112,7 @@ cleanly and is missing data.
   databases and the account already provisioned.
 - **A SQLite file cannot be copied hot.** In WAL mode restic copies three files one
   after another while the app writes. `VACUUM INTO` produces a consistent snapshot, and
-  the failure only shows at restore time.
+  the failure only shows at restore time. 🔴 `sqlite: true` is a list kept by hand:
+  three of six SQLite volumes lacked it (CrowdSec, ntfy, Grafana) and were copied
+  live. The pass looks in every backed-up volume by header now — one on another node
+  only when flagged.

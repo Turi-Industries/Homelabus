@@ -875,6 +875,39 @@ impl State {
             .collect()
     }
 
+    /// Every backed-up volume: `(app, name, mountpoint, sqlite)`.
+    pub async fn backed_up_volumes(&self) -> Result<Vec<(String, String, String, bool)>> {
+        let rows = sqlx::query(
+            "SELECT app, name, mountpoint, sqlite FROM app_volumes
+             WHERE backup = 1 ORDER BY app, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("app")?,
+                    r.try_get("name")?,
+                    r.try_get("mountpoint")?,
+                    r.try_get::<i64, _>("sqlite")? != 0,
+                ))
+            })
+            .collect()
+    }
+
+    /// Marks a volume as holding SQLite, found there by the pass whatever its manifest
+    /// said. ⚠️ The next `add_volume` writes the manifest's word back; the next pass
+    /// finds the database again.
+    pub async fn mark_sqlite(&self, app: &str, name: &str) -> Result<()> {
+        sqlx::query("UPDATE app_volumes SET sqlite = 1 WHERE app = ?1 AND name = ?2")
+            .bind(app)
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// ALL of an app's volumes: (name, mountpoint, backed up, sqlite).
     ///
     /// ⚠️ Including those that are **not** backed up, unlike

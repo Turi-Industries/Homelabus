@@ -191,34 +191,33 @@ pub async fn run(
                 snap.short_id(),
                 &before[..8.min(before.len())]
             );
-            if sqlite {
-                match restore.sqlite_after(app, &volume, &place, &source).await {
-                    Ok(back) if back.is_empty() => println!(
-                        "  ⚠️ no consistent snapshot of its SQLite databases from that pass: \
+            // Asked whatever the flag says: the pass snapshots a database it finds in any
+            // volume, and pairs it by the pass's tag, so a volume without one gets nothing.
+            match restore.sqlite_after(app, &volume, &place, &source).await {
+                Ok(back) if back.is_empty() && !sqlite => {}
+                Ok(back) if back.is_empty() => println!(
+                    "  ⚠️ no consistent snapshot of its SQLite databases from that pass: \
                          they are as restic copied them, live"
-                    ),
-                    Ok(back) => {
-                        for (db, id) in back {
-                            println!(
-                                "✓ {db} put back from its consistent snapshot {}",
-                                &id[..8.min(id.len())]
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        // Left stopped: a database half put back is neither copy.
-                        eprintln!("🔴 its SQLite databases could not be put back: {e}");
-                        eprintln!(
-                            "   {app} is left STOPPED. What {volume} held is snapshot {before}:"
+                ),
+                Ok(back) => {
+                    for (db, id) in back {
+                        println!(
+                            "✓ {db} put back from its consistent snapshot {}",
+                            &id[..8.min(id.len())]
                         );
-                        eprintln!(
-                            "   hlb backup restore {app} {volume} --snapshot {} --from {} --apply",
-                            &before[..8.min(before.len())],
-                            source.destination.name
-                        );
-                        audit(state, app, "failed", &e).await?;
-                        return Ok(ExitCode::FAILURE);
                     }
+                }
+                Err(e) => {
+                    // Left stopped: a database half put back is neither copy.
+                    eprintln!("🔴 its SQLite databases could not be put back: {e}");
+                    eprintln!("   {app} is left STOPPED. What {volume} held is snapshot {before}:");
+                    eprintln!(
+                        "   hlb backup restore {app} {volume} --snapshot {} --from {} --apply",
+                        &before[..8.min(before.len())],
+                        source.destination.name
+                    );
+                    audit(state, app, "failed", &e).await?;
+                    return Ok(ExitCode::FAILURE);
                 }
             }
             restore::start(o, &services).await?;

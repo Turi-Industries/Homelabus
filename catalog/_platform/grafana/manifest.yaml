@@ -23,6 +23,7 @@ spec:
       path: /var/lib/grafana
       tier: local
       backup: true
+      sqlite: true       # grafana.db
   ingress:
     # Private: the dashboard has no reason to be reachable from outside, and it exposes
     # the installation's full topology.

@@ -17,6 +17,7 @@ spec:
       path: /var/lib/crowdsec/data
       tier: local
       backup: true
+      sqlite: true       # crowdsec.db
     - kind: storage
       name: config
       path: /etc/crowdsec

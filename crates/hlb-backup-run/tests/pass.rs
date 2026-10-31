@@ -115,3 +115,114 @@ async fn a_pass_sends_volumes_and_state_to_the_declared_destination() {
         let _ = docker(&["volume", "rm", "-f", v]);
     }
 }
+
+#[tokio::test]
+#[ignore = "needs Docker and python3"]
+async fn a_sqlite_database_in_an_unflagged_volume_is_snapshotted_not_only_copied_live() {
+    // 🔴 CrowdSec, ntfy and Grafana keep SQLite in volumes their manifests never
+    // flagged: the pass copied each live, with nothing to say so.
+    let dir = tempfile::tempdir().expect("tmp");
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+
+    // The volume is a directory of this machine, bound: the pass reads it by its path.
+    let host = tempfile::tempdir().expect("volume dir");
+    let (data, repo) = ("hlb-pass-unflagged", "hlb-pass-unflagged-repo");
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+    }
+    let device = format!("device={}", host.path().display());
+    assert!(docker(&[
+        "volume",
+        "create",
+        "--driver",
+        "local",
+        "--opt",
+        "type=none",
+        "--opt",
+        "o=bind",
+        "--opt",
+        &device,
+        data,
+    ])
+    .status
+    .success());
+    docker(&["volume", "create", repo]);
+    let db = host.path().join("crowdsec.db");
+    let made = std::process::Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            &format!(
+                "import sqlite3; c=sqlite3.connect('{}'); c.execute('CREATE TABLE t (v)'); \
+                 c.execute('INSERT INTO t VALUES (1)'); c.commit()",
+                db.display()
+            ),
+        ])
+        .status()
+        .expect("python3");
+    assert!(made.success());
+
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: demo }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("demo", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume(
+            "demo",
+            data,
+            &host.path().display().to_string(),
+            true,
+            false,
+        )
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+
+    let pass = Pass {
+        state: &state,
+        vault: &vault,
+        state_path: &state_path,
+        fallback_repo: None,
+        network: "bridge",
+        postgres_admin: None,
+        mariadb_admin: None,
+        schedule: hlb_backup::Schedule::default(),
+        force: true,
+        only: None,
+        orchestrator: None,
+        s3_endpoint: None,
+    };
+    let mut events = Vec::new();
+    let sum = pass.run(&mut |e| events.push(e)).await.expect("pass");
+    assert_eq!(sum.failed, 0, "{events:?}");
+    let snapshotted = events.iter().any(|e| {
+        matches!(e, Event::Done { what, destination, .. }
+            if what == &format!("demo/{data}/crowdsec.db") && destination == "nas")
+    });
+    assert!(snapshotted, "{events:#?}");
+    // Found once, it is the volume's from then on: owed a snapshot, put back at a restore.
+    let flagged = state.sqlite_volumes().await.expect("read");
+    assert!(
+        flagged.iter().any(|(a, v, _)| a == "demo" && v == data),
+        "{flagged:?}"
+    );
+    assert!(state
+        .backup_kinds("demo")
+        .await
+        .expect("kinds")
+        .contains(&hlb_state::backup_kind::SQLITE));
+
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+    }
+}
