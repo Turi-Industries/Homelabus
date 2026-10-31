@@ -74,8 +74,14 @@ jobs:
       # fixed version exists (4.3.1 is its last, 2023). Only `vite-plugin-svelte` takes
       # it, at build time, to merge this repository's own Svelte config — nothing in
       # `build/` carries it. Revisit when the plugin drops it or a fix is released.
+      # GHSA-g3hv-75wg-m249, minimatch's globparts amplification: fixed in 11.0.1 only,
+      # while `openapi-typescript` 7 holds `@redocly/openapi-core` to 1.x, which holds
+      # minimatch to 5. It matches a reference's URL against a Redocly config's
+      # patterns, and `generate` runs with no config over our own `openapi.json` — no
+      # pattern comes from outside, nothing in `build/` carries it. Revisit when
+      # `openapi-typescript` takes `@redocly/openapi-core` 2, which has no minimatch.
       - name: bun audit
-        run: bun audit --ignore=GHSA-gcqx-w48m-w2h4
+        run: bun audit --ignore=GHSA-gcqx-w48m-w2h4 --ignore=GHSA-g3hv-75wg-m249
       - name: bun run check
         run: bun run check
       - name: bun run test
