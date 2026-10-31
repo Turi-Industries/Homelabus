@@ -1285,8 +1285,10 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    (`tests/pass.rs`, proven to fail first). Stalwart's `data-v1` declares it. No `exec`
    variant: Garage's `meta snapshot`, its one candidate, copies metadata whose blocks
    are not backed up — whether `garage-meta` is backed up at all is the owner's call.
-   NATS is not declared, unmeasured. Left: Stalwart's downtime per pass, measured on the
-   lab.
+   NATS is not declared, unmeasured. **Measured** on deb1 the same day (`hlb backup run
+   --app stalwart --force`, two destinations, `nas` and `rest`): SMTP on port 25 stopped
+   answering for **5.0 s** (probed every 0.5 s), the pass took 8.3 s — against senders
+   that retry for days, so the stop stays. Released after: reconciliation sees no gap.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000
