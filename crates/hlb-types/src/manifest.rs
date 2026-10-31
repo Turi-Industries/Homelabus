@@ -692,7 +692,11 @@ impl Spec {
             .chain(
                 self.companions
                     .iter()
-                    .filter(|c| c.storage.iter().any(|v| !v.copy.is_live()))
+                    .filter(|c| {
+                        c.storage
+                            .iter()
+                            .any(|v| v.copy == crate::VolumeCopy::Stopped)
+                    })
                     .map(|c| c.service(app)),
             )
             .collect()

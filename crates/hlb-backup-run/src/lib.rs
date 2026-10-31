@@ -306,7 +306,18 @@ async fn stop_for_copy<'o>(
     app: &str,
     volumes: &[String],
 ) -> Result<std::result::Result<Option<Stopped<'o>>, String>> {
-    let names = state.app_manifest(app).await?.spec.stopped_for_copy(app);
+    let spec = state.app_manifest(app).await?.spec;
+    // Declared and not yet taken by its tool: the copy fails, never taken live instead.
+    if let Some(name) = spec.requires.iter().find_map(|c| match c {
+        hlb_types::Capability::Storage { name, copy, .. } if copy.engine().is_some() => Some(name),
+        _ => None,
+    }) {
+        return Ok(Err(format!(
+            "{app}-{name} is to be copied by its engine's own tool, which this pass \
+             cannot run yet"
+        )));
+    }
+    let names = spec.stopped_for_copy(app);
     if names.is_empty() {
         return Ok(Ok(None));
     }
@@ -1508,6 +1519,37 @@ mod tests {
                 .any(|e| matches!(e, Event::Failed { what, destination, error }
                 if what == "mail volumes" && destination.as_deref() == Some("nas")
                     && error.contains("no orchestrator can stop it"))),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_volume_for_its_engine_s_tool_is_never_copied_live_meanwhile() {
+        let state = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: { name: postgres }\n\
+             spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n    \
+             - { kind: storage, name: data, path: /data, copy: pg-basebackup }\n",
+        )
+        .expect("manifest");
+        state.upsert_app("postgres", &m, None).await.expect("app");
+        state
+            .add_volume("postgres", "postgres-data", "/unused", true, false)
+            .await
+            .expect("volume");
+        nas_declared(&state).await;
+        let mut p = pass(&state, &vault, Path::new("/unused"));
+        p.force = true;
+        p.only = Some("postgres");
+        let mut events = Vec::new();
+        let sum = p.run(&mut |e| events.push(e)).await.expect("pass");
+        assert_eq!(sum.done, 0, "{events:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Failed { what, error, .. }
+                if what == "postgres volumes" && error.contains("engine's own tool"))),
             "{events:?}"
         );
     }

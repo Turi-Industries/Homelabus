@@ -262,11 +262,29 @@ pub enum VolumeCopy {
     /// another, and Stalwart's copy named an SST written after restic had passed it,
     /// and did not open.
     Stopped,
+    /// A PostgreSQL data directory, copied by `pg_basebackup` while the server runs:
+    /// starts as a server that crashed at the copy's end. 🔴 restic reading the
+    /// directory itself takes each file at another instant, and no recovery mends that.
+    #[serde(rename = "pg-basebackup")]
+    PgBasebackup,
+    /// A MariaDB data directory, copied by `mariadb-backup` while the server runs and
+    /// prepared, for the same reason.
+    #[serde(rename = "mariadb-backup")]
+    MariadbBackup,
 }
 
 impl VolumeCopy {
     pub fn is_live(&self) -> bool {
         *self == Self::Live
+    }
+
+    /// The engine whose own tool takes the copy.
+    pub fn engine(&self) -> Option<DbEngine> {
+        match self {
+            Self::Live | Self::Stopped => None,
+            Self::PgBasebackup => Some(DbEngine::Postgres),
+            Self::MariadbBackup => Some(DbEngine::Mariadb),
+        }
     }
 }
 

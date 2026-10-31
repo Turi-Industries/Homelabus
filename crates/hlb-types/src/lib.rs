@@ -592,6 +592,15 @@ pub fn validate(m: &Manifest) -> Result<()> {
         .iter()
         .flat_map(|c| c.storage.iter())
         .map(|v| (v.name.as_str(), v.backup, v.copy));
+    for c in &m.spec.companions {
+        if let Some(v) = c.storage.iter().find(|v| v.copy.engine().is_some()) {
+            return Err(Error::Validation(format!(
+                "{}: volume \"{}\" of {} is copied by an engine's tool, which connects to \
+                 the app's own service: an engine runs as the app, never as a companion",
+                m.metadata.name, v.name, c.name
+            )));
+        }
+    }
     for (name, backup, copy) in volumes.chain(companions) {
         if !backup && !copy.is_live() {
             return Err(Error::Validation(format!(
@@ -2605,6 +2614,26 @@ spec:
             .unwrap_err()
             .to_string()
             .contains("NFS"));
+    }
+
+    #[test]
+    fn an_engine_s_copy_is_the_app_s_volume_never_a_companion_s() {
+        let own = format!(
+            "{BASE}  requires:\n    - kind: storage\n      name: data\n      path: /data\n      \
+             copy: pg-basebackup\n"
+        );
+        let m = manifest(&own);
+        assert_eq!(validate(&m).map_err(|e| e.to_string()), Ok(()));
+        assert!(
+            m.spec.stopped_for_copy("test").is_empty(),
+            "it runs throughout"
+        );
+        let companion = format!(
+            "{BASE}  companions:\n    - name: db\n      image: {{ repo: a/b, tag: \"1\" }}\n      \
+             storage:\n        - {{ name: d, path: /d, backup: true, copy: mariadb-backup }}\n"
+        );
+        let e = validate(&manifest(&companion)).unwrap_err().to_string();
+        assert!(e.contains("never as a companion"), "{e}");
     }
 
     #[test]
