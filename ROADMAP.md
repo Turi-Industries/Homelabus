@@ -1223,6 +1223,53 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    `http` variant beside `exec` and `sql` when an app the owner names needs one.
 5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade or post-restore step;
    cross-app budgets (connections against `max_connections`) are Rust tests.
+   **Measured** 2026-10-31, the step before a backup first. The nightly pass copies
+   every `backup: true` volume with restic while its service runs — only a restore
+   stops one — and the catalog declares 24. By what they hold (the lab's `nas`
+   repository and volumes read the same day):
+   - SQLite snapshotted by `VACUUM INTO`, flagged `sqlite: true`: PocketID, Jellyfin,
+     Termix. 🔴 **SQLite copied live, unflagged: CrowdSec's `crowdsec.db`** (5 MB, on
+     the lab), **ntfy's `cache.db` and `auth.db`** (its accounts and tokens, by its
+     manifest's own variables), **Grafana's `grafana.db`** (its manifest's comment
+     says "SQLite"). Three of six carry the flag — a hand-maintained list, drifted.
+     `sqlite::discover` already finds a database by its header; the flag only says
+     which volumes to look in.
+   - An engine's store, copied live: **Stalwart's RocksDB** (all the mail), Garage's
+     LMDB `meta` (whose manifest says "stopping the service before copying stays the
+     only way to be consistent" — nothing stops it), Fluxer's NATS JetStream, and
+     PostgreSQL's and MariaDB's own data directories (MariaDB's, 201 MB every night on
+     the lab) beside the dumps that actually restore them.
+   - Files written whole, safe live: Caddy's certificates, CrowdSec's configuration,
+     Immich's and Vikunja's files, Vaultwarden's, Mealie's and n8n's data (their
+     databases are PostgreSQL), Bulwark's two. Not read file by file: Seafile's
+     blocks, Gitea's `/data` (its queues are LevelDB by default).
+
+   **The drill**, on deb1, from snapshot `d4e79ce7` (2026-10-30 20:37): Stalwart 1.0,
+   `--network none`, opened the live copy with no RocksDB error — the live server's
+   accounts bar the one made since, the same e-mail count in each, four messages
+   byte-identical. One idle sample says nothing of the race, so the race was played on
+   the restored copy: restic 0.19.1 reads a directory in name order, two files at a
+   time — the `000*.sst` first, `MANIFEST-*` last (checked) —, and a flush between the two (forced by a restart) left
+   a copy whose MANIFEST names `000465.sst`, written after the SSTs were read —
+   **`Corruption: … 000465.sst: No such file or directory`, and Stalwart does not
+   start.** restic reports nothing: a file created after its listing is no error,
+   only one that vanished (exit 3, which the pass does fail on). Nothing reads a
+   volume snapshot back as its app would — `backup verify` compares the snapshot with
+   itself — so it shows the day of the restore. Stalwart's own `--export` opens the
+   store, so it too needs the service stopped; a ZFS snapshot would not (it is what a
+   power cut leaves, and RocksDB recovers from that), but `data-v1` is a Docker volume
+   on deb1, not a dataset.
+
+   **So**, three steps, by what a volume holds. (1) SQLite: discovered in every
+   backed-up volume, flag or not, and paired at restore the same way — the scan
+   replaces the list. (2) A declared step before a volume's copy, an exhaustive enum:
+   the service **stopped** for its copy and started again whatever happened
+   (Stalwart, NATS), or a command **writing a consistent copy** into the volume while
+   it runs (Garage's `garage meta snapshot`). (3) PostgreSQL's and MariaDB's data
+   directories: read what restores them today (dumps, PITR's base backups) before
+   taking them out of the volume pass. The kill number for (2)'s stop: a mail server
+   down long enough for a sender to give up — measured in days, against a stop that
+   lasts restic's incremental pass over immutable SSTs.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

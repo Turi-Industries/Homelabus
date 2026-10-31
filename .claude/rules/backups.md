@@ -52,6 +52,13 @@ during an outage.
 - **restic reading a repository mounted read-only waits for ever.** It retries its
   lock every minute (`read-only file system`) and never fails: a drill reading a
   destination by hand passes `--no-lock`.
+- **🔴 An engine's store copied live restores nothing, and restic says nothing.**
+  restic 0.19.1 reads a directory in name order, so RocksDB's `MANIFEST-*` comes after
+  its `000*.sst`: a flush between the two left a copy naming an SST it never took, and
+  Stalwart refused to start on it (`Corruption: … No such file`, played on deb1
+  2026-10-31). A file that vanished mid-copy fails the pass (exit 3); one created after
+  restic's listing is no error at all. An idle server's copy opens, so one good drill
+  proves nothing. The pass copies every `backup: true` volume while its service runs.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.
