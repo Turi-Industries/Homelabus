@@ -1207,6 +1207,20 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
 4. **Syncing people and nodes into an app** — `Members` and `Nodes` have one variant
    each, and each needed a crate. Per-person and per-node `exec`/HTTP steps, as
    `AdminsApply` and `QuotaApply` already are.
+   **Measured** 2026-10-31 on the catalog — the two stores keep no accounts to compare
+   with. Of the 13 apps holding people, 7 take them through OIDC claims at each sign-in
+   and need nothing kept in step; 3 keep an existing account in step by declared
+   per-person steps, with no Rust (Fluxer's administrators by `exec`, Immich's quota by
+   `sql`, Seafile's by `exec`). The two crates would not have been spared by a declared
+   step: Vaultwarden's members are ONE import call for the whole set, declarable — but
+   confirming a member encrypts the organisation's key, which only an owner's client
+   can, and `hlb-bitwarden` is the emergency vault's client cryptography far more than
+   the sync (171 of its 1,630 lines). Termix's hosts are a diff against Termix's own
+   list, declarable — but each node's key is authorized ON the node, a machine's
+   action, not an app's. **Nothing built.** Left: Jellyfin keeps accounts of its own,
+   made by hand, since its TV clients cannot sign in through OIDC — the one app a
+   per-person HTTP step (create, disable) would serve. No step is HTTP today: an
+   `http` variant beside `exec` and `sql` when an app the owner names needs one.
 5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade or post-restore step;
    cross-app budgets (connections against `max_connections`) are Rust tests.
 
