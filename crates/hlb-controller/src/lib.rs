@@ -14,6 +14,7 @@ pub mod capacity;
 pub mod coverage;
 pub mod demo;
 pub mod diff;
+pub mod domain;
 pub mod error;
 pub mod export;
 pub mod exposure;

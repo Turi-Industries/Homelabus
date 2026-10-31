@@ -1681,6 +1681,41 @@
 			}
 		}
 	],
+	"cause_domain_moved": "Le domaine de la maison a changé depuis sa référence : si personne ici ne l'a fait, appelez le bureau d'enregistrement maintenant",
+	"cause_caa_refuses_account": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} compte ACME de la maison est refusé par le CAA du domaine : ses certificats ne se renouvelleront pas",
+				"countPlural=*": "{shown} comptes ACME de la maison sont refusés par le CAA du domaine : leurs certificats ne se renouvelleront pas"
+			}
+		}
+	],
+	"cause_certificate_foreign": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Un certificat pour {shown} nom de la maison, sous une clé qu'elle ne détient pas : quelqu'un d'autre peut répondre à sa place",
+				"countPlural=*": "Des certificats pour {shown} noms de la maison, sous une clé qu'elle ne détient pas : quelqu'un d'autre peut répondre à sa place"
+			}
+		}
+	],
+	"cause_domain_unwatched": "Le domaine n'est pas surveillé : hlb domain accept --apply fixe sa référence",
+	"cause_domain_unknown": "Le domaine n'a pas été relu depuis Internet récemment",
 	"cause_deadman_absent": "Aucun veilleur : si tout s'arrête, rien ne vous préviendra",
 	"cause_deadman_silent": "Le veilleur ne bat plus",
 	"cause_exposure_unknown": "Accès jamais appliqués : on ignore ce qui est joignable de l'extérieur",
@@ -1935,6 +1970,11 @@
 	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",
+	"reason_domain_moved": "a changé depuis sa référence : hlb domain watch",
+	"reason_caa_refuses_account": "refusé par le CAA : hlb domain watch",
+	"reason_certificate_foreign": "certifié sous une clé que la maison ne détient pas",
+	"reason_domain_unwatched": "sans référence : hlb domain accept --apply",
+	"reason_domain_unknown": "non relu récemment",
 	"reason_exposed_against_manifest": "sur internet contre son manifeste",
 	"reason_not_published": "devrait être publiée",
 	"reason_route_not_applied": "sans route",

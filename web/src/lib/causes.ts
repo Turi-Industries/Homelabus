@@ -104,6 +104,16 @@ export function title(issue: Issue): string {
 			return m.cause_mail_record_unknown(n);
 		case 'mail_blocklists_refused':
 			return m.cause_mail_blocklists_refused(n);
+		case 'domain_moved':
+			return m.cause_domain_moved();
+		case 'caa_refuses_account':
+			return m.cause_caa_refuses_account(n);
+		case 'certificate_foreign':
+			return m.cause_certificate_foreign(n);
+		case 'domain_unwatched':
+			return m.cause_domain_unwatched();
+		case 'domain_unknown':
+			return m.cause_domain_unknown();
 		case 'account_without_mailbox':
 			return m.cause_account_without_mailbox(n);
 		case 'account_without_identity':
@@ -158,6 +168,14 @@ export function where(issue: Issue): string {
 		case 'mail_blocklists_refused':
 		case 'mail_waiting':
 			return '/apps/stalwart';
+		// No page reads the domain yet: the exposure is where its names are published,
+		// and `hlb domain watch` says the rest.
+		case 'domain_moved':
+		case 'caa_refuses_account':
+		case 'certificate_foreign':
+		case 'domain_unwatched':
+		case 'domain_unknown':
+			return '/exposure';
 		case 'guide_blocking':
 		case 'guide_pending':
 			return '/todo';
@@ -292,6 +310,16 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_mail_record_unknown();
 		case 'mail_blocklists_refused':
 			return m.reason_mail_blocklists_refused();
+		case 'domain_moved':
+			return m.reason_domain_moved();
+		case 'caa_refuses_account':
+			return m.reason_caa_refuses_account();
+		case 'certificate_foreign':
+			return m.reason_certificate_foreign();
+		case 'domain_unwatched':
+			return m.reason_domain_unwatched();
+		case 'domain_unknown':
+			return m.reason_domain_unknown();
 		case 'no_backup_destination':
 		case 'single_destination':
 		case 'drill_never':

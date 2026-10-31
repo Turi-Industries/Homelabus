@@ -120,6 +120,26 @@ pub enum Cause {
     /// spammer's message passes them. The subjects are the refusing lists' tags;
     /// `hlb mail dns` says what to change.
     MailBlocklistsRefused,
+    /// 🔴 The house's domain moved since the baseline `hlb domain accept` recorded —
+    /// its name servers, DS, CAA, registrar or locks —, the way a registrar's support
+    /// hands a domain to a thief. The subject is the zone; `hlb domain watch` says
+    /// what moved.
+    DomainMoved,
+    /// 🔴 The CAA governing the house's names refuses one of its ACME accounts: its
+    /// certificates stop renewing. The subjects are who holds the account (`Caddy`,
+    /// `Stalwart`); `hlb domain watch` prints the line to add.
+    CaaRefusesAccount,
+    /// 🔴 A Certificate Transparency log holds a certificate for the house's names under
+    /// a key neither Caddy nor Stalwart holds: someone else can answer for them. The
+    /// subjects are its names; `hlb domain watch` says which authority, and when.
+    CertificateForeign,
+    /// The domain, or the certificates issued for it, have no baseline: nothing is
+    /// compared, so no change can be told. The subject is the zone; `hlb domain accept
+    /// --apply` sets one.
+    DomainUnwatched,
+    /// The domain was not read from the internet lately, or no resolver answered: a
+    /// change made meanwhile is not known.
+    DomainUnknown,
 
     // --- People -------------------------------------------------------------
     /// An identity and no mailbox: signs in everywhere, receives nothing.

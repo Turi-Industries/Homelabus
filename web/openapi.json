@@ -2052,6 +2052,81 @@
             "type": "object"
           },
           {
+            "description": "🔴 The house's domain moved since the baseline `hlb domain accept` recorded —\nits name servers, DS, CAA, registrar or locks —, the way a registrar's support\nhands a domain to a thief. The subject is the zone; `hlb domain watch` says\nwhat moved.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "domain_moved"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "🔴 The CAA governing the house's names refuses one of its ACME accounts: its\ncertificates stop renewing. The subjects are who holds the account (`Caddy`,\n`Stalwart`); `hlb domain watch` prints the line to add.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "caa_refuses_account"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "🔴 A Certificate Transparency log holds a certificate for the house's names under\na key neither Caddy nor Stalwart holds: someone else can answer for them. The\nsubjects are its names; `hlb domain watch` says which authority, and when.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "certificate_foreign"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The domain, or the certificates issued for it, have no baseline: nothing is\ncompared, so no change can be told. The subject is the zone; `hlb domain accept\n--apply` sets one.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "domain_unwatched"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The domain was not read from the internet lately, or no resolver answered: a\nchange made meanwhile is not known.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "domain_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "An identity and no mailbox: signs in everywhere, receives nothing.",
             "properties": {
               "kind": {

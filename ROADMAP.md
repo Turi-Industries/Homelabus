@@ -773,9 +773,14 @@ three Tangs, and the third alone opens it.
     not read), `google.com` (MarkMonitor, the six locks, not signed), `afnic.fr`
     (signed, `active` only: no transfer lock and no CAA, both advised); a baseline
     accepted, one name server forged in it, `watch` named the name servers and the
-    delegation and exited 1. Left: the inbox and a screen (an unwatched domain is a
-    log line tonight); WHOIS for the TLDs without RDAP, parsed per registry; the
-    nightly pass not run on the lab, whose exposure is internal — nothing to watch.
+    delegation and exited 1. ✅ The inbox, 2026-10-31 (`hlb_controller::domain`):
+    `domain_moved`, `caa_refuses_account` and `certificate_foreign` critical,
+    `domain_unwatched` (no baseline, of the zone or of the logs) and `domain_unknown`
+    (not read for two days, or no resolver answered) notices — judged from what the
+    night recorded, by the rules `hlb domain watch` prints with; filed under security,
+    leading to the exposure. Left: a screen; WHOIS for the TLDs without RDAP, parsed
+    per registry; the nightly pass not run on the lab, whose exposure is internal —
+    nothing to watch.
   - CAA with `accounturi`. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
     offline where no CA was to be reached): Caddy keeps its account in
     `/data/caddy/acme/<directory, ':' and '/' as '-'>/users/<email>/<local part>.json`,
@@ -840,7 +845,7 @@ three Tangs, and the third alone opens it.
     against the internet: `hlb domain watch` for desec.io read the logs and judged
     nothing, Caddy unreadable without a Swarm — the cursor unmoved. Left: never judged
     end to end on a real Swarm (the lab's exposure is internal); a Cert Spotter key
-    for more than ten requests a window; the inbox and a screen, as for the drift.
+    for more than ten requests a window; a screen, as for the drift.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach

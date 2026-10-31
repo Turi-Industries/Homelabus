@@ -13,5 +13,5 @@ export const module: Module = {
 		{ path: '/secrets', label: m.page_security_secrets, reads: ['/api/secrets'] },
 		{ path: '/secrets/rotation', label: m.page_security_rotation, reads: ['/api/secrets/rotation'] }
 	],
-	causes: ['exposure_unknown', 'exposed_against_manifest', 'not_published', 'route_not_applied', 'orphan_route', 'secret_never_rotated', 'secret_rotation_due', 'certificate_expiring', 'assertion_broken', 'assertion_unknown', 'mail_record_wrong', 'mail_record_unknown', 'mail_blocklists_refused'],
+	causes: ['exposure_unknown', 'exposed_against_manifest', 'not_published', 'route_not_applied', 'orphan_route', 'secret_never_rotated', 'secret_rotation_due', 'certificate_expiring', 'assertion_broken', 'assertion_unknown', 'mail_record_wrong', 'mail_record_unknown', 'mail_blocklists_refused', 'domain_moved', 'caa_refuses_account', 'certificate_foreign', 'domain_unwatched', 'domain_unknown'],
 };

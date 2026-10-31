@@ -1677,6 +1677,41 @@
 			}
 		}
 	],
+	"cause_domain_moved": "The house's domain moved since its baseline: if nobody here did it, call the registrar now",
+	"cause_caa_refuses_account": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} ACME account of the house is refused by the domain's CAA: its certificates will not renew",
+				"countPlural=*": "{shown} ACME accounts of the house are refused by the domain's CAA: their certificates will not renew"
+			}
+		}
+	],
+	"cause_certificate_foreign": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "A certificate for {shown} name of the house under a key it does not hold: someone else can answer for it",
+				"countPlural=*": "Certificates for {shown} names of the house under a key it does not hold: someone else can answer for them"
+			}
+		}
+	],
+	"cause_domain_unwatched": "The domain is not watched: hlb domain accept --apply sets its baseline",
+	"cause_domain_unknown": "The domain was not read from the internet lately",
 	"cause_deadman_absent": "No deadman: if everything stops, nothing will warn you",
 	"cause_deadman_silent": "The deadman's heartbeat has stopped",
 	"cause_exposure_unknown": "Access never applied: what is reachable from outside is unknown",
@@ -1931,6 +1966,11 @@
 	"reason_mail_record_wrong": "missing or wrong: mail is refused or filed as spam",
 	"reason_mail_record_unknown": "not read lately",
 	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",
+	"reason_domain_moved": "moved since its baseline: hlb domain watch",
+	"reason_caa_refuses_account": "refused by the CAA: hlb domain watch",
+	"reason_certificate_foreign": "certified under a key the house does not hold",
+	"reason_domain_unwatched": "no baseline: hlb domain accept --apply",
+	"reason_domain_unknown": "not read lately",
 	"reason_exposed_against_manifest": "on the internet against its manifest",
 	"reason_not_published": "should be published",
 	"reason_route_not_applied": "no route",
