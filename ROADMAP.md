@@ -1192,6 +1192,18 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    `{{ smtp.from }}`, while people come in through PocketID; a language, 3 apps.
 3. **Engines** — `DbEngine` is PostgreSQL or MariaDB, the cache is Valkey: Fluxer runs
    Valkey, NATS and Meilisearch as companions, without provisioning or dump backups.
+   **Measured** 2026-10-31 on the 577 apps, by image: 112 run a backing engine, and
+   **85 of them only engines Homelabus provisions** — PostgreSQL (64, pgvector
+   included), MariaDB or MySQL (25), a Redis-compatible cache (38), S3 (Garage). The
+   other 27 spread thin: MongoDB 10 (two of them MongoDB itself, three Bitcoin wallets),
+   Meilisearch 6, PostGIS 2, Elasticsearch/OpenSearch 2, a vector database 2, then
+   TimescaleDB, DocumentDB, ClickHouse, RabbitMQ and Memcached, one app each. No third
+   engine approaches the two: a generic engine declaration would serve a tail, and
+   MongoDB enters as a `DbEngine` variant when an app the owner names runs it. 🔴 What
+   the tail shares is the real gap: each runs as a companion, and the nightly pass
+   copies a companion's volume **while it runs** — only a restore stops services — so
+   a database's files can be caught mid-write. That is gap 5's step before a backup (a
+   declared dump, or the companion stopped for its copy), not an engine.
 4. **Syncing people and nodes into an app** — `Members` and `Nodes` have one variant
    each, and each needed a crate. Per-person and per-node `exec`/HTTP steps, as
    `AdminsApply` and `QuotaApply` already are.
