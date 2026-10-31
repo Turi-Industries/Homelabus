@@ -133,6 +133,17 @@ exported — Homelabus never bills.
   house's network only), so a node without a screen can be opened; the console works
   too. Its host key lies in clear on `/boot`, which the preview says.
 
+#### Decided by the owner, 2026-10-31
+
+- **Phase 2 is closed**, its leftovers kept under each item; phase 3 is next.
+- **The family's sealed kit is mailed to each relative every time it is sealed
+  again**, so each holds the latest in a mailbox of their own, the house up or not.
+- **No third-party DNS service** for the signed zone: the secondaries are the house's
+  own machines. The registry and the registrar stay — no domain exists without them,
+  which is what the drift check and the registry lock are for.
+- **Every TLD alike**: the owner's domain is a `.eu`, which has no RDAP — a feature
+  that works only where RDAP exists does not count as done.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -230,6 +241,11 @@ opens alone in 38 s; after `update-initramfs -u` the hook reseals and it opens a
 the firmware's boot manager, both Tangs up, it waits — two minutes, nothing mounted —
 and the kit's key opens it; `bind-disk` run again at A, from that GRUB boot, reseals to
 three Tangs, and the third alone opens it.
+✅ Closed by the owner 2026-10-31. Left, each under its item below: the domain's screen,
+WHOIS for the TLDs without RDAP (the owner's `.eu` among them), DANE/TLSA, the hidden
+Knot primary with secondaries of the house's own, the sealed kit mailed at each seal,
+the nodes screen showing each level, the SLSA provenance of three images, `validationmethods`,
+and what needs real hardware or a public domain to be measured.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
   reading the file before `exec` —, and `catalog validate` refusing a secret in an
@@ -957,7 +973,8 @@ three Tangs, and the third alone opens it.
     keeps its own fingerprint (`family-kit-sealed`), since a plain kit printed after a
     change makes `emergency-kit` current again while theirs restores the old house.
   - Left: the sealed kit deposited where a relative finds it without the owner — today
-    it is a file the owner sends.
+    it is a file the owner sends. Decided 2026-10-31: mailed to each relative every
+    time it is sealed again.
 
 **3. An app without Rust, then the catalog on its own.** Gate: an app enters through a
 pull request to the catalog, with no `hlb` release.
