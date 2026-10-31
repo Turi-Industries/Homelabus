@@ -146,6 +146,15 @@ exported — Homelabus never bills.
   stop it. A machine at a relative's, a third site, may join later.
 - **Every TLD alike**: the owner's domain is a `.eu`, which has no RDAP — a feature
   that works only where RDAP exists does not count as done.
+- **Phase 3's proving ground: calendars and contacts from Stalwart** (CalDAV/CardDAV,
+  a capability and a phone guide). Mealie, in since 2026-10-30, stays; no other app of
+  the list proposed while planning is added.
+- **`homelabus-catalog` lives on GitHub, under Turi-Industries**, beside Homelabus: its
+  pull requests and CI are what the gate needs, and the signed index leaves the host
+  able to withhold it, never to forge, replay or freeze it.
+- **The official index is signed by the owner's key, outside CI**: CI builds and tests
+  the index, the owner signs it after each merge with a key only they hold, on the kit;
+  neither GitHub nor Sigstore can publish an app.
 
 #### The phases
 
@@ -1005,9 +1014,9 @@ pull request to the catalog, with no `hlb` release.
   the lifeboat's input.
 - Proving ground for goal 4: **which apps is the owner's decision, taken when this phase
   starts** (2026-10-30) — the list below was proposed while planning, never decided, and
-  no app is added from it meanwhile. Calendars and contacts from Stalwart (a capability
-  and a phone guide), then Paperless-ngx, Actual, Mealie, Audiobookshelf, Navidrome,
-  FreshRSS.
+  no app is added from it meanwhile. Decided 2026-10-31: calendars and contacts from
+  Stalwart (a capability and a phone guide); the rest of the list proposed —
+  Paperless-ngx, Actual, Audiobookshelf, Navidrome, FreshRSS — was not chosen.
   - ✅ Mealie — 2026-10-30, a manifest and a guide, no Rust beyond the form-encoded
     recovery proof it showed missing. **Proven on the lab** by `hlb install mealie
     --apply` alone: the guide's `sql` step run by the executor (all four assertions

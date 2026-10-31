@@ -101,6 +101,15 @@ for manifest in catalog/*/manifest.yaml; do
 done
 row "4 no Rust" "apps whose first commit changed no Rust under \`crates/*/src\`" "$pure of $apps added since the history restarted ($before predate it, uncounted)" "every app added from now on"
 
+# Phase 3's gate: an app reaching the house with no release means the catalog is neither
+# baked into the controller's image nor kept in this repository.
+if grep -q '^COPY catalog ' Dockerfile; then
+    catalog="0 — the catalog is copied into the controller's image (\`Dockerfile\`): a new app needs a release"
+else
+    catalog="the catalog is out of the image — probe: a pull request to \`homelabus-catalog\` installed on the lab"
+fi
+row "4 no Rust" "apps that reached an installed house through a catalog pull request, with no \`hlb\` release" "$catalog" "every app, once \`homelabus-catalog\` exists"
+
 # 5. Always available ---------------------------------------------------------------
 row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"
 
