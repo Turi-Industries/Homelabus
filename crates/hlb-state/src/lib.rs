@@ -810,6 +810,45 @@ impl State {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Holds `services` stopped for `secs`: reconciliation leaves them as they are.
+    pub async fn hold_services(&self, services: &[String], why: &str, secs: i64) -> Result<()> {
+        for s in services {
+            sqlx::query(
+                "INSERT INTO service_holds (service, why, until)
+                 VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER) + ?3)
+                 ON CONFLICT(service) DO UPDATE SET why = excluded.why, until = excluded.until",
+            )
+            .bind(s)
+            .bind(why)
+            .bind(secs)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn release_services(&self, services: &[String]) -> Result<()> {
+        for s in services {
+            sqlx::query("DELETE FROM service_holds WHERE service = ?1")
+                .bind(s)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Why `service` is held, while the hold lasts.
+    pub async fn held(&self, service: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT why FROM service_holds
+             WHERE service = ?1 AND until > CAST(strftime('%s','now') AS INTEGER)",
+        )
+        .bind(service)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.try_get("why")).transpose()?)
+    }
+
     /// The replica count decided for an app, over its manifest's — what reconciliation
     /// keeps and a deployment deploys.
     pub async fn app_replicas(&self, name: &str) -> Result<Option<u64>> {

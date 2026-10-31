@@ -175,8 +175,8 @@ pub async fn run(
     };
 
     println!();
-    if let Err(e) = restore::stop(o, &services).await {
-        restore::start(o, &services).await?;
+    if let Err(e) = restore::stop(o, state, &services, &format!("restore of {volume}")).await {
+        restore::start(o, state, &services).await?;
         eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
         audit(state, app, "refused", &e).await?;
         return Ok(ExitCode::FAILURE);
@@ -220,7 +220,7 @@ pub async fn run(
                     return Ok(ExitCode::FAILURE);
                 }
             }
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             if !names.is_empty() {
                 println!("✓ {} started again", names.join(", "));
             }
@@ -228,7 +228,7 @@ pub async fn run(
             Ok(ExitCode::SUCCESS)
         }
         Err(Failure::Refused(e)) => {
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             eprintln!("🔴 {e}\n   Nothing was restored, and {app} is started again.");
             audit(state, app, "refused", &e).await?;
             Ok(ExitCode::FAILURE)
@@ -325,8 +325,9 @@ async fn bucket(
     let endpoint = crate::relay::reach(hlb_objstore::S3_URL, &cli.platform_network);
 
     println!();
-    if let Err(e) = restore::stop(o, &services).await {
-        restore::start(o, &services).await?;
+    if let Err(e) = restore::stop(o, state, &services, &format!("restore of bucket {bucket}")).await
+    {
+        restore::start(o, state, &services).await?;
         eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
         audit_as(state, "bucket-restore", app, "refused", &e).await?;
         return Ok(ExitCode::FAILURE);
@@ -347,7 +348,7 @@ async fn bucket(
                 put.deleted,
                 &before[..8.min(before.len())]
             );
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             if !names.is_empty() {
                 println!("✓ {} started again", names.join(", "));
             }
@@ -362,7 +363,7 @@ async fn bucket(
             Ok(ExitCode::SUCCESS)
         }
         Err(Failure::Refused(e)) => {
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             eprintln!("🔴 {e}\n   Nothing was restored, and {app} is started again.");
             audit_as(state, "bucket-restore", app, "refused", &e).await?;
             Ok(ExitCode::FAILURE)
@@ -529,8 +530,9 @@ async fn database(
     };
 
     println!();
-    if let Err(e) = restore::stop(o, &services).await {
-        restore::start(o, &services).await?;
+    if let Err(e) = restore::stop(o, state, &services, &format!("restore of database {name}")).await
+    {
+        restore::start(o, state, &services).await?;
         eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
         audit_as(state, "database-restore", app, "refused", &e).await?;
         return Ok(ExitCode::FAILURE);
@@ -552,7 +554,7 @@ async fn database(
                 snap.short_id(),
                 &before[..8.min(before.len())]
             );
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             if !names.is_empty() {
                 println!("✓ {} started again", names.join(", "));
             }
@@ -567,7 +569,7 @@ async fn database(
             Ok(ExitCode::SUCCESS)
         }
         Err(Failure::Refused(e)) => {
-            restore::start(o, &services).await?;
+            restore::start(o, state, &services).await?;
             eprintln!("🔴 {e}\n   Nothing was restored, and {app} is started again.");
             audit_as(state, "database-restore", app, "refused", &e).await?;
             Ok(ExitCode::FAILURE)

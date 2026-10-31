@@ -296,8 +296,15 @@ pub async fn encrypt(cli: &Cli, t: Target<'_>, apply: bool) -> Result<ExitCode> 
             Vec::new()
         };
         println!("\n{app}:");
-        if let Err(e) = restore::stop(&orch, &services).await {
-            restore::start(&orch, &services).await?;
+        if let Err(e) = restore::stop(
+            &orch,
+            &state,
+            &services,
+            &format!("encryption of {app}'s volumes"),
+        )
+        .await
+        {
+            restore::start(&orch, &state, &services).await?;
             eprintln!("  🔴 {e}: nothing of {app} was touched.");
             return Ok(ExitCode::FAILURE);
         }
@@ -310,7 +317,7 @@ pub async fn encrypt(cli: &Cli, t: Target<'_>, apply: bool) -> Result<ExitCode> 
             encrypted += 1;
         }
         // Whatever happened: each step leaves the volume where the app finds it.
-        restore::start(&orch, &services).await?;
+        restore::start(&orch, &state, &services).await?;
         if let Err(e) = outcome {
             eprintln!("  🔴 {e}");
             eprintln!("     {app} is started again. Run this again: what is done is skipped.");

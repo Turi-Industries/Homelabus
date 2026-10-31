@@ -61,6 +61,9 @@ pub enum Drift {
         running: usize,
         desired: u64,
     },
+    /// Stopped on purpose — a restore, a store stopped for its copy — until the hold
+    /// is released or lapses.
+    Held { app: String, why: String },
 }
 
 impl Drift {
@@ -98,6 +101,10 @@ impl Drift {
                 "Swarm is converging: progress is transient and gets left alone - \
                  only the instruction is corrected",
             ),
+            Self::Held { .. } => Some(
+                "stopped on purpose, and started again by whoever stopped it: started \
+                 here, it would write to a volume being copied or restored",
+            ),
         }
     }
 
@@ -106,7 +113,8 @@ impl Drift {
             Self::ServiceMissing { app, .. }
             | Self::ReplicasDiverged { app, .. }
             | Self::ImageDiverged { app, .. }
-            | Self::Converging { app, .. } => app,
+            | Self::Converging { app, .. }
+            | Self::Held { app, .. } => app,
             Self::OrphanService { name } => name,
         }
     }
@@ -146,6 +154,7 @@ impl std::fmt::Display for Drift {
             } => {
                 write!(f, "{app}: converging ({running}/{desired})")
             }
+            Self::Held { app, why } => write!(f, "{app}: held stopped — {why}"),
         }
     }
 }
@@ -263,6 +272,15 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                     });
                     continue;
                 };
+                if let Some(why) = self.state.held(&e.service).await? {
+                    if svc.desired_replicas != e.replicas {
+                        drifts.push(Drift::Held {
+                            app: e.service,
+                            why,
+                        });
+                    }
+                    continue;
+                }
 
                 // The essential distinction: what Swarm has been instructed (`desired`)
                 // comes from a decision - ours or a human's. What actually runs
@@ -356,7 +374,8 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             // Deliberately inert: see the module header.
             Drift::ServiceMissing { .. }
             | Drift::OrphanService { .. }
-            | Drift::Converging { .. } => Ok(()),
+            | Drift::Converging { .. }
+            | Drift::Held { .. } => Ok(()),
         }
     }
 }
@@ -391,6 +410,10 @@ mod tests {
                 app: "gitea".into(),
                 running: 1,
                 desired: 2,
+            },
+            Drift::Held {
+                app: "gitea".into(),
+                why: "restore of gitea-data".into(),
             },
         ];
 

@@ -824,8 +824,25 @@ pub async fn replicas(o: &dyn Orchestrator, services: &[String]) -> Vec<(String,
     out
 }
 
-/// Stops each service and waits until none of its tasks runs.
-pub async fn stop(o: &dyn Orchestrator, services: &[(String, u64)]) -> Result<(), String> {
+/// How long a hold keeps reconciliation away: past it, a process that died holding
+/// services stopped gets them started again — longer than any copy or restore.
+const HOLD_SECS: i64 = 24 * 3600;
+
+/// Stops each service and waits until none of its tasks runs, held for `why`.
+///
+/// 🔴 Held before it is scaled: with `--reconcile-apply`, the next minute started a
+/// service scaled to zero again — onto a volume half restored, or being copied.
+pub async fn stop(
+    o: &dyn Orchestrator,
+    state: &State,
+    services: &[(String, u64)],
+    why: &str,
+) -> Result<(), String> {
+    let names: Vec<String> = services.iter().map(|(s, _)| s.clone()).collect();
+    state
+        .hold_services(&names, why, HOLD_SECS)
+        .await
+        .map_err(|e| format!("holding {} stopped: {e}", names.join(", ")))?;
     for (s, replicas) in services {
         if *replicas > 0 {
             o.scale(s, 0)
@@ -854,15 +871,27 @@ pub async fn stop(o: &dyn Orchestrator, services: &[(String, u64)]) -> Result<()
 
 /// Gives each service back its replicas, its companions before the app — the order
 /// they were deployed in.
-pub async fn start(o: &dyn Orchestrator, stopped: &[(String, u64)]) -> Result<(), String> {
+///
+/// The hold is released whatever happened: a service that did not start is then
+/// reconciliation's to start again, where one still held would stay down.
+pub async fn start(
+    o: &dyn Orchestrator,
+    state: &State,
+    stopped: &[(String, u64)],
+) -> Result<(), String> {
+    let mut failed = None;
     for (s, replicas) in stopped.iter().rev() {
         if *replicas > 0 {
-            o.scale(s, *replicas)
-                .await
-                .map_err(|e| format!("starting {s} again: {e}"))?;
+            if let Err(e) = o.scale(s, *replicas).await {
+                failed.get_or_insert(format!("starting {s} again: {e}"));
+            }
         }
     }
-    Ok(())
+    let names: Vec<String> = stopped.iter().map(|(s, _)| s.clone()).collect();
+    if let Err(e) = state.release_services(&names).await {
+        failed.get_or_insert(format!("releasing {}: {e}", names.join(", ")));
+    }
+    failed.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

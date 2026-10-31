@@ -822,3 +822,33 @@ async fn a_redeployment_keeps_the_count_stop_decided() {
     let gitea = specs.iter().find(|x| x.name == "gitea").expect("deployed");
     assert_eq!(gitea.replicas, 0);
 }
+
+#[tokio::test]
+async fn a_service_held_for_a_copy_is_left_stopped_until_the_hold_lapses() {
+    // 🔴 A restore — and a pass stopping a store for its copy — scales to zero: with
+    // `--reconcile-apply`, the next minute started the app again on a volume half
+    // written.
+    let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24", 0, 0)]);
+    let s = state_with_running_gitea().await;
+    s.hold_services(&["gitea".to_string()], "restore of gitea-data", 3600)
+        .await
+        .expect("hold");
+
+    let report = Reconciler::new(&o, &s).reconcile(true).await.unwrap();
+    assert!(o.scaled.lock().unwrap().is_empty(), "{report:?}");
+    assert!(matches!(&report.drifts[0], Drift::Held { why, .. } if why.contains("restore")));
+    assert!(report.drifts[0].refusal().is_some());
+
+    // Lapsed — the pass that held it died —: taken back like any other drift.
+    s.hold_services(&["gitea".to_string()], "restore of gitea-data", -1)
+        .await
+        .expect("hold");
+    Reconciler::new(&o, &s).reconcile(true).await.unwrap();
+    assert_eq!(*o.scaled.lock().unwrap(), vec![("gitea".to_string(), 2)]);
+
+    // Released, nothing of it is left.
+    s.release_services(&["gitea".to_string()])
+        .await
+        .expect("release");
+    assert_eq!(s.held("gitea").await.expect("read"), None);
+}
