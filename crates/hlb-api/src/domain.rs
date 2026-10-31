@@ -478,6 +478,132 @@ fn pin_advice(r: &Reading) -> Option<String> {
     ))
 }
 
+/// A certificate a Certificate Transparency log holds for the exposure's names, as Cert
+/// Spotter reports it: a precertificate and its certificate are one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Issuance {
+    /// Cert Spotter's, rising: what the next reading starts after.
+    pub id: String,
+    pub names: Vec<String>,
+    /// As Cert Spotter names it: `Let's Encrypt`.
+    pub issuer: String,
+    /// RFC 3339.
+    pub not_before: String,
+    /// The SHA-256 of its key's SPKI, hex: what says whether the house holds it.
+    pub key: String,
+}
+
+/// Where the watch over the logs stands, kept between nights.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transparency {
+    /// The last issuance judged; `None` until a baseline is accepted.
+    pub after: Option<String>,
+    /// Issuances for the house's names under a key it does not hold, alerted every
+    /// night until accepted.
+    pub foreign: Vec<Issuance>,
+}
+
+impl Transparency {
+    /// After a night that read `found` and judged `foreign` of them: the next reading
+    /// starts after the last one read, and the foreign ones join those kept, once each
+    /// — the logs may give one again, and its alert is keyed by its id.
+    pub fn advance(&mut self, found: &[Issuance], foreign: Vec<Issuance>) {
+        if let Some(last) = found.last() {
+            self.after = Some(last.id.clone());
+        }
+        for i in foreign {
+            if !self.foreign.iter().any(|f| f.id == i.id) {
+                self.foreign.push(i);
+            }
+        }
+    }
+}
+
+/// One page of Cert Spotter's `/v1/issuances`, asked with `expand=dns_names` and
+/// `expand=issuer`. An entry missing its id or its key is refused rather than
+/// skipped: a skipped one would be an issuance nobody judged.
+pub fn parse_issuances(body: &serde_json::Value) -> Result<Vec<Issuance>, String> {
+    let entries = body
+        .as_array()
+        .ok_or("Cert Spotter answered something other than a list")?;
+    entries
+        .iter()
+        .map(|e| {
+            let text = |v: Option<&serde_json::Value>| v.and_then(|v| v.as_str()).map(String::from);
+            let id = text(e.get("id")).ok_or("an issuance without its id")?;
+            Ok(Issuance {
+                key: text(e.get("pubkey_sha256"))
+                    .map(|k| k.to_ascii_lowercase())
+                    .ok_or_else(|| format!("issuance {id} without its key"))?,
+                names: normalised(
+                    e.get("dns_names")
+                        .and_then(|n| n.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|n| n.as_str())
+                        .map(host),
+                ),
+                issuer: e
+                    .get("issuer")
+                    .and_then(|i| text(i.get("friendly_name")).or_else(|| text(i.get("name"))))
+                    .unwrap_or_else(|| "an authority not named".into()),
+                not_before: text(e.get("not_before")).unwrap_or_default(),
+                id,
+            })
+        })
+        .collect()
+}
+
+/// Whether two certificate names can be the same host: equal, or a wildcard covering
+/// the other one label deep — either way, since a stranger's `*.home.example` serves
+/// the house's `git.home.example`, and the house's wildcard every name below it.
+pub fn names_meet(a: &str, b: &str) -> bool {
+    let (a, b) = (host(a), host(b));
+    let covers = |w: &str, n: &str| {
+        w.strip_prefix("*.")
+            .is_some_and(|base| n.split_once('.').is_some_and(|(_, parent)| parent == base))
+    };
+    a == b || covers(&a, &b) || covers(&b, &a)
+}
+
+/// Issuances judged against the keys the house holds and the names it serves.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Judged {
+    /// Another key, for a name of the house: someone else can answer for it.
+    pub foreign: Vec<Issuance>,
+    /// Another key, for names the house does not serve: an owner's site elsewhere.
+    pub elsewhere: Vec<Issuance>,
+}
+
+pub fn judge_issuances(issuances: &[Issuance], keys: &[String], names: &[String]) -> Judged {
+    let mut out = Judged::default();
+    for i in issuances {
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(&i.key)) {
+            continue;
+        }
+        if i.names
+            .iter()
+            .any(|n| names.iter().any(|h| names_meet(n, h)))
+        {
+            out.foreign.push(i.clone());
+        } else {
+            out.elsewhere.push(i.clone());
+        }
+    }
+    out
+}
+
+/// An issuance as a person reads it.
+pub fn issuance_line(i: &Issuance) -> String {
+    format!(
+        "{} by {}, {} (Cert Spotter {})",
+        list(&i.names),
+        i.issuer,
+        i.not_before.get(..10).unwrap_or(&i.not_before),
+        i.id
+    )
+}
+
 /// A host name as compared: lower case, no final dot.
 fn host(n: &str) -> String {
     n.trim().trim_end_matches('.').to_ascii_lowercase()
@@ -833,5 +959,92 @@ mod tests {
         o.remove("accounts");
         let r: Reading = serde_json::from_value(json).expect("read");
         assert!(r.accounts.is_empty() && r.caa_governing.is_none());
+    }
+
+    /// Two entries in the shape Cert Spotter answered for desec.io on 2026-10-31.
+    fn page() -> serde_json::Value {
+        serde_json::json!([
+            {
+                "id": "17742810616",
+                "dns_names": ["www.desec.io", "desec.io", "get.desec.io"],
+                "pubkey_sha256": "16E73877FF5B51995C9EA55DAFFB9AB38C8C8514C10B39688DB52FF54773573A",
+                "issuer": { "friendly_name": "Let's Encrypt", "name": "C=US, O=Let's Encrypt, CN=R13" },
+                "not_before": "2026-10-12T14:35:36Z",
+            },
+            {
+                "id": "17743719754",
+                "dns_names": ["insight.desec.io"],
+                "pubkey_sha256": "aa",
+                "issuer": { "name": "CN=Some CA" },
+                "not_before": "2026-10-12T15:28:54Z",
+            },
+        ])
+    }
+
+    #[test]
+    fn an_issuance_is_read_with_its_names_sorted_and_its_key_lower_case() {
+        let got = parse_issuances(&page()).expect("read");
+        assert_eq!(got[0].names, ["desec.io", "get.desec.io", "www.desec.io"]);
+        assert_eq!(&got[0].key[..8], "16e73877");
+        assert_eq!(got[0].issuer, "Let's Encrypt");
+        assert_eq!(got[1].issuer, "CN=Some CA");
+        assert_eq!(
+            issuance_line(&got[0]),
+            "desec.io, get.desec.io, www.desec.io by Let's Encrypt, 2026-10-12 (Cert Spotter 17742810616)"
+        );
+        assert_eq!(parse_issuances(&serde_json::json!([])), Ok(vec![]));
+    }
+
+    #[test]
+    fn an_issuance_missing_its_key_refuses_the_page_rather_than_skipping_it() {
+        let mut p = page();
+        p[1].as_object_mut().expect("entry").remove("pubkey_sha256");
+        let e = parse_issuances(&p).expect_err("refused");
+        assert!(e.contains("17743719754"), "{e}");
+        assert!(parse_issuances(&serde_json::json!({ "code": "rate_limited" })).is_err());
+    }
+
+    #[test]
+    fn a_wildcard_meets_a_name_one_label_below_either_way() {
+        assert!(names_meet("*.home.example", "git.home.example"));
+        assert!(names_meet("git.home.example", "*.home.example"));
+        assert!(names_meet("Home.Example.", "home.example"));
+        assert!(!names_meet("*.home.example", "home.example"));
+        assert!(!names_meet("*.home.example", "a.git.home.example"));
+        assert!(!names_meet("blog.home.example", "git.home.example"));
+    }
+
+    #[test]
+    fn only_a_key_the_house_does_not_hold_for_a_name_it_serves_is_foreign() {
+        let got = parse_issuances(&page()).expect("read");
+        let keys = ["16e73877ff5b51995c9ea55daffb9ab38c8c8514c10b39688db52ff54773573a".to_string()];
+        let judged = judge_issuances(&got, &keys, &["*.desec.io".into()]);
+        assert_eq!(judged.foreign.len(), 1);
+        assert_eq!(judged.foreign[0].id, "17743719754");
+        assert!(judged.elsewhere.is_empty());
+        // The same issuance, for a name the house does not serve, is said, not alerted.
+        let judged = judge_issuances(&got, &keys, &["desec.io".into()]);
+        assert!(judged.foreign.is_empty());
+        assert_eq!(judged.elsewhere.len(), 1);
+        // Held, it is the house's whatever its names.
+        let judged = judge_issuances(&got[1..], &["AA".into()], &["*.desec.io".into()]);
+        assert_eq!(judged, Judged::default());
+    }
+
+    #[test]
+    fn a_night_moves_the_cursor_and_keeps_what_was_foreign_until_accepted() {
+        let got = parse_issuances(&page()).expect("read");
+        let mut t = Transparency {
+            after: Some("1".into()),
+            foreign: vec![],
+        };
+        t.advance(&got, vec![got[1].clone()]);
+        assert_eq!(t.after.as_deref(), Some("17743719754"));
+        assert_eq!(t.foreign.len(), 1);
+        // A night that read nothing keeps the cursor, and a foreign one given again is
+        // kept once.
+        t.advance(&[], vec![got[1].clone()]);
+        assert_eq!(t.after.as_deref(), Some("17743719754"));
+        assert_eq!(t.foreign.len(), 1);
     }
 }

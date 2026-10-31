@@ -1536,9 +1536,12 @@ enum DomainCmd {
     /// Read the zone holding the exposure's domain — NS, DS, DNSSEC validation and CAA
     /// from a public resolver; registrar, locks, delegation and expiry from the
     /// registry's RDAP, where its TLD has one — record it, and compare it with the
-    /// baseline. Exits 1 on anything moved, or with no baseline.
+    /// baseline; and the certificates the Certificate Transparency logs hold for its
+    /// names since the last night, judged by whether the house holds their key. Exits 1
+    /// on anything moved, a certificate under another key, or with no baseline.
     Watch,
-    /// Make the reading taken now the baseline every later one is compared with.
+    /// Make the reading taken now the baseline every later one is compared with, and
+    /// the certificates issued until now — those found foreign included — accepted.
     /// Preview by default.
     Accept {
         #[arg(long)]

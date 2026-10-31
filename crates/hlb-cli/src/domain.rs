@@ -61,6 +61,17 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
         .filter(|b| b.zone == reading.zone);
     print(&reading, &unread, now);
     let refused = domain::refused(&reading);
+    let watch = state.domain_transparency().await?;
+    let logs = hlb_engine::domain::transparency(
+        &state,
+        &hlb_engine::domain::Public::default(),
+        orch.as_ref().map(|o| o as &dyn Orchestrator),
+        mail.as_ref(),
+        &exposure.domain,
+        watch.after.as_deref(),
+    )
+    .await;
+    let foreign = print_logs(&exposure.domain, &watch, &logs);
 
     match cmd {
         DomainCmd::Watch => {
@@ -76,6 +87,13 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                         .join(" and ")
                 );
             }
+            // Before a baseline the house's own previous certificate is among them.
+            if foreign > 0 && watch.after.is_some() {
+                println!(
+                    "\n{foreign} certificate(s) for the house's names under a key it does not \
+                     hold: if nobody here asked for one, have its authority revoke it."
+                );
+            }
             let Some(baseline) = baseline else {
                 println!(
                     "\nNot watched yet: nothing to compare with. Read the above, then \
@@ -89,7 +107,7 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                     "\nAs accepted on {}.",
                     day(baseline.read_at).unwrap_or_default()
                 );
-                return Ok(if refused.is_empty() {
+                return Ok(if refused.is_empty() && foreign == 0 {
                     ExitCode::SUCCESS
                 } else {
                     ExitCode::FAILURE
@@ -133,6 +151,20 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
             }
             state.set_domain_baseline(&reading).await?;
             state.record_domain_reading(&reading).await?;
+            match &logs {
+                // The foreign ones are taken with the rest: the person read them above.
+                Ok((found, _)) => {
+                    let after = found.last().map(|i| i.id.clone()).or(watch.after.clone());
+                    state
+                        .set_domain_transparency(&domain::Transparency {
+                            // Nothing issued yet still starts the watch, from the start.
+                            after: after.or_else(|| Some("0".into())),
+                            foreign: Vec::new(),
+                        })
+                        .await?;
+                }
+                Err(_) => println!("The certificates were not read: their watch stays as it was."),
+            }
             state
                 .audit(
                     "cli",
@@ -219,6 +251,56 @@ fn print(r: &Reading, unread: &[String], now: i64) {
     for a in domain::advice(r, now) {
         println!("  • {a}");
     }
+}
+
+/// The certificates the logs hold, as judged; how many are foreign, those kept from
+/// earlier nights included.
+fn print_logs(
+    domain: &str,
+    watch: &domain::Transparency,
+    logs: &std::result::Result<(Vec<domain::Issuance>, domain::Judged), String>,
+) -> usize {
+    println!("\nCertificates for {domain} and below, in the Certificate Transparency logs");
+    for i in &watch.foreign {
+        println!(
+            "  🔴 {} — another key, found earlier",
+            domain::issuance_line(i)
+        );
+    }
+    let (found, judged) = match logs {
+        Ok(l) => l,
+        Err(e) => {
+            println!("  ? not judged: {e}");
+            return watch.foreign.len();
+        }
+    };
+    let since = if watch.after.is_some() {
+        "since the last night"
+    } else {
+        "unexpired, never accepted"
+    };
+    let strangers = judged.foreign.len() + judged.elsewhere.len();
+    println!(
+        "  {} issued {since}, {} under a key the house holds",
+        found.len(),
+        found.len() - strangers
+    );
+    for i in &judged.foreign {
+        println!("  🔴 {} — another key", domain::issuance_line(i));
+    }
+    for i in &judged.elsewhere {
+        println!(
+            "  • {} — another key, for names the house does not serve",
+            domain::issuance_line(i)
+        );
+    }
+    if watch.after.is_none() && !judged.foreign.is_empty() {
+        println!(
+            "  The house's previous certificate is among these when it was renewed since: \
+             its key went with it."
+        );
+    }
+    watch.foreign.len() + judged.foreign.len()
 }
 
 fn day(epoch: i64) -> Option<String> {

@@ -2494,6 +2494,32 @@ impl State {
         self.put_domain_setting("domain-reading", r).await
     }
 
+    const TRANSPARENCY: &'static str = "domain-transparency";
+
+    /// Where the watch over the Certificate Transparency logs stands: the last issuance
+    /// judged and those found foreign since the last `hlb domain accept`.
+    pub async fn domain_transparency(&self) -> Result<hlb_api::domain::Transparency> {
+        Ok(self
+            .setting(Self::TRANSPARENCY)
+            .await?
+            .map(|v| {
+                serde_json::from_str(&v).map_err(|source| Error::StoredDomain {
+                    key: Self::TRANSPARENCY,
+                    source,
+                })
+            })
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    pub async fn set_domain_transparency(&self, t: &hlb_api::domain::Transparency) -> Result<()> {
+        let v = serde_json::to_string(t).map_err(|source| Error::StoredDomain {
+            key: Self::TRANSPARENCY,
+            source,
+        })?;
+        self.put_setting(Self::TRANSPARENCY, Some(&v)).await
+    }
+
     async fn domain_setting(&self, key: &'static str) -> Result<Option<hlb_api::domain::Reading>> {
         self.setting(key)
             .await?

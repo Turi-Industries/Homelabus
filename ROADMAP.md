@@ -829,6 +829,18 @@ three Tangs, and the third alone opens it.
     every unexpired issuance as the baseline (the house's own previous certificate
     among them, its key gone with the renewal). A reading that could not be made —
     the API, Caddy or Stalwart not read — judges nothing and does not advance.
+    ✅ Built 2026-10-31 (`hlb_api::domain::{Issuance, Transparency, judge_issuances}`,
+    `hlb_engine::domain::{issuances, held, transparency}`, `hlb domain watch` /
+    `accept`, the nightly pass: `ct:<id>`). The SPKI is read by `trust.rs`'s DER walker,
+    held to desec.io's real certificate (RSA, Cert Spotter's own `pubkey_sha256`) and
+    to a P-256 one (OpenSSL's). Proven in `live_mail` on 0.16.27 and 1.0.0: the key
+    Stalwart serves on 993 is among those its ACME certificate's PEM gives over JMAP,
+    and Caddy's on 443 among those `find … -exec cat` reads in its container
+    (BusyBox's `find` exits 1 on a missing directory: not read, never "no key"). Read
+    against the internet: `hlb domain watch` for desec.io read the logs and judged
+    nothing, Caddy unreadable without a Swarm — the cursor unmoved. Left: never judged
+    end to end on a real Swarm (the lab's exposure is internal); a Cert Spotter key
+    for more than ten requests a window; the inbox and a screen, as for the drift.
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach

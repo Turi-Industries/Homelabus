@@ -1654,6 +1654,29 @@ fn presented_at(network: &str, ip: &str, port: u16, name: &str) -> String {
     String::from_utf8_lossy(&out.stdout).replace('\n', " ")
 }
 
+/// The SHA-256 of the key `ip:port` serves for `name`, as Cert Spotter writes it.
+fn served_key(ip: &str, port: u16, name: &str) -> String {
+    let out = docker(&[
+        "run",
+        "--rm",
+        "--network",
+        ACME_NET,
+        "--entrypoint",
+        "sh",
+        "alpine/openssl:3.3.2",
+        "-c",
+        &format!(
+            "echo | openssl s_client -connect {ip}:{port} -servername {name} 2>/dev/null \
+             | openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum"
+        ),
+    ]);
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[tokio::test]
 #[ignore = "needs Docker and the hlb-caddy image"]
 async fn people_s_clients_meet_a_certificate_for_stalwart_s_public_name() {
@@ -1794,6 +1817,42 @@ async fn people_s_clients_meet_a_certificate_for_stalwart_s_public_name() {
         "{caddy_s}"
     );
     println!("✓ two accounts to pin: {stalwart_s} (Stalwart), {caddy_s} (Caddy)");
+
+    // What a Certificate Transparency log is judged against: the key each one serves
+    // is among those read where `domain::held` reads them — Stalwart's ACME
+    // certificate with its PEM over JMAP, Caddy's in certmagic's directory.
+    let stalwart_keys: Vec<String> = s
+        .certificates()
+        .await
+        .expect("read")
+        .iter()
+        .flat_map(|c| hlb_engine::domain::key_fingerprints(&c.pem))
+        .collect();
+    let served = served_key(STALWART_IP, 993, "mail.example.org");
+    assert!(
+        stalwart_keys.contains(&served),
+        "{served} not in {stalwart_keys:?}"
+    );
+    let caddy_certs = docker(&[
+        "exec",
+        CADDY,
+        "find",
+        "/data/caddy/certificates",
+        "-name",
+        "*.crt",
+        "-exec",
+        "cat",
+        "{}",
+        "+",
+    ]);
+    let caddy_keys =
+        hlb_engine::domain::key_fingerprints(&String::from_utf8_lossy(&caddy_certs.stdout));
+    let served = served_key(CADDY_IP, 443, "mail.example.org");
+    assert!(
+        caddy_keys.contains(&served),
+        "{served} not in {caddy_keys:?}"
+    );
+    println!("✓ the keys Stalwart and Caddy serve are the ones read for the logs");
     assert!(
         hlb_engine::mail_tls::certify(&state, &vault, &s, true)
             .await

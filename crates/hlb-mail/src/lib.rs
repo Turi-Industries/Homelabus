@@ -2089,6 +2089,9 @@ pub struct Certificate {
     pub names: Vec<String>,
     /// RFC 3339, UTC.
     pub not_valid_after: String,
+    /// The certificate itself, PEM — its key masked: what says whether a certificate a
+    /// log holds is this one. Empty when Stalwart gave none.
+    pub pem: String,
 }
 
 /// One recipient of a queued message, not delivered yet.
@@ -2218,6 +2221,13 @@ fn certificates_in(args: &serde_json::Value) -> Vec<Certificate> {
                     .map(|n| n.keys().cloned().collect())
                     .unwrap_or_default(),
                 not_valid_after: c.get("notValidAfter")?.as_str()?.to_string(),
+                // `{"@type": "Text", "value": …}`, read back as it was written (0.16.27
+                // and 1.0.0, 2026-10-31).
+                pem: c
+                    .pointer("/certificate/value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
             })
         })
         .collect()
@@ -2773,7 +2783,9 @@ mod tests {
         // Captured from 0.16.26: the names are a SET (a map to `true`), the CN included.
         let v: serde_json::Value = serde_json::from_str(
             r#"{"list":[{"id":"x1","subjectAlternativeNames":{"stalwart":true},
-                         "notValidAfter":"2029-01-20T10:39:35Z","issuer":"CN=Homelabus"}]}"#,
+                         "notValidAfter":"2029-01-20T10:39:35Z","issuer":"CN=Homelabus",
+                         "certificate":{"@type":"Text","value":"PEM"},
+                         "privateKey":{"@type":"Text","secret":"****"}}]}"#,
         )
         .expect("json");
         assert_eq!(
@@ -2782,6 +2794,7 @@ mod tests {
                 id: "x1".into(),
                 names: vec!["stalwart".into()],
                 not_valid_after: "2029-01-20T10:39:35Z".into(),
+                pem: "PEM".into(),
             }]
         );
         // The PEMs travel as texts, the key as a SECRET text.

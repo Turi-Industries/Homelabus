@@ -490,7 +490,10 @@ once a reading is accepted, any change is a critical alert. Under Let's Encrypt 
 reads the house's ACME accounts — Caddy's from its storage, Stalwart's over JMAP — and
 judges the CAA governing the exposure's names against them: one it refuses is critical
 (renewals fail), none pinned is advised with the `0 issue "letsencrypt.org;
-accounturi=…"` line of each:
+accounturi=…"` line of each. And it reads the Certificate Transparency logs (Cert
+Spotter's API) for every certificate issued for the exposure's names since the night
+before: one whose key neither Caddy nor Stalwart holds, for a name the house serves, is
+critical until accepted — someone else can answer for that name:
 
 ```sh
 ./target/debug/hlb domain watch              # read, advise; exits 1 on a change, or before a baseline

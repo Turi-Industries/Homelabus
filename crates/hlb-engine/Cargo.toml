@@ -36,6 +36,8 @@ serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # The private root's file name, as `openssl rehash` gives it.
 sha1 = "0.11"
+# A certificate's key, as the Certificate Transparency logs fingerprint it (`domain.rs`).
+sha2 = "0.11"
 rustls-pemfile = "2"
 # Waiting for Caddy's update to conclude.
 tokio = { workspace = true, features = ["time"] }

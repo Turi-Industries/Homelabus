@@ -2,7 +2,7 @@
 //! daemon's night. What is compared and advised is `hlb_api::domain`'s.
 
 use async_trait::async_trait;
-use hlb_api::domain::{Account, DnsSide, Governing, Reading, Registry};
+use hlb_api::domain::{Account, DnsSide, Governing, Issuance, Reading, Registry};
 use hlb_state::{Certificates, State};
 
 /// IANA's list of the RDAP server of each TLD.
@@ -285,6 +285,159 @@ fn account_location(file: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Cert Spotter's view of the Certificate Transparency logs, open without a key.
+pub const CERT_SPOTTER: &str = "https://api.certspotter.com/v1/issuances";
+
+/// Pages one reading asks at most: a reader without a key has ten requests a window,
+/// and what is left is read the next night, from the last issuance judged.
+const PAGES: usize = 5;
+
+/// The issuances for `domain` and its subdomains after `after`, oldest first — every
+/// unexpired one when `after` is `None`.
+pub async fn issuances(
+    net: &dyn Internet,
+    domain: &str,
+    after: Option<&str>,
+) -> Result<Vec<Issuance>, String> {
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let mut after = after.map(str::to_string);
+    let mut out = Vec::new();
+    for _ in 0..PAGES {
+        let mut query = vec![
+            ("domain", domain.clone()),
+            ("include_subdomains", "true".into()),
+            ("expand", "dns_names".into()),
+            ("expand", "issuer".into()),
+        ];
+        if let Some(a) = &after {
+            query.push(("after", a.clone()));
+        }
+        let url =
+            reqwest::Url::parse_with_params(CERT_SPOTTER, &query).map_err(|e| e.to_string())?;
+        let page = match net.json(url.as_str()).await {
+            Ok(Some(body)) => hlb_api::domain::parse_issuances(&body)?,
+            Ok(None) => return Err(format!("{CERT_SPOTTER} answered 404")),
+            Err(e) => return Err(format!("Cert Spotter not read: {e}")),
+        };
+        // Its `Link` names a next page even after the last: an empty one is the end.
+        let Some(last) = page.last() else { break };
+        after = Some(last.id.clone());
+        out.extend(page);
+    }
+    Ok(out)
+}
+
+/// What the house holds: the keys of its certificates and the names it serves.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Held {
+    pub keys: Vec<String>,
+    pub names: Vec<String>,
+}
+
+/// The keys of the certificates Caddy and Stalwart hold, and the names the house
+/// serves. `Err` when one that requests certificates could not be read: judged
+/// without its keys, each of its own certificates would read as a stranger's.
+pub async fn held(
+    state: &State,
+    orch: Option<&dyn hlb_orchestrator::Orchestrator>,
+    mail: Option<&hlb_mail::Stalwart>,
+) -> Result<Held, String> {
+    let exposure = state
+        .exposure()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("no exposure")?;
+    let mut held = Held::default();
+    held.names.push(exposure.domain.clone());
+    held.names.push(exposure.controller_host());
+    if exposure.dns_provider.is_some() {
+        held.names.push(format!("*.{}", exposure.domain));
+    }
+    for (app, _) in state.installed_apps().await.map_err(|e| e.to_string())? {
+        if let Some(d) = state.app_domain(&app).await.map_err(|e| e.to_string())? {
+            held.names.push(d);
+        }
+    }
+    let orch = orch.ok_or("Caddy's certificates not read: no orchestrator")?;
+    let out = orch
+        .exec_in_service(
+            hlb_types::manifest::INGRESS_SERVICE,
+            &[
+                "find",
+                CADDY_CERTIFICATES,
+                "-name",
+                "*.crt",
+                "-exec",
+                "cat",
+                "{}",
+                "+",
+            ]
+            .map(String::from),
+        )
+        .await
+        .map_err(|e| format!("Caddy's certificates not read: {e}"))?;
+    if !out.ok() {
+        return Err(format!(
+            "Caddy's certificates not read ({}) — none requested yet?",
+            out.stderr.trim()
+        ));
+    }
+    held.keys.extend(key_fingerprints(&out.stdout));
+    if state
+        .mail_acme_provider()
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        let mail = mail.ok_or("Stalwart's certificates not read: no Stalwart")?;
+        for c in mail
+            .certificates()
+            .await
+            .map_err(|e| format!("Stalwart's certificates not read: {e}"))?
+        {
+            held.keys.extend(key_fingerprints(&c.pem));
+            held.names.extend(c.names);
+        }
+    }
+    held.keys.sort();
+    held.keys.dedup();
+    Ok(held)
+}
+
+/// The issuances for the exposure's names after `after`, judged against what the house
+/// holds — read after the logs, so a certificate issued between the two is held by
+/// then.
+pub async fn transparency(
+    state: &State,
+    net: &dyn Internet,
+    orch: Option<&dyn hlb_orchestrator::Orchestrator>,
+    mail: Option<&hlb_mail::Stalwart>,
+    domain: &str,
+    after: Option<&str>,
+) -> Result<(Vec<Issuance>, hlb_api::domain::Judged), String> {
+    let found = issuances(net, domain, after).await?;
+    let held = held(state, orch, mail).await?;
+    let judged = hlb_api::domain::judge_issuances(&found, &held.keys, &held.names);
+    Ok((found, judged))
+}
+
+/// Where Caddy keeps its certificates, one directory per authority and name.
+const CADDY_CERTIFICATES: &str = "/data/caddy/certificates";
+
+/// The SHA-256 of each certificate's key in `pem`, hex: Cert Spotter's `pubkey_sha256`.
+pub fn key_fingerprints(pem: &str) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    rustls_pemfile::certs(&mut pem.as_bytes())
+        .filter_map(|der| crate::trust::spki(der.ok()?.as_ref()))
+        .map(|spki| {
+            Sha256::digest(&spki)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        })
+        .collect()
+}
+
 async fn dns_side(net: &dyn Internet, zone: &str) -> Result<DnsSide, String> {
     // The NS answer's `AD` is the zone's own chain; a DS's is its parent's.
     let (ns, validated) = net.query(zone, "NS").await?;
@@ -488,5 +641,163 @@ mod tests {
                 records: vec![]
             })
         );
+    }
+
+    /// desec.io's certificate as it served it on 2026-10-31: RSA, Let's Encrypt's R13.
+    const DESEC_IO: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIFBzCCA++gAwIBAgISBZszSh+DlpqYwIXLQGGI3zf7MA0GCSqGSIb3DQEBCwUA\n\
+MDMxCzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQD\n\
+EwNZUjIwHhcNMjYxMDEyMTQzNTM2WhcNMjcwMTEwMTQzNTM1WjATMREwDwYDVQQD\n\
+EwhkZXNlYy5pbzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJD4Qi84\n\
+nMtwVL2D7hAOfW1LH3zSoml7sIKXj2bVzetPKBUtN/vxAbOqGJS+mCqEeztvcPSP\n\
+UDtnoiY/LzIPeV9lDbw8bsRYFpoc/z9ZFbFw8Q4bVlDaLsWSrQkhE50zMQLL5xAc\n\
+/njeUD8f9BkSvPa6rapfKIXfyZY/ew4sFc6dr734Ld2Ma9RCahn0LFodNLSawOYy\n\
+92eEz8sFsNfWfmE9A373p2WJSCrZmJJG2n2t4QgQViEZJfl0gt1/cD8lh46BTvGb\n\
+9WdTYkg1gl2eInb25iz3C7Ynvh4jhwtJogvAA03fp7krt7r+jdTIjdJ1L9g2VZIC\n\
+A+5v9H8NIeya3U0CAwEAAaOCAjMwggIvMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUE\n\
+DDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTBilpa3xrwdSAk\n\
+p4lJkVrX6bKRwDAfBgNVHSMEGDAWgBRAFS0mee0yIJ7fmnId1jIfgQyBDDAzBggr\n\
+BgEFBQcBAQQnMCUwIwYIKwYBBQUHMAKGF2h0dHA6Ly95cjIuaS5sZW5jci5vcmcv\n\
+MC8GA1UdEQQoMCaCCGRlc2VjLmlvggxnZXQuZGVzZWMuaW+CDHd3dy5kZXNlYy5p\n\
+bzATBgNVHSAEDDAKMAgGBmeBDAECATAvBgNVHR8EKDAmMCSgIqAghh5odHRwOi8v\n\
+eXIyLmMubGVuY3Iub3JnLzEyNC5jcmwwggEMBgorBgEEAdZ5AgQCBIH9BIH6APgA\n\
+dgBGojlnxg22RofGbz35mZR2k6amESCEV9VV5+PQodm2RgAAAaEwv+rBAAAEAwBH\n\
+MEUCIQDLY8q7isimKvF6diBm322a4KjycaFpU80mVMEV5EnhzgIgPaUELnfIyyBY\n\
+f6tDbR0ElXKAX53vnfRM27vRK8PAIqcAfgAai51rjdeR0c0FSe22A1XWBrZPrTDb\n\
+cf54jw/HyPvEsQAAAaEwv+/bAAgAAAUAB69QxQQDAEcwRQIhAOGtPBUwA0R44lID\n\
+bYmezadj3eqVqGK7294VheW4HwunAiAIE/ixAvjdWMefCF5aR2DxU18a0SwU05xy\n\
+WqqBfdsmcTANBgkqhkiG9w0BAQsFAAOCAQEATlohbwQe40SnWugBJqRj5Xa4yM1X\n\
+PVjEfbqnQBy7s6wvzX5+nygxdcp/XKnN41A+1qqQ8JosaNl6x20MXo2b90QtwaYO\n\
+WOsDKMtfNa6sZBKyT76bd9S/iJMB3z9NneoESiD651cIn4ocnSR5GrrVeWkfFGao\n\
+9VZiej4i8YFERZsqYcyEZE9lRYSQJHDOxjL/wLZCtvZvo1xIKzEvtpRxxQPV/zaL\n\
+8WEeqrtB6XzhoIfGOLY3A5ycksdisr3jRMnjK679/fM+3oj/P+rwQjoAJiwJ5uzB\n\
+MBPZZDJCahB6Q40ZVtZoCfdVPcnif4cDklNhQGzIVxZ04bOJtisOneggmQ==\n\
+-----END CERTIFICATE-----\n";
+
+    /// An ECDSA P-256 certificate, as Caddy requests by default: `openssl req -x509
+    /// -newkey ec`, its key thrown away.
+    const P256: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIBpzCCAU6gAwIBAgIUIPghBth2VYz3tN7ELcqoxDGc7k4wCgYIKoZIzj0EAwIw\n\
+GzEZMBcGA1UEAwwQbWFpbC5leGFtcGxlLm9yZzAeFw0yNjEwMzExMDIwMjZaFw0y\n\
+NjExMzAxMDIwMjZaMBsxGTAXBgNVBAMMEG1haWwuZXhhbXBsZS5vcmcwWTATBgcq\n\
+hkjOPQIBBggqhkjOPQMBBwNCAATUJU31HJcYFQpD/h94NbPr8TqJf31Gdc1D5iDO\n\
+WS+WCXjJxZ2Mko1HIiplVXzPLMIh5fylQAGiICyrPhI7Gb2Co3AwbjAdBgNVHQ4E\n\
+FgQUGRFw1T+DoK8DedikyQKxNTr3dnMwHwYDVR0jBBgwFoAUGRFw1T+DoK8Dedik\n\
+yQKxNTr3dnMwDwYDVR0TAQH/BAUwAwEB/zAbBgNVHREEFDASghBtYWlsLmV4YW1w\n\
+bGUub3JnMAoGCCqGSM49BAMCA0cAMEQCICGj+7EU096h3KaTnDFXuOUYOe0E9v26\n\
+pLQeT5/2gKrVAiAexS7iBVbNjglbexsQY/6OsKFciWjxwfS7rH07DCmelA==\n\
+-----END CERTIFICATE-----\n";
+
+    #[test]
+    fn a_key_is_fingerprinted_as_cert_spotter_does() {
+        // Cert Spotter's `pubkey_sha256` for desec.io's issuance 17742810616, and
+        // `openssl pkey -pubin -outform DER | sha256sum` for the other.
+        assert_eq!(
+            key_fingerprints(DESEC_IO),
+            ["16e73877ff5b51995c9ea55daffb9ab38c8c8514c10b39688db52ff54773573a"]
+        );
+        assert_eq!(
+            key_fingerprints(&format!("{P256}{DESEC_IO}"))[0],
+            "7eaa7101afb25e35da7295cf17d82a8842782e86f6ff11e45f108f224538e1c9"
+        );
+        assert!(key_fingerprints("not a certificate").is_empty());
+    }
+
+    fn issuance(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "dns_names": ["home.org"],
+            "pubkey_sha256": "aa",
+            "issuer": { "friendly_name": "Let's Encrypt" },
+            "not_before": "2026-10-12T14:35:36Z",
+        })
+    }
+
+    #[tokio::test]
+    async fn issuances_are_read_page_after_page_until_one_is_empty() {
+        let first = "https://api.certspotter.com/v1/issuances?domain=home.org\
+                     &include_subdomains=true&expand=dns_names&expand=issuer";
+        let net = Table::default()
+            .page(first, serde_json::json!([issuance("1"), issuance("2")]))
+            .page(
+                &format!("{first}&after=2"),
+                serde_json::json!([issuance("3")]),
+            )
+            .page(&format!("{first}&after=3"), serde_json::json!([]));
+        let ids = |v: Vec<Issuance>| v.into_iter().map(|i| i.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(issuances(&net, "Home.org.", None).await.expect("read")),
+            ["1", "2", "3"]
+        );
+        assert_eq!(
+            ids(issuances(&net, "home.org", Some("2")).await.expect("read")),
+            ["3"]
+        );
+        // A page missing is not the end of the list.
+        let e = issuances(&net, "home.org", Some("9"))
+            .await
+            .expect_err("not read");
+        assert!(e.contains("404"), "{e}");
+    }
+
+    async fn exposed(wildcard: bool) -> State {
+        let state = State::in_memory().await.expect("state");
+        state
+            .set_exposure(&hlb_state::Exposure {
+                domain: "home.org".into(),
+                certificates: Certificates::Acme,
+                acme_email: Some("me@home.org".into()),
+                dns_provider: wildcard.then(|| "desec".into()),
+                staging: false,
+                controller_host: None,
+                acme_ca: None,
+                acme_ca_root: None,
+            })
+            .await
+            .expect("exposure");
+        state
+    }
+
+    #[tokio::test]
+    async fn the_house_holds_caddy_s_keys_and_serves_its_names_and_its_wildcard() {
+        let state = exposed(true).await;
+        let caddy = crate::tests::Fake::exec_answering(&format!("{P256}{DESEC_IO}"), false);
+        let held = held(&state, Some(&caddy), None).await.expect("read");
+        assert_eq!(held.keys.len(), 2);
+        assert!(held.keys.contains(&key_fingerprints(DESEC_IO)[0]));
+        assert_eq!(held.names, ["home.org", "hlb.home.org", "*.home.org"]);
+        let (service, cmd) = &caddy.execs()[0];
+        assert_eq!(service, hlb_types::manifest::INGRESS_SERVICE);
+        assert_eq!(
+            cmd[..2],
+            ["find", "/data/caddy/certificates"].map(String::from)
+        );
+    }
+
+    #[tokio::test]
+    async fn keys_not_read_judge_nothing() {
+        let state = exposed(false).await;
+        let e = held(
+            &state,
+            Some(&crate::tests::Fake::exec_answering("", true)),
+            None,
+        )
+        .await
+        .expect_err("Caddy failed");
+        assert!(e.starts_with("Caddy's certificates not read"), "{e}");
+        assert!(held(&state, None, None).await.is_err());
+        // Stalwart asks an authority: without it, its own certificate reads as a
+        // stranger's.
+        state
+            .set_mail_acme_provider(Some("p1"))
+            .await
+            .expect("provider");
+        let caddy = crate::tests::Fake::exec_answering(DESEC_IO, false);
+        let e = held(&state, Some(&caddy), None)
+            .await
+            .expect_err("no Stalwart");
+        assert!(e.contains("no Stalwart"), "{e}");
     }
 }

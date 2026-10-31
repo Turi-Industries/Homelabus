@@ -1996,7 +1996,7 @@ mod tests {
     type Deployment = (String, Vec<(String, String)>);
 
     #[derive(Default)]
-    struct Fake {
+    pub(crate) struct Fake {
         deployed: Mutex<Vec<String>>,
         waited: Mutex<Vec<String>>,
         updated: Mutex<Vec<(String, String)>>,
@@ -2027,12 +2027,29 @@ mod tests {
         /// Every `exec_in_service`, and whether they exit 1.
         execs: Mutex<Vec<(String, Vec<String>)>>,
         fail_exec: bool,
+        /// What every `exec_in_service` prints.
+        exec_stdout: String,
         /// What `nodes` answers, and every label set.
         nodes: Mutex<Vec<hlb_orchestrator::NodeInfo>>,
         labelled: Mutex<Vec<(String, String, String)>>,
     }
 
     type Reconfigured = (String, Vec<(String, String)>, Vec<String>);
+
+    impl Fake {
+        /// One whose every `exec_in_service` prints `stdout`, or fails.
+        pub(crate) fn exec_answering(stdout: &str, fail: bool) -> Self {
+            Self {
+                exec_stdout: stdout.into(),
+                fail_exec: fail,
+                ..Self::default()
+            }
+        }
+
+        pub(crate) fn execs(&self) -> Vec<(String, Vec<String>)> {
+            self.execs.lock().expect("mutex").clone()
+        }
+    }
 
     #[async_trait]
     impl Orchestrator for Fake {
@@ -2141,7 +2158,7 @@ mod tests {
                 .push((name.into(), cmd.to_vec()));
             Ok(hlb_orchestrator::ExecOutput {
                 exit_code: i64::from(self.fail_exec),
-                stdout: String::new(),
+                stdout: self.exec_stdout.clone(),
                 stderr: if self.fail_exec {
                     "no space left".into()
                 } else {

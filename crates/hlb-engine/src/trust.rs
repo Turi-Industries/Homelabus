@@ -145,6 +145,17 @@ fn subject(cert: &[u8]) -> Option<&[u8]> {
     (tag == 0x30).then_some(name)
 }
 
+/// The `SubjectPublicKeyInfo`, whole: the field after the subject. Re-encoded from
+/// its content, which DER's one length form gives back byte for byte.
+pub(crate) fn spki(cert: &[u8]) -> Option<Vec<u8>> {
+    let (_, cert, _) = element(cert)?;
+    let (_, tbs, _) = element(cert)?;
+    let fields = children(tbs)?;
+    let skip = usize::from(fields.first()?.0 == 0xa0);
+    let (tag, key) = *fields.get(skip + 5)?;
+    (tag == 0x30).then(|| encode(tag, key))
+}
+
 /// `x509_name_canon`: every RDN set re-encoded with its strings canonical, one after
 /// the other, without the outer SEQUENCE.
 fn canonical_subject(name: &[u8]) -> Option<Vec<u8>> {

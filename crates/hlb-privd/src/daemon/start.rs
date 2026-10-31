@@ -804,6 +804,19 @@ pub async fn start(
                                     ))
                                     .await;
                             }
+                            for i in found.foreign {
+                                let line = hlb_api::domain::issuance_line(&i);
+                                tracing::error!("🔴 certificate {line}");
+                                notif
+                                    .tell(&hlb_notify::Notification::critical(
+                                        &format!("ct:{}", i.id),
+                                        "A certificate for the house's names under a key it \
+                                         does not hold: if nobody here asked for it, have \
+                                         its authority revoke it",
+                                        &line,
+                                    ))
+                                    .await;
+                            }
                             for d in found.drifts {
                                 let line =
                                     format!("{}: was {}, now {}", d.what.label(), d.was, d.now);

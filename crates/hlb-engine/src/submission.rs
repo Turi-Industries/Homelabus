@@ -388,6 +388,7 @@ mod tests {
             id: "c".into(),
             names: names.iter().map(|n| n.to_string()).collect(),
             not_valid_after: end.into(),
+            pem: String::new(),
         }
     }
 
