@@ -1772,6 +1772,28 @@ async fn people_s_clients_meet_a_certificate_for_stalwart_s_public_name() {
         "the apps' certificate is still theirs: {apps}"
     );
     println!("✓ ACME, HTTP-01 through Caddy: 993 and 465 present mail.example.org under Pebble");
+
+    // The two accounts a CAA `accounturi` must name: Stalwart's by JMAP, Caddy's in
+    // the file certmagic keeps it in.
+    let accounts = s.acme_providers().await.expect("read");
+    let stalwart_s = accounts[0].account_uri.as_deref().unwrap_or_default();
+    assert!(
+        stalwart_s.starts_with("https://pebble:14000/my-account/"),
+        "{accounts:?}"
+    );
+    let file = docker(&[
+        "exec",
+        CADDY,
+        "cat",
+        "/data/caddy/acme/pebble-14000-dir/users/admin@example.org/admin.json",
+    ]);
+    let caddy_s: serde_json::Value = serde_json::from_slice(&file.stdout).expect("Caddy's account");
+    let caddy_s = caddy_s["location"].as_str().unwrap_or_default();
+    assert!(
+        caddy_s.starts_with("https://pebble:14000/my-account/") && caddy_s != stalwart_s,
+        "{caddy_s}"
+    );
+    println!("✓ two accounts to pin: {stalwart_s} (Stalwart), {caddy_s} (Caddy)");
     assert!(
         hlb_engine::mail_tls::certify(&state, &vault, &s, true)
             .await

@@ -1616,7 +1616,7 @@ impl Stalwart {
                 "x:AcmeProvider/get",
                 serde_json::json!({
                     "ids": null,
-                    "properties": ["challengeType", "directory", "contact"],
+                    "properties": ["challengeType", "directory", "contact", "accountUri"],
                 }),
             )
             .await?;
@@ -1632,6 +1632,11 @@ impl Stalwart {
                         .and_then(|c| c.as_object())
                         .map(|c| c.keys().cloned().collect())
                         .unwrap_or_default(),
+                    account_uri: p
+                        .get("accountUri")
+                        .and_then(|u| u.as_str())
+                        .filter(|u| !u.is_empty())
+                        .map(str::to_string),
                 })
             })
             .collect())
@@ -2045,6 +2050,9 @@ pub struct AcmeProvider {
     pub directory: String,
     /// `mailto:` addresses.
     pub contact: Vec<String>,
+    /// The account's URL at the directory, what a CAA `accounturi` names; `None`
+    /// until the directory has registered it.
+    pub account_uri: Option<String>,
 }
 
 /// How one domain's certificate is obtained.

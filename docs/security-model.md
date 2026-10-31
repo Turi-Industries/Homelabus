@@ -187,4 +187,10 @@ plan around them.
   next night. It tells you of a theft, it does not prevent one, and many ccTLDs
   (`.eu`, `.de`, `.io`, `.ch`) publish no RDAP — there only the DNS half is read.
   Homelabus signs no zone yet. A registrar with a registry lock is recommended.
+- **A CAA naming the house's accounts is yours to publish.** Homelabus reads Caddy's
+  and Stalwart's Let's Encrypt accounts and says the exact `accounturi` lines; a CAA
+  refusing one of them is a critical alert, since its certificate would stop renewing.
+  Pinned, a certificate for your names needs one of those accounts' keys — not just
+  control of a name for a minute. Caddy asks Let's Encrypt alone, with no fallback to
+  ZeroSSL, whose account could not be pinned before it exists.
 - **One maintainer.** No change is reviewed by a second person before it is merged.

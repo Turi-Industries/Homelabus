@@ -738,6 +738,7 @@ pub async fn start(
         };
         let dns = Arc::new(hlb_mail::public_dns::PublicDns::default());
         let internet = Arc::new(hlb_engine::domain::Public::default());
+        let orch = orch_api.clone();
         let st = state.clone();
         let rx = shutdown_rx.clone();
         let notif_as = notif.clone();
@@ -749,7 +750,7 @@ pub async fn start(
             move || {
                 let (reader, st, notif) = (reader.clone(), st.clone(), notif_as.clone());
                 let (mail, dns, master_key) = (mail.clone(), dns.clone(), master_key.clone());
-                let internet = internet.clone();
+                let (internet, orch) = (internet.clone(), orch.clone());
                 async move {
                     let now = crate::now();
                     // Opened at each pass, as the backup loop does: a key rotated by
@@ -778,9 +779,32 @@ pub async fn start(
                             ))
                             .await;
                     }
-                    match super::domain::read_and_record(&st, internet.as_ref(), now).await {
-                        Ok(drifts) => {
-                            for d in drifts {
+                    match super::domain::read_and_record(
+                        &st,
+                        internet.as_ref(),
+                        orch.as_deref(),
+                        mail.as_deref(),
+                        now,
+                    )
+                    .await
+                    {
+                        Ok(found) => {
+                            for a in found.refused {
+                                let line = format!(
+                                    "{}'s account {} is refused by the domain's CAA",
+                                    a.who, a.uri
+                                );
+                                tracing::error!("🔴 {line}");
+                                notif
+                                    .tell(&hlb_notify::Notification::critical(
+                                        &format!("caa:{}", a.who.to_lowercase()),
+                                        "A certificate of the house will not renew: add \
+                                         its account to the CAA",
+                                        &line,
+                                    ))
+                                    .await;
+                            }
+                            for d in found.drifts {
                                 let line =
                                     format!("{}: was {}, now {}", d.what.label(), d.was, d.now);
                                 tracing::error!("🔴 domain {line}");

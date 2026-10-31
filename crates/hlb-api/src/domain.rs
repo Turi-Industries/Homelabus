@@ -20,6 +20,36 @@ pub struct Reading {
     /// `Err` when no resolver could say.
     pub dns: Result<DnsSide, String>,
     pub registry: Registry,
+    /// The CAA set governing the exposure's names. `None` when no resolver said, and
+    /// in readings stored before it was read.
+    #[serde(default)]
+    pub caa_governing: Option<Governing>,
+    /// The house's ACME accounts, judged against `caa_governing`. Only Let's
+    /// Encrypt's production ones: a staging or private authority's are nobody's to pin.
+    #[serde(default)]
+    pub accounts: Vec<Account>,
+}
+
+/// The first CAA set found climbing from the exposure's domain to the zone, the one an
+/// authority checks before issuing for a name below (RFC 8659 §3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Governing {
+    /// Where it was found; `None` when no name up to the zone holds one.
+    pub at: Option<String>,
+    pub records: Vec<String>,
+}
+
+/// An ACME account that requests the house's certificates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    /// `Caddy`, `Stalwart`.
+    pub who: String,
+    /// The authority's CAA domain: `letsencrypt.org`.
+    pub issuer: String,
+    /// What a CAA `accounturi` names.
+    pub uri: String,
+    /// It also requests a wildcard, which an `issuewild` set governs when present.
+    pub wildcard: bool,
 }
 
 /// What the internet resolves, normalised so two resolvers' answers compare equal.
@@ -267,11 +297,185 @@ pub fn advice(r: &Reading, now: i64) -> Vec<String> {
                 "signed and NOT validating: a validating resolver refuses every name in it".into(),
             );
         }
-        if dns.caa.is_empty() {
+        if dns.caa.is_empty() && r.accounts.is_empty() {
             out.push("no CAA: any certificate authority may issue for it".into());
         }
     }
+    if let Some(pin) = pin_advice(r) {
+        out.push(pin);
+    }
     out
+}
+
+/// What a CAA set lets one account do (RFC 8659, and 8657's `accounturi`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// No `issue` governs: any authority, any account.
+    Anyone,
+    /// Its authority is named with no account: any account there may issue.
+    AnyAccount,
+    /// Only accounts named, its own among them.
+    Pinned,
+    /// Not allowed: every renewal fails, 30 days before the certificate ends.
+    Refused,
+}
+
+impl Verdict {
+    fn badness(self) -> u8 {
+        match self {
+            Self::Pinned => 0,
+            Self::AnyAccount => 1,
+            Self::Anyone => 2,
+            Self::Refused => 3,
+        }
+    }
+}
+
+/// The tags RFC 8659 and its successors register. An unknown one marked critical
+/// forbids every issuance (§4.1).
+const KNOWN_TAGS: [&str; 7] = [
+    "issue",
+    "issuewild",
+    "iodef",
+    "issuemail",
+    "issuevmc",
+    "contactemail",
+    "contactphone",
+];
+
+struct Caa {
+    critical: bool,
+    tag: String,
+    /// The issuer domain, lower case; empty for `;`, which allows nobody.
+    issuer: String,
+    account: Option<String>,
+}
+
+/// `128 issue "letsencrypt.org; accounturi=https://…"`, as both resolvers answer.
+fn parse_caa(record: &str) -> Option<Caa> {
+    let mut parts = record.trim().splitn(3, char::is_whitespace);
+    let flags: u8 = parts.next()?.parse().ok()?;
+    let tag = parts.next()?.to_ascii_lowercase();
+    let value = parts.next().unwrap_or("").trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value);
+    let mut fields = value.split(';');
+    let issuer = fields.next().unwrap_or("").trim().to_ascii_lowercase();
+    let account = fields.find_map(|f| {
+        let (k, v) = f.split_once('=')?;
+        k.trim()
+            .eq_ignore_ascii_case("accounturi")
+            .then(|| v.trim().to_string())
+    });
+    Some(Caa {
+        critical: flags & 0x80 != 0,
+        tag,
+        issuer,
+        account,
+    })
+}
+
+/// What `records` let `account` do — for a wildcard as well, when it requests one.
+/// `validationmethods` (RFC 8657) is not judged: no account here says which
+/// challenge its next renewal takes.
+pub fn judge(records: &[String], account: &Account) -> Verdict {
+    let caa: Vec<Caa> = records.iter().filter_map(|r| parse_caa(r)).collect();
+    if caa
+        .iter()
+        .any(|c| c.critical && !KNOWN_TAGS.contains(&c.tag.as_str()))
+    {
+        return Verdict::Refused;
+    }
+    let under = |tag: &str| {
+        let set: Vec<&Caa> = caa.iter().filter(|c| c.tag == tag).collect();
+        if set.is_empty() {
+            return Verdict::Anyone;
+        }
+        let ours: Vec<&&Caa> = set
+            .iter()
+            .filter(|c| c.issuer == account.issuer.to_ascii_lowercase())
+            .collect();
+        if !ours
+            .iter()
+            .any(|c| c.account.as_deref().is_none_or(|u| u == account.uri))
+        {
+            Verdict::Refused
+        } else if ours.iter().any(|c| c.account.is_none()) {
+            Verdict::AnyAccount
+        } else {
+            Verdict::Pinned
+        }
+    };
+    let plain = under("issue");
+    if !account.wildcard {
+        return plain;
+    }
+    // With no `issuewild`, `issue` governs a wildcard too (§4.3).
+    let wild = if caa.iter().any(|c| c.tag == "issuewild") {
+        under("issuewild")
+    } else {
+        plain
+    };
+    if wild.badness() > plain.badness() {
+        wild
+    } else {
+        plain
+    }
+}
+
+/// The accounts the governing CAA refuses: critical, since their certificates stop
+/// renewing and nothing else says why until they end.
+pub fn refused(r: &Reading) -> Vec<&Account> {
+    let Some(g) = &r.caa_governing else {
+        return Vec::new();
+    };
+    r.accounts
+        .iter()
+        .filter(|a| judge(&g.records, a) == Verdict::Refused)
+        .collect()
+}
+
+/// The lines that let the house's accounts alone issue, when the CAA lets others.
+/// Every account in one piece of advice: a set pinning one of two refuses the other.
+fn pin_advice(r: &Reading) -> Option<String> {
+    let g = r.caa_governing.as_ref()?;
+    let verdicts: Vec<Verdict> = r.accounts.iter().map(|a| judge(&g.records, a)).collect();
+    if verdicts.is_empty() || verdicts.contains(&Verdict::Refused) {
+        return None;
+    }
+    let why = if verdicts.contains(&Verdict::Anyone) {
+        "no CAA names an authority: any may issue for the house's names"
+    } else if verdicts.contains(&Verdict::AnyAccount) {
+        "the CAA names no account: anyone's at the same authority may issue"
+    } else {
+        return None;
+    };
+    let wild_set = g
+        .records
+        .iter()
+        .filter_map(|c| parse_caa(c))
+        .any(|c| c.tag == "issuewild");
+    let mut lines = Vec::new();
+    for a in &r.accounts {
+        lines.push(format!(
+            "{}: 0 issue \"{}; accounturi={}\"",
+            a.who, a.issuer, a.uri
+        ));
+        if a.wildcard && wild_set {
+            lines.push(format!(
+                "{}, its wildcard: 0 issuewild \"{}; accounturi={}\"",
+                a.who, a.issuer, a.uri
+            ));
+        }
+    }
+    Some(format!(
+        "{why}; these CAA records at {}, in place of its `issue` ones, let the house's \
+         accounts alone:\n    {}",
+        g.at.as_deref().unwrap_or(&r.zone),
+        lines.join("\n    ")
+    ))
 }
 
 /// A host name as compared: lower case, no final dot.
@@ -313,7 +517,22 @@ mod tests {
             read_at: 0,
             dns: Ok(dns),
             registry,
+            caa_governing: None,
+            accounts: Vec::new(),
         }
+    }
+
+    fn account(who: &str, n: u32, wildcard: bool) -> Account {
+        Account {
+            who: who.into(),
+            issuer: "letsencrypt.org".into(),
+            uri: format!("https://acme-v02.api.letsencrypt.org/acme/acct/{n}"),
+            wildcard,
+        }
+    }
+
+    fn records(r: &[&str]) -> Vec<String> {
+        r.iter().map(|s| s.to_string()).collect()
     }
 
     fn signed() -> DnsSide {
@@ -498,5 +717,121 @@ mod tests {
         let r = reading(signed(), locked());
         let json = serde_json::to_string(&r).expect("written");
         assert_eq!(serde_json::from_str::<Reading>(&json).expect("read"), r);
+    }
+
+    #[test]
+    fn desec_s_own_set_pins_its_account_and_refuses_any_other() {
+        // Both resolvers' answer for desec.io, 2026-10-31.
+        let set = records(&[
+            "128 iodef \"mailto:input@desec.io\"",
+            "128 issue \"letsencrypt.org;accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1909605\"",
+        ]);
+        assert_eq!(
+            judge(&set, &account("Caddy", 1909605, false)),
+            Verdict::Pinned
+        );
+        assert_eq!(judge(&set, &account("Caddy", 7, false)), Verdict::Refused);
+    }
+
+    #[test]
+    fn a_set_is_judged_by_its_issue_records_as_rfc_8659_reads_them() {
+        let caddy = account("Caddy", 1, false);
+        for (set, verdict) in [
+            (vec![], Verdict::Anyone),
+            (vec!["0 iodef \"mailto:a@b.example\""], Verdict::Anyone),
+            (vec!["0 issue \"LetsEncrypt.org\""], Verdict::AnyAccount),
+            (vec!["0 issue \"sectigo.com\""], Verdict::Refused),
+            (vec!["0 issue \";\""], Verdict::Refused),
+            (
+                vec![
+                    "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+                    "0 issue \"letsencrypt.org\"",
+                ],
+                Verdict::AnyAccount,
+            ),
+            (vec!["128 tbs \"x\""], Verdict::Refused),
+            (vec!["0 tbs \"x\""], Verdict::Anyone),
+        ] {
+            assert_eq!(judge(&records(&set), &caddy), verdict, "{set:?}");
+        }
+    }
+
+    #[test]
+    fn a_wildcard_is_governed_by_issuewild_when_there_is_one() {
+        let set = records(&[
+            "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+            "0 issuewild \";\"",
+        ]);
+        assert_eq!(judge(&set, &account("Caddy", 1, false)), Verdict::Pinned);
+        assert_eq!(judge(&set, &account("Caddy", 1, true)), Verdict::Refused);
+        let issue_only = records(&[&set[0]]);
+        assert_eq!(
+            judge(&issue_only, &account("Caddy", 1, true)),
+            Verdict::Pinned
+        );
+    }
+
+    #[test]
+    fn an_unpinned_set_is_advised_with_one_line_per_account() {
+        let mut r = reading(signed(), locked());
+        r.caa_governing = Some(Governing {
+            at: Some("home.example".into()),
+            records: records(&[
+                "0 issue \"letsencrypt.org\"",
+                "0 issuewild \"letsencrypt.org\"",
+            ]),
+        });
+        r.accounts = vec![account("Caddy", 1, true), account("Stalwart", 2, false)];
+        assert!(refused(&r).is_empty());
+        let a = advice(&r, 0).join("\n");
+        for line in [
+            "Caddy: 0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+            "Caddy, its wildcard: 0 issuewild \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+            "Stalwart: 0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/2\"",
+        ] {
+            assert!(a.contains(line), "{line} missing from:\n{a}");
+        }
+        assert!(!a.contains("Stalwart, its wildcard"), "{a}");
+    }
+
+    #[test]
+    fn a_set_pinning_one_account_of_two_refuses_the_other_and_advises_nothing() {
+        let mut r = reading(signed(), locked());
+        r.caa_governing = Some(Governing {
+            at: Some("home.example".into()),
+            records: records(&[
+                "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+            ]),
+        });
+        r.accounts = vec![account("Caddy", 1, false), account("Stalwart", 2, false)];
+        let who: Vec<&str> = refused(&r).iter().map(|a| a.who.as_str()).collect();
+        assert_eq!(who, ["Stalwart"]);
+        assert!(advice(&r, 0).is_empty(), "{:?}", advice(&r, 0));
+    }
+
+    #[test]
+    fn no_caa_with_accounts_known_is_advised_as_the_lines_to_publish() {
+        let mut dns = signed();
+        dns.caa.clear();
+        let mut r = reading(dns, locked());
+        r.caa_governing = Some(Governing {
+            at: None,
+            records: vec![],
+        });
+        r.accounts = vec![account("Caddy", 1, false)];
+        let a = advice(&r, 0);
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert!(a[0].starts_with("no CAA names an authority"), "{a:?}");
+        assert!(a[0].contains("records at home.example"), "{a:?}");
+    }
+
+    #[test]
+    fn a_reading_stored_before_the_accounts_still_reads() {
+        let mut json = serde_json::to_value(reading(signed(), locked())).expect("written");
+        let o = json.as_object_mut().expect("an object");
+        o.remove("caa_governing");
+        o.remove("accounts");
+        let r: Reading = serde_json::from_value(json).expect("read");
+        assert!(r.accounts.is_empty() && r.caa_governing.is_none());
     }
 }

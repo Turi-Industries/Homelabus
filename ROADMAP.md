@@ -776,7 +776,7 @@ three Tangs, and the third alone opens it.
     delegation and exited 1. Left: the inbox and a screen (an unwatched domain is a
     log line tonight); WHOIS for the TLDs without RDAP, parsed per registry; the
     nightly pass not run on the lab, whose exposure is internal — nothing to watch.
-  - CAA with `accounturi` next. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
+  - CAA with `accounturi`. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
     offline where no CA was to be reached): Caddy keeps its account in
     `/data/caddy/acme/<directory, ':' and '/' as '-'>/users/<email>/<local part>.json`,
     the URI its `location` (`acme-v02.api.letsencrypt.org-directory` for Let's
@@ -794,7 +794,15 @@ three Tangs, and the third alone opens it.
     the exposure's names (climbing from its domain to the zone, the first set found);
     one that refuses an account is critical (renewals fail 30 days before expiry),
     none pinned is advised with the exact lines, `0 issue "letsencrypt.org;
-    accounturi=<uri>"` per account, `issuewild` judged for a wildcard.
+    accounturi=<uri>"` per account, `issuewild` judged for a wildcard. ✅ Built
+    2026-10-31 (`hlb_api::domain::judge`, `hlb_engine::domain::accounts`, `hlb domain
+    watch`, the nightly pass: `caa:<who>`). Stalwart's `accountUri` proven on 0.16.27
+    and 1.0.0 in `live_mail` beside Caddy's file, two accounts; the file's path is
+    certmagic 0.25's `storageKeyUserReg`, read from its source (`Safe` keeps `/` out by
+    `issuerKey`, not by itself). Judged on desec.io's real set: its account pinned, any
+    other refused. Left: `validationmethods` is not judged — no account says which
+    challenge its next renewal takes; and the accounts were not read through a real
+    Swarm (the lab's exposure is internal).
 - ✅ An append-only destination (rest-server), pruned with another credential from
   another machine, never automatically: restic handles no S3 object lock, and Garage has
   none. Done 2026-10-30: the upkeep already left a destination proven out of reach

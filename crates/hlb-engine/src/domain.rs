@@ -2,7 +2,8 @@
 //! daemon's night. What is compared and advised is `hlb_api::domain`'s.
 
 use async_trait::async_trait;
-use hlb_api::domain::{DnsSide, Reading, Registry};
+use hlb_api::domain::{Account, DnsSide, Governing, Reading, Registry};
+use hlb_state::{Certificates, State};
 
 /// IANA's list of the RDAP server of each TLD.
 pub const RDAP_BOOTSTRAP: &str = "https://data.iana.org/rdap/dns.json";
@@ -94,15 +95,194 @@ pub async fn read(net: &dyn Internet, domain: &str, now: i64) -> Reading {
                 read_at: now,
                 dns: Err(e.clone()),
                 registry: Registry::NotRead { why: e },
+                caa_governing: None,
+                accounts: Vec::new(),
             };
         }
     };
     Reading {
         dns: dns_side(net, &zone).await,
         registry: registry(net, &zone).await,
+        caa_governing: governing(net, domain, &zone).await.ok(),
         zone,
         read_at: now,
+        accounts: Vec::new(),
     }
+}
+
+/// The CAA set an authority checks for the exposure's names: the first non-empty one
+/// climbing from its domain up to the zone. Above the zone is another owner's.
+async fn governing(net: &dyn Internet, domain: &str, zone: &str) -> Result<Governing, String> {
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let mut name = domain.as_str();
+    loop {
+        let (records, _) = net.query(name, "CAA").await?;
+        if !records.is_empty() {
+            return Ok(Governing {
+                at: Some(name.to_string()),
+                records,
+            });
+        }
+        if name == zone {
+            return Ok(Governing {
+                at: None,
+                records: Vec::new(),
+            });
+        }
+        match name.split_once('.') {
+            Some((_, parent)) => name = parent,
+            None => return Err(format!("{domain} is not under {zone}")),
+        }
+    }
+}
+
+/// Let's Encrypt's CAA domain.
+const LETS_ENCRYPT_CAA: &str = "letsencrypt.org";
+
+/// The house's ACME accounts at Let's Encrypt's production, and why one was not
+/// read. None under staging or a private directory: their accounts pin nothing a
+/// public authority checks. Caddy's is read from its storage in its container,
+/// Stalwart's over JMAP.
+pub async fn accounts(
+    state: &State,
+    orch: Option<&dyn hlb_orchestrator::Orchestrator>,
+    mail: Option<&hlb_mail::Stalwart>,
+) -> (Vec<Account>, Vec<String>) {
+    let (mut found, mut unread) = (Vec::new(), Vec::new());
+    let exposure = match state.exposure().await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (found, unread),
+        Err(e) => return (found, vec![format!("the exposure not read: {e}")]),
+    };
+    if exposure.certificates == Certificates::Internal
+        || exposure.acme_ca.is_some()
+        || exposure.staging
+    {
+        return (found, unread);
+    }
+    let directory = crate::mail_tls::LETS_ENCRYPT;
+    match (orch, exposure.acme_email.as_deref()) {
+        (Some(orch), Some(email)) => {
+            let path = caddy_account_path(directory, email);
+            match orch
+                .exec_in_service(
+                    hlb_types::manifest::INGRESS_SERVICE,
+                    &["cat".to_string(), path.clone()],
+                )
+                .await
+            {
+                Ok(out) if out.ok() => match account_location(&out.stdout) {
+                    Some(uri) => found.push(Account {
+                        who: "Caddy".into(),
+                        issuer: LETS_ENCRYPT_CAA.into(),
+                        uri,
+                        // Its wildcard is requested over DNS-01, through the provider.
+                        wildcard: exposure.dns_provider.is_some(),
+                    }),
+                    None => unread.push(format!("Caddy's account: {path} names no location")),
+                },
+                Ok(out) => unread.push(format!(
+                    "Caddy's account: {path} not read ({}) — no certificate requested yet?",
+                    out.stderr.trim()
+                )),
+                Err(e) => unread.push(format!("Caddy's account not read: {e}")),
+            }
+        }
+        (None, _) => unread.push("Caddy's account not read: no orchestrator".into()),
+        (_, None) => unread.push("Caddy's account not read: no ACME address".into()),
+    }
+    let ours = match state.mail_acme_provider().await {
+        Ok(id) => id,
+        Err(e) => {
+            unread.push(format!("Stalwart's account not read: {e}"));
+            None
+        }
+    };
+    match (ours, mail) {
+        // Stalwart asks no authority: nothing of its to pin.
+        (None, _) => {}
+        (Some(_), None) => unread.push("Stalwart's account not read: no Stalwart".into()),
+        (Some(id), Some(mail)) => match mail.acme_providers().await {
+            Ok(providers) => match providers.into_iter().find(|p| p.id == id) {
+                Some(p) if p.directory != directory => {}
+                Some(p) => match p.account_uri {
+                    Some(uri) => found.push(Account {
+                        who: "Stalwart".into(),
+                        issuer: LETS_ENCRYPT_CAA.into(),
+                        uri,
+                        wildcard: false,
+                    }),
+                    None => unread.push("Stalwart's account has no URI yet".into()),
+                },
+                None => unread.push(format!("Stalwart holds no ACME account {id}")),
+            },
+            Err(e) => unread.push(format!("Stalwart's account not read: {e}")),
+        },
+    }
+    (found, unread)
+}
+
+/// Where Caddy keeps its account for `directory` and `email`, under the image's
+/// `XDG_DATA_HOME`: certmagic 0.25's `storageKeyUserReg`.
+fn caddy_account_path(directory: &str, email: &str) -> String {
+    let email = email.to_lowercase();
+    let local = match email.split_once('@') {
+        Some(("", rest)) => rest,
+        Some((l, _)) => l,
+        None => email.as_str(),
+    };
+    format!(
+        "/data/caddy/acme/{}/users/{}/{}.json",
+        certmagic_safe(&issuer_key(directory)),
+        certmagic_safe(&email),
+        certmagic_safe(local)
+    )
+}
+
+/// certmagic's `ACMEIssuer.issuerKey`: the host, and the path as one component.
+fn issuer_key(directory: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(directory) else {
+        return directory.to_string();
+    };
+    let mut key = url.host_str().unwrap_or_default().to_string();
+    if let Some(port) = url.port() {
+        key += &format!(":{port}");
+    }
+    let path = url.path().replace(['/', '\\'], "-");
+    let path = path.trim_matches('-');
+    if !path.is_empty() {
+        key += "-";
+        key += path;
+    }
+    key
+}
+
+/// certmagic's `KeyBuilder.Safe`: lower case, a few characters spelled out, then
+/// anything but `[\w@.-]` dropped.
+fn certmagic_safe(s: &str) -> String {
+    let mut s = s.trim().to_lowercase();
+    for (from, to) in [
+        (" ", "_"),
+        ("+", "_plus_"),
+        ("*", "wildcard_"),
+        (":", "-"),
+        ("..", ""),
+    ] {
+        s = s.replace(from, to);
+    }
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '@' | '.' | '-'))
+        .collect()
+}
+
+/// The account's URL in Caddy's file: its `location`.
+fn account_location(file: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(file)
+        .ok()?
+        .get("location")?
+        .as_str()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 async fn dns_side(net: &dyn Internet, zone: &str) -> Result<DnsSide, String> {
@@ -256,5 +436,57 @@ mod tests {
         )
         .await;
         assert!(hlb_api::domain::drifts(&baseline, &r).is_empty());
+    }
+
+    #[test]
+    fn caddy_s_account_is_where_certmagic_keeps_it() {
+        // Measured on hlb-caddy:dev against Pebble, 2026-10-30.
+        assert_eq!(
+            caddy_account_path("https://pebble:14000/dir", "admin@example.org"),
+            "/data/caddy/acme/pebble-14000-dir/users/admin@example.org/admin.json"
+        );
+        assert_eq!(
+            caddy_account_path(crate::mail_tls::LETS_ENCRYPT, "Me+acme@Home.example"),
+            "/data/caddy/acme/acme-v02.api.letsencrypt.org-directory/users/\
+             me_plus_acme@home.example/me_plus_acme.json"
+        );
+        assert_eq!(
+            account_location(r#"{"status":"valid","location":"https://acme/acct/1"}"#).as_deref(),
+            Some("https://acme/acct/1")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_caa_governing_a_subdomain_is_the_nearest_set_up_to_the_zone() {
+        let net = Table::default()
+            .record("home.org", "NS", &["ns1.example."], true)
+            .record("home.org", "CAA", &["0 issue \"letsencrypt.org\""], true);
+        let r = read(&net, "lab.home.org", 0).await;
+        assert_eq!(
+            r.caa_governing,
+            Some(Governing {
+                at: Some("home.org".into()),
+                records: vec!["0 issue \"letsencrypt.org\"".into()],
+            })
+        );
+        let net = net.record("lab.home.org", "CAA", &["0 issue \";\""], true);
+        let r = read(&net, "lab.home.org", 0).await;
+        assert_eq!(
+            r.caa_governing.and_then(|g| g.at).as_deref(),
+            Some("lab.home.org")
+        );
+        let r = read(
+            &Table::default().record("home.org", "NS", &["ns1.example."], true),
+            "home.org",
+            0,
+        )
+        .await;
+        assert_eq!(
+            r.caa_governing,
+            Some(Governing {
+                at: None,
+                records: vec![]
+            })
+        );
     }
 }

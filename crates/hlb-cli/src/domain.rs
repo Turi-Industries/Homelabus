@@ -3,10 +3,11 @@
 
 use std::process::ExitCode;
 
-use hlb_api::domain::{self, Reading, Registry};
+use hlb_api::domain::{self, Reading, Registry, Verdict};
+use hlb_orchestrator::{Orchestrator, SwarmOrchestrator};
 use hlb_state::Certificates;
 
-use crate::{open_state, Cli, DomainCmd, ACTOR_ROLE};
+use crate::{open_state, relay, Cli, DomainCmd, ACTOR_ROLE};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -26,21 +27,55 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    let reading = hlb_engine::domain::read(
+    let mut reading = hlb_engine::domain::read(
         &hlb_engine::domain::Public::default(),
         &exposure.domain,
         now,
     )
     .await;
+    let orch = SwarmOrchestrator::connect().await.ok();
+    let mail = match (
+        &cli.stalwart_url,
+        &cli.stalwart_admin,
+        &cli.stalwart_password,
+    ) {
+        (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
+            relay::reach(u, &cli.platform_network),
+            hlb_mail::Auth::Basic {
+                user: a.clone(),
+                password: p.clone(),
+            },
+        )),
+        _ => None,
+    };
+    let (accounts, unread) = hlb_engine::domain::accounts(
+        &state,
+        orch.as_ref().map(|o| o as &dyn Orchestrator),
+        mail.as_ref(),
+    )
+    .await;
+    reading.accounts = accounts;
     let baseline = state
         .domain_baseline()
         .await?
         .filter(|b| b.zone == reading.zone);
-    print(&reading, now);
+    print(&reading, &unread, now);
+    let refused = domain::refused(&reading);
 
     match cmd {
         DomainCmd::Watch => {
             state.record_domain_reading(&reading).await?;
+            if !refused.is_empty() {
+                println!(
+                    "\nThe CAA refuses {}: renewals will fail — add its line, or remove the \
+                     record naming another account.",
+                    refused
+                        .iter()
+                        .map(|a| a.who.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                );
+            }
             let Some(baseline) = baseline else {
                 println!(
                     "\nNot watched yet: nothing to compare with. Read the above, then \
@@ -54,7 +89,11 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                     "\nAs accepted on {}.",
                     day(baseline.read_at).unwrap_or_default()
                 );
-                return Ok(ExitCode::SUCCESS);
+                return Ok(if refused.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                });
             }
             println!(
                 "\nMoved since the baseline of {} — if nobody here did this, call the \
@@ -110,7 +149,7 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
     }
 }
 
-fn print(r: &Reading, now: i64) {
+fn print(r: &Reading, unread: &[String], now: i64) {
     println!("{} — as the internet and its registry see it", r.zone);
     let line = |label: &str, v: &[String]| {
         println!(
@@ -154,6 +193,28 @@ fn print(r: &Reading, now: i64) {
             }
         }
         Registry::NotRead { why } => println!("  ? registry not read: {why}"),
+    }
+    if let Some(g) = &r.caa_governing {
+        if let Some(at) = g.at.as_deref().filter(|at| *at != r.zone) {
+            line(&format!("CAA at {at}"), &g.records);
+        }
+        for a in &r.accounts {
+            println!(
+                "  {:<13} {} {} — {}",
+                "ACME account",
+                a.who,
+                a.uri,
+                match domain::judge(&g.records, a) {
+                    Verdict::Pinned => "named by the CAA",
+                    Verdict::AnyAccount => "allowed, as any account at its authority is",
+                    Verdict::Anyone => "allowed, as any authority is",
+                    Verdict::Refused => "🔴 REFUSED by the CAA",
+                }
+            );
+        }
+    }
+    for u in unread {
+        println!("  ? {u}");
     }
     for a in domain::advice(r, now) {
         println!("  • {a}");

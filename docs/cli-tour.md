@@ -486,7 +486,11 @@ to add:
 The domain itself is watched the same night: its name servers, DS, DNSSEC and CAA as
 the internet resolves them, its registrar, locks and expiry from the registry's RDAP
 where its TLD publishes one. A theft through a registrar's support moves these first;
-once a reading is accepted, any change is a critical alert:
+once a reading is accepted, any change is a critical alert. Under Let's Encrypt it also
+reads the house's ACME accounts — Caddy's from its storage, Stalwart's over JMAP — and
+judges the CAA governing the exposure's names against them: one it refuses is critical
+(renewals fail), none pinned is advised with the `0 issue "letsencrypt.org;
+accounturi=…"` line of each:
 
 ```sh
 ./target/debug/hlb domain watch              # read, advise; exits 1 on a change, or before a baseline

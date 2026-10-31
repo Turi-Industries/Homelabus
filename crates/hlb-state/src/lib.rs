@@ -7408,6 +7408,8 @@ mod tests {
             registry: Registry::NotRead {
                 why: "no RDAP for .example".into(),
             },
+            caa_governing: None,
+            accounts: Vec::new(),
         };
         s.set_domain_baseline(&reading("ns1.example"))
             .await
