@@ -12,10 +12,9 @@ spec:
   image: { repo: mariadb, tag: "12.3.2", digest: "sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc" }
   # 🔴 Swarm's virtual IP forgets a connection idle for 900 s and tells neither end:
   # the server's keepalives cross it for every client, as PostgreSQL's do. 0 — the
-  # image's default — is the system's 7200. The image's own entrypoint and command
-  # first, as its `Entrypoint` and `Cmd` say.
-  command:
-    - docker-entrypoint.sh
+  # image's default — is the system's 7200. After the image's own entrypoint, its
+  # `Cmd` first.
+  args:
     - mariadbd
     - --tcp-keepalive-time=300
     - --tcp-keepalive-interval=30

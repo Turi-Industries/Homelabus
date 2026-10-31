@@ -80,11 +80,10 @@ cleanly and is missing data.
 - **A pooled connection dies at a quarter of an hour of silence** — Swarm's VIP, not
   the server (`operations-swarm.md`); MariaDB's too ("Lost connection to server during
   query" after 17 minutes, measured). Both servers send keepalives from their
-  manifest's `command`, after the image's own entrypoint and arguments — `command`
-  replaces the image's `Entrypoint`, and without its configuration file PostgreSQL
-  would lose the vector extensions' `shared_preload_libraries`: PostgreSQL
-  `tcp_keepalives_idle=300`, MariaDB `--tcp-keepalive-time=300` (0, the image's
-  default, is the system's 7200). ⚠️ PostgreSQL's `SHOW` over the local socket says 0
+  manifest's `args`, after the image's own `Cmd` — `args` replace `Cmd` whole, and
+  without its configuration file PostgreSQL would lose the vector extensions'
+  `shared_preload_libraries`: PostgreSQL `tcp_keepalives_idle=300`, MariaDB
+  `--tcp-keepalive-time=300` (0, the image's default, is the system's 7200). ⚠️ PostgreSQL's `SHOW` over the local socket says 0
   — keepalives apply to TCP only; `pg_settings.source` says `command line`.
 - **A MariaDB dump does NOT include routines, triggers or events** without
   `--routines --triggers --events`. The dump succeeds, restores without error, and the

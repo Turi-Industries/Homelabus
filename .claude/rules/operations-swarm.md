@@ -119,7 +119,12 @@ Most of these fail behind a healthy task.
 - **An image whose entrypoint is a bare CLI runs nothing.** ntfy's is `ntfy`: with no
   `serve` it printed its help and exited, Swarm restarted it, and the catalog's ntfy
   never received one alert. Read `Config.Entrypoint` and `Cmd` before trusting that a
-  manifest without `command` starts anything.
+  manifest without `args` starts anything.
+- **`command` replaces the image's ENTRYPOINT; `args` its `Cmd`.** Restating an
+  entrypoint to add arguments drops whatever it had and the manifest never sees:
+  Valkey's is `tini -- docker-entrypoint.sh`, and Fluxer's `command` began at the
+  script, without `tini` (2026-10-31). Arguments go in `args`; `command` is for a
+  start the image does not have (a `sh -c` reading a secret file, Gitea's script).
 - **An image that runs as a user and ships no directory for its volume cannot write it.**
   Docker initialises a new named volume from the image's directory at that path, owner
   included — with none, the volume is root's, 755. Vikunja runs as 1000: no attachment

@@ -26,10 +26,10 @@ spec:
   # the lab: every established entry expires at 899) and tells neither end: a pooled
   # connection quiet for a quarter of an hour fails the next query — Fluxer answered
   # 503 the first time a channel was opened. The server's keepalives cross the VIP
-  # well before, for every client, whatever its pool does. The image's own entrypoint
-  # and configuration file, as its `Entrypoint` and `Cmd` say, then the three settings.
-  command:
-    - /usr/local/bin/immich-docker-entrypoint.sh
+  # well before, for every client, whatever its pool does. After the image's own
+  # entrypoint, its `Cmd` — without the configuration file, the vector extensions'
+  # `shared_preload_libraries` are lost — then the three settings.
+  args:
     - postgres
     - -c
     - config_file=/etc/postgresql/postgresql.conf

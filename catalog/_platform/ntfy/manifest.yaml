@@ -17,7 +17,7 @@ spec:
       backup: true
   # 🔴 The image's entrypoint is `ntfy` alone: without `serve` it printed its help and
   # exited, and Swarm started it again — the catalog's ntfy never received an alert.
-  command: [ntfy, serve]
+  args: [serve]
   env:
     NTFY_BASE_URL: "https://{{ domain }}"
     # Without a file, the messages a phone has not fetched yet live in memory and die
