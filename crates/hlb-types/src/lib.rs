@@ -1008,9 +1008,91 @@ pub fn validate_guide(m: &Manifest, g: &Guide) -> Result<()> {
                 ));
             }
         }
+        if step.phase == Phase::PostRestore {
+            // Read by `hlb backup restore`, which runs the automations in order and
+            // judges each by its exit: whatever else it said would be read by nothing.
+            if step.is_blocking() {
+                return refuse(
+                    "a post-restore step blocks nothing: the restore is done when it runs".into(),
+                );
+            }
+            if step.verify.is_automatic() {
+                return refuse(
+                    "a post-restore step is judged by its automation's exit; its `verify` \
+                     would be read by nothing"
+                        .into(),
+                );
+            }
+            if !step.after.is_empty() {
+                return refuse(
+                    "post-restore steps run in the order they are written; `after` would be \
+                     read by nothing"
+                        .into(),
+                );
+            }
+            for a in &step.automate {
+                let unread = match a {
+                    Automation::Env { .. } => Some("`env` is a deploy's"),
+                    Automation::Sql { .. } => Some("`sql` is an install's"),
+                    Automation::Exec { .. } | Automation::Api { .. } => None,
+                };
+                if let Some(whose) = unread {
+                    return refuse(format!(
+                        "a restore runs `exec` and `api` steps; {whose}, read by nothing here"
+                    ));
+                }
+                let probed = match a {
+                    Automation::Exec {
+                        command: _,
+                        service: _,
+                        probe,
+                        probe_matches,
+                    } => probe.is_some() || probe_matches.is_some(),
+                    Automation::Api {
+                        port: _,
+                        probe,
+                        calls: _,
+                    } => probe.is_some(),
+                    Automation::Env { .. } | Automation::Sql { .. } => false,
+                };
+                if probed {
+                    return refuse(
+                        "a post-restore step runs on every restore: a probe saying it is done \
+                         already would read what the restore just replaced"
+                            .into(),
+                    );
+                }
+            }
+        }
+        // An install never plans a post-restore step: one waiting on it would wait forever.
+        for before in &step.after {
+            if g.steps
+                .iter()
+                .any(|s| &s.id == before && s.phase == Phase::PostRestore)
+                && step.phase.at_install()
+            {
+                return refuse(format!(
+                    "it comes after \"{before}\", a post-restore step no install runs"
+                ));
+            }
+        }
         for a in &step.automate {
             match a {
-                Automation::Env { .. } | Automation::Exec { .. } => {}
+                Automation::Env { .. } => {}
+                Automation::Exec {
+                    command: _,
+                    service,
+                    probe: _,
+                    probe_matches: _,
+                } => {
+                    if let Some(c) = service {
+                        if !m.spec.companions.iter().any(|k| &k.name == c) {
+                            return refuse(format!(
+                                "its `exec` runs in \"{c}\", which is none of {app}'s companions"
+                            ));
+                        }
+                    }
+                }
                 Automation::Api { port, probe, calls } => {
                     if calls.is_empty() {
                         return refuse(
@@ -2042,6 +2124,72 @@ spec:
         assert!(with(r#"{"p":"{{ base_domain }}"}"#)
             .expect_err("unknown")
             .contains("filled by nothing"));
+    }
+
+    #[test]
+    fn a_post_restore_step_declares_only_what_a_restore_runs() {
+        let m = manifest(&format!(
+            "{BASE}  requires:\n    - {{ kind: database, engine: postgres, connections: 5 }}\n  \
+             ingress:\n    - {{ host: a.example.fr, port: 80 }}\n  companions:\n    \
+             - name: api\n      image: {{ repo: a/b, tag: \"1\" }}\n"
+        ));
+        let with = |extra: &str, automate: &str| {
+            let g: Guide = serde_yaml_ng::from_str(&format!(
+                "steps:\n  - id: first\n    title: x\n  - id: reindex\n    title: x\n    \
+                 phase: post-restore\n{extra}    automate:\n      - {automate}\n"
+            ))
+            .expect("guide");
+            validate_guide(&m, &g).map_err(|e| e.to_string())
+        };
+        let exec = "{ method: exec, command: [reindex], service: api }";
+        assert_eq!(with("", exec), Ok(()));
+        assert_eq!(
+            with(
+                "",
+                "{ method: api, calls: [{ verb: POST, path: /reindex }] }"
+            ),
+            Ok(())
+        );
+        for (extra, automate, why) in [
+            ("    severity: blocking\n", exec, "blocks nothing"),
+            ("    verify: { type: tcp, target: a:1 }\n", exec, "verify"),
+            ("    after: [first]\n", exec, "order"),
+            ("", "{ method: env, vars: { A: b } }", "`env`"),
+            (
+                "",
+                "{ method: sql, statement: UPDATE t SET a = 1, params: [], probe: SELECT true }",
+                "`sql`",
+            ),
+            (
+                "",
+                "{ method: exec, command: [a], probe: [b], probeMatches: done }",
+                "probe",
+            ),
+            (
+                "",
+                "{ method: api, probe: { path: /a, pointer: /a, equals: 'true' }, calls: [{ verb: POST, path: /a }] }",
+                "probe",
+            ),
+            (
+                "",
+                "{ method: exec, command: [a], service: worker }",
+                "none of test's companions",
+            ),
+        ] {
+            let refusal = with(extra, automate).expect_err(why);
+            assert!(refusal.contains(why), "{why}: {refusal}");
+        }
+
+        // An install's step waiting on one no install runs would wait forever.
+        let g: Guide = serde_yaml_ng::from_str(
+            "steps:\n  - id: reindex\n    title: x\n    phase: post-restore\n  \
+             - id: later\n    title: x\n    after: [reindex]\n",
+        )
+        .expect("guide");
+        assert!(validate_guide(&m, &g)
+            .expect_err("after")
+            .to_string()
+            .contains("no install runs"));
     }
 
     #[test]

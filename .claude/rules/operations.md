@@ -112,6 +112,17 @@ monitoring, updates and routes have their own `operations-*.md`.
   with no way given to close it. And an installation that began before a catalog fix
   keeps the door until `hlb upgrade` — the lab's Jellyfin still had its first-run
   wizard open to the first visitor on 2026-10-27.
+- **What follows a restore is the restore's, never an install's** (`phase:
+  post-restore`). Fluxer's message search is rebuilt from the database and Seafile's
+  libraries checked against their blocks only after `hlb backup restore` started the
+  app again: run at install, the first rebuilds nothing. The resolver leaves the phase
+  out of every plan; the restore waits for each step's service (an `exec` names a
+  companion by `service`) and fails when a step does. 🔴 Both upstream commands exit 0
+  whatever they found — Fluxer's relay on a `relay_error`, `seaf-fsck.sh` on damaged
+  blocks — so each step judges its output in `sh -c`, the damage sent to stderr where
+  the refusal reads its first line (from another node both streams come back as one).
+  And a 200 that QUEUES work is not the work: Fluxer's refresh is followed to its
+  job's end, which on the lab is a failure its api never mentioned.
 - **A first-run wizard belongs to whoever reaches it first.** n8n's `/rest/owner/setup`
   and Jellyfin's `/Startup/User` take no authentication until done: the guide's `api`
   step runs them after `WaitHealthy` and before any route, with a generated password —

@@ -67,7 +67,7 @@ steps:
       type: attest
 
   - id: search-after-restore
-    title: After a restore, rebuild the message search
+    title: Restore Fluxer whole, from one night
     phase: post-install
     severity: tip
     body: |
@@ -79,14 +79,50 @@ steps:
         hlb backup restore fluxer fluxer-nats-data --apply
         hlb backup restore fluxer fluxer --apply
 
-      The search index is not backed up: it is made from the database. After a
-      restore, the communities' and people's indexes refill by themselves; the
-      messages' come back when asked:
+      The search index is not backed up: it is made from the database, and each
+      restore asks for the messages' to be rebuilt once Fluxer runs again.
+    verify:
+      type: attest
+
+  # Run by `hlb backup restore`, never by an install. Judged by the job's end, read
+  # back from the api: the relay exits 0 whatever the api said, and the api's 200 says
+  # the job was QUEUED — the worker then failed it, and nothing else said so.
+  # 🔴 On Meilisearch the `all` refresh fails on 2026.1026 and 2026.1027 alike: the
+  # search provider initialises six indexes and not the threads' one, which `all`
+  # empties first ("Meilisearch adapter not initialised"); the messages are never
+  # reached. This step says so after every restore until Fluxer initialises it.
+  - id: rebuild-message-search
+    title: Rebuild the messages' search index
+    phase: post-restore
+    body: |
+      The communities' and people's indexes refill by themselves; the messages'
+      come back when asked, from Fluxer's api — then read the job's state with
+      GET /admin/search/index-refreshes/<job_id> the same way:
 
         docker exec -i $(docker ps -qf name=fluxer-api) node bin/operator-relay.mjs \
           <<< '{"target":"operator","method":"POST","path":"/admin/search/indexes/all/refreshes"}'
-    verify:
-      type: attest
+    automate:
+      - method: exec
+        service: api
+        command:
+          - sh
+          - -c
+          - |
+            r=$(echo '{"target":"operator","method":"POST","path":"/admin/search/indexes/all/refreshes"}' | node bin/operator-relay.mjs)
+            id=$(printf '%s' "$r" | sed -n 's/.*"job_id":"\([0-9]*\)".*/\1/p')
+            if [ -z "$id" ]; then printf '%s\n' "$r" >&2; exit 1; fi
+            i=0
+            while [ "$i" -lt 720 ]; do
+              s=$(printf '{"target":"operator","method":"GET","path":"/admin/search/index-refreshes/%s"}\n' "$id" | node bin/operator-relay.mjs)
+              case "$s" in
+                *'"status":"completed"'*) exit 0 ;;
+                *'"status":"failed"'*) printf 'refresh %s failed: %s\n' "$id" "$(printf '%s' "$s" | grep -o '"error":"[^"]*"')" >&2; exit 1 ;;
+              esac
+              i=$((i + 1))
+              sleep 5
+            done
+            echo "refresh $id still not done after an hour" >&2
+            exit 1
 
   - id: phone-notifications
     title: Notifications on a phone come to the installed app

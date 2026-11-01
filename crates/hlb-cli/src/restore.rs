@@ -159,6 +159,7 @@ pub async fn run(
         );
     }
 
+    announce_after(cli, app);
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         // The snapshot named, in full: "the latest" may be another one by the time it
@@ -225,7 +226,7 @@ pub async fn run(
                 println!("✓ {} started again", names.join(", "));
             }
             audit(state, app, "ok", &format!("{volume} from {}", snap.id)).await?;
-            Ok(ExitCode::SUCCESS)
+            finished(after(cli, state, o, app, &manifest).await?)
         }
         Err(Failure::Refused(e)) => {
             restore::start(o, state, &services).await?;
@@ -310,6 +311,7 @@ async fn bucket(
         source.destination.name
     );
     println!("  · 🔴 what was written since is LOST, and the objects added since are deleted");
+    announce_after(cli, app);
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         println!(
@@ -360,7 +362,7 @@ async fn bucket(
                 &format!("{bucket} from {}", snap.id),
             )
             .await?;
-            Ok(ExitCode::SUCCESS)
+            finished(after(cli, state, o, app, manifest).await?)
         }
         Err(Failure::Refused(e)) => {
             restore::start(o, state, &services).await?;
@@ -517,6 +519,7 @@ async fn database(
              {app} stays stopped and the copy taken first is named"
         ),
     }
+    announce_after(cli, app);
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         println!(
@@ -567,7 +570,7 @@ async fn database(
                 &format!("{db_name} from {}", snap.id),
             )
             .await?;
-            Ok(ExitCode::SUCCESS)
+            finished(after(cli, state, o, app, manifest).await?)
         }
         Err(Failure::Refused(e)) => {
             restore::start(o, state, &services).await?;
@@ -589,6 +592,84 @@ async fn database(
             Ok(ExitCode::FAILURE)
         }
     }
+}
+
+/// A restore done is a success only once what follows it is done too.
+fn finished(after: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    Ok(if after {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// The app's post-restore steps, from the catalog's guide — read as an install reads
+/// it, since no guide is frozen with the manifest.
+fn post_restore_guide(cli: &crate::Cli, app: &str) -> hlb_types::Guide {
+    let mut guide = hlb_catalog::Catalog::load(&cli.catalog)
+        .ok()
+        .and_then(|c| c.get(app).ok().map(|e| e.guide.clone()))
+        .unwrap_or_default();
+    guide
+        .steps
+        .retain(|s| s.phase == hlb_types::Phase::PostRestore);
+    guide
+}
+
+/// What a preview says will follow the restore.
+fn announce_after(cli: &crate::Cli, app: &str) {
+    for s in post_restore_guide(cli, app).steps {
+        println!("  · then: {}", s.title);
+    }
+}
+
+/// The post-restore steps, run on the app started again, and what each did. `false`
+/// when one did not: the data is back, and what was to follow it is not done.
+async fn after(
+    cli: &crate::Cli,
+    state: &hlb_state::State,
+    o: &dyn hlb_orchestrator::Orchestrator,
+    app: &str,
+    manifest: &hlb_types::Manifest,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let guide = post_restore_guide(cli, app);
+    if guide.steps.is_empty() {
+        return Ok(true);
+    }
+    let network = cli.platform_network.clone();
+    let client = hlb_guide::HttpApi::default().reaching(move |u| crate::relay::reach(u, &network));
+    let api = hlb_guide::Api {
+        client: &client,
+        port: manifest.spec.ingress.first().map(|i| i.port),
+    };
+    let domain = state.app_domain(app).await?.unwrap_or_default();
+    let vars = [("domain", domain.as_str())];
+    let done = hlb_guide::after_restore(o, Some(api), app, &guide, &vars).await;
+
+    let mut left = Vec::new();
+    for (step, outcome) in &done {
+        match outcome {
+            hlb_guide::AutomationOutcome::Applied { .. }
+            | hlb_guide::AutomationOutcome::AlreadyDone { .. } => {
+                println!("✓ {} — {}", step.title, outcome.describe());
+            }
+            hlb_guide::AutomationOutcome::FellBackToManual { .. }
+            | hlb_guide::AutomationOutcome::NothingDeclared => {
+                eprintln!("🔴 {} — {}", step.title, outcome.describe());
+                for line in hlb_types::guide::render(&step.body, &vars).lines() {
+                    eprintln!("   {line}");
+                }
+                left.push(format!("{}: {}", step.id, outcome.describe()));
+            }
+        }
+    }
+    let ids: Vec<&str> = done.iter().map(|(s, _)| s.id.as_str()).collect();
+    if left.is_empty() {
+        audit_as(state, "post-restore", app, "ok", &ids.join(", ")).await?;
+    } else {
+        audit_as(state, "post-restore", app, "failed", &left.join("; ")).await?;
+    }
+    Ok(left.is_empty())
 }
 
 async fn audit(

@@ -106,6 +106,24 @@ pub enum Phase {
     Maintenance,
     /// Only when crossing a version boundary.
     PostUpgrade,
+    /// After a restore of the app's data, once it runs again: run by `hlb backup
+    /// restore`, never by an install — a search index rebuilt from the database, the
+    /// files restored checked against their blocks.
+    PostRestore,
+}
+
+impl Phase {
+    /// Is a step of this phase part of the install plan?
+    pub fn at_install(self) -> bool {
+        match self {
+            Self::PreInstall
+            | Self::PostInstall
+            | Self::FirstLogin
+            | Self::Maintenance
+            | Self::PostUpgrade => true,
+            Self::PostRestore => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -140,6 +158,10 @@ pub enum Automation {
     /// Level 2: a command inside the container (`gitea admin`, `occ`…).
     Exec {
         command: Vec<String>,
+        /// A companion's container, by its name under `companions`; absent, the app's
+        /// own. Fluxer rebuilds its search from its api, not from the proxy in front.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        service: Option<String>,
         /// Detection command, so that what is already done is not replayed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         probe: Option<Vec<String>>,

@@ -41,6 +41,11 @@ pub const DOCKER_CLI_IMAGE: &str =
 /// The line a remote command's exit code is printed on, after its own output.
 const EXIT_MARK: &str = "hlb-exit=";
 
+/// How long a command in a task on another node is waited for. The local exec waits
+/// as long as the command runs; this one was cut at two minutes, which a restore's
+/// `seaf-fsck` over every Seafile library outgrows (5 s for 10 000 blocks on the lab).
+const REMOTE_EXEC_S: u64 = 3_600;
+
 /// The registry an image reference names, or `None` for Docker Hub: the first segment
 /// is a host only when it carries a dot, a port or is `localhost`.
 fn registry_host(image: &str) -> Option<&str> {
@@ -143,7 +148,7 @@ impl SwarmOrchestrator {
             .bind("/var/run/docker.sock", "/var/run/docker.sock", false)
             .command(args);
         job.hardening.read_only_rootfs = false;
-        let out = self.run_job(&job, 120).await?;
+        let out = self.run_job(&job, REMOTE_EXEC_S).await?;
         let code = out
             .output
             .iter()

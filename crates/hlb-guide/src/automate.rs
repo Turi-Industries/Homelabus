@@ -166,9 +166,12 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
 
             Automation::Exec {
                 command,
+                service: companion,
                 probe,
                 probe_matches,
             } => {
+                let target = exec_target(service, companion.as_deref());
+                let service = target.as_str();
                 // Idempotency probe: do not replay a command already applied. Many
                 // app CLIs fail outright if the object already exists.
                 if let Some(p) = probe {
@@ -194,11 +197,24 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
                         tracing::info!(step = %step.id, "step automated through exec");
                         return AutomationOutcome::Applied { method: "exec" };
                     }
-                    Ok(out) => reasons.push(format!(
-                        "exec exited {}: {}",
-                        out.exit_code,
-                        out.stderr.trim().lines().next().unwrap_or("").trim()
-                    )),
+                    Ok(out) => {
+                        // A task on another node is reached through a job whose one log
+                        // holds both streams: its stderr comes back empty, and Seafile's
+                        // damaged block was refused as "exec exited 1: " and nothing.
+                        let said = if out.stderr.trim().is_empty() {
+                            &out.stdout
+                        } else {
+                            &out.stderr
+                        };
+                        reasons.push(format!(
+                            "exec exited {}: {}",
+                            out.exit_code,
+                            said.lines()
+                                .map(str::trim)
+                                .find(|l| !l.is_empty())
+                                .unwrap_or("")
+                        ));
+                    }
                     Err(e) => reasons.push(format!("exec failed: {e}")),
                 }
             }
@@ -294,6 +310,70 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
         return AutomationOutcome::Applied { method: "env" };
     }
     AutomationOutcome::FellBackToManual { reasons }
+}
+
+/// Where an `exec` runs: the app's own service, or the companion it names —
+/// `Companion::service`'s name, the app's then the companion's.
+fn exec_target(app_service: &str, companion: Option<&str>) -> String {
+    companion.map_or_else(|| app_service.to_string(), |c| format!("{app_service}-{c}"))
+}
+
+/// How long a restored app is waited for before its post-restore steps: Fluxer's api
+/// migrates its schema before it answers, and its own probe allows seven minutes.
+const RESTARTED_WAIT_S: u64 = 600;
+
+/// The guide's post-restore steps, in the order written, on the app started again
+/// after a restore — each once its service is healthy, since a restore starts it and
+/// returns at once. They declare no probe (`validate_guide`): what an install left
+/// done, a restore has undone.
+pub async fn after_restore<O: Orchestrator + ?Sized>(
+    orch: &O,
+    api: Option<Api<'_>>,
+    service: &str,
+    guide: &hlb_types::Guide,
+    vars: &[(&str, &str)],
+) -> Vec<(GuideStep, AutomationOutcome)> {
+    let mut out = Vec::new();
+    for step in guide
+        .steps
+        .iter()
+        .filter(|s| s.phase == hlb_types::Phase::PostRestore)
+    {
+        let mut targets: Vec<String> = Vec::new();
+        for a in &step.automate {
+            let t = match a {
+                Automation::Exec {
+                    command: _,
+                    service: companion,
+                    probe: _,
+                    probe_matches: _,
+                } => exec_target(service, companion.as_deref()),
+                Automation::Api {
+                    port: _,
+                    probe: _,
+                    calls: _,
+                } => service.to_string(),
+                // Refused on a post-restore step by `validate_guide`.
+                Automation::Env { .. } | Automation::Sql { .. } => continue,
+            };
+            if !targets.contains(&t) {
+                targets.push(t);
+            }
+        }
+        let mut waited = Vec::new();
+        for t in &targets {
+            if let Err(e) = orch.wait_healthy(t, RESTARTED_WAIT_S).await {
+                waited.push(format!("{t} is not healthy: {e}"));
+            }
+        }
+        let outcome = if waited.is_empty() {
+            try_automate_with(orch, api, None, service, step, vars).await
+        } else {
+            AutomationOutcome::FellBackToManual { reasons: waited }
+        };
+        out.push((step.clone(), outcome));
+    }
+    out
 }
 
 /// Stopped, then started again and waited for: an app that reads a value at its start
@@ -432,6 +512,11 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         calls: Mutex<Vec<Vec<String>>>,
+        /// The service each exec ran in, and each wait asked for.
+        services: Mutex<Vec<String>>,
+        waited: Mutex<Vec<String>>,
+        /// Services `wait_healthy` never sees healthy.
+        down: Vec<String>,
         /// Successive answers; the last one repeats.
         outputs: Mutex<Vec<ExecOutput>>,
     }
@@ -439,8 +524,8 @@ mod tests {
     impl Fake {
         fn with(outputs: Vec<ExecOutput>) -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
                 outputs: Mutex::new(outputs),
+                ..Self::default()
             }
         }
         fn ok() -> ExecOutput {
@@ -507,10 +592,11 @@ mod tests {
         }
         async fn exec_in_service(
             &self,
-            _: &str,
+            service: &str,
             cmd: &[String],
         ) -> hlb_orchestrator::Result<ExecOutput> {
             self.calls.lock().expect("mutex").push(cmd.to_vec());
+            self.services.lock().expect("mutex").push(service.into());
             let mut s = self.outputs.lock().expect("mutex");
             Ok(if s.len() > 1 {
                 s.remove(0)
@@ -545,8 +631,23 @@ mod tests {
         async fn remove(&self, _: &str) -> hlb_orchestrator::Result<()> {
             Ok(())
         }
-        async fn wait_healthy(&self, _: &str, _: u64) -> hlb_orchestrator::Result<ServiceStatus> {
-            Err(hlb_orchestrator::Error::NotFound("x".into()))
+        async fn wait_healthy(
+            &self,
+            name: &str,
+            _: u64,
+        ) -> hlb_orchestrator::Result<ServiceStatus> {
+            self.waited.lock().expect("mutex").push(name.into());
+            if self.down.iter().any(|d| d == name) {
+                return Err(hlb_orchestrator::Error::NotFound(name.into()));
+            }
+            Ok(ServiceStatus {
+                name: name.into(),
+                id: "id".into(),
+                desired_replicas: 1,
+                running_replicas: 1,
+                image: "img".into(),
+                update_state: None,
+            })
         }
 
         async fn tasks(
@@ -579,6 +680,89 @@ steps:
       - method: exec
         command: [gitea, admin, config, set, service.DISABLE_REGISTRATION, "true"]
 "#;
+
+    const AFTER_RESTORE: &str = r#"
+steps:
+  - id: tip
+    title: Read this
+    automate:
+      - method: exec
+        command: [install-time]
+  - id: reindex
+    title: Rebuild the search
+    phase: post-restore
+    automate:
+      - method: exec
+        service: api
+        command: [reindex]
+  - id: fsck
+    title: Check the files
+    phase: post-restore
+    automate:
+      - method: exec
+        command: [fsck]
+"#;
+
+    #[tokio::test]
+    async fn a_restore_runs_its_steps_alone_each_where_it_names_once_healthy() {
+        let orch = Fake::with(vec![Fake::ok(), Fake::ko("Repo[abc] block x is missing.")]);
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(AFTER_RESTORE).expect("guide");
+
+        let done = after_restore(&orch, None, "chat", &g, &[]).await;
+
+        let ids: Vec<&str> = done.iter().map(|(s, _)| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["reindex", "fsck"],
+            "an install's step, run by a restore"
+        );
+        assert_eq!(*orch.calls.lock().expect("mutex"), [["reindex"], ["fsck"]]);
+        assert_eq!(
+            *orch.services.lock().expect("mutex"),
+            ["chat-api", "chat"],
+            "each command in the container it names"
+        );
+        assert_eq!(*orch.waited.lock().expect("mutex"), ["chat-api", "chat"]);
+        assert!(done[0].1.handled());
+        assert!(
+            done[1].1.describe().contains("is missing"),
+            "a failed check says what it found: {}",
+            done[1].1.describe()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_on_another_node_says_what_it_printed() {
+        // There a job's one log holds both streams, and stderr comes back empty.
+        let orch = Fake::with(vec![ExecOutput {
+            exit_code: 1,
+            stdout: "\n[WARNING] Repo[abc] block x is missing.\n".into(),
+            stderr: String::new(),
+        }]);
+        let issue = try_automate(&orch, "files", &step(WITH_EXEC), &[]).await;
+        assert!(
+            issue
+                .describe()
+                .contains("exec exited 1: [WARNING] Repo[abc] block x is missing."),
+            "{}",
+            issue.describe()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_step_whose_service_never_comes_back_is_not_run() {
+        let orch = Fake {
+            down: vec!["chat-api".into()],
+            ..Fake::default()
+        };
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(AFTER_RESTORE).expect("guide");
+
+        let done = after_restore(&orch, None, "chat", &g, &[]).await;
+
+        assert_eq!(*orch.calls.lock().expect("mutex"), [["fsck"]]);
+        assert!(!done[0].1.handled());
+        assert!(done[0].1.describe().contains("chat-api is not healthy"));
+    }
 
     #[tokio::test]
     async fn a_declared_command_is_executed() {

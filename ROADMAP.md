@@ -1238,8 +1238,8 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    per-person HTTP step (create, disable) would serve. No step is HTTP today: an
    `http` variant beside `exec` and `sql` when an app the owner names needs one —
    named 2026-11-01: Jellyfin, in this phase.
-5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade or post-restore step;
-   cross-app budgets (connections against `max_connections`) are Rust tests.
+5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade step (none needed,
+   measured); post-restore steps and connection budgets built 2026-11-01.
    **Measured** 2026-10-31, the step before a backup first. The nightly pass copies
    every `backup: true` volume with restic while its service runs — only a restore
    stops one — and the catalog declares 24. By what they hold (the lab's `nas`
@@ -1397,10 +1397,29 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
      role's server-side limit is twice the app's sum (`role_connection_limit`), proven
      on a real PostgreSQL to refuse the third connection of a role limited to 2. Pools
      capped in the manifests: Gitea, Vikunja, Vaultwarden 10, n8n 2, Roundcube 16
-     Apache workers, Mealie one Uvicorn worker. **Not yet on the lab.**
-   - **Next, decided 2026-11-01 (owner): a `post-restore` guide phase**, its automated
-     steps run by `hlb backup restore` once the services are back — Fluxer's search
-     refresh moves there from its `post-install` tip, Seafile's `seaf-fsck` joins it.
+     Apache workers, Mealie one Uvicorn worker. On the lab the same day: `SHOW
+     max_connections` 200 and MariaDB's 250 after `hlb upgrade postgres|mariadb`; each
+     app's `hlb upgrade` re-ran its database step (its description names the limit, so
+     the journal's done row did not carry over) — roles fluxer 44, immich 42, mealie
+     30, vaultwarden 20, vikunja 20, MariaDB's seafile 232, all twice their sum.
+   - ✅ **A `post-restore` guide phase** (owner, 2026-11-01). Never planned by an
+     install; `hlb backup restore` runs its `exec` and `api` steps, in order, once each
+     one's service is healthy again, says what each did, and exits non-zero when one
+     did not. `validate_guide` refuses there what a restore would not read: `env`,
+     `sql`, a probe, a `verify`, `after`, `blocking`. An `exec` names a companion's
+     container by `service` (Fluxer's api). Seafile's `seaf-fsck` (check only) — it
+     exits 0 whatever it found, so its lines are judged: on the lab, a database
+     restore ran it ✓, and again with one block set aside, 🔴 "block … is missing",
+     exit 1. Fluxer's search refresh moved there, judged by the job's END (the api's
+     200 only says it was queued) — 🔴 and on the lab it FAILS: Fluxer 2026.1026 and
+     2026.1027 initialise six Meilisearch indexes and not the threads', which the
+     `all` refresh empties first ("Meilisearch adapter not initialised"), so the
+     messages' index was never rebuilt — the tip a person pasted before never worked
+     either, and said 200.
+   - **Next: Fluxer's message search after a restore.** Either a per-guild
+     `channel_messages` refresh (it needs the guilds' ids from the admin API) or
+     Fluxer initialising its thread index (reported at feedback.fluxer.com — GitHub
+     issues are closed). Until then the restore says the step failed, every time.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

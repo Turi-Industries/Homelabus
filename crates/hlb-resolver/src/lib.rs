@@ -387,7 +387,9 @@ pub fn resolve_with_guide(
     // The order is the protection mechanism itself: it is because these steps come
     // before the ingress that the "first to sign up becomes admin" window stays shut.
     let vars = domain_vars(params);
-    for s in &guide.steps {
+    // A post-restore step is `hlb backup restore`'s: run at install, Fluxer would
+    // rebuild a search index of nothing.
+    for s in guide.steps.iter().filter(|s| s.phase.at_install()) {
         plan.push(Action::PendingGuideStep {
             id: s.id.clone(),
             title: render_guide(&s.title, &vars),
@@ -1447,6 +1449,36 @@ steps:
             .actions
             .iter()
             .any(|a| matches!(a, Action::PendingGuideStep { id, .. } if id == "dns")));
+    }
+
+    #[test]
+    fn a_post_restore_step_never_enters_an_install_plan() {
+        let m = manifest("");
+        let g: hlb_types::Guide = serde_yaml_ng::from_str(
+            r#"
+steps:
+  - id: reindex
+    title: Rebuild the search
+    phase: post-restore
+    automate:
+      - method: exec
+        command: [reindex]
+  - id: tip
+    title: Read this
+"#,
+        )
+        .expect("guide");
+
+        let p = resolve_with_guide(&m, &g, &InstallParams::default()).expect("plan");
+        let planned: Vec<&str> = p
+            .actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::PendingGuideStep { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(planned, ["tip"], "the restore's step, run by an install");
     }
 
     #[test]

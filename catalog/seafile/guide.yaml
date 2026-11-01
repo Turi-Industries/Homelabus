@@ -73,3 +73,40 @@ steps:
       Every week, Homelabus runs Seafile's garbage collection, which frees the
       space of what is past both. Until then, deleting frees nothing on the
       pool. `hlb job` shows its last run.
+
+  # Run by `hlb backup restore`, never by an install: a database put back from one
+  # night and blocks from another disagree, and Seafile serves the file until someone
+  # downloads it. Check only — `-r` would rewrite the libraries to what is left.
+  # `seaf-fsck.sh` exits 0 whatever it found (its binary returns 0, the script ends on
+  # `echo Done.`): the lines it prints are judged, the damaged ones sent to stderr so
+  # a refusal names the first. Measured on 13.0.25 with one block set aside: "block
+  # … is missing", then "file … is damaged". Its keys come from the files the start
+  # reads, through the environment, never an argument.
+  - id: check-the-libraries
+    title: Check every library against its blocks
+    phase: post-restore
+    body: |
+      Each library's commits, folders and files are read against the blocks on disk.
+      A damaged or missing one is named; nothing is repaired. To run it again:
+
+        docker exec $(docker ps -qf name=seafile) sh -c 'JWT_PRIVATE_KEY=$(cat /run/secrets/jwt-key) \
+          SEAFILE_MYSQL_DB_PASSWORD=$(cat /run/secrets/db-password) \
+          /opt/seafile/seafile-server-latest/seaf-fsck.sh'
+
+      A damaged library is restored again from an older night, or repaired to what
+      is left with `seaf-fsck.sh -r <library id>`, which deletes what it cannot read.
+    automate:
+      - method: exec
+        command:
+          - sh
+          - -c
+          - |
+            out=$(JWT_PRIVATE_KEY=$(cat /run/secrets/jwt-key) \
+              SEAFILE_MYSQL_DB_PASSWORD=$(cat /run/secrets/db-password) \
+              /opt/seafile/seafile-server-latest/seaf-fsck.sh 2>&1)
+            if printf '%s\n' "$out" | grep -E 'is damaged|is missing|need to restore' >&2; then
+              exit 1
+            fi
+            printf '%s\n' "$out" | grep -q 'seaf-fsck run done' && exit 0
+            printf '%s\n' "$out" | grep -v '^$' >&2
+            exit 1
