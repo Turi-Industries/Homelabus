@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { limits } from '#lib/api/limits.ts';
 	import { panel, type ActionResult } from '#lib/action.svelte.ts';
-	import { api } from '#lib/api/client.ts';
+	import { api, type Schemas } from '#lib/api/client.ts';
 	import { refusal } from '#lib/resource.svelte.ts';
 	import { copy as write } from '#lib/clipboard.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import DeviceSetup from './DeviceSetup.svelte';
 	import Qr from './Qr.svelte';
 
 	/**
@@ -129,6 +130,10 @@
 					{@render once(result.link)}
 				{/if}
 
+				{#if 'setup' in result && result.setup}
+					<DeviceSetup setup={result.setup as Schemas['DeviceSetup']} />
+				{/if}
+
 				{#if result.blockers.length > 0}
 					<section class="rounded-lg border border-critical p-3">
 						<h3 class="text-sm font-semibold text-critical">{m.action_blockers()}</h3>
@@ -184,7 +189,9 @@
 
 				{#if stage.kind === 'passkey'}
 					<section class="flex flex-col items-start gap-3 border-t border-border pt-4">
-						<p class="text-sm font-semibold text-critical">{m.action_destructive_operation()}</p>
+						<!-- Not "destructive": a passkey also guards what takes nothing away — a
+						     device's password, a role given, a node paused. -->
+						<p class="text-sm font-semibold text-critical">{m.action_passkey_heading()}</p>
 						<p class="text-sm">{m.action_passkey_needed()}</p>
 						{#if stage.refused !== null}
 							<p role="alert" class="text-sm text-critical">

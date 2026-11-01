@@ -13,6 +13,7 @@ export const module: Module = {
 		{ path: '/me/mailbox', label: m.page_me_mailbox, reads: ['/api/me', '/api/me/aliases'] },
 		{ path: '/me/status', label: m.page_me_status, reads: ['/api/status'] },
 		{ path: '/me/preferences', label: m.page_me_preferences, reads: ['/api/preferences', '/api/themes'] },
-		{ path: '/me/account', label: m.page_me_account, reads: ['/api/me', '/api/me/identity', '/api/me/sessions'] }
+		{ path: '/me/account', label: m.page_me_account, reads: ['/api/me', '/api/me/identity', '/api/me/sessions'] },
+		{ path: '/me/devices', label: m.page_me_devices, reads: ['/api/me', '/api/me/devices'] }
 	]
 };

@@ -137,6 +137,12 @@ pub const BOUNDS: &[(&str, &str, Bound)] = &[
     ),
     ("CreateMailboxRequest", "local", Bound::Text(LOCAL_PART)),
     ("DefaultMailboxRequest", "local", Bound::Text(LOCAL_PART)),
+    (
+        "DeviceRequest",
+        "name",
+        Bound::Text(hlb_api::DEVICE_NAME_MAX),
+    ),
+    ("DeviceRequest", "mailbox", Bound::Text(LOCAL_PART)),
     // PocketID's own bounds (`UserCreateDto`): past them it refuses the whole update.
     ("NamesRequest", "first_name", Bound::Text(50)),
     ("NamesRequest", "last_name", Bound::Text(50)),

@@ -72,6 +72,19 @@ pub(crate) async fn respond(
     target: &str,
     r: ActionResult,
 ) -> ActionReply {
+    audit(s, identity, action, target, &r).await;
+    Ok(Json(r))
+}
+
+/// Logs an action whose answer carries more than its result — what [`respond`] does,
+/// for a route answering its own type.
+pub(crate) async fn audit(
+    s: &AppState,
+    identity: &crate::auth::Identity,
+    action: &str,
+    target: &str,
+    r: &ActionResult,
+) {
     // The real outcome, not the intent: an action that failed halfway is a failure, even
     // if it started correctly.
     let issue = if !r.applied {
@@ -95,8 +108,6 @@ pub(crate) async fn respond(
             Some(&r.verdict()),
         )
         .await;
-
-    Ok(Json(r))
 }
 
 /// The privileged side could not answer: a fault of ours, never the caller's.

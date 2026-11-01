@@ -749,6 +749,10 @@ pub struct MailboxBrief {
     pub default: bool,
 }
 
+/// The longest name a device takes: "Camille's work laptop" fits, and it stays one row.
+/// The privileged side refuses past it, and the controller's bounds write it into the API.
+pub const DEVICE_NAME_MAX: usize = 64;
+
 /// One of a person's devices: the password it signs in to their mailbox with — mail,
 /// calendars and contacts.
 ///
@@ -766,12 +770,23 @@ pub struct Device {
     pub created_at: Option<String>,
 }
 
+/// The signed-in person's devices, or why they could not be read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct MyDevices {
+    pub devices: Vec<Device>,
+    /// Why Stalwart could not be asked. An empty list read is "no device"; one never
+    /// read is not, and showing it as such would hide a password still open.
+    pub unreadable: Option<String>,
+}
+
 /// What a device is set up with: the one moment its password is known.
 ///
 /// 🔴 Never stored, never logged: Stalwart answers the password once, and nothing
 /// reads it back.
 #[derive(Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DeviceSetup {
+    /// What the person called the device: what its accounts are named on it.
+    pub device: String,
     /// The user name: the mailbox's address.
     pub user: String,
     pub password: String,
@@ -784,6 +799,7 @@ pub struct DeviceSetup {
 impl std::fmt::Debug for DeviceSetup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeviceSetup")
+            .field("device", &self.device)
             .field("user", &self.user)
             .field("password", &"…")
             .field("server", &self.server)

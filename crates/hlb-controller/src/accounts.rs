@@ -22,7 +22,7 @@ use axum::extract::State as AxumState;
 use hlb_api::intent::SignedUp;
 use hlb_api::{ActionResult, ActionStep, StepState};
 
-use crate::actions::ActionQuery;
+use crate::actions::{audit, ActionQuery};
 use crate::api::AppState;
 use crate::auth::{Authorized, CanManageAccounts};
 use crate::error::{ActionError, ActionReply};
@@ -957,34 +957,6 @@ async fn finish_signup(
         result: r,
         enrolment_link: link,
     }))
-}
-
-/// Logs an action on accounts, with its real outcome.
-async fn audit(
-    s: &AppState,
-    identity: &crate::auth::Identity,
-    action: &str,
-    target: &str,
-    r: &ActionResult,
-) {
-    let issue = if !r.applied {
-        "preview"
-    } else if r.succeeded() {
-        "ok"
-    } else {
-        "failed"
-    };
-
-    let _ = s
-        .append_audit(
-            identity.actor.name(),
-            identity.role,
-            action,
-            target,
-            issue,
-            Some(&r.verdict()),
-        )
-        .await;
 }
 
 /// Logs and returns the response.

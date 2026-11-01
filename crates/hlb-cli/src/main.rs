@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+mod devices;
 mod disk;
 mod domain;
 mod emergency;
@@ -1435,6 +1436,10 @@ enum UserCmd {
     /// Aliases: permanent or temporary, generated or chosen.
     #[command(subcommand)]
     Alias(AliasCmd),
+    /// Devices: one password each for a person's mailbox — mail, calendars and
+    /// contacts on a phone, which cannot sign in with a passkey.
+    #[command(subcommand)]
+    Device(DeviceCmd),
 }
 
 /// Roles: a name, a permission level, mail limits, a quota per app — and the apps each
@@ -1700,6 +1705,37 @@ enum MailboxCmd {
     Default {
         name: String,
         local: String,
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DeviceCmd {
+    /// A person's devices, read from Stalwart.
+    List { name: String },
+    /// Make a device a password of its own. Preview by default.
+    ///
+    /// The password is shown ONCE: Stalwart keeps nothing anyone can read back.
+    Add {
+        /// The account.
+        name: String,
+        /// What the device is called — how it is told from the others when revoking.
+        device: String,
+        /// The local part of one of their mailboxes. Without it: their default one.
+        #[arg(long)]
+        mailbox: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Revoke a device's password: refused from its next request on. Preview by
+    /// default.
+    Revoke {
+        name: String,
+        /// The local part of the mailbox the device signs in to.
+        mailbox: String,
+        /// The device's id, as `hlb user device list` shows it.
+        id: String,
         #[arg(long)]
         apply: bool,
     },
@@ -8135,6 +8171,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             Ok(ExitCode::SUCCESS)
                         }
                     },
+
+                    UserCmd::Device(sub) => devices::run(&state, mail.as_ref(), sub).await,
 
                     UserCmd::Alias(sub) => {
                         manage_aliases(&state, &domain, mail.as_ref(), sub).await

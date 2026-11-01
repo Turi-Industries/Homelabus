@@ -1624,6 +1624,8 @@ pub fn api() -> OpenApiRouter<Arc<AppState>> {
             crate::me::close_my_other_sessions
         ))
         .routes(routes!(crate::me::close_my_session))
+        .routes(routes!(crate::me::my_devices, crate::me::add_my_device))
+        .routes(routes!(crate::me::revoke_my_device))
         // Sign-in: these two routes are necessarily open — you cannot require
         // authentication of someone who is coming to authenticate.
         .routes(routes!(crate::signin::start))
@@ -4424,6 +4426,27 @@ pub(crate) mod tests {
             list[0]["state"], "expired-but-active",
             "the open door must come first: {v}"
         );
+    }
+
+    #[tokio::test]
+    async fn devices_never_read_are_not_shown_as_none() {
+        // "No device" would tell someone their old phone's password is gone when
+        // nobody asked Stalwart: a house without mail, or a token bound to nobody.
+        let st = State::in_memory().await.expect("base");
+        st.upsert_user("lena", "standard", None)
+            .await
+            .expect("user");
+        let lena = bound_token(&st, "lena", hlb_types::Role::User).await;
+        let (nobody, stored) = hlb_types::token::generate("svc", hlb_types::Role::User, [9u8; 32]);
+        st.store_token(&stored).await.expect("token");
+        let r = router(app_state(st, false));
+
+        for token in [&lena, &nobody] {
+            let (s, v) = get_with_token(r.clone(), "/api/me/devices", Some(token)).await;
+            assert_eq!(s, StatusCode::OK);
+            assert_eq!(v["devices"], serde_json::json!([]), "{v}");
+            assert!(v["unreadable"].is_string(), "read as none: {v}");
+        }
     }
 
     #[tokio::test]

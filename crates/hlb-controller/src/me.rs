@@ -1,5 +1,5 @@
 //! The signed-in person's own account: their names, their default mailbox, their
-//! sessions.
+//! sessions, their devices.
 //!
 //! 🔴 Every route here acts on `for_account()` — never on an account named in the URL or
 //! the body, or one person could rename another, or sign them out.
@@ -403,4 +403,152 @@ pub async fn close_my_other_sessions(
         confirmation_required: None,
     };
     respond(&s, auth.identity(), "session-close", who, r).await
+}
+
+/// My devices: one password each for my mailbox, read from Stalwart.
+#[utoipa::path(
+    get,
+    path = "/api/me/devices",
+    responses(
+        (status = 200, body = hlb_api::MyDevices)
+    ),
+    extensions(
+        ("x-hlb-requires" = json!("read-self"))
+    )
+)]
+pub async fn my_devices(
+    auth: Authorized<CanReadSelf>,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> Json<hlb_api::MyDevices> {
+    let unreadable = |why: String| hlb_api::MyDevices {
+        devices: Vec::new(),
+        unreadable: Some(why),
+    };
+    // A service token is nobody, and has no mailbox for a device to sign in to.
+    let Some(account) = auth.actor().for_account() else {
+        return Json(unreadable(NOBODY.into()));
+    };
+    let asked = hlb_api::intent::Devices {
+        account: account.to_string(),
+    };
+    Json(match s.privd().ask(asked).await {
+        Ok(Ok(devices)) => hlb_api::MyDevices {
+            devices,
+            unreadable: None,
+        },
+        Ok(Err(why)) => unreadable(why),
+        Err(e) => unreadable(e.to_string()),
+    })
+}
+
+#[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeviceRequest {
+    /// What I call the device, to tell it from the others when revoking one.
+    pub name: String,
+    /// The local part of one of my mailboxes; left out, my default one.
+    pub mailbox: Option<String>,
+}
+
+/// The answer to making a device's password.
+///
+/// 🔴 The only place its password appears: Stalwart answers it once, and nothing here
+/// stores or logs it.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct DeviceCreated {
+    /// ⚠️ FLATTENED, like every action's answer: `applied`, `steps` and `blockers` at
+    /// the root, where the interface and the preview-by-default test read them.
+    #[serde(flatten)]
+    pub result: ActionResult,
+    /// What the device is set up with, shown **once**; `None` until it is made.
+    pub setup: Option<hlb_api::DeviceSetup>,
+}
+
+/// Gives one of my devices a password for my mailbox: mail, calendars and contacts.
+///
+/// Applied, it takes my own passkey — the password opens the mailbox every password
+/// reset lands in.
+#[utoipa::path(
+    post,
+    path = "/api/me/devices",
+    params(ActionQuery),
+    request_body = DeviceRequest,
+    responses(
+        (status = 200, body = DeviceCreated),
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = DeviceCreated),
+        (status = 428, description = "Applying it needs a passkey: present one where the header says, then send it again", body = hlb_api::ErrorBody, headers(("x-hlb-passkey-url" = String, description = "Where to present the passkey")))
+    ),
+    extensions(
+        ("x-hlb-requires" = json!("act-on-self")),
+        ("x-hlb-preview" = json!(true))
+    )
+)]
+pub async fn add_my_device(
+    auth: Authorized<CanActOnSelf>,
+    AxumState(s): AxumState<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<ActionQuery>,
+    Json(d): Json<DeviceRequest>,
+) -> ActionReply<DeviceCreated> {
+    let account = auth.actor().for_account().map(str::to_string);
+    let who = account.clone().unwrap_or_else(|| "<account>".into());
+    let asked = hlb_api::intent::AddDevice {
+        account,
+        name: d.name,
+        mailbox: d.mailbox,
+        apply: q.apply,
+    };
+    let proof = crate::passkey::confirm(&s, &headers, vec![asked.clone().into()]).await?;
+    let made = s
+        .privd()
+        .ask_confirmed(proof, asked)
+        .await
+        .map_err(crate::actions::privd_error)?;
+    // The result alone: `setup` carries the password, which no log ever holds.
+    crate::actions::audit(&s, auth.identity(), "device-add", &who, &made.result).await;
+    Ok(Json(DeviceCreated {
+        result: made.result,
+        setup: made.setup,
+    }))
+}
+
+/// Revokes one of my devices' password: refused from its next request on.
+#[utoipa::path(
+    delete,
+    path = "/api/me/devices/{mailbox}/{id}",
+    params(ActionQuery),
+    responses(
+        (status = 200, body = hlb_api::ActionResult),
+        (status = 422, description = "Nothing could be planned: the body's `blockers` say why", body = hlb_api::ActionResult)
+    ),
+    extensions(
+        ("x-hlb-requires" = json!("act-on-self")),
+        ("x-hlb-preview" = json!(true))
+    )
+)]
+pub async fn revoke_my_device(
+    auth: Authorized<CanActOnSelf>,
+    AxumState(s): AxumState<Arc<AppState>>,
+    Path((mailbox, id)): Path<(String, String)>,
+    Query(q): Query<ActionQuery>,
+) -> ActionReply {
+    let account = auth.actor().for_account().map(str::to_string);
+    let who = account.clone().unwrap_or_else(|| "<account>".into());
+    let answer = s
+        .privd()
+        .ask(hlb_api::intent::RevokeDevice {
+            account,
+            mailbox,
+            id,
+            apply: q.apply,
+        })
+        .await
+        .map_err(crate::actions::privd_error)?;
+    let r = match answer {
+        hlb_api::intent::Acted::Planned(r) => r,
+        hlb_api::intent::Acted::Unplannable(m) => {
+            return Err(crate::error::ApiError::Internal(m).into())
+        }
+    };
+    respond(&s, auth.identity(), "device-revoke", &who, r).await
 }

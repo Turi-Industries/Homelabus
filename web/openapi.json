@@ -2628,6 +2628,113 @@
         },
         "type": "object"
       },
+      "Device": {
+        "description": "One of a person's devices: the password it signs in to their mailbox with — mail,\ncalendars and contacts.\n\nRead from Stalwart, never copied here: a copy would list a device revoked in\nStalwart's own screens as still open.",
+        "properties": {
+          "created_at": {
+            "description": "RFC 3339, UTC.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Stalwart's id, unique within its mailbox.",
+            "type": "string"
+          },
+          "mailbox": {
+            "description": "The mailbox it signs in to, which is also its user name.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What the person called it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "created_at",
+          "id",
+          "mailbox",
+          "name"
+        ],
+        "type": "object"
+      },
+      "DeviceCreated": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ActionResult",
+            "description": "⚠️ FLATTENED, like every action's answer: `applied`, `steps` and `blockers` at\nthe root, where the interface and the preview-by-default test read them."
+          },
+          {
+            "properties": {
+              "setup": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DeviceSetup",
+                    "description": "What the device is set up with, shown **once**; `None` until it is made."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "setup"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The answer to making a device's password.\n\n🔴 The only place its password appears: Stalwart answers it once, and nothing here\nstores or logs it."
+      },
+      "DeviceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mailbox": {
+            "default": null,
+            "description": "The local part of one of my mailboxes; left out, my default one.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "default": "",
+            "description": "What I call the device, to tell it from the others when revoking one.",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DeviceSetup": {
+        "description": "What a device is set up with: the one moment its password is known.\n\n🔴 Never stored, never logged: Stalwart answers the password once, and nothing\nreads it back.",
+        "properties": {
+          "device": {
+            "description": "What the person called the device: what its accounts are named on it.",
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "server": {
+            "description": "Stalwart's public name, where a phone finds CalDAV and CardDAV\n(`/.well-known/caldav`), JMAP and IMAP.",
+            "type": "string"
+          },
+          "user": {
+            "description": "The user name: the mailbox's address.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device",
+          "password",
+          "server",
+          "user"
+        ],
+        "type": "object"
+      },
       "DiskSummary": {
         "description": "A filesystem on a node.",
         "properties": {
@@ -3856,6 +3963,29 @@
         "required": [
           "for_s",
           "reason"
+        ],
+        "type": "object"
+      },
+      "MyDevices": {
+        "description": "The signed-in person's devices, or why they could not be read.",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            },
+            "type": "array"
+          },
+          "unreadable": {
+            "description": "Why Stalwart could not be asked. An empty list read is \"no device\"; one never\nread is not, and showing it as such would hide a password still open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "devices",
+          "unreadable"
         ],
         "type": "object"
       },
@@ -8763,6 +8893,180 @@
           }
         },
         "summary": "Makes one of my mailboxes my default — my identity, and the address PocketID gives\napplications.",
+        "x-hlb-preview": true,
+        "x-hlb-requires": "act-on-self"
+      }
+    },
+    "/api/me/devices": {
+      "get": {
+        "operationId": "my_devices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyDevices"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "My devices: one password each for my mailbox, read from Stalwart.",
+        "x-hlb-requires": "read-self"
+      },
+      "post": {
+        "description": "Applied, it takes my own passkey — the password opens the mailbox every password\nreset lands in.",
+        "operationId": "add_my_device",
+        "parameters": [
+          {
+            "description": "🔴 Absent or `false` = **preview**. That is the default, and it changes nothing.",
+            "in": "query",
+            "name": "apply",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCreated"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCreated"
+                }
+              }
+            },
+            "description": "Nothing could be planned: the body's `blockers` say why"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Applying it needs a passkey: present one where the header says, then send it again",
+            "headers": {
+              "x-hlb-passkey-url": {
+                "description": "Where to present the passkey",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "Gives one of my devices a password for my mailbox: mail, calendars and contacts.",
+        "x-hlb-preview": true,
+        "x-hlb-requires": "act-on-self"
+      }
+    },
+    "/api/me/devices/{mailbox}/{id}": {
+      "delete": {
+        "operationId": "revoke_my_device",
+        "parameters": [
+          {
+            "description": "🔴 Absent or `false` = **preview**. That is the default, and it changes nothing.",
+            "in": "query",
+            "name": "apply",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "path",
+            "name": "mailbox",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "Nothing could be planned: the body's `blockers` say why"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "Revokes one of my devices' password: refused from its next request on.",
         "x-hlb-preview": true,
         "x-hlb-requires": "act-on-self"
       }

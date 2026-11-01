@@ -2,26 +2,28 @@
 //! contacts on a phone, which cannot sign in through PocketID.
 //!
 //! Stalwart holds them and is the only list: a device revoked in its own screens is
-//! gone here too.
+//! gone here too. The privileged daemon and the CLI both answer through these.
 
 use hlb_api::intent::{Acted, AddDevice, DeviceAdded, Devices, RevokeDevice};
+use hlb_api::DEVICE_NAME_MAX as NAME_MAX;
 use hlb_api::{ActionResult, ActionStep, Device, DeviceSetup, StepState};
-
-use crate::Privd;
+use hlb_mail::Stalwart;
+use hlb_state::State;
 
 const NOBODY: &str = "this request acts on nobody's behalf — sign in first";
 const NO_MAIL: &str = "mail is not configured on this controller";
-/// Long enough for "Camille's work laptop", short enough for a row.
-const NAME_MAX: usize = 64;
 
 /// Every device of every mailbox of `account`, oldest first within each.
-pub(crate) async fn devices(p: &Privd, i: Devices) -> Result<Vec<Device>, String> {
-    let Some(mail) = &p.mail else {
+pub async fn devices(
+    state: &State,
+    mail: Option<&Stalwart>,
+    i: Devices,
+) -> Result<Vec<Device>, String> {
+    let Some(mail) = mail else {
         return Err(NO_MAIL.into());
     };
     let mut out = Vec::new();
-    for (local, domain, _) in p
-        .state
+    for (local, domain, _) in state
         .mailboxes(&i.account)
         .await
         .map_err(|e| e.to_string())?
@@ -60,15 +62,11 @@ fn name_refusal(name: &str) -> Option<String> {
 /// The mailbox `wanted` names among `account`'s — their default one when `None` — as
 /// `(local, address)`.
 async fn mailbox_of(
-    p: &Privd,
+    state: &State,
     account: &str,
     wanted: Option<&str>,
 ) -> Result<Result<(String, String), String>, String> {
-    let boxes = p
-        .state
-        .mailboxes(account)
-        .await
-        .map_err(|e| e.to_string())?;
+    let boxes = state.mailboxes(account).await.map_err(|e| e.to_string())?;
     let found = match wanted {
         Some(w) => boxes.iter().find(|(l, ..)| l == w),
         None => boxes.iter().find(|(.., d)| *d),
@@ -85,7 +83,7 @@ fn quoted(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
+pub async fn add_device(state: &State, mail: Option<&Stalwart>, i: AddDevice) -> DeviceAdded {
     let AddDevice {
         account,
         name,
@@ -98,7 +96,7 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
     let mut target = None;
     match &account {
         None => blockers.push(NOBODY.into()),
-        Some(a) => match mailbox_of(p, a, mailbox.as_deref()).await {
+        Some(a) => match mailbox_of(state, a, mailbox.as_deref()).await {
             Ok(Ok(t)) => target = Some(t),
             Ok(Err(why)) => blockers.push(why),
             Err(e) => blockers.push(e),
@@ -106,7 +104,7 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
     }
     // Where the phone finds CalDAV, CardDAV and IMAP: without a public name, a
     // password made now opens nothing a phone can reach.
-    let server = match p.state.app_domain("stalwart").await {
+    let server = match state.app_domain("stalwart").await {
         Ok(Some(d)) => Some(d),
         Ok(None) => {
             blockers.push(
@@ -120,7 +118,7 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
         }
     };
     let mut stalwart_id = None;
-    match (&p.mail, &target) {
+    match (mail, &target) {
         (None, _) => blockers.push(NO_MAIL.into()),
         (Some(mail), Some((_, address))) => match mail.account_of(address).await {
             Ok(Some(id)) => {
@@ -151,12 +149,13 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
     let applied = apply && blockers.is_empty();
     let mut setup = None;
     if applied {
-        if let (Some(mail), Some(id), Some(server)) = (&p.mail, &stalwart_id, &server) {
+        if let (Some(mail), Some(id), Some(server)) = (mail, &stalwart_id, &server) {
             match mail.create_app_password(id, &name).await {
                 Ok(made) => {
                     step.state = StepState::Done;
                     tracing::info!(device = %name, mailbox = %address, "device password made");
                     setup = Some(DeviceSetup {
+                        device: name.clone(),
                         user: address.clone(),
                         password: made.secret,
                         server: server.clone(),
@@ -175,9 +174,13 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
             summary: format!("give \"{name}\" a password for {address}"),
             steps: vec![step],
             cli_command: format!(
-                "hlb user device add {} {} --apply",
+                "hlb user device add {} {}{} --apply",
                 account.as_deref().unwrap_or("<account>"),
-                quoted(&name)
+                quoted(&name),
+                mailbox
+                    .as_deref()
+                    .map(|m| format!(" --mailbox {m}"))
+                    .unwrap_or_default()
             ),
             blockers,
             warnings: vec![
@@ -191,7 +194,7 @@ pub(crate) async fn add_device(p: &Privd, i: AddDevice) -> DeviceAdded {
     }
 }
 
-pub(crate) async fn revoke_device(p: &Privd, i: RevokeDevice) -> Acted {
+pub async fn revoke_device(state: &State, mail: Option<&Stalwart>, i: RevokeDevice) -> Acted {
     let RevokeDevice {
         account,
         mailbox,
@@ -202,14 +205,14 @@ pub(crate) async fn revoke_device(p: &Privd, i: RevokeDevice) -> Acted {
     let mut target = None;
     match &account {
         None => blockers.push(NOBODY.into()),
-        Some(a) => match mailbox_of(p, a, Some(&mailbox)).await {
+        Some(a) => match mailbox_of(state, a, Some(&mailbox)).await {
             Ok(Ok(t)) => target = Some(t),
             Ok(Err(why)) => blockers.push(why),
             Err(e) => return Acted::Unplannable(e),
         },
     }
     let mut found = None;
-    match (&p.mail, &target) {
+    match (mail, &target) {
         (None, _) => blockers.push(NO_MAIL.into()),
         (Some(mail), Some((_, address))) => match mail.account_of(address).await {
             Ok(Some(sid)) => match mail.app_passwords(&sid).await {
@@ -233,7 +236,7 @@ pub(crate) async fn revoke_device(p: &Privd, i: RevokeDevice) -> Acted {
     };
     let applied = apply && blockers.is_empty();
     if applied {
-        if let (Some(mail), Some((sid, _))) = (&p.mail, &found) {
+        if let (Some(mail), Some((sid, _))) = (mail, &found) {
             match mail.revoke_app_password(sid, &id).await {
                 Ok(_) => step.state = StepState::Done,
                 Err(e) => {
@@ -260,7 +263,6 @@ pub(crate) async fn revoke_device(p: &Privd, i: RevokeDevice) -> Acted {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[test]
     fn a_device_is_named_on_one_short_line() {
@@ -277,15 +279,14 @@ mod tests {
 
     #[tokio::test]
     async fn nobody_and_a_house_without_mail_get_no_password() {
-        let state = Arc::new(hlb_state::State::in_memory().await.expect("state"));
-        let p = Privd::new(state);
+        let state = State::in_memory().await.expect("state");
         let asked = |account: Option<&str>| AddDevice {
             account: account.map(str::to_string),
             name: "phone".into(),
             mailbox: None,
             apply: true,
         };
-        let nobody = add_device(&p, asked(None)).await;
+        let nobody = add_device(&state, None, asked(None)).await;
         assert!(!nobody.result.applied);
         assert!(nobody.setup.is_none());
         assert!(
@@ -293,7 +294,7 @@ mod tests {
             "{:?}",
             nobody.result.blockers
         );
-        let unmailed = add_device(&p, asked(Some("lena"))).await;
+        let unmailed = add_device(&state, None, asked(Some("lena"))).await;
         assert!(!unmailed.result.applied);
         assert!(unmailed.setup.is_none());
         assert!(
