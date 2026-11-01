@@ -1316,6 +1316,24 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    1/1 against `No such key` until the redeploy, reconciliation saw no gap, and
    `hlb upgrade` says "nothing to apply". Left: that drift found by reconciliation and
    named with its fix, and the four commands in the generated runbook.
+   ✅ (3), PostgreSQL, built 2026-11-01 (`hlb_backup_run::engine_copy`, the owner's
+   "physical copy, hot" of 2026-10-31): `copy: pg-basebackup` on the catalog's
+   `postgres-data`. The pass and the copy before an update run `pg_basebackup`
+   (`--wal-method=stream`) in the SERVER's image where the volume lives — `docker run`
+   here, a Swarm job on another node, the password a file — into `hlb-copy-<volume>`,
+   back that up at the real volume's path, and empty it; no administrator known, the
+   copy fails, never taken live. The server reads `hlb_hba.conf` (the data directory's
+   own file included first, then `host replication postgres`). Proven
+   (`tests/pass.rs`) on the catalog's image with a writer inserting throughout: the
+   restored directory starts, `pg_amcheck --all --heapallindexed` clean, every row
+   from before; with the live copy, no `backup_label` — fails first. **On the lab**:
+   `hlb upgrade postgres --apply`, then the pass in 7.8 s through a job on deb2 —
+   🔴 after a fix: a job run's file secret overflowed Swarm's 64 characters, latent
+   since the restic jobs' names were short. Snapshot `29b86bf1` restored into a
+   throwaway volume and started with no network: backup recovery, consistent, its
+   six databases, `pg_amcheck` 0 — 220 MB where the live volume copy took 381 (the WAL
+   the lab's stale slot holds stays out). Left: MariaDB (`mariadb-backup --backup`,
+   then `--prepare`, the password in a defaults file).
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

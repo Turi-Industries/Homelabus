@@ -240,7 +240,7 @@ fn job(
     script: &str,
     env: &[(String, String)],
 ) -> ServiceSpec {
-    let mut job = ServiceSpec::new(format!("hlb-copy-{to}"), image)
+    let mut job = ServiceSpec::new(to, image)
         .job()
         .constraint(format!("node.id=={id}"))
         .mount(to, STAGE);

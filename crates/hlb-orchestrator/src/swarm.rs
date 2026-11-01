@@ -51,9 +51,28 @@ fn registry_host(image: &str) -> Option<&str> {
 
 /// The Swarm secret carrying one file of a service: named after the service, the path
 /// and the content, so a new version of the file is a new secret.
+///
+/// 🔴 Within Swarm's 64 characters: a job run's name is up to 63 already, and
+/// `pg_basebackup`'s copy job was refused "invalid name" for the 18 added here. A
+/// name too long keeps its first characters and the hash covers the whole of it, so
+/// two services sharing a prefix share no secret; a name that fits is named as it
+/// always was, or every running service would be redeployed for new secrets.
 fn file_secret_name(service: &str, path: &str, content: &str) -> String {
-    let hex = hlb_types::token::sha256_hex(format!("{path}\n{content}").as_bytes());
-    format!("{service}-file-{}", &hex[..12])
+    const ROOM: usize = 64 - "-file-".len() - 12;
+    if service.len() <= ROOM {
+        let hex = hlb_types::token::sha256_hex(format!("{path}\n{content}").as_bytes());
+        return format!("{service}-file-{}", &hex[..12]);
+    }
+    let hex = hlb_types::token::sha256_hex(format!("{service}\n{path}\n{content}").as_bytes());
+    let mut end = ROOM;
+    while !service.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}-file-{}",
+        service[..end].trim_end_matches('-'),
+        &hex[..12]
+    )
 }
 
 /// An RFC 3339 timestamp as Docker returns them, in Unix seconds.
@@ -1901,6 +1920,26 @@ impl Orchestrator for SwarmOrchestrator {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_job_run_s_file_secret_fits_swarm_s_name_limit() {
+        let run = job_name("hlb-copy-immich-machine-learning-cache-and-more");
+        let a = file_secret_name(&run, "/run/hlb/env/PGPASSWORD", "x");
+        assert!(a.len() <= 64, "{a} ({})", a.len());
+        // Two services cut to one prefix keep secrets of their own.
+        let b = file_secret_name(&format!("{run}2"), "/run/hlb/env/PGPASSWORD", "x");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_service_s_file_secret_keeps_the_name_it_always_had() {
+        // Renamed, every running service would be redeployed for "new" secrets.
+        let hex = hlb_types::token::sha256_hex(b"/etc/garage.toml\nx");
+        assert_eq!(
+            file_secret_name("garage", "/etc/garage.toml", "x"),
+            format!("garage-file-{}", &hex[..12])
+        );
+    }
+
     #[test]
     fn two_runs_of_one_job_never_share_a_name() {
         // 🔴 Found by review: a backup and a restore of one app were both
