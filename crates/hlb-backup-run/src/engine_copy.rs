@@ -38,6 +38,8 @@ pub fn staging(volume: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Copy {
     pub volume: String,
+    /// Where the server mounts it: where a tool reading its files finds them.
+    pub path: String,
     pub engine: DbEngine,
 }
 
@@ -51,8 +53,11 @@ pub(crate) async fn declared(state: &State, app: &str) -> crate::Result<Vec<Copy
         .requires
         .iter()
         .filter_map(|c| match c {
-            Capability::Storage { name, copy, .. } => copy.engine().map(|engine| Copy {
+            Capability::Storage {
+                name, path, copy, ..
+            } => copy.engine().map(|engine| Copy {
                 volume: format!("{app}-{name}"),
+                path: path.clone(),
                 engine,
             }),
             _ => None,
@@ -81,7 +86,8 @@ pub(crate) async fn take(
         else {
             return Ok(Err(format!("where {} is cannot be told", c.volume)));
         };
-        let (script, env) = match c.engine {
+        // The live volume, for a tool that reads the server's files beside it.
+        let (script, env, live) = match c.engine {
             DbEngine::Postgres => {
                 let Some(creds) = admins.postgres.and_then(hlb_backup::parse_pg_url) else {
                     return Ok(Err(format!(
@@ -101,17 +107,30 @@ pub(crate) async fn take(
                         ("PGUSER".to_string(), creds.user),
                         ("PGPASSWORD".to_string(), creds.password),
                     ],
+                    None,
                 )
             }
             DbEngine::Mariadb => {
-                return Ok(Err(format!(
-                    "{} is copied by mariadb-backup, which this pass cannot run yet",
-                    c.volume
-                )))
+                let Some(creds) = admins.mariadb.and_then(hlb_backup::parse_maria_url) else {
+                    return Ok(Err(format!(
+                        "{} is copied by mariadb-backup, and no MariaDB administrator is \
+                         known (--mariadb-admin): it is not copied live instead",
+                        c.volume
+                    )));
+                };
+                (
+                    maria_script(app, &c.path),
+                    vec![
+                        ("MARIADB_USER".to_string(), creds.user),
+                        // Read by the client library itself: never on a command line.
+                        ("MYSQL_PWD".to_string(), creds.password),
+                    ],
+                    Some((c.volume.as_str(), c.path.as_str())),
+                )
             }
         };
         let to = staging(&c.volume);
-        if let Err(e) = run_at(orch, place, network, &image, &to, &script, &env).await {
+        if let Err(e) = run_at(orch, place, network, &image, &to, live, &script, &env).await {
             let _ = clear(orch, place, &image, &to).await;
             return Ok(Err(format!("{} not copied: {e}", c.volume)));
         }
@@ -157,7 +176,7 @@ async fn clear(
     image: &str,
     to: &str,
 ) -> Result<(), String> {
-    run_at(orch, place, "none", image, to, &clear_script(), &[]).await
+    run_at(orch, place, "none", image, to, None, &clear_script(), &[]).await
 }
 
 fn clear_script() -> String {
@@ -183,14 +202,45 @@ fn pg_script() -> String {
     )
 }
 
-/// `script` in `image` where `place` is, the volume `to` at [`STAGE`], `env` given
-/// out of any command line.
+/// `mariadb-backup` reads the server's files where they lie — the live volume at the
+/// server's own path, READ-ONLY — and asks the server, on the overlay, for the instants
+/// its copy needs. `--prepare` then applies the redo log copied alongside: unprepared,
+/// the directory does not start. Its output goes to a log, and its end only to the
+/// error: one line per table.
+///
+/// The entrypoint's own files are no tables, and `mariadb-backup` leaves them: without
+/// `.my-healthcheck.cnf` the image's probe signs in as nobody and the restored server
+/// stays unhealthy, unless its entrypoint recreates the probe's user first.
+fn maria_script(host: &str, datadir: &str) -> String {
+    let run = |args: &str| {
+        format!(
+            "mariadb-backup {args} >/tmp/hlb-copy.log 2>&1 || \
+             {{ tail -n 20 /tmp/hlb-copy.log >&2; exit 1; }}; "
+        )
+    };
+    format!(
+        "set -eu; find {STAGE} -mindepth 1 -delete; {}{}\
+         for f in .my-healthcheck.cnf mariadb_upgrade_info; do \
+         if [ -f {datadir}/$f ]; then cp -p {datadir}/$f {STAGE}/; fi; done; \
+         chown -R mysql:mysql {STAGE}",
+        run(&format!(
+            "--backup --target-dir={STAGE} --datadir={datadir} --host={host} --port=3306 \
+             --user=\"$MARIADB_USER\""
+        )),
+        run(&format!("--prepare --target-dir={STAGE}")),
+    )
+}
+
+/// `script` in `image` where `place` is, the volume `to` at [`STAGE`], `live`
+/// (volume, path) read-only, `env` given out of any command line.
+#[allow(clippy::too_many_arguments)]
 async fn run_at(
     orch: Option<&dyn Orchestrator>,
     place: &Place,
     network: &str,
     image: &str,
     to: &str,
+    live: Option<(&str, &str)>,
     script: &str,
     env: &[(String, String)],
 ) -> Result<(), String> {
@@ -200,6 +250,9 @@ async fn run_at(
             cmd.args(["run", "--rm", "--network", network, "--entrypoint", "sh"]);
             hlb_backup::docker_env::pass_by_name(&mut cmd, env);
             cmd.arg("-v").arg(format!("{to}:{STAGE}"));
+            if let Some((volume, path)) = live {
+                cmd.arg("-v").arg(format!("{volume}:{path}:ro"));
+            }
             cmd.args([image, "-c", script]);
             cmd.kill_on_drop(true);
             let out = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_S), cmd.output())
@@ -217,7 +270,7 @@ async fn run_at(
                 return Err(format!("{to} is on {hostname}: no orchestrator"));
             };
             let out = o
-                .run_job(&job(id, network, image, to, script, env), TIMEOUT_S)
+                .run_job(&job(id, network, image, to, live, script, env), TIMEOUT_S)
                 .await
                 .map_err(|e| e.to_string())?;
             if out.succeeded {
@@ -237,6 +290,7 @@ fn job(
     network: &str,
     image: &str,
     to: &str,
+    live: Option<(&str, &str)>,
     script: &str,
     env: &[(String, String)],
 ) -> ServiceSpec {
@@ -244,6 +298,9 @@ fn job(
         .job()
         .constraint(format!("node.id=={id}"))
         .mount(to, STAGE);
+    if let Some((volume, path)) = live {
+        job = job.mount_read_only(volume, path);
+    }
     if network != "none" {
         job = job.network(network);
     }
@@ -281,6 +338,7 @@ mod tests {
             "hlb_platform",
             "pg:17",
             "hlb-copy-postgres-data",
+            None,
             &pg_script(),
             &env,
         );
@@ -311,5 +369,38 @@ mod tests {
         assert!(s.contains("chown -R postgres:postgres /stage"), "{s}");
         // Emptied first: a copy a dead pass left behind would refuse every later one.
         assert!(s.find("-delete") < s.find("pg_basebackup"), "{s}");
+    }
+
+    #[test]
+    fn a_mariadb_copy_reads_the_live_directory_read_only_and_prepares_what_it_took() {
+        let s = maria_script("mariadb", "/var/lib/mysql");
+        // Unprepared, the directory does not start.
+        assert!(s.find("--backup") < s.find("--prepare"), "{s}");
+        assert!(s.find("-delete") < s.find("--backup"), "{s}");
+        assert!(s.contains("--datadir=/var/lib/mysql"), "{s}");
+        assert!(s.contains(".my-healthcheck.cnf"), "{s}");
+        assert!(s.ends_with("chown -R mysql:mysql /stage"), "{s}");
+        assert!(!s.contains("MYSQL_PWD"), "never on a command line: {s}");
+        let j = job(
+            "n1",
+            "hlb_platform",
+            "mariadb:12",
+            "hlb-copy-mariadb-data",
+            Some(("mariadb-data", "/var/lib/mysql")),
+            &s,
+            &[("MYSQL_PWD".to_string(), "maria-secret-1".to_string())],
+        );
+        assert_eq!(j.read_only_volumes, vec!["mariadb-data".to_string()]);
+        assert!(
+            j.mounts
+                .contains(&("mariadb-data".to_string(), "/var/lib/mysql".to_string())),
+            "{:?}",
+            j.mounts
+        );
+        assert!(
+            !j.command.iter().any(|c| c.contains("maria-secret-1")),
+            "{:?}",
+            j.command
+        );
     }
 }

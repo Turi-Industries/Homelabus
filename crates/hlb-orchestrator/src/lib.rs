@@ -88,6 +88,9 @@ pub struct ServiceSpec {
     /// daemon `hlb` runs on, and on every other node Swarm created a plain local volume
     /// under the same name — a `tier: nfs` app scheduled there wrote to that node's disk.
     pub backings: Vec<(String, VolumeBacking)>,
+    /// The mounted volumes the container may only read — a job reading a live server's
+    /// directory, which nothing it runs may write into.
+    pub read_only_volumes: Vec<String>,
     /// Hardening. Comes from the manifest and is **applied**, not merely declared.
     /// The type is `hlb-types`': one definition, as for the rest of the schema.
     pub hardening: SecuritySpec,
@@ -133,6 +136,7 @@ impl ServiceSpec {
             mode: ServiceMode::Replicated,
             mounts: Vec::new(),
             backings: Vec::new(),
+            read_only_volumes: Vec::new(),
             hardening: SecuritySpec::default(),
             healthcheck: None,
             files: Vec::new(),
@@ -181,6 +185,14 @@ impl ServiceSpec {
     /// Adds a named volume, mounted at the given path.
     pub fn mount(mut self, volume: impl Into<String>, path: impl Into<String>) -> Self {
         self.mounts.push((volume.into(), path.into()));
+        self
+    }
+
+    /// Adds a named volume the container can only read.
+    pub fn mount_read_only(mut self, volume: impl Into<String>, path: impl Into<String>) -> Self {
+        let volume = volume.into();
+        self.read_only_volumes.push(volume.clone());
+        self.mounts.push((volume, path.into()));
         self
     }
 

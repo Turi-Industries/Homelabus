@@ -779,3 +779,328 @@ async fn a_postgres_directory_copied_while_written_restores_into_a_server_that_s
     );
     assert!(rows("hlbpgcopy-back") >= before, "the rows written before");
 }
+
+/// Removes what the MariaDB copy test made, however it ends.
+struct MaCleanup;
+
+const MA_APP: &str = "hlbmacopy";
+const MA_BACK: &str = "hlbmacopy-back";
+const MA_NET: &str = "hlb-pass-macopy";
+const MA_PASSWORD: &str = "macopy-root#pass\"word";
+
+impl MaCleanup {
+    fn volumes() -> [String; 4] {
+        [
+            format!("{MA_APP}-data"),
+            hlb_backup_run::engine_copy::staging(&format!("{MA_APP}-data")),
+            format!("{MA_APP}-repo"),
+            format!("{MA_APP}-restored"),
+        ]
+    }
+    fn run() {
+        for c in [MA_APP, MA_BACK] {
+            let _ = docker(&["rm", "-f", c]);
+        }
+        for v in Self::volumes() {
+            let _ = docker(&["volume", "rm", "-f", &v]);
+        }
+        let _ = docker(&["network", "rm", MA_NET]);
+    }
+}
+
+impl Drop for MaCleanup {
+    fn drop(&mut self) {
+        Self::run();
+    }
+}
+
+/// `sql` as root, the password out of the command line.
+fn maria(container: &str, sql: &str) -> std::process::Output {
+    docker(&[
+        "exec",
+        "-e",
+        &format!("MYSQL_PWD={MA_PASSWORD}"),
+        container,
+        "mariadb",
+        "-uroot",
+        "-N",
+        "-e",
+        sql,
+    ])
+}
+
+/// The catalog's own probe passes, which is what Swarm waits on.
+fn maria_healthy(container: &str, probe: &[String]) -> bool {
+    let mut args = vec!["exec", container];
+    args.extend(probe.iter().map(String::as_str));
+    (0..120).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        docker(&args).status.success()
+    })
+}
+
+fn maria_rows(container: &str) -> u64 {
+    let out = maria(container, "SELECT COUNT(*) FROM app.t");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("a count")
+}
+
+/// `docker run -d` of the catalog's server: its image, environment, password file and
+/// arguments, over `data`.
+fn maria_server(
+    manifest: &hlb_types::Manifest,
+    secrets: &std::path::Path,
+    name: &str,
+    network: &str,
+    data: &str,
+) -> std::process::Output {
+    let mut run = vec![
+        "run".to_string(),
+        "-d".into(),
+        "--name".into(),
+        name.into(),
+        "--network".into(),
+        network.into(),
+        "-v".into(),
+        format!("{data}:/var/lib/mysql"),
+        "-v".into(),
+        format!("{}:/run/secrets:ro", secrets.display()),
+    ];
+    for (k, v) in &manifest.spec.env {
+        run.extend(["-e".to_string(), format!("{k}={v}")]);
+    }
+    run.push(manifest.spec.image.reference());
+    run.extend(manifest.spec.args.iter().cloned());
+    let args: Vec<&str> = run.iter().map(String::as_str).collect();
+    docker(&args)
+}
+
+#[tokio::test]
+#[ignore = "needs Docker and the catalog's MariaDB image"]
+async fn a_mariadb_directory_copied_while_written_restores_into_a_server_that_starts() {
+    // 🔴 The same trap as PostgreSQL's: restic reading InnoDB's files one after another
+    // takes each at another instant. The catalog's own server is copied while a writer
+    // inserts, and the copy started where nothing else runs, under the catalog's probe.
+    MaCleanup::run();
+    let _cleanup = MaCleanup;
+    let catalog = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../catalog/_platform/mariadb/manifest.yaml");
+    let text = std::fs::read_to_string(&catalog).expect("catalog manifest");
+    let mut manifest: hlb_types::Manifest = serde_yaml_ng::from_str(&text).expect("manifest");
+    manifest.metadata.name = MA_APP.into();
+    let probe = manifest
+        .spec
+        .swarm
+        .healthcheck
+        .as_ref()
+        .expect("the catalog's probe")
+        .test
+        .iter()
+        .skip(1) // "CMD"
+        .cloned()
+        .collect::<Vec<_>>();
+    let dir = tempfile::tempdir().expect("tmp");
+    let secrets = dir.path().join("secrets");
+    std::fs::create_dir(&secrets).expect("secrets");
+    let file = manifest
+        .spec
+        .files
+        .iter()
+        .find(|f| f.path == "/run/secrets/root-password")
+        .expect("the catalog's password file");
+    assert!(file.content.contains("secret.root-password"));
+    std::fs::write(secrets.join("root-password"), MA_PASSWORD).expect("password");
+    // Read by the entrypoint once it is the image's `mysql`, as Swarm's 0444 file is.
+    use std::os::unix::fs::PermissionsExt;
+    for (p, mode) in [(dir.path().to_path_buf(), 0o755), (secrets.clone(), 0o755)] {
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).expect("mode");
+    }
+    std::fs::set_permissions(
+        secrets.join("root-password"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .expect("mode");
+
+    let [data, staging, repo, restored] = MaCleanup::volumes();
+    docker(&["network", "create", MA_NET]);
+    for v in [&data, &repo, &restored] {
+        docker(&["volume", "create", v]);
+    }
+    let up = maria_server(&manifest, &secrets, MA_APP, MA_NET, &data);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(maria_healthy(MA_APP, &probe), "MariaDB never answered");
+    let made = maria(
+        MA_APP,
+        "CREATE DATABASE app; CREATE TABLE app.t \
+         (id BIGINT AUTO_INCREMENT PRIMARY KEY, pad TEXT NOT NULL) ENGINE=InnoDB",
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    // A writer for the whole pass: pages change under the copy.
+    let writer = docker(&[
+        "exec",
+        "-d",
+        "-e",
+        &format!("MYSQL_PWD={MA_PASSWORD}"),
+        MA_APP,
+        "sh",
+        "-c",
+        "while :; do mariadb -uroot app -e \
+         \"INSERT INTO t (pad) SELECT REPEAT(MD5(RAND()), 40) FROM seq_1_to_200\"; done",
+    ]);
+    assert!(writer.status.success());
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let before = maria_rows(MA_APP);
+    assert!(before > 0, "the writer writes");
+
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    state
+        .upsert_app(MA_APP, &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume(MA_APP, &data, "/unused", true, false)
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", &repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+    // The URL's host is a relay the CLI may reach the server through: the copy goes to
+    // the service owning the volume, never there.
+    let admin = format!("mariadb://root:{MA_PASSWORD}@relay.invalid:13306");
+    let pass = Pass {
+        state: &state,
+        vault: &vault,
+        state_path: &state_path,
+        fallback_repo: None,
+        network: MA_NET,
+        postgres_admin: None,
+        mariadb_admin: Some(&admin),
+        schedule: hlb_backup::Schedule::default(),
+        force: true,
+        only: Some(MA_APP),
+        orchestrator: None,
+        s3_endpoint: None,
+    };
+    let mut events = Vec::new();
+    let sum = pass.run(&mut |e| events.push(e)).await.expect("pass");
+    assert_eq!(sum.failed, 0, "{events:#?}");
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Done { what, .. }
+            if what == &format!("{MA_APP} volumes"))),
+        "{events:#?}"
+    );
+    assert!(maria_rows(MA_APP) > before, "written during the pass");
+    let left = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{staging}:/s"),
+        "alpine:3",
+        "sh",
+        "-c",
+        "ls -A /s | wc -l",
+    ]);
+    assert_eq!(
+        String::from_utf8_lossy(&left.stdout).trim(),
+        "0",
+        "the copy emptied after its backup"
+    );
+
+    // Put back as the volume restore does: at the volume's own path, into an empty one.
+    let password = hlb_backup_run::restic_password(&state, &vault)
+        .await
+        .expect("pw");
+    let path = hlb_backup_run::volume_path(&data);
+    let back = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{repo}:/repo"),
+        "-v",
+        &format!("{restored}:{path}"),
+        "-e",
+        &format!("RESTIC_PASSWORD={password}"),
+        "restic/restic:latest",
+        "-r",
+        "/repo",
+        "restore",
+        "latest",
+        "--target",
+        "/",
+        "--include",
+        &path,
+    ]);
+    assert!(
+        back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&back.stderr)
+    );
+    // What a prepared `mariadb-backup` leaves and a directory read by restic never
+    // holds; and the probe's own file, which the tool does not copy.
+    let label = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{restored}:/d"),
+        "alpine:3",
+        "sh",
+        "-c",
+        "grep -q 'backup_type = log-applied' /d/mariadb_backup_checkpoints \
+         && test -f /d/.my-healthcheck.cnf && stat -c %u /d/ibdata1",
+    ]);
+    assert!(
+        label.status.success(),
+        "not a prepared mariadb-backup copy: the directory was copied live"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&label.stdout).trim(),
+        "999",
+        "owned by the server's user"
+    );
+
+    // Started where nothing reaches it, by the catalog's entrypoint, judged by its probe.
+    let up = maria_server(&manifest, &secrets, MA_BACK, "none", &restored);
+    assert!(up.status.success());
+    let started = maria_healthy(MA_BACK, &probe);
+    let logs = docker(&["logs", MA_BACK]);
+    assert!(
+        started,
+        "the restored server is not healthy: {}",
+        String::from_utf8_lossy(&logs.stderr)
+    );
+    let check = docker(&[
+        "exec",
+        "-e",
+        &format!("MYSQL_PWD={MA_PASSWORD}"),
+        MA_BACK,
+        "mariadb-check",
+        "-uroot",
+        "--all-databases",
+        "--extended",
+    ]);
+    let said = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check.status.success() && !said.contains("error") && !said.contains("corrupt"),
+        "{said}{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(maria_rows(MA_BACK) >= before, "the rows written before");
+}

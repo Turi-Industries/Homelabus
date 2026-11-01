@@ -1332,8 +1332,15 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    since the restic jobs' names were short. Snapshot `29b86bf1` restored into a
    throwaway volume and started with no network: backup recovery, consistent, its
    six databases, `pg_amcheck` 0 — 220 MB where the live volume copy took 381 (the WAL
-   the lab's stale slot holds stays out). Left: MariaDB (`mariadb-backup --backup`,
-   then `--prepare`, the password in a defaults file).
+   the lab's stale slot holds stays out). MariaDB the same way, `copy: mariadb-backup`
+   on `mariadb-data`: `mariadb-backup --backup` reads the LIVE volume mounted read-only
+   at its own path (`ServiceSpec::mount_read_only` on a job), the password in
+   `MYSQL_PWD`, then `--prepare`; the entrypoint's `.my-healthcheck.cnf`, which the
+   tool does not copy, taken beside it — or the restored server's probe has no user
+   until the entrypoint's upgrade path recreates one. Proven on
+   the catalog's image the same way: healthy under the catalog's probe,
+   `mariadb-check --all-databases --extended` clean, every row; live, no prepared
+   `mariadb_backup_checkpoints` — fails first. Left: the lab.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

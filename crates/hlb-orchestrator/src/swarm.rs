@@ -583,6 +583,7 @@ impl SwarmOrchestrator {
                                     target: Some(path.clone()),
                                     source: Some(vol.clone()),
                                     typ: Some(MountType::VOLUME),
+                                    read_only: spec.read_only_volumes.contains(vol).then_some(true),
                                     // What makes a node other than this one create
                                     // the volume as NFS, or as the bind, it is.
                                     volume_options: spec.backing_of(vol).driver_options().map(
@@ -1984,6 +1985,26 @@ mod tests {
             },
         );
         assert_eq!(order(&media), Some(Order::START_FIRST));
+    }
+
+    #[test]
+    fn a_volume_mounted_read_only_reaches_swarm_read_only_and_only_it() {
+        let spec = ServiceSpec::new("copy", "mariadb:12")
+            .mount_read_only("mariadb-data", "/var/lib/mysql")
+            .mount("hlb-copy-mariadb-data", "/stage");
+        let mounts = SwarmOrchestrator::to_bollard(&spec)
+            .task_template
+            .and_then(|t| t.container_spec)
+            .and_then(|c| c.mounts)
+            .expect("mounts");
+        let ro = |source: &str| {
+            mounts
+                .iter()
+                .find(|m| m.source.as_deref() == Some(source))
+                .and_then(|m| m.read_only)
+        };
+        assert_eq!(ro("mariadb-data"), Some(true));
+        assert_eq!(ro("hlb-copy-mariadb-data"), None);
     }
 
     #[test]

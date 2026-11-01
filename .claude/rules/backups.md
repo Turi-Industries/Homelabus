@@ -65,7 +65,12 @@ during an outage.
   `hlb-copy-<volume>` beside it, by the SERVER's image, then backed up AT THE VOLUME'S
   OWN PATH, so the plain volume restore puts back a directory that starts. Without its
   administrator the copy fails. Replication needs its own `pg_hba` line: the
-  catalog's `hlb_hba.conf` includes the data directory's file first.
+  catalog's `hlb_hba.conf` includes the data directory's file first. MariaDB's says
+  `copy: mariadb-backup`: the tool reads the live directory (mounted READ-ONLY at its
+  own path, same node) and must `--prepare` what it took, or nothing starts. ⚠️ It
+  copies tables only: the image's `.my-healthcheck.cnf` is taken beside them, or the
+  restored server's probe signs in as nobody until an entrypoint run with
+  `MARIADB_AUTO_UPGRADE` recreates its user.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.
