@@ -314,10 +314,20 @@ pub(crate) async fn nodes_summary(s: &AppState) -> Vec<hlb_api::NodeSummary> {
 
     // The tasks, to say what each node hosts. A failure here must not deprive us of the
     // node list: we show the nodes without their tasks.
-    let tasks = swarm(s, None)
-        .await
-        .map(|v| task_summaries(&v))
-        .unwrap_or_default();
+    let view = swarm(s, None).await;
+    let tasks = view.as_ref().map(task_summaries).unwrap_or_default();
+    // The level is a label on the Swarm node, found by hostname — the one name the agent
+    // and Swarm share, as for the detail's availability.
+    let protection = |hostname: Option<&str>| match &view {
+        Some(v) => v
+            .nodes
+            .iter()
+            .find(|n| hostname == Some(n.hostname.as_str()))
+            .and_then(|n| n.protection.as_deref())
+            .and_then(hlb_api::ProtectionLevel::from_label),
+        None if s.demo => crate::demo::protection(hostname),
+        None => None,
+    };
 
     let mut out = Vec::new();
     for (address, status) in poll.iter() {
@@ -378,6 +388,7 @@ pub(crate) async fn nodes_summary(s: &AppState) -> Vec<hlb_api::NodeSummary> {
             protocol: r.map(|r| r.protocol),
             tasks: on_this_node,
             reboot_pending: r.and_then(|r| r.reboot_required),
+            protection: protection(r.map(|r| r.hostname.as_str())),
         });
     }
 

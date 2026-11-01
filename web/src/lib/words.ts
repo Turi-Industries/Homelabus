@@ -27,6 +27,22 @@ export function nodeProblem(p: Schemas['NodeProblem']): string {
 	return _;
 }
 
+/** What a machine at this level gives up when stolen — the level is the server's, detected. */
+export function protectionLevel(l: Schemas['ProtectionLevel']): string {
+	switch (l) {
+		case 'A':
+			return m.node_detail_protection_a();
+		case 'B':
+			return m.node_detail_protection_b();
+		case 'C':
+			return m.node_detail_protection_c();
+		case 'D':
+			return m.node_detail_protection_d();
+	}
+	const _: never = l;
+	return _;
+}
+
 export function coverage(c: Schemas['Coverage']): string {
 	switch (c.kind) {
 		case 'no_destination':

@@ -276,7 +276,7 @@ three Tangs, and the third alone opens it.
 ✅ Closed by the owner 2026-10-31. Left, each under its item below: the domain's screen,
 WHOIS for the TLDs without RDAP (the owner's `.eu` among them), DANE/TLSA, the hidden
 Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
-(✅ 2026-11-01), the nodes screen showing each level, the SLSA provenance of three images, `validationmethods`,
+(✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, `validationmethods`,
 and what needs real hardware or a public domain to be measured.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
@@ -342,7 +342,11 @@ and what needs real hardware or a public domain to be measured.
     seals, systemd 252) and deb2 (no TPM, DKMS `zfs`) both D, kvm, roots not
     encrypted — the same as the signals read by hand. Not read by the agent: the trial
     seals as root on the host, which the agent's container is not; the label is what
-    the controller reads. Left: the interface's nodes screen; a VM naming a node of the
+    the controller reads. ✅ The interface's nodes screen — 2026-11-01: each machine's
+    card says the level it can reach (or "never read"), its page says what that level
+    gives up when stolen, that it is a ceiling, and the `hlb node protection` line that
+    reads it again (`NodeSummary.protection`, from the label, by hostname); on the lab
+    deb1 and deb2 read D, as their labels say. Left: a VM naming a node of the
     house as its host (the lower of the two — the VM's own signals are read and not
     shown yet). ✅ `tpm2-tools` installed at provisioning where `+driver` says a TPM
     2.0 is there, and the level read again after it — without them Debian's TPM read

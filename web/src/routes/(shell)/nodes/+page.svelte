@@ -37,7 +37,8 @@
 							{#each node.disks as disk (disk.path)}<Disk {disk} />{/each}
 						</div>
 					{/if}
-					<p class="mt-3 text-xs text-muted-text">
+					<p class="mt-3 text-sm">{node.protection === null ? m.nodes_protection_never_read() : m.nodes_protection({ level: node.protection })}</p>
+					<p class="mt-1 text-xs text-muted-text">
 						{node.address}
 						{#if node.report_age_s !== null}· {m.nodes_last_report({ age: duration(node.report_age_s) })}{/if}
 						{#if node.agent_version !== null}· {m.nodes_agent_version({ version: node.agent_version })}{/if}

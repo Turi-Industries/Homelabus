@@ -10,8 +10,8 @@
 	import Gauge from '#lib/ui/Gauge.svelte';
 	import Loaded from '#lib/ui/Loaded.svelte';
 	import PageHeader from '#lib/ui/PageHeader.svelte';
-	import { button, muted } from '#lib/ui/styles.ts';
-	import { nodeProblem } from '#lib/words.ts';
+	import { button, code, muted } from '#lib/ui/styles.ts';
+	import { nodeProblem, protectionLevel } from '#lib/words.ts';
 
 	const address = $derived(page.params.address ?? '');
 	const detail = $derived(read('/api/nodes/{address}/detail', { path: { address } }));
@@ -85,6 +85,16 @@
 							<p class="mt-3 text-sm">{d.swarm.availability === 'active' ? m.node_detail_drain_consequence() : m.node_detail_return_consequence()}</p>
 						{/if}
 					{/if}
+				</Card>
+				<Card title={m.node_detail_protection()}>
+					{#if n.protection === null}
+						<p class={muted}>{m.node_detail_protection_never_read()}</p>
+					{:else}
+						<p class="text-sm font-medium">{m.node_detail_protection_level({ level: n.protection })}</p>
+						<p class="mt-1 text-sm">{protectionLevel(n.protection)}</p>
+						<p class="mt-3 {muted}">{m.node_detail_protection_ceiling()}</p>
+					{/if}
+					<code class="mt-2 block wrap-anywhere {code}">{m.node_detail_protection_command({ node: n.hostname ?? n.address })}</code>
 				</Card>
 				<Card>
 					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">

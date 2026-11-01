@@ -1239,6 +1239,11 @@ judged! {
         /// drained. `None`: the agent does not say.
         #[serde(default)]
         pub reboot_pending: Option<bool>,
+        /// The level the machine can reach, as detected and written on its Swarm node
+        /// (`hlb.protection`) — never declared. `None`: never read, or Swarm does not
+        /// know the machine; the screen says which command reads it.
+        #[serde(default)]
+        pub protection: Option<ProtectionLevel>,
     }
 
     rules {
@@ -1256,6 +1261,32 @@ pub struct DiskSummary {
     pub free_mb: u64,
     /// Disk pressure step: 0 healthy … 4 critical.
     pub pressure: u8,
+}
+
+/// What a machine can protect once its disk is encrypted, best first — detected from
+/// its firmware, TPM and systemd by `hlb_bootstrap::protection`, whose `describe` says
+/// each in a sentence. A ceiling: the level says nothing of whether the root IS
+/// encrypted yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
+pub enum ProtectionLevel {
+    A,
+    B,
+    C,
+    D,
+}
+
+impl ProtectionLevel {
+    /// The label's value as `hlb node add` and `hlb node protection` write it. Anything
+    /// else is no level: a label typed by hand is not a detection.
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "A" => Some(Self::A),
+            "B" => Some(Self::B),
+            "C" => Some(Self::C),
+            "D" => Some(Self::D),
+            _ => None,
+        }
+    }
 }
 
 /// The worst thing wrong with a node: see [`NodeSummary::problem`].
@@ -4543,6 +4574,7 @@ mod tests {
             protocol: Some(2),
             tasks: Vec::new(),
             reboot_pending: None,
+            protection: None,
         }
     }
 

@@ -386,6 +386,18 @@ pub fn node_tasks(node: &str) -> Vec<hlb_api::TaskSummary> {
         .collect()
 }
 
+/// The level each demo machine can reach. Three levels and a machine never read, so
+/// each wording is on the screens the browser suite crawls.
+pub fn protection(hostname: Option<&str>) -> Option<hlb_api::ProtectionLevel> {
+    use hlb_api::ProtectionLevel::{B, C, D};
+    match hostname? {
+        "swarm-heavy" => Some(B),
+        "small-01" => Some(C),
+        "small-02" => Some(D),
+        _ => None,
+    }
+}
+
 /// The Swarm side of a demo node, found by hostname in [`topology`].
 ///
 /// 🔴 It reads `topology()` rather than carrying a second list: the demonstration's

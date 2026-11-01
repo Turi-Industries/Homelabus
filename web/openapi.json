@@ -4657,6 +4657,17 @@
               }
             ]
           },
+          "protection": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProtectionLevel",
+                "description": "The level the machine can reach, as detected and written on its Swarm node\n(`hlb.protection`) — never declared. `None`: never read, or Swarm does not\nknow the machine; the screen says which command reads it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "protocol": {
             "description": "Protocol version. A mismatched fleet is a trap.",
             "format": "int32",
@@ -4721,6 +4732,7 @@
           "load_per_core",
           "memory_used",
           "problem",
+          "protection",
           "protocol",
           "reachable",
           "reboot_pending",
@@ -5024,6 +5036,16 @@
           "theme"
         ],
         "type": "object"
+      },
+      "ProtectionLevel": {
+        "description": "What a machine can protect once its disk is encrypted, best first — detected from\nits firmware, TPM and systemd by `hlb_bootstrap::protection`, whose `describe` says\neach in a sentence. A ceiling: the level says nothing of whether the root IS\nencrypted yet.",
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "type": "string"
       },
       "Quorum": {
         "description": "What becomes of quorum after the failure.",

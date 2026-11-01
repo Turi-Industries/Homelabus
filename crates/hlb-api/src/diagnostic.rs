@@ -299,6 +299,7 @@ mod tests {
             protocol: Some(2),
             tasks: Vec::new(),
             reboot_pending: None,
+            protection: None,
         }
     }
 
