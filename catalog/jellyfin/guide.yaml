@@ -110,6 +110,36 @@ steps:
       url: "https://{{ domain }}/sso/OID/GetNames"
       expectJson: { pointer: /0, equals: '"PocketID"' }
 
+  - id: sso-only
+    title: Passwords closed to accounts signing in through PocketID
+    phase: post-install
+    after: [sso-provider]
+    body: |
+      Once an account has signed in through PocketID, its Jellyfin password
+      stops working: whoever is taken out of PocketID cannot come back in by
+      a password set long ago. The administrator `admin` keeps its own — the
+      way in when PocketID is down — and so does any account never linked.
+
+      TVs and phones are not concerned: Quick Connect checks no password.
+    automate:
+      - method: api
+        signIn: admin-password
+        headers:
+          Authorization: 'MediaBrowser Client="Homelabus", Device="Homelabus", DeviceId="homelabus-recovery-proof", Version="1", Token="{{ token }}"'
+        # The SSO plugin's own configuration (its id, 6.1.0.0): one document holding the
+        # provider and every account's link, so the two settings are merged into it —
+        # sent alone, they would reset the rest, after which nobody signs in.
+        probe:
+          path: /Plugins/505ce9d1-d916-42fa-86ca-673ef241d7df/Configuration
+          pointer: /EnforceSsoOnly
+          equals: "true"
+        calls:
+          - verb: POST
+            path: /Plugins/505ce9d1-d916-42fa-86ca-673ef241d7df/Configuration
+            merge: true
+            # The recovery sign-in's username.
+            body: '{"EnforceSsoOnly":true,"SsoOnlyExemptUsernames":["admin"]}'
+
   - id: remote-access
     title: Decide on access outside the VPN
     phase: post-install

@@ -1283,6 +1283,20 @@ pub fn validate_guide(m: &Manifest, g: &Guide) -> Result<()> {
                         if let Some(body) = &c.body {
                             check_run_tokens(m, body).or_else(refuse)?;
                         }
+                        if c.merge {
+                            let object = c
+                                .body
+                                .as_deref()
+                                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                                .is_some_and(|v| v.is_object());
+                            if !object || c.verb.eq_ignore_ascii_case("GET") {
+                                return refuse(format!(
+                                    "{} {} merges: a body that is one JSON object, sent by \
+                                     another verb than the GET it is merged over",
+                                    c.verb, c.path
+                                ));
+                            }
+                        }
                     }
                 }
                 Automation::Sql {
@@ -2253,6 +2267,32 @@ spec:
         ] {
             let refusal = with(bad).expect_err(bad);
             assert!(refusal.contains(why), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn a_merged_call_sends_one_object_over_a_get() {
+        let m = manifest(&format!(
+            "{BASE}  ingress:\n    - {{ host: a.example.fr, port: 8096 }}\n"
+        ));
+        let with = |call: &str| {
+            let g: Guide = serde_yaml_ng::from_str(&format!(
+                "steps:\n  - id: s\n    title: x\n    automate:\n      - method: api\n        \
+                 calls: [{call}]\n"
+            ))
+            .expect("guide");
+            validate_guide(&m, &g).map_err(|e| e.to_string())
+        };
+        assert_eq!(
+            with("{ verb: POST, path: /c, merge: true, body: '{\"A\":true}' }"),
+            Ok(())
+        );
+        for bad in [
+            "{ verb: POST, path: /c, merge: true }",
+            "{ verb: POST, path: /c, merge: true, body: '[1]' }",
+            "{ verb: GET, path: /c, merge: true, body: '{\"A\":true}' }",
+        ] {
+            assert!(with(bad).expect_err(bad).contains("merges"), "{bad}");
         }
     }
 

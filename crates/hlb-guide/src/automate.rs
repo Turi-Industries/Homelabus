@@ -519,7 +519,10 @@ async fn run_calls(
 ) -> Result<(), String> {
     for c in calls {
         let path = hlb_types::guide::render(&c.path, vars);
-        let body = c.body.as_deref().map(|b| hlb_types::guide::render(b, vars));
+        let mut body = c.body.as_deref().map(|b| hlb_types::guide::render(b, vars));
+        if c.merge {
+            body = Some(merged(client, headers, base, &path, body.as_deref()).await?);
+        }
         let mut tries = 0;
         loop {
             match client
@@ -549,6 +552,53 @@ async fn run_calls(
         }
     }
     Ok(())
+}
+
+/// A merged call's body: what a GET of its path answers, the body merged over it.
+/// What was read is never said either — Jellyfin's holds its client secret.
+async fn merged(
+    client: &dyn ApiClient,
+    headers: &[(String, String)],
+    base: &str,
+    path: &str,
+    patch: Option<&str>,
+) -> Result<String, String> {
+    let read = |why: String| format!("GET {path}, to merge over, {why}");
+    let mut doc = match client
+        .call("GET", &format!("{base}{path}"), headers, None)
+        .await
+    {
+        Ok((200, answer)) => serde_json::from_str::<serde_json::Value>(&answer)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or_else(|| read("answered with no JSON object".into()))?,
+        Ok((code, _)) => return Err(read(format!("answered {code}"))),
+        Err(e) => return Err(read(format!("failed: {e}"))),
+    };
+    let patch = serde_json::from_str::<serde_json::Value>(patch.unwrap_or_default())
+        .map_err(|e| format!("the body merged over {path} is not JSON: {e}"))?;
+    merge_patch(&mut doc, &patch);
+    Ok(doc.to_string())
+}
+
+/// RFC 7386: an object merges key by key, `null` removes, anything else replaces.
+fn merge_patch(doc: &mut serde_json::Value, patch: &serde_json::Value) {
+    let serde_json::Value::Object(p) = patch else {
+        *doc = patch.clone();
+        return;
+    };
+    if !doc.is_object() {
+        *doc = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let serde_json::Value::Object(d) = doc {
+        for (k, v) in p {
+            if v.is_null() {
+                d.remove(k);
+            } else {
+                merge_patch(d.entry(k.clone()).or_insert(serde_json::Value::Null), v);
+            }
+        }
+    }
 }
 
 /// Signs in with the recovery sign-in a step names, as its proof does every night:
@@ -1440,6 +1490,100 @@ pointer: /AccessToken
             assert!(r.describe().contains(why), "{}", r.describe());
             assert!(silent.sent.lock().expect("mutex").is_empty());
         }
+    }
+
+    #[test]
+    fn a_merge_keeps_what_the_body_does_not_name() {
+        let mut doc = serde_json::json!({
+            "EnforceSsoOnly": false,
+            "OidConfigs": { "PocketID": { "OidSecret": "s", "CanonicalLinks": { "a": "b" } } },
+            "Gone": 1
+        });
+        merge_patch(
+            &mut doc,
+            &serde_json::json!({
+                "EnforceSsoOnly": true,
+                "SsoOnlyExemptUsernames": ["admin"],
+                "OidConfigs": { "PocketID": { "OidSecret": "t" } },
+                "Gone": null
+            }),
+        );
+        assert_eq!(
+            doc,
+            serde_json::json!({
+                "EnforceSsoOnly": true,
+                "SsoOnlyExemptUsernames": ["admin"],
+                "OidConfigs": { "PocketID": { "OidSecret": "t", "CanonicalLinks": { "a": "b" } } }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merged_call_sends_what_it_read_with_its_body_over_it() {
+        let y = r#"
+steps:
+  - id: sso-only
+    title: x
+    automate:
+      - method: api
+        calls:
+          - { verb: POST, path: /cfg, merge: true, body: '{"EnforceSsoOnly":true}' }
+"#;
+        let api = Answers {
+            answers: vec![
+                (
+                    "GET http://jellyfin:8096/cfg",
+                    (
+                        200,
+                        r#"{"EnforceSsoOnly":false,"OidConfigs":{"P":{"CanonicalLinks":{"a":"b"}}}}"#,
+                    ),
+                ),
+                ("POST http://jellyfin:8096/cfg", (204, "")),
+            ],
+            ..Default::default()
+        };
+        let st = step(y);
+        assert_eq!(
+            on_8096(&api, &st).await,
+            AutomationOutcome::Applied { method: "api" }
+        );
+        assert_eq!(
+            api.sent.lock().expect("mutex")[1],
+            r#"POST http://jellyfin:8096/cfg {"EnforceSsoOnly":true,"OidConfigs":{"P":{"CanonicalLinks":{"a":"b"}}}}"#
+        );
+
+        // Nothing read, nothing sent: a body alone would reset the rest.
+        let refused = Answers {
+            answers: vec![(
+                "GET http://jellyfin:8096/cfg",
+                (401, r#"{"OidSecret":"s"}"#),
+            )],
+            ..Default::default()
+        };
+        let r = on_8096(&refused, &st).await;
+        assert!(
+            r.describe().contains("to merge over, answered 401"),
+            "{}",
+            r.describe()
+        );
+        assert!(!r.describe().contains("OidSecret"));
+        assert_eq!(refused.sent.lock().expect("mutex").len(), 1);
+    }
+
+    async fn on_8096(api: &Answers, st: &GuideStep) -> AutomationOutcome {
+        try_automate_with(
+            &Fake::default(),
+            Some(Api {
+                client: api,
+                port: Some(8096),
+                sign_ins: &[],
+            }),
+            None,
+            "jellyfin",
+            st,
+            &[],
+        )
+        .await
     }
 
     #[tokio::test]

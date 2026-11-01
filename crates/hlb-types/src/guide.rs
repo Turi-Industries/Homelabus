@@ -221,6 +221,12 @@ pub struct ApiCall {
     /// JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// The body is merged (RFC 7386) over what a GET of the same path answers, and the
+    /// result sent: one setting among many an app takes back whole. 🔴 Jellyfin's
+    /// plugin configuration is one document — its SSO provider and each account's link
+    /// to its PocketID identity inside — and a body sent alone resets the rest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merge: bool,
 }
 
 /// A GET whose JSON says an `api` automation's work is there already.

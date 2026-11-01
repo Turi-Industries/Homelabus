@@ -200,7 +200,12 @@ exported — Homelabus never bills.
   (`validate_with_guide`). Jellyfin declares `sso: native`, both callbacks the plugin
   answers on (`/sso/OID/redirect/`, `/sso/OID/r/`), `hlb_jellyfin` by level and
   `AdminRoles: [admin]`; the plugin always asks `openid profile`, which carries the
-  claim. Not run against a real Jellyfin yet: the lab, with part 4; (4) the per-person `http` step beside `exec` and `sql`:
+  claim. Not run against a real Jellyfin yet: the lab, with part 4. Then (owner,
+  2026-11-01) `EnforceSsoOnly`, `admin` exempt: a linked account's password stops
+  working, so whoever leaves PocketID cannot come back by an old one. A setting of the
+  plugin's one configuration document, which holds the provider and the links too: an
+  `api` call's `merge` writes it over a GET (RFC 7386). Quick Connect checks no
+  password (`AuthenticateDirect`, from Jellyfin's source) — the lab to confirm; (4) the per-person `http` step beside `exec` and `sql`:
   disable the account of whoever holds no allowed role, enable it again — through
   read-modify-write of the account's policy, found by `CanonicalLinks`.
 - **Calendars and contacts: one password per device**, made by the person in Me,
