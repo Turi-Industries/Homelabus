@@ -171,6 +171,10 @@ exported — Homelabus never bills.
 - **Jellyfin's accounts are kept in step in phase 3**: a per-person `http` step beside
   `exec` and `sql` (create, disable), Jellyfin its first user — its TV clients cannot
   sign in through OIDC.
+- **Calendars and contacts: one password per device**, made by the person in Me,
+  opening mail, calendars and contacts, each revoked alone. **No `calendar` capability
+  yet**: no app of the catalog consumes CalDAV, and a declaration nobody reads is worse
+  than none — it comes with the first app that does.
 
 #### The phases
 
@@ -1042,6 +1046,15 @@ pull request to the catalog, with no `hlb` release.
     message sent over STARTTLS and delivered DKIM-signed, the volume and its database
     backed up. The first app of the catalog under a read-only root: `TMPDIR` on its
     volume, without which an upload past 1 MB is refused (400, measured).
+  - ✅ Calendars and contacts from Stalwart — 2026-11-01. A device's password is
+    Stalwart's own `x:AppPassword` (1.0), and Stalwart the only list of them: Me →
+    Devices and `hlb user device add|list|revoke`, making one takes the person's own
+    passkey, the password shown once beside a setup panel — server, user, an Apple
+    profile built in the browser (CalDAV, CardDAV, IMAP and SMTP), DAVx⁵ and mail-app
+    lines. **Proven on the lab**: from the CLI and from the page with a real passkey,
+    the password answered PROPFIND through Caddy (207, CalDAV and CardDAV) and IMAP,
+    and after revocation 401 and refused. The lab found one defect: `revoke` refused
+    the address `device list` prints.
 
 **4. Always available.** Gate: the moving-house drill on the lab — the house cut, minutes
 until Vaultwarden and PocketID answer from the VPS, then the way back, both timed.
