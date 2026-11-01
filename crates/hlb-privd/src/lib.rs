@@ -21,6 +21,7 @@ pub mod backup;
 mod confirm;
 pub mod daemon;
 pub mod demo;
+mod devices;
 pub mod fleet;
 mod identity;
 mod mail;
@@ -364,6 +365,9 @@ impl Privd {
             }
             Intent::CreateAlias(i) => serde_json::to_value(mail::create_alias(self, i).await)?,
             Intent::CreateMailbox(i) => serde_json::to_value(mail::create_mailbox(self, i).await)?,
+            Intent::Devices(i) => serde_json::to_value(devices::devices(self, i).await)?,
+            Intent::AddDevice(i) => serde_json::to_value(devices::add_device(self, i).await)?,
+            Intent::RevokeDevice(i) => serde_json::to_value(devices::revoke_device(self, i).await)?,
             Intent::PurgeAlias(i) => serde_json::to_value(mail::purge_alias(self, i).await)?,
             Intent::SignUp(i) => serde_json::to_value(signup::sign_up(self, i).await)?,
             Intent::SyncRoles(i) => serde_json::to_value(roles::sync(self, i).await)?,

@@ -69,6 +69,9 @@ impl Intent {
                 (i.apply && i.availability != "active").then_some(Action::Operate)
             }
             Intent::DeleteRole(_) | Intent::SetUserRole(_) => Some(Action::ManageAccounts),
+            // Not a destruction, a theft: a password to the person's mail, where every
+            // reset lands. Confirmed by THEIR passkey — the daemon checks whose.
+            Intent::AddDevice(i) => i.apply.then_some(Action::ActOnSelf),
             // A confirmation is decided for what it wraps.
             Intent::Scale(_)
             | Intent::Nodes(_)
@@ -89,6 +92,8 @@ impl Intent {
             | Intent::DefaultMailbox(_)
             | Intent::CreateAlias(_)
             | Intent::CreateMailbox(_)
+            | Intent::Devices(_)
+            | Intent::RevokeDevice(_)
             | Intent::SignUp(_)
             | Intent::SyncRoles(_)
             | Intent::PortalRoles(_)

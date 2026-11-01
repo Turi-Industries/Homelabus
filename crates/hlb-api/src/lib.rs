@@ -749,6 +749,48 @@ pub struct MailboxBrief {
     pub default: bool,
 }
 
+/// One of a person's devices: the password it signs in to their mailbox with — mail,
+/// calendars and contacts.
+///
+/// Read from Stalwart, never copied here: a copy would list a device revoked in
+/// Stalwart's own screens as still open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Device {
+    /// Stalwart's id, unique within its mailbox.
+    pub id: String,
+    /// What the person called it.
+    pub name: String,
+    /// The mailbox it signs in to, which is also its user name.
+    pub mailbox: String,
+    /// RFC 3339, UTC.
+    pub created_at: Option<String>,
+}
+
+/// What a device is set up with: the one moment its password is known.
+///
+/// 🔴 Never stored, never logged: Stalwart answers the password once, and nothing
+/// reads it back.
+#[derive(Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct DeviceSetup {
+    /// The user name: the mailbox's address.
+    pub user: String,
+    pub password: String,
+    /// Stalwart's public name, where a phone finds CalDAV and CardDAV
+    /// (`/.well-known/caldav`), JMAP and IMAP.
+    pub server: String,
+}
+
+// By hand: a derived `Debug` would print the password into whatever logs an answer.
+impl std::fmt::Debug for DeviceSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceSetup")
+            .field("user", &self.user)
+            .field("password", &"…")
+            .field("server", &self.server)
+            .finish()
+    }
+}
+
 /// The signed-in person as PocketID knows them: the part of an account they edit
 /// themselves.
 ///

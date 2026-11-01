@@ -220,6 +220,16 @@ pub(crate) async fn consume(p: &Privd, proof: &Proof, asked: &Intent) -> Result<
             action.describe()
         ));
     }
+    // A password to someone's mail is theirs to confirm, whoever else may act on
+    // themselves: an administrator's passkey makes none for another person.
+    if let Intent::AddDevice(i) = asked {
+        if i.account.as_deref() != Some(granted.account.as_str()) {
+            return Err(format!(
+                "{} confirmed, and the device would sign in to another person's mail",
+                granted.account
+            ));
+        }
+    }
     let account = granted.account.clone();
     open.left.retain(|d| *d != digest);
     if !open.left.is_empty() {
@@ -414,6 +424,36 @@ mod tests {
             .await
             .expect_err("an unbound identity");
         assert!(nobody.contains("no account"), "{nobody}");
+    }
+
+    #[tokio::test]
+    async fn a_device_password_takes_its_owners_own_passkey() {
+        let add = |account: &str| -> Intent {
+            hlb_api::intent::AddDevice {
+                account: Some(account.into()),
+                name: "phone".into(),
+                mailbox: None,
+                apply: true,
+            }
+            .into()
+        };
+        // Alice is an administrator, and still makes no password to bob's mail.
+        let p = daemon("u1", &[add("bob")], 0).await;
+        let refused = p.answer(add("bob")).await.expect_err("made unconfirmed");
+        assert!(refused.to_string().contains("passkey"), "{refused}");
+        let proof = begun(&p, &[add("bob")]).await;
+        let alice = confirmed(&p, &proof, &add("bob"))
+            .await
+            .expect_err("alice confirmed bob's");
+        assert!(alice.contains("another person's mail"), "{alice}");
+
+        // Bob's own passkey lets it through to the handler — which finds no mail here.
+        let p = daemon("u2", &[add("bob")], 0).await;
+        let proof = begun(&p, &[add("bob")]).await;
+        let done = confirmed(&p, &proof, &add("bob"))
+            .await
+            .expect("let through");
+        assert_eq!(done["result"]["applied"], false, "{done}");
     }
 
     #[tokio::test]

@@ -62,6 +62,9 @@ pub enum Intent {
     DefaultMailbox(DefaultMailbox),
     CreateAlias(CreateAlias),
     CreateMailbox(CreateMailbox),
+    Devices(Devices),
+    AddDevice(AddDevice),
+    RevokeDevice(RevokeDevice),
     SignUp(SignUp),
     SyncRoles(SyncRoles),
     PortalRoles(PortalRoles),
@@ -141,6 +144,9 @@ asks! {
     DefaultMailbox => Acted,
     CreateAlias => Result<String, Refusal>,
     CreateMailbox => Acted,
+    Devices => Result<Vec<crate::Device>, String>,
+    AddDevice => DeviceAdded,
+    RevokeDevice => Acted,
     SignUp => SignedUp,
     SyncRoles => Result<RolesSynced, String>,
     PortalRoles => Result<(), String>,
@@ -420,6 +426,51 @@ pub struct CreateMailbox {
     /// The account the web side vouches is asking; `None` = nobody signed in.
     pub account: Option<String>,
     pub local: String,
+}
+
+/// The devices a person's mailboxes sign in with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Devices {
+    /// The account the web side vouches is asking.
+    pub account: String,
+}
+
+/// Give one of a person's devices a password of its own for their mailbox.
+///
+/// 🔴 Applied, it takes the person's OWN passkey: the password opens their mail, where
+/// every password reset lands, and an intruder in the web side holding their session
+/// would otherwise make one and read it for as long as nobody looked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddDevice {
+    /// The account the web side vouches is asking; `None` = nobody signed in.
+    pub account: Option<String>,
+    /// What the person calls the device — how they will tell it from the others when
+    /// revoking one.
+    pub name: String,
+    /// The local part of one of their mailboxes; `None` = their default one.
+    pub mailbox: Option<String>,
+    pub apply: bool,
+}
+
+/// A device's plan or outcome, and — made — what it is set up with, this once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceAdded {
+    pub result: ActionResult,
+    pub setup: Option<crate::DeviceSetup>,
+}
+
+/// Revoke one device's password: refused from its next request on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeDevice {
+    /// The account the web side vouches is asking; `None` = nobody signed in.
+    pub account: Option<String>,
+    /// The local part of the mailbox the device signs in to.
+    pub mailbox: String,
+    pub id: String,
+    pub apply: bool,
 }
 
 /// Create an account from an invitation, or preview it without using the link.
