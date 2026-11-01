@@ -638,7 +638,7 @@ pub struct SignInFailed {
 }
 
 /// Signs in once with a recovery sign-in, as [`sign_in_for`] does but never waiting:
-/// for a pass that runs every few minutes, a page is a failure tried at the next one.
+/// for a pass that runs every hour, a page is a failure tried at the next one.
 pub async fn sign_in(
     client: &dyn ApiClient,
     base: &str,

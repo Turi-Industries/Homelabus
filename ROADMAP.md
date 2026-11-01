@@ -200,21 +200,28 @@ exported — Homelabus never bills.
   (`validate_with_guide`). Jellyfin declares `sso: native`, both callbacks the plugin
   answers on (`/sso/OID/redirect/`, `/sso/OID/r/`), `hlb_jellyfin` by level and
   `AdminRoles: [admin]`; the plugin always asks `openid profile`, which carries the
-  claim. Not run against a real Jellyfin yet: the lab, with part 4. Then (owner,
+  claim. Then (owner,
   2026-11-01) `EnforceSsoOnly`, `admin` exempt: a linked account's password stops
   working, so whoever leaves PocketID cannot come back by an old one. A setting of the
   plugin's one configuration document, which holds the provider and the links too: an
   `api` call's `merge` writes it over a GET (RFC 7386). Quick Connect checks no
-  password (`AuthenticateDirect`, from Jellyfin's source) — the lab to confirm; (4)
+  password (`AuthenticateDirect`): a TV approved by a person signed in through
+  PocketID gets its own token under `EnforceSsoOnly` (the lab); (4)
   each linked account disabled while its person holds no role let in, enabled again
   once they do ✅ 2026-11-01 — `access.accounts` (`type: http`), run by the role sync:
   the plugin's `CanonicalLinks` walked, each account's policy read and sent back WHOLE
   with `IsDisabled` set; an account linked to nobody (`admin`) never read. 🔴 It signs
-  in every few minutes, so a refused recovery password is recorded as the nightly
-  proof records it (`recovery:<secret>` broken) and never tried again by either
-  before `hlb assert` — five refusals and Jellyfin disables its administrator. Not run
-  against a real Jellyfin yet: the lab, with parts 2-3 and Quick Connect under
-  `EnforceSsoOnly`.
+  in every hour and at every role change, so a refused recovery password is recorded
+  as the nightly proof records it (`recovery:<secret>` broken) and never tried again
+  by either before `hlb assert` — five refusals and Jellyfin disables its
+  administrator. **The lab, 2026-11-01** (10.11.11 volume → 12.4, plugin 6.1.0.0,
+  PocketID v2): the download job ran on Jellyfin's data node; the guide wrote the
+  provider and `EnforceSsoOnly`; a person signed in through PocketID, their account
+  made and linked (`CanonicalLinks` an object, PocketID id → id without dashes); a
+  role taken away disabled it, its policy otherwise untouched, and both the browser's
+  and a Quick Connect TV's tokens answered 401 at once. 🔴 Disabling DELETES the
+  account's devices: enabled again, the person signs in anew and each TV redoes its
+  Quick Connect.
 - **Calendars and contacts: one password per device**, made by the person in Me,
   opening mail, calendars and contacts, each revoked alone. **No `calendar` capability
   yet**: no app of the catalog consumes CalDAV, and a declaration nobody reads is worse

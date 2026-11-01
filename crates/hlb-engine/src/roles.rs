@@ -938,7 +938,7 @@ impl RoleSync<'_> {
             let AccountsApply::Http { sign_in, .. } = &how.apply;
             let proof_id = hlb_guide::assertions::recovery_id(sign_in);
             // 🔴 Never a password the app refused last time: Jellyfin disables its
-            // administrator after five, and this pass runs every few minutes.
+            // administrator after five, and this pass runs every hour and at every role change.
             if readings.iter().any(|(a, r)| {
                 a == app && r.id == proof_id && r.verdict == hlb_api::assertions::Verdict::Broken
             }) {
