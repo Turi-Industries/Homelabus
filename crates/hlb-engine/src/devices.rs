@@ -60,7 +60,8 @@ fn name_refusal(name: &str) -> Option<String> {
 }
 
 /// The mailbox `wanted` names among `account`'s — their default one when `None` — as
-/// `(local, address)`.
+/// `(local, address)`. Named by its local part or its whole address: the device list
+/// shows the address, and a revocation refusing what the list shows was met on the lab.
 async fn mailbox_of(
     state: &State,
     account: &str,
@@ -68,12 +69,14 @@ async fn mailbox_of(
 ) -> Result<Result<(String, String), String>, String> {
     let boxes = state.mailboxes(account).await.map_err(|e| e.to_string())?;
     let found = match wanted {
-        Some(w) => boxes.iter().find(|(l, ..)| l == w),
+        Some(w) => boxes
+            .iter()
+            .find(|(l, d, _)| l == w || w.split_once('@') == Some((l.as_str(), d.as_str()))),
         None => boxes.iter().find(|(.., d)| *d),
     };
     Ok(match (found, wanted) {
         (Some((l, d, _)), _) => Ok((l.clone(), format!("{l}@{d}"))),
-        (None, Some(w)) => Err(format!("\"{w}\" is not one of your mailboxes")),
+        (None, Some(w)) => Err(format!("\"{w}\" is not one of {account}'s mailboxes")),
         (None, None) => Err("you have no default mailbox for the device to sign in to".into()),
     })
 }
@@ -227,7 +230,7 @@ pub async fn revoke_device(state: &State, mail: Option<&Stalwart>, i: RevokeDevi
         },
         (Some(_), None) => {}
     }
-    let address = target.map(|(_, a)| a).unwrap_or_default();
+    let address = target.map_or_else(|| mailbox.clone(), |(_, a)| a);
     let name = found.as_ref().map(|(_, n)| n.clone()).unwrap_or(id.clone());
     let mut step = ActionStep {
         description: format!("revoke \"{name}\"'s password for {address}"),
@@ -275,6 +278,34 @@ mod tests {
     #[test]
     fn a_name_reaches_the_command_as_one_word() {
         assert_eq!(quoted("Camille's phone"), r"'Camille'\''s phone'");
+    }
+
+    #[tokio::test]
+    async fn a_mailbox_is_named_by_its_address_as_the_list_shows_it() {
+        let state = State::in_memory().await.expect("state");
+        state
+            .upsert_user("lena", "standard", None)
+            .await
+            .expect("account");
+        state
+            .add_mailbox("lena", "lena", "home.example", true)
+            .await
+            .expect("mailbox");
+        let wanted = "lena".to_string();
+        for asked in ["lena", "lena@home.example"] {
+            let found = mailbox_of(&state, &wanted, Some(asked))
+                .await
+                .expect("read");
+            assert_eq!(
+                found,
+                Ok(("lena".into(), "lena@home.example".into())),
+                "{asked}"
+            );
+        }
+        let elsewhere = mailbox_of(&state, &wanted, Some("lena@other.example"))
+            .await
+            .expect("read");
+        assert!(elsewhere.is_err(), "{elsewhere:?}");
     }
 
     #[tokio::test]

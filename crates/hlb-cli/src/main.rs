@@ -1722,7 +1722,7 @@ enum DeviceCmd {
         name: String,
         /// What the device is called — how it is told from the others when revoking.
         device: String,
-        /// The local part of one of their mailboxes. Without it: their default one.
+        /// One of their mailboxes, by its local part or its address. Without it: their default one.
         #[arg(long)]
         mailbox: Option<String>,
         #[arg(long)]
@@ -1732,7 +1732,7 @@ enum DeviceCmd {
     /// default.
     Revoke {
         name: String,
-        /// The local part of the mailbox the device signs in to.
+        /// The mailbox the device signs in to, by its local part or its address.
         mailbox: String,
         /// The device's id, as `hlb user device list` shows it.
         id: String,

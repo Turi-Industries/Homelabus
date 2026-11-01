@@ -212,7 +212,7 @@ PostgreSQL runs — a base backup does not open on another libc:
 ./target/debug/hlb user mailbox default lena contact   # --apply; PocketID's address follows
 ./target/debug/hlb user device add lena "Léna's phone"   # --apply; its password shown once: mail, calendars, contacts
 ./target/debug/hlb user device list lena     # read from Stalwart, the only list
-./target/debug/hlb user device revoke lena lena <id>   # --apply; refused from its next request on
+./target/debug/hlb user device revoke lena lena@home.example <id>   # --apply; refused from its next request on
 ./target/debug/hlb audit --verify            # chain integrity
 ```
 

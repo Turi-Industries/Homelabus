@@ -449,7 +449,7 @@ pub struct AddDevice {
     /// What the person calls the device — how they will tell it from the others when
     /// revoking one.
     pub name: String,
-    /// The local part of one of their mailboxes; `None` = their default one.
+    /// One of their mailboxes, by its local part or its address; `None` = their default one.
     pub mailbox: Option<String>,
     pub apply: bool,
 }
@@ -467,7 +467,7 @@ pub struct DeviceAdded {
 pub struct RevokeDevice {
     /// The account the web side vouches is asking; `None` = nobody signed in.
     pub account: Option<String>,
-    /// The local part of the mailbox the device signs in to.
+    /// The mailbox the device signs in to, by its local part or its address.
     pub mailbox: String,
     pub id: String,
     pub apply: bool,
