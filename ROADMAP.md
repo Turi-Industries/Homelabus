@@ -1416,10 +1416,16 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
      `all` refresh empties first ("Meilisearch adapter not initialised"), so the
      messages' index was never rebuilt — the tip a person pasted before never worked
      either, and said 200.
-   - **Next: Fluxer's message search after a restore.** Either a per-guild
-     `channel_messages` refresh (it needs the guilds' ids from the admin API) or
-     Fluxer initialising its thread index (reported at feedback.fluxer.com — GitHub
-     issues are closed). Until then the restore says the step failed, every time.
+   - ✅ **Fluxer's message search after a restore** (owner, 2026-11-01: work around
+     it AND report it). Read in the api image's source: the threads' index is made
+     ready lazily, by whatever asks it first, and `all` empties it without asking. A
+     `threads` refresh of one community (its id from `GET /admin/guilds?limit=1`)
+     asks first, in the same worker; `all` then runs whole. On the lab: the worker
+     restarted and the messages' index emptied, `all` alone fails again, the guide's
+     script exits 0 and the index is back to 18. Without a community it still fails
+     — nothing else readies the index in the worker. Upstream: the report is the
+     owner's to post at feedback.fluxer.com; the first refresh goes once Fluxer
+     readies the index before emptying it.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000
