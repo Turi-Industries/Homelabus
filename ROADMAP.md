@@ -168,9 +168,30 @@ exported — Homelabus never bills.
   An alternative speaking another protocol (another password manager, another web SSH
   console than `nodes: termix`) enters as a new variant, and the emergency vault's
   dependence on the Bitwarden protocol is said where it is offered.
-- **Jellyfin's accounts are kept in step in phase 3**: a per-person `http` step beside
-  `exec` and `sql` (create, disable), Jellyfin its first user — its TV clients cannot
-  sign in through OIDC.
+- **Jellyfin signs in through PocketID, by MaxRink's SSO plugin** (owner, 2026-11-01,
+  over Jellyfin keeping accounts of its own). Jellyfin will not take OIDC into its
+  core (jellyfin/jellyfin#17271 closed 2026-10-02, "not ready"); 9p4's plugin was
+  archived 2026-05-12. Of its forks, MaxRink's: K0lin's still starts an account link
+  unauthenticated and has no way to refuse adopting a same-named account — a PocketID
+  person called `admin` would take Jellyfin's administrator. TVs sign in by Quick
+  Connect, approved from a signed-in browser or phone. **Measured** on 12.4 against
+  PocketID 2.19.1, plugin 6.1.0.0: the plugin makes the account at a first sign-in;
+  a person taken out of the group cannot sign in again, 🔴 but their TV's and phone's
+  tokens keep working until the account is disabled (then 401 at once); the plugin
+  never enables a disabled account again; a disabled account's SSO sign-in answers
+  200 with a token Jellyfin refuses; the admin flag follows the role claim at each
+  sign-in only. 🔴 `POST /sso/OID/Add` REPLACES the provider, its `CanonicalLinks`
+  (PocketID id → Jellyfin account) with it: written again, everyone is refused (409)
+  — configured once, or read-modify-written. 🔴 `POST /Users/{id}/Policy` resets
+  every field it is not sent. `OidSecretFile` is in the fork's code, not in 6.1.0.0.
+  The plugin loads from `/config/plugins/<any dir>/`, its settings kept apart in
+  `plugins/configurations/`. Four parts, in order: (1) Jellyfin 12.4 ✅; (2)
+  `spec.downloads`, a file fetched by URL and sha256 into a volume before the app
+  starts, by a job on its data's node, the service restarted when it changes; (3) an
+  `api` guide step signing in with a recovery login, its token in its calls' headers,
+  to set the provider once; (4) the per-person `http` step beside `exec` and `sql`:
+  disable the account of whoever holds no allowed role, enable it again — through
+  read-modify-write of the account's policy, found by `CanonicalLinks`.
 - **Calendars and contacts: one password per device**, made by the person in Me,
   opening mail, calendars and contacts, each revoked alone. **No `calendar` capability
   yet**: no app of the catalog consumes CalDAV, and a declaration nobody reads is worse
