@@ -86,6 +86,14 @@ the first.
   1.0.0.
 - **`SieveScript/*` needs `urn:ietf:params:jmap:sieve` in `using`**, or it is an
   `unknownMethod`. And a fresh server hosts no domain: `ensure_account` creates it.
+- **🔴 A device's password is an `x:AppPassword`, never a credential written on the
+  account** (1.0.0). `credentials` with `@type: AppPassword` in `x:Account/set` is
+  refused — "Secondary credentials cannot be set directly", under HTTP 200. It is
+  `x:AppPassword/set` with the account's `accountId` and NO `secret`: the server draws
+  it and answers it ONCE; `/get` reads `****` after. 0.16 has none (`Error::NeedsV1`).
+  Stalwart is the only list of devices (`hlb_engine::devices`): a copy would show one
+  revoked in its own screens as open. Through Caddy `/.well-known/caldav` redirects to
+  https; inside the overlay the same redirect says http.
 - **A Sieve script does not travel in the JMAP call.** `SieveScript` only carries a
   `blobId`: upload the content, then reference it. And **without
   `onSuccessActivateScript` the script exists and sorts NOTHING** — a completely silent
