@@ -49,7 +49,7 @@ steps:
           path: /System/Info/Public
           pointer: /StartupWizardCompleted
           equals: "true"
-        # The wizard's own calls, in its order (10.11.11). Remote access stays on:
+        # The wizard's own calls, in its order (10.11.11, unchanged in 12.4). Remote access stays on:
         # every request reaches Jellyfin through Caddy, never from its own network.
         calls:
           - verb: POST
@@ -65,7 +65,7 @@ steps:
           - { verb: POST, path: /Startup/Complete }
     verify:
       type: http
-      # The wizard's last call sets it, after the administrator (10.11.11); `/health`
+      # The wizard's last call sets it, after the administrator (10.11.11, 12.4); `/health`
       # answered with the wizard still open to its first visitor.
       url: "https://{{ domain }}/System/Info/Public"
       expectJson: { pointer: /StartupWizardCompleted, equals: "true" }

@@ -6,7 +6,11 @@ metadata:
   category: media
   homepage: https://jellyfin.org
 spec:
-  image: { repo: jellyfin/jellyfin, tag: "10.11.11", digest: "sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db" }
+  # 12 — rehearsed on 2026-11-01 on a 10.11.11 volume through this start: its
+  # migrations, the administrator and an account still signing in, the wizard below
+  # run on an empty one. 12.0 removes alternative versions of a film it did not merge
+  # by hand until a library scan, which Jellyfin schedules itself every twelve hours.
+  image: { repo: jellyfin/jellyfin, tag: "12.4", digest: "sha256:fea863d0cd9ec445985d9c75fc6ed64e38a1d2766cf0c250a33d553f4fc1b771" }
   requires:
     # 🔴 NO SSO. Jellyfin speaks OIDC, but its clients — Android TV, Apple TV,
     # Kodi, the mobile app — cannot follow an authentication redirect. Putting a
@@ -57,8 +61,8 @@ spec:
       # sign-in form facing the internet — and its accounts are not protected by the
       # identity provider.
       expose: private
-      # A wrong password is an `AuthenticationException`, which Jellyfin 10.11 answers
-      # 401 (`ExceptionMiddleware`). Its routes ignore case, and so does Caddy's `path`.
+      # A wrong password is an `AuthenticationException`, which Jellyfin answers 401
+      # (`ExceptionMiddleware`, 10.11 and 12.4). Its routes ignore case, and so does Caddy's `path`.
       authRoutes:
         - paths: [/Users/AuthenticateByName]
           failsWith: 401
@@ -75,6 +79,9 @@ spec:
     # Transcoding is the heaviest load in the catalog.
     tier: heavy
     healthcheck:
+      # ⚠️ Lenient on purpose: while a new version migrates its database, `/health`
+      # answers 200 `Degraded` and every sign-in 503. Requiring `Healthy` would have
+      # Swarm kill the task mid-migration — 12.0's first start rewrites the library.
       test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
   update:
     channel: minor
@@ -91,7 +98,8 @@ spec:
   recovery:
     - secret: admin-password
       username: admin
-      # 401 to a refusal, and to a client that does not name itself (10.11.11). One
+      # 401 to a refusal; 400 to a client that does not name itself (12.4; 10.11.11
+      # answered it 401). One
       # device id: each sign-in replaces the last one's token instead of adding a device.
       proof:
         path: /Users/AuthenticateByName

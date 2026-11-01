@@ -1697,7 +1697,8 @@ Vikunja 2.7 — the newest build of each a week old. Seafile 14.0.9 and its noti
 server 14.0.8, rehearsed then and written on 2026-10-27 once mature, after a second start
 from an empty volume. MariaDB stays on its 11.8 LTS.
 Jellyfin publishes 12.x only as `12.2` and `12.2.<date>-<time>`, no shape of its
-10.11.11, so nothing is proposed. `hlb-caddy` is built here (`builtHere`): what pins it
+10.11.11, so nothing was proposed: 12.4 written by hand on 2026-11-01, rehearsed on a
+10.11.11 volume — the SSO plugin it now carries targets 12 only. `hlb-caddy` is built here (`builtHere`): what pins it
 is its `Dockerfile`'s bases, each by digest.
 
 **Decided on 2026-10-18:**
