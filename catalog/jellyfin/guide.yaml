@@ -39,9 +39,9 @@ steps:
 
         hlb secret-get jellyfin-admin-password
 
-      🔴 Jellyfin is NOT behind the SSO — its TV clients cannot follow an
-      authentication redirect. That password is therefore the only thing
-      protecting the media library: put it in Vaultwarden, nowhere else.
+      Everyone else signs in through PocketID; this account is the way in
+      when PocketID is down, and its password opens every library: it is in
+      the emergency vault, keep it nowhere else.
     deeplink: "https://{{ domain }}/web/#/login.html"
     automate:
       - method: api
@@ -69,6 +69,46 @@ steps:
       # answered with the wizard still open to its first visitor.
       url: "https://{{ domain }}/System/Info/Public"
       expectJson: { pointer: /StartupWizardCompleted, equals: "true" }
+
+  - id: sso-provider
+    title: Sign-in through PocketID
+    phase: post-install
+    after: [first-account]
+    body: |
+      The SSO plugin is given PocketID as its provider, by the administrator:
+      every allowed role signs in with "Sign in with PocketID" on the sign-in
+      page, its account made at the first sign-in. TVs and phones sign in by
+      Quick Connect, approved from a browser already signed in.
+
+      ⚠️ It is written once. Writing it again replaces the provider whole,
+      with each account's link to its PocketID identity, after which nobody
+      signs in: a client secret or an identity provider changed later is NOT
+      carried to Jellyfin by this step.
+    automate:
+      - method: api
+        signIn: admin-password
+        # The proof's own device: Jellyfin keeps one token per device, so the step
+        # replaces the nightly proof's instead of adding a device.
+        headers:
+          Authorization: 'MediaBrowser Client="Homelabus", Device="Homelabus", DeviceId="homelabus-recovery-proof", Version="1", Token="{{ token }}"'
+        # Anonymous, and the names alone: reading the provider is the administrator's.
+        probe:
+          path: /sso/OID/GetNames
+          pointer: /0
+          equals: '"PocketID"'
+        # Every PocketID person reaching the plugin is let in (`Roles` empty):
+        # PocketID's own restriction of the client to the allowed roles is the gate.
+        # `DisableUsernameAccountAdoption`: a PocketID person named `admin` must not
+        # take the administrator's account. Never `CanonicalLinks` here — sent, it
+        # would replace every account's link.
+        calls:
+          - verb: POST
+            path: /sso/OID/Add/PocketID
+            body: '{"OidEndpoint":"{{ oidc.issuer }}","OidClientId":"{{ oidc.client_id }}","OidSecret":"{{ oidc.client_secret }}","Enabled":true,"EnableAuthorization":true,"EnableAllFolders":true,"EnabledFolders":[],"Roles":[],"AdminRoles":["admin"],"PreserveAdminPermissions":false,"RoleClaim":"hlb_jellyfin","OidScopes":[],"DisableUsernameAccountAdoption":true,"SchemeOverride":"https"}'
+    verify:
+      type: http
+      url: "https://{{ domain }}/sso/OID/GetNames"
+      expectJson: { pointer: /0, equals: '"PocketID"' }
 
   - id: remote-access
     title: Decide on access outside the VPN

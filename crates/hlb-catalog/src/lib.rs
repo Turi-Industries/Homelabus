@@ -105,7 +105,7 @@ impl Catalog {
             .entries
             .iter()
             .filter_map(|(name, e)| {
-                hlb_types::validate(&e.manifest)
+                hlb_types::validate_with_guide(&e.manifest, &e.guide)
                     .and_then(|()| hlb_types::validate_guide(&e.manifest, &e.guide))
                     // 🔴 What the catalog holds to beyond any manifest. Written in phase 7
                     // and called by nothing but its own tests until 2026-10-19: the
@@ -1185,9 +1185,24 @@ mod tests {
                 continue;
             }
             native += 1;
+            // Or by its guide, through the app's API: Jellyfin's SSO plugin.
+            let calls = e
+                .guide
+                .steps
+                .iter()
+                .flat_map(|s| &s.automate)
+                .flat_map(|a| match a {
+                    hlb_types::Automation::Api { calls, .. } => {
+                        calls.iter().filter_map(|c| c.body.as_ref()).collect()
+                    }
+                    hlb_types::Automation::Env { .. }
+                    | hlb_types::Automation::Exec { .. }
+                    | hlb_types::Automation::Sql { .. } => Vec::new(),
+                });
             let given = m
                 .spec
                 .substituted()
+                .chain(calls)
                 .any(|v| v.contains("{{ oidc.client_id }}"));
             assert!(
                 given,

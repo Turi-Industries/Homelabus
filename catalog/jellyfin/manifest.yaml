@@ -12,16 +12,14 @@ spec:
   # by hand until a library scan, which Jellyfin schedules itself every twelve hours.
   image: { repo: jellyfin/jellyfin, tag: "12.4", digest: "sha256:fea863d0cd9ec445985d9c75fc6ed64e38a1d2766cf0c250a33d553f4fc1b771" }
   requires:
-    # 🔴 NO SSO. Jellyfin speaks OIDC, but its clients — Android TV, Apple TV,
-    # Kodi, the mobile app — cannot follow an authentication redirect. Putting a
-    # portal in front cuts off everything that is not a browser, and the failure is
-    # discovered from the sofa. Jellyfin therefore keeps its own accounts, and the
-    # private exposure compensates.
-    #
-    # This is a DELIBERATE exclusion, not an oversight: `mode: none` records it as a
-    # decision, where omitting the capability would suggest a hole.
+    # Through MaxRink's SSO plugin (`downloads` below), set by the guide. Its callback
+    # follows the path a sign-in began at — `/sso/OID/start/` comes back to
+    # `redirect`, `/sso/OID/p/` to `r` (6.1.0.0) — so both are declared. TVs and the
+    # phone apps cannot follow a redirect: they sign in by Quick Connect, approved from
+    # a browser already signed in.
     - kind: sso
-      mode: none
+      mode: native
+      redirectPaths: ["/sso/OID/redirect/PocketID", "/sso/OID/r/PocketID"]
 
     # Configuration and internal database. SQLite: the flag imposes the snapshot backup
     # method — a SQLite file copied hot does not restore.
@@ -57,9 +55,9 @@ spec:
       port: 8096
       # No Anubis: a proof-of-work would break every non-browser client.
       chain: [caddy-front, caddy-back]
-      # 🔴 Private. With no SSO in front, a public exposure would leave Jellyfin's
-      # sign-in form facing the internet — and its accounts are not protected by the
-      # identity provider.
+      # 🔴 Private. The SSO is a button beside Jellyfin's own password form, which stays
+      # — the administrator's recovery sign-in goes through it — and a public exposure
+      # would leave that form facing the internet.
       expose: private
       # A wrong password is an `AuthenticationException`, which Jellyfin answers 401
       # (`ExceptionMiddleware`, 10.11 and 12.4). Its routes ignore case, and so does Caddy's `path`.
@@ -105,8 +103,17 @@ spec:
         path: /System/Info/Public
         pointer: /StartupWizardCompleted
         equals: true
-  # Its administrator, made by the guide's first-run step — the only way in, since its
-  # TV clients cannot go through the SSO.
+  # Every allowed role signs in through PocketID; the plugin makes the account at the
+  # first sign-in and sets its administrator flag from `hlb_jellyfin` at each one — one
+  # role to the plugin, `user` or `admin`, and its `AdminRoles` names `admin`.
+  access:
+    admins:
+      level: admin
+      means: Jellyfin's administration — its accounts, libraries and settings
+    claims:
+      hlb_jellyfin: { byLevel: { user: user, admin: admin } }
+  # Its administrator, made by the guide's first-run step: the way in when PocketID is
+  # down, and the account that sets the SSO provider.
   recovery:
     - secret: admin-password
       username: admin

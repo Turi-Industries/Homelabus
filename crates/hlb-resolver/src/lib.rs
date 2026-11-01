@@ -105,7 +105,7 @@ pub fn resolve_with_guide(
     guide: &hlb_types::Guide,
     params: &InstallParams,
 ) -> Result<Plan> {
-    hlb_types::validate(m)?;
+    hlb_types::validate_with_guide(m, guide)?;
 
     let app = &m.metadata.name;
 

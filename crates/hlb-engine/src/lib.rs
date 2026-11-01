@@ -1013,6 +1013,37 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             .collect())
     }
 
+    /// The app's recovery sign-ins that carry a proof, with what the vault holds for
+    /// each — or why it holds nothing, said by the step that wanted one.
+    async fn api_sign_ins(
+        &self,
+        app: &str,
+        m: &hlb_types::Manifest,
+    ) -> Result<Vec<hlb_guide::ApiSignIn>> {
+        let credentials = match self.vault {
+            Some(vault) => emergency::credentials(self.state, vault, app, m).await?,
+            None => m
+                .spec
+                .recovery
+                .iter()
+                .map(|r| hlb_guide::assertions::Credential {
+                    secret: r.secret.clone(),
+                    sign_in: Err("the vault is not open".into()),
+                })
+                .collect(),
+        };
+        Ok(m.spec
+            .recovery
+            .iter()
+            .zip(credentials)
+            .filter_map(|(r, credential)| {
+                r.proof
+                    .clone()
+                    .map(|proof| hlb_guide::ApiSignIn { credential, proof })
+            })
+            .collect())
+    }
+
     /// Reads a secret from the vault, or `None` when it does not exist yet.
     ///
     /// ⚠️ Absent is not an error here: a plan can be executed before the secret is
@@ -1456,9 +1487,19 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // deployment: the step in the plan keeps `{{ secret.admin-password }}`.
                 let mut step = step.clone();
                 let mut writes_sql = false;
+                let mut signs_in = false;
                 for a in &mut step.automate {
                     match a {
-                        hlb_types::Automation::Api { calls, .. } => {
+                        // Its headers take `{{ token }}` alone, filled by the sign-in
+                        // (`validate_guide`): nothing of the vault's to give them here.
+                        hlb_types::Automation::Api {
+                            port: _,
+                            sign_in,
+                            headers: _,
+                            probe: _,
+                            calls,
+                        } => {
+                            signs_in |= sign_in.is_some();
                             for c in calls {
                                 if let Some(body) = &c.body {
                                     c.body = Some(self.resolve_one(app, body).await?);
@@ -1486,13 +1527,21 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                     (Some(pg), Some(database)) => Some(AppDb { pg, database }),
                     _ => None,
                 };
-                let port = self
-                    .state
-                    .app_manifest(app)
-                    .await
-                    .ok()
+                let manifest = self.state.app_manifest(app).await.ok();
+                let port = manifest
+                    .as_ref()
                     .and_then(|m| m.spec.ingress.first().map(|i| i.port));
-                let api = self.api.map(|client| hlb_guide::Api { client, port });
+                // The recovery sign-ins, looked up only for a step that signs in: the
+                // vault is opened for what is sent, never on the way.
+                let sign_ins = match (&manifest, signs_in) {
+                    (Some(m), true) => self.api_sign_ins(app, m).await?,
+                    _ => Vec::new(),
+                };
+                let api = self.api.map(|client| hlb_guide::Api {
+                    client,
+                    port,
+                    sign_ins: &sign_ins,
+                });
                 let domain = self.state.app_domain(app).await?.unwrap_or_default();
                 let issue = hlb_guide::try_automate_with(
                     self.orchestrator,
@@ -4227,5 +4276,128 @@ spec:
         let out = install(&o, &s, PUBLIC, Some("demo.example.fr")).await;
         assert_eq!(out.unimplemented, 1, "{out:?}");
         assert!(o.jobs.lock().unwrap().is_empty());
+    }
+
+    /// A request as it was sent: `VERB url`, its headers, its body.
+    type Sent = (String, Vec<(String, String)>, String);
+
+    /// An app's API that signs in its administrator and records what it was sent.
+    #[derive(Default)]
+    struct SignsIn {
+        sent: Mutex<Vec<Sent>>,
+    }
+
+    #[async_trait]
+    impl hlb_guide::ApiClient for SignsIn {
+        async fn call(
+            &self,
+            verb: &str,
+            url: &str,
+            headers: &[(String, String)],
+            body: Option<&str>,
+        ) -> std::result::Result<(u16, String), String> {
+            let key = format!("{verb} {url}");
+            let mut sent = self.sent.lock().expect("mutex");
+            sent.push((key.clone(), headers.to_vec(), body.unwrap_or("").into()));
+            let wrote = |path: &str| sent.iter().any(|(k, _, _)| k.ends_with(path));
+            Ok(match key.as_str() {
+                "GET http://demo:8096/done" => (
+                    200,
+                    format!(r#"{{"first":{},"sso":{}}}"#, wrote("/first"), wrote("/sso")),
+                ),
+                "POST http://demo:8096/signin" => (200, r#"{"AccessToken":"tok-1"}"#.into()),
+                _ => (204, String::new()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_signs_in_with_the_vaults_password_and_sends_the_token() {
+        let o = Fake::default();
+        let s = State::in_memory().await.expect("state");
+        let dir = tempfile::tempdir().expect("dir");
+        let vault = Vault::init(dir.path().join("master.key")).expect("vault");
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: a/b, tag: "1", digest: "sha256:x" }
+  ingress:
+    - { host: x.example.fr, port: 8096 }
+  recovery:
+    - secret: admin-password
+      username: admin
+      proof:
+        path: /signin
+        body: '{"u":"{{ username }}","p":"{{ password }}"}'
+        pointer: /AccessToken
+"#,
+        )
+        .expect("manifest");
+        let guide: hlb_types::Guide = serde_yaml_ng::from_str(
+            r#"
+steps:
+  - id: first
+    title: The administrator
+    automate:
+      - method: api
+        probe: { path: /done, pointer: /first, equals: "true" }
+        calls: [{ verb: POST, path: /first, body: '{"p":"{{ secret.admin-password }}"}' }]
+  - id: sso
+    title: The SSO provider
+    after: [first]
+    automate:
+      - method: api
+        signIn: admin-password
+        headers: { Authorization: 'Token="{{ token }}"' }
+        probe: { path: /done, pointer: /sso, equals: "true" }
+        calls: [{ verb: POST, path: /sso, body: '{}' }]
+"#,
+        )
+        .expect("guide");
+        hlb_types::validate_guide(&m, &guide).expect("a valid guide");
+        s.upsert_app("demo", &m, None).await.expect("upsert");
+        let p = hlb_resolver::resolve_with_guide(&m, &guide, &Default::default()).expect("plan");
+        let api = SignsIn::default();
+        let out = Executor::new(&o, &s)
+            .with_vault(&vault)
+            .with_api(&api)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .expect("run");
+        assert!(out.is_success(), "{out:?}");
+        assert!(
+            s.pending_guides().await.expect("guides").is_empty(),
+            "both steps done"
+        );
+
+        let password = vault
+            .decrypt(
+                &s.secret("demo-admin-password")
+                    .await
+                    .expect("read")
+                    .expect("kept"),
+            )
+            .expect("decrypt");
+        let sent = api.sent.lock().expect("mutex");
+        let at = |path: &str| {
+            sent.iter()
+                .find(|(k, _, _)| k.ends_with(path))
+                .unwrap_or_else(|| panic!("no {path}: {sent:?}"))
+        };
+        assert_eq!(
+            at("/signin").2,
+            format!(r#"{{"p":"{password}","u":"admin"}}"#),
+            "signed in with what the vault holds"
+        );
+        let token = vec![("Authorization".to_string(), r#"Token="tok-1""#.to_string())];
+        assert_eq!(at("/sso").1, token, "the call carries the token");
+        assert!(
+            at("/first").1.is_empty(),
+            "a step that signs in nowhere sends none"
+        );
     }
 }

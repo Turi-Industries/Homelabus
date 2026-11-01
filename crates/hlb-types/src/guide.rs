@@ -177,6 +177,15 @@ pub enum Automation {
         /// Absent: the first ingress's port.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
+        /// A recovery sign-in, by its `secret`, made by its proof before the probe —
+        /// for an app whose settings only its administrator writes: Jellyfin's SSO
+        /// plugin. The string its proof's `pointer` reaches is `{{ token }}` in
+        /// `headers`, and nowhere else.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sign_in: Option<String>,
+        /// Sent with the probe and every call.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        headers: std::collections::BTreeMap<String, String>,
         /// A GET saying it is done already, so a step is never replayed — most
         /// first-run endpoints refuse a second call, or worse, accept it.
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -248,7 +248,7 @@ pub const FORM: &str = "application/x-www-form-urlencoded";
 
 /// A proof's body, already filled, as a form: one JSON object of strings, each field
 /// percent-encoded as browsers encode a form (WHATWG URL, `application/x-www-form-urlencoded`).
-fn form(body: &str) -> Result<String, String> {
+pub(crate) fn form(body: &str) -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("the proof's body is not JSON: {e}"))?;
     let fields = v.as_object().ok_or("a form's body is one JSON object")?;
@@ -276,7 +276,7 @@ fn form(body: &str) -> Result<String, String> {
 }
 
 /// A proof's body with the sign-in in its strings, escaped as JSON.
-fn fill(body: &str, username: &str, password: &str) -> Result<String, String> {
+pub(crate) fn fill(body: &str, username: &str, password: &str) -> Result<String, String> {
     fn walk(v: &mut serde_json::Value, username: &str, password: &str) {
         match v {
             serde_json::Value::String(s) => {

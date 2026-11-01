@@ -193,7 +193,14 @@ exported — Homelabus never bills.
   nothing, a wrong hash refused with the old version left, a user's volume keeping its
   owner); its Swarm placement is the lab's to prove, with part 4; (3) an
   `api` guide step signing in with a recovery login, its token in its calls' headers,
-  to set the provider once; (4) the per-person `http` step beside `exec` and `sql`:
+  to set the provider once ✅ 2026-11-01 — `signIn` names a `recovery` entry, made by
+  its proof before the probe, the vault read by the engine only for such a step; its
+  string at the proof's `pointer` is `{{ token }}` in `headers` and nowhere else
+  (`validate_guide`); a capability read by a guide's call counts as read
+  (`validate_with_guide`). Jellyfin declares `sso: native`, both callbacks the plugin
+  answers on (`/sso/OID/redirect/`, `/sso/OID/r/`), `hlb_jellyfin` by level and
+  `AdminRoles: [admin]`; the plugin always asks `openid profile`, which carries the
+  claim. Not run against a real Jellyfin yet: the lab, with part 4; (4) the per-person `http` step beside `exec` and `sql`:
   disable the account of whoever holds no allowed role, enable it again — through
   read-modify-write of the account's policy, found by `CanonicalLinks`.
 - **Calendars and contacts: one password per device**, made by the person in Me,

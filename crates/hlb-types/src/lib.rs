@@ -259,6 +259,12 @@ fn validate_downloads(m: &Manifest) -> Result<()> {
 ///
 /// Each rule here corresponds to a concrete way of shooting yourself in the foot.
 pub fn validate(m: &Manifest) -> Result<()> {
+    validate_with_guide(m, &Guide::default())
+}
+
+/// The same, a capability read by the guide's own calls counting as read: Jellyfin
+/// hands its OIDC client to the SSO plugin through its API, from no variable.
+pub fn validate_with_guide(m: &Manifest, g: &Guide) -> Result<()> {
     // An app on `proxy-header` trusts an HTTP header. If it is reachable without
     // going through the proxy, `curl -H "Remote-User: admin"` is enough to impersonate
     // any account.
@@ -412,8 +418,27 @@ pub fn validate(m: &Manifest) -> Result<()> {
     // complain about an incorrect password, and the investigation would start at the
     // password - never at the manifest.
     //
-    // Everywhere a deployment substitutes.
-    let texts: Vec<&str> = m.spec.substituted().map(String::as_str).collect();
+    // Everywhere a deployment substitutes, and every value a guide's step sends.
+    let mut texts: Vec<&str> = m.spec.substituted().map(String::as_str).collect();
+    for a in g.steps.iter().flat_map(|s| &s.automate) {
+        match a {
+            Automation::Api {
+                port: _,
+                sign_in: _,
+                // `{{ token }}` alone (`validate_guide`).
+                headers: _,
+                probe: _,
+                calls,
+            } => texts.extend(calls.iter().filter_map(|c| c.body.as_deref())),
+            Automation::Sql {
+                statement: _,
+                params,
+                probe: _,
+                restart: _,
+            } => texts.extend(params.iter().map(String::as_str)),
+            Automation::Env { .. } | Automation::Exec { .. } => {}
+        }
+    }
     let mut used: Vec<Token> = texts.iter().flat_map(|v| binding::tokens_in(v)).collect();
     used.sort_unstable();
     used.dedup();
@@ -1133,6 +1158,8 @@ pub fn validate_guide(m: &Manifest, g: &Guide) -> Result<()> {
                     } => probe.is_some() || probe_matches.is_some(),
                     Automation::Api {
                         port: _,
+                        sign_in: _,
+                        headers: _,
                         probe,
                         calls: _,
                     } => probe.is_some(),
@@ -1176,7 +1203,59 @@ pub fn validate_guide(m: &Manifest, g: &Guide) -> Result<()> {
                         }
                     }
                 }
-                Automation::Api { port, probe, calls } => {
+                Automation::Api {
+                    port,
+                    sign_in,
+                    headers,
+                    probe,
+                    calls,
+                } => {
+                    if let Some(secret) = sign_in {
+                        // A restore is handed no sign-in: the step would fail on every
+                        // restore, saying only that none was looked up.
+                        if step.phase == Phase::PostRestore {
+                            return refuse("a restore signs in nowhere yet".into());
+                        }
+                        let Some(r) = m.spec.recovery.iter().find(|r| &r.secret == secret) else {
+                            return refuse(format!(
+                                "it signs in with \"{secret}\", which no `recovery` entry names"
+                            ));
+                        };
+                        let Some(proof) = &r.proof else {
+                            return refuse(format!(
+                                "it signs in with \"{secret}\", whose recovery entry says no \
+                                 `proof` to sign in by"
+                            ));
+                        };
+                        // Basic sends the password with every request, and makes no token
+                        // a step could carry: no app of the catalog needs it here.
+                        if proof.basic {
+                            return refuse(format!(
+                                "it signs in with \"{secret}\", whose proof is HTTP Basic: a \
+                                 step carries a token, never the password"
+                            ));
+                        }
+                        if !headers.values().any(|v| v.contains("{{ token }}")) {
+                            return refuse(format!(
+                                "it signs in with \"{secret}\" and sends the token in no header"
+                            ));
+                        }
+                    }
+                    // A header is sent as written but for the token: whatever else is
+                    // between braces would reach the app literal.
+                    for (name, value) in headers {
+                        let mut rest = value.as_str();
+                        while let Some(at) = rest.find("{{") {
+                            let inner = rest[at + 2..].split("}}").next().unwrap_or("");
+                            rest = &rest[at + 2..];
+                            if inner != " token " || sign_in.is_none() {
+                                return refuse(format!(
+                                    "header {name} holds {{{{{inner}}}}}: a header takes \
+                                     `{{{{ token }}}}`, and only from a `signIn`"
+                                ));
+                            }
+                        }
+                    }
                     if calls.is_empty() {
                         return refuse(
                             "an `api` automation with no call does nothing, and says it did".into(),
@@ -2206,6 +2285,80 @@ spec:
             .contains("does not declare"));
         assert!(with(r#"{"p":"{{ base_domain }}"}"#)
             .expect_err("unknown")
+            .contains("filled by nothing"));
+    }
+
+    #[test]
+    fn a_step_signs_in_by_a_proven_recovery_and_sends_its_token_in_a_header_only() {
+        let m = manifest(&format!(
+            "{BASE}  ingress:\n    - {{ host: a.example.fr, port: 8096 }}\n  recovery:\n    \
+             - secret: admin-password\n      username: admin\n      proof: {{ path: /in, body: \
+             '{{\"u\":\"{{{{ username }}}}\",\"p\":\"{{{{ password }}}}\"}}', pointer: \
+             /AccessToken }}\n    - secret: basic-password\n      username: admin\n      \
+             proof: {{ path: /in, body: '{{}}', basic: true, pointer: /t }}\n"
+        ));
+        // The wizard's step, generating what the recovery entries deposit.
+        let first =
+            "steps:\n  - id: first\n    title: x\n    automate:\n      - method: api\n        \
+                     calls: [{ verb: POST, path: /u, body: '{\"a\":\"{{ secret.admin-password }}\",\
+                     \"b\":\"{{ secret.basic-password }}\"}' }]\n";
+        let with = |phase: &str, automate: &str| {
+            let g: Guide = serde_yaml_ng::from_str(&format!(
+                "{first}  - id: sso\n    title: x\n    phase: {phase}\n    automate:\n      \
+                 - method: api\n{automate}        calls: [{{ verb: POST, path: /a }}]\n"
+            ))
+            .expect("guide");
+            validate_guide(&m, &g).map_err(|e| e.to_string())
+        };
+        let signed = "        signIn: admin-password\n        headers: { Authorization: \
+                      'Token=\"{{ token }}\"' }\n";
+        assert_eq!(with("post-install", signed), Ok(()));
+        assert_eq!(
+            with("post-install", "        headers: { X-Client: hlb }\n"),
+            Ok(()),
+            "a header needs no sign-in"
+        );
+        for (phase, automate, why) in [
+            (
+                "post-install",
+                "        signIn: nobody\n        headers: { A: '{{ token }}' }\n",
+                "no `recovery` entry",
+            ),
+            (
+                "post-install",
+                "        signIn: basic-password\n        headers: { A: '{{ token }}' }\n",
+                "HTTP Basic",
+            ),
+            (
+                "post-install",
+                "        signIn: admin-password\n        headers: { A: b }\n",
+                "in no header",
+            ),
+            (
+                "post-install",
+                "        headers: { A: '{{ token }}' }\n",
+                "only from a `signIn`",
+            ),
+            (
+                "post-install",
+                "        signIn: admin-password\n        headers: { A: '{{ token }} \
+                 {{ secret.admin-password }}' }\n",
+                "a header takes",
+            ),
+            ("post-restore", signed, "a restore signs in nowhere"),
+        ] {
+            let refusal = with(phase, automate).expect_err(why);
+            assert!(refusal.contains(why), "{why}: {refusal}");
+        }
+        // Nowhere but a header: a body would carry it into whatever the app echoes.
+        let g: Guide = serde_yaml_ng::from_str(&format!(
+            "{first}  - id: sso\n    title: x\n    automate:\n      - method: api\n{signed}        \
+             calls: [{{ verb: POST, path: /a, body: '{{\"t\":\"{{{{ token }}}}\"}}' }}]\n"
+        ))
+        .expect("guide");
+        assert!(validate_guide(&m, &g)
+            .expect_err("body")
+            .to_string()
             .contains("filled by nothing"));
     }
 

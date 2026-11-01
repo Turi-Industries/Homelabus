@@ -165,7 +165,11 @@ async fn the_catalog_automation_runs_on_the_real_image() {
     let run = || {
         try_automate_with(
             &NoSwarm,
-            Some(Api { client: &api, port }),
+            Some(Api {
+                client: &api,
+                port,
+                sign_ins: &[],
+            }),
             None,
             &app,
             &step,

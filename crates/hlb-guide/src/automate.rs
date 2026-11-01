@@ -19,15 +19,19 @@
 
 use async_trait::async_trait;
 use hlb_orchestrator::Orchestrator;
-use hlb_types::{ApiCall, ApiProbe, Automation, GuideStep};
+use hlb_types::{ApiCall, ApiProbe, Automation, GuideStep, SignIn};
 
-/// How an `api` automation reaches the app: one request, its status and its body.
+use crate::assertions::{Credential, FORM, JSON};
+
+/// How an `api` automation reaches the app: one request, its status and its body. A
+/// body is JSON unless `headers` name its `content-type`.
 #[async_trait]
 pub trait ApiClient: Send + Sync {
     async fn call(
         &self,
         verb: &str,
         url: &str,
+        headers: &[(String, String)],
         body: Option<&str>,
     ) -> Result<(u16, String), String>;
 }
@@ -42,11 +46,21 @@ pub trait SqlWriter: Send + Sync {
     async fn write(&self, statement: &str, probe: &str, params: &[String]) -> Result<bool, String>;
 }
 
-/// The app's API, and the port to reach it on when the step names none.
+/// The app's API, the port to reach it on when the step names none, and the recovery
+/// sign-ins a step may sign in with.
 #[derive(Clone, Copy)]
 pub struct Api<'a> {
     pub client: &'a dyn ApiClient,
     pub port: Option<u16>,
+    pub sign_ins: &'a [ApiSignIn],
+}
+
+/// A recovery sign-in an `api` step signs in with: its proof, and what the vault holds
+/// for it — looked up by the caller, so this module never sees the vault.
+#[derive(Debug, Clone)]
+pub struct ApiSignIn {
+    pub credential: Credential,
+    pub proof: SignIn,
 }
 
 /// The client that reaches the real installation, JSON in and out.
@@ -82,15 +96,23 @@ impl ApiClient for HttpApi {
         &self,
         verb: &str,
         url: &str,
+        headers: &[(String, String)],
         body: Option<&str>,
     ) -> Result<(u16, String), String> {
         let method = reqwest::Method::from_bytes(verb.to_ascii_uppercase().as_bytes())
             .map_err(|e| e.to_string())?;
         let mut req = self.http.request(method, (self.reach)(url));
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
         if let Some(b) = body {
-            req = req
-                .header("content-type", "application/json")
-                .body(b.to_string());
+            if !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            {
+                req = req.header("content-type", JSON);
+            }
+            req = req.body(b.to_string());
         }
         let r = req.send().await.map_err(|e| e.to_string())?;
         let code = r.status().as_u16();
@@ -219,7 +241,13 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
                 }
             }
 
-            Automation::Api { port, probe, calls } => {
+            Automation::Api {
+                port,
+                sign_in,
+                headers,
+                probe,
+                calls,
+            } => {
                 let Some(api) = api else {
                     reasons.push("the app's API is not reachable from here".into());
                     continue;
@@ -229,8 +257,31 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
                     continue;
                 };
                 let base = format!("http://{service}:{port}");
+                // Before the probe, which may need it: what it reads is the
+                // administrator's alone — Jellyfin's `/sso/OID/Get`.
+                let token = match sign_in {
+                    None => None,
+                    Some(secret) => match sign_in_for(api, &base, secret).await {
+                        Ok(t) => Some(t),
+                        Err(why) => {
+                            reasons.push(why);
+                            continue;
+                        }
+                    },
+                };
+                let headers: Vec<(String, String)> = headers
+                    .iter()
+                    .map(|(k, v)| {
+                        let v = match &token {
+                            Some(t) => v.replace("{{ token }}", t),
+                            None => v.clone(),
+                        };
+                        (k.clone(), v)
+                    })
+                    .collect();
+                let (client, headers) = (api.client, headers.as_slice());
                 if let Some(p) = probe {
-                    match probe_when_ready(api.client, &base, p, vars).await {
+                    match probe_when_ready(client, headers, &base, p, vars).await {
                         Some(true) => return AutomationOutcome::AlreadyDone { method: "api" },
                         Some(false) => {}
                         None => {
@@ -243,11 +294,11 @@ pub async fn try_automate_with<O: Orchestrator + ?Sized>(
                         }
                     }
                 }
-                match run_calls(api.client, &base, calls, vars).await {
+                match run_calls(client, headers, &base, calls, vars).await {
                     Ok(()) => {
                         // Judged by its effect: what the probe says now, not a status.
                         let held = match probe {
-                            Some(p) => probe_says_done(api.client, &base, p, vars).await,
+                            Some(p) => probe_says_done(client, headers, &base, p, vars).await,
                             None => true,
                         };
                         if held {
@@ -350,6 +401,8 @@ pub async fn after_restore<O: Orchestrator + ?Sized>(
                 } => exec_target(service, companion.as_deref()),
                 Automation::Api {
                     port: _,
+                    sign_in: _,
+                    headers: _,
                     probe: _,
                     calls: _,
                 } => service.to_string(),
@@ -405,23 +458,28 @@ async fn restart_service<O: Orchestrator + ?Sized>(orch: &O, service: &str) -> R
 /// a no: the calls then run, and a first-run endpoint refusing them says why.
 async fn probe_says_done(
     client: &dyn ApiClient,
+    headers: &[(String, String)],
     base: &str,
     p: &ApiProbe,
     vars: &[(&str, &str)],
 ) -> bool {
-    probe_reads(client, base, p, vars).await == Some(true)
+    probe_reads(client, headers, base, p, vars).await == Some(true)
 }
 
 /// What the probe says, or `None` while the app does not answer it as its API — a
 /// page, a 404 of a route not registered yet, nothing at all.
 async fn probe_reads(
     client: &dyn ApiClient,
+    headers: &[(String, String)],
     base: &str,
     p: &ApiProbe,
     vars: &[(&str, &str)],
 ) -> Option<bool> {
     let path = hlb_types::guide::render(&p.path, vars);
-    let Ok((200, body)) = client.call("GET", &format!("{base}{path}"), None).await else {
+    let Ok((200, body)) = client
+        .call("GET", &format!("{base}{path}"), headers, None)
+        .await
+    else {
         return None;
     };
     let got = serde_json::from_str::<serde_json::Value>(&body).ok()?;
@@ -437,12 +495,13 @@ async fn probe_reads(
 /// open. A step with a probe waits until the probe reads.
 async fn probe_when_ready(
     client: &dyn ApiClient,
+    headers: &[(String, String)],
     base: &str,
     p: &ApiProbe,
     vars: &[(&str, &str)],
 ) -> Option<bool> {
     for _ in 0..PAGE_RETRIES {
-        if let Some(done) = probe_reads(client, base, p, vars).await {
+        if let Some(done) = probe_reads(client, headers, base, p, vars).await {
             return Some(done);
         }
         tokio::time::sleep(PAGE_WAIT).await;
@@ -453,6 +512,7 @@ async fn probe_when_ready(
 /// The calls, in order; the first that fails stops the rest, and says how.
 async fn run_calls(
     client: &dyn ApiClient,
+    headers: &[(String, String)],
     base: &str,
     calls: &[ApiCall],
     vars: &[(&str, &str)],
@@ -463,7 +523,7 @@ async fn run_calls(
         let mut tries = 0;
         loop {
             match client
-                .call(&c.verb, &format!("{base}{path}"), body.as_deref())
+                .call(&c.verb, &format!("{base}{path}"), headers, body.as_deref())
                 .await
             {
                 // 🔴 A page is not the API's answer. n8n 1.123 answers its starting
@@ -489,6 +549,58 @@ async fn run_calls(
         }
     }
     Ok(())
+}
+
+/// Signs in with the recovery sign-in a step names, as its proof does every night:
+/// the string at the proof's `pointer`.
+///
+/// 🔴 Neither the answer nor the token is ever said: the answer may echo the password,
+/// and the token opens the administrator's account.
+async fn sign_in_for(api: Api<'_>, base: &str, secret: &str) -> Result<String, String> {
+    let Some(s) = api.sign_ins.iter().find(|s| s.credential.secret == secret) else {
+        return Err(format!(
+            "no sign-in \"{secret}\" was looked up to sign in with"
+        ));
+    };
+    let (username, password) = match &s.credential.sign_in {
+        Ok((u, p)) => (u.as_str(), p.as_str()),
+        Err(why) => return Err(format!("no sign-in with \"{secret}\": {why}")),
+    };
+    let p = &s.proof;
+    let filled = crate::assertions::fill(&p.body, username, password)?;
+    let (content_type, body) = if p.form {
+        (FORM, crate::assertions::form(&filled)?)
+    } else {
+        (JSON, filled)
+    };
+    let mut headers: Vec<(String, String)> = p.headers.clone().into_iter().collect();
+    headers.push(("content-type".into(), content_type.into()));
+    let url = format!("{base}{}", p.path);
+    for _ in 0..PAGE_RETRIES {
+        match api.client.call("POST", &url, &headers, Some(&body)).await {
+            Ok((code, answer)) if (200..300).contains(&code) => {
+                let Ok(json) = serde_json::from_str::<serde_json::Value>(&answer) else {
+                    // A page: the app is still starting, as n8n does.
+                    tokio::time::sleep(PAGE_WAIT).await;
+                    continue;
+                };
+                return match json.pointer(&p.pointer) {
+                    Some(serde_json::Value::String(t)) if !t.is_empty() => Ok(t.clone()),
+                    _ => Err(format!(
+                        "the sign-in at {} answered {code} with no {} to sign in with",
+                        p.path, p.pointer
+                    )),
+                };
+            }
+            Ok((code, _)) => return Err(format!("the sign-in at {} answered {code}", p.path)),
+            Err(e) => return Err(format!("the sign-in at {} failed: {e}", p.path)),
+        }
+    }
+    Err(format!(
+        "the sign-in at {} answered with a page, not its API, for {} s",
+        p.path,
+        PAGE_RETRIES * PAGE_WAIT.as_secs()
+    ))
 }
 
 /// How often, and how long apart, a call answered by a page is tried again: fifteen
@@ -868,7 +980,13 @@ steps:
         /// The first answers of a key, before `answers` — an app still starting.
         first: Mutex<Vec<(&'static str, (u16, &'static str))>>,
         sent: Mutex<Vec<String>>,
+        /// The headers each request carried, by `VERB url`.
+        headers: Mutex<Vec<(String, Headers)>>,
+        /// Requests that are no write, though not a GET: a sign-in.
+        reads: Vec<&'static str>,
     }
+
+    type Headers = Vec<(String, String)>;
 
     #[async_trait]
     impl ApiClient for Answers {
@@ -876,6 +994,7 @@ steps:
             &self,
             verb: &str,
             url: &str,
+            headers: &[(String, String)],
             body: Option<&str>,
         ) -> Result<(u16, String), String> {
             let key = format!("{verb} {url}");
@@ -884,6 +1003,10 @@ steps:
                     .trim_end()
                     .to_string(),
             );
+            self.headers
+                .lock()
+                .expect("mutex")
+                .push((key.clone(), headers.to_vec()));
             {
                 let mut first = self.first.lock().expect("mutex");
                 if let Some(i) = first.iter().position(|(k, _)| *k == key) {
@@ -891,12 +1014,10 @@ steps:
                     return Ok((c, b.to_string()));
                 }
             }
-            let written = self
-                .sent
-                .lock()
-                .expect("mutex")
-                .iter()
-                .any(|s| !s.starts_with("GET "));
+            let written =
+                self.sent.lock().expect("mutex").iter().any(|s| {
+                    !s.starts_with("GET ") && !self.reads.iter().any(|r| s.starts_with(r))
+                });
             let after = self.after.iter().filter(|_| written);
             after
                 .chain(self.answers.iter())
@@ -999,6 +1120,7 @@ steps:
             Some(Api {
                 client: &api,
                 port: Some(8096),
+                sign_ins: &[],
             }),
             None,
             "jellyfin",
@@ -1054,6 +1176,7 @@ steps:
             Some(Api {
                 client: &api,
                 port: Some(8096),
+                sign_ins: &[],
             }),
             None,
             "jellyfin",
@@ -1091,6 +1214,7 @@ steps:
             Some(Api {
                 client: &api,
                 port: Some(8096),
+                sign_ins: &[],
             }),
             None,
             "jellyfin",
@@ -1115,6 +1239,7 @@ steps:
             Some(Api {
                 client: &api,
                 port: Some(8096),
+                sign_ins: &[],
             }),
             None,
             "jellyfin",
@@ -1146,6 +1271,7 @@ steps:
             Some(Api {
                 client: &api,
                 port: Some(8096),
+                sign_ins: &[],
             }),
             None,
             "jellyfin",
@@ -1169,6 +1295,151 @@ steps:
             "{}",
             alone.describe()
         );
+    }
+
+    const SSO: &str = r#"
+steps:
+  - id: sso-provider
+    title: The SSO provider
+    automate:
+      - method: api
+        signIn: admin-password
+        headers: { Authorization: 'MediaBrowser Token="{{ token }}"' }
+        probe: { path: /sso/OID/GetNames, pointer: /0, equals: '"PocketID"' }
+        calls:
+          - { verb: POST, path: /sso/OID/Add/PocketID, body: '{"Enabled":true}' }
+"#;
+
+    fn admin(sign_in: Result<(String, String), String>) -> ApiSignIn {
+        ApiSignIn {
+            credential: Credential {
+                secret: "admin-password".into(),
+                sign_in,
+            },
+            proof: serde_yaml_ng::from_str(
+                r#"
+path: /Users/AuthenticateByName
+body: '{"Username":"{{ username }}","Pw":"{{ password }}"}'
+headers: { Authorization: 'MediaBrowser Client="Homelabus"' }
+pointer: /AccessToken
+"#,
+            )
+            .expect("proof"),
+        }
+    }
+
+    async fn sso(api: &Answers, sign_ins: &[ApiSignIn]) -> AutomationOutcome {
+        try_automate_with(
+            &Fake::default(),
+            Some(Api {
+                client: api,
+                port: Some(8096),
+                sign_ins,
+            }),
+            None,
+            "jellyfin",
+            &step(SSO),
+            &[],
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_step_signs_in_first_and_sends_its_token_with_the_probe_and_every_call() {
+        let api = Answers {
+            answers: vec![
+                (
+                    "POST http://jellyfin:8096/Users/AuthenticateByName",
+                    (200, r#"{"AccessToken":"tok-123","User":{"Name":"admin"}}"#),
+                ),
+                ("GET http://jellyfin:8096/sso/OID/GetNames", (200, "[]")),
+                ("POST http://jellyfin:8096/sso/OID/Add/PocketID", (204, "")),
+            ],
+            after: vec![(
+                "GET http://jellyfin:8096/sso/OID/GetNames",
+                (200, r#"["PocketID"]"#),
+            )],
+            reads: vec!["POST http://jellyfin:8096/Users/AuthenticateByName"],
+            ..Default::default()
+        };
+        let sign_ins = [admin(Ok(("admin".into(), "pa\"ss".into())))];
+        assert_eq!(
+            sso(&api, &sign_ins).await,
+            AutomationOutcome::Applied { method: "api" }
+        );
+        let sent = api.sent.lock().expect("mutex");
+        assert_eq!(
+            sent[0],
+            r#"POST http://jellyfin:8096/Users/AuthenticateByName {"Pw":"pa\"ss","Username":"admin"}"#,
+            "the proof's body, its password escaped as JSON"
+        );
+        let headers = api.headers.lock().expect("mutex");
+        let token = (
+            "Authorization".to_string(),
+            r#"MediaBrowser Token="tok-123""#.to_string(),
+        );
+        assert!(
+            headers[0].1.contains(&(
+                "Authorization".into(),
+                r#"MediaBrowser Client="Homelabus""#.into()
+            )) && headers[0].1.contains(&("content-type".into(), JSON.into())),
+            "the sign-in as the proof makes it: {:?}",
+            headers[0]
+        );
+        assert_eq!(headers.len(), 4, "sign-in, probe, call, probe: {headers:?}");
+        for (key, h) in &headers[1..] {
+            assert_eq!(h, std::slice::from_ref(&token), "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_sign_in_sends_nothing_else_and_says_neither_answer_nor_password() {
+        let api = Answers {
+            answers: vec![(
+                "POST http://jellyfin:8096/Users/AuthenticateByName",
+                (401, r#"{"Pw":"hunter2"}"#),
+            )],
+            ..Default::default()
+        };
+        let r = sso(&api, &[admin(Ok(("admin".into(), "hunter2".into())))]).await;
+        let said = r.describe();
+        assert!(
+            said.contains("/Users/AuthenticateByName answered 401"),
+            "{said}"
+        );
+        assert!(!said.contains("hunter2"), "{said}");
+        assert_eq!(
+            api.sent.lock().expect("mutex").len(),
+            1,
+            "the sign-in alone"
+        );
+
+        // Signed in, and no token where the proof reads it: nothing is sent either.
+        let tokenless = Answers {
+            answers: vec![(
+                "POST http://jellyfin:8096/Users/AuthenticateByName",
+                (200, r#"{"User":{"Name":"admin"}}"#),
+            )],
+            ..Default::default()
+        };
+        let r = sso(&tokenless, &[admin(Ok(("admin".into(), "x".into())))]).await;
+        assert!(r.describe().contains("no /AccessToken"), "{}", r.describe());
+        assert_eq!(tokenless.sent.lock().expect("mutex").len(), 1);
+
+        // Nothing in the vault yet, or not looked up: nothing is sent at all.
+        for (sign_ins, why) in [
+            (
+                vec![admin(Err("its secret is not generated yet".into()))],
+                "not generated yet",
+            ),
+            (vec![], "was looked up"),
+        ] {
+            let silent = Answers::default();
+            let r = sso(&silent, &sign_ins).await;
+            assert!(!r.handled());
+            assert!(r.describe().contains(why), "{}", r.describe());
+            assert!(silent.sent.lock().expect("mutex").is_empty());
+        }
     }
 
     #[tokio::test]

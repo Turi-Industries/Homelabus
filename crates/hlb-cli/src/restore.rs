@@ -641,6 +641,8 @@ async fn after(
     let api = hlb_guide::Api {
         client: &client,
         port: manifest.spec.ingress.first().map(|i| i.port),
+        // `validate_guide` refuses a post-restore step that signs in.
+        sign_ins: &[],
     };
     let domain = state.app_domain(app).await?.unwrap_or_default();
     let vars = [("domain", domain.as_str())];
