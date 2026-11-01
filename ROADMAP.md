@@ -156,6 +156,22 @@ exported — Homelabus never bills.
   the index, the owner signs it after each merge with a key only they hold, on the kit;
   neither GitHub nor Sigstore can publish an app.
 
+#### Decided by the owner, 2026-11-01
+
+- **Two apps keep Rust of their own through phase 3: Vaultwarden and Termix** —
+  measured under gap 4, no declared step replaces either crate. Of the other eleven
+  apps, none is named by production code (only `demo.rs` and tests). **On one
+  condition: each stays replaceable by an alternative.** So the variant names a
+  protocol, never an app, and nothing finds the app by its name: the emergency vault
+  looks for `members: bitwarden-directory` (`hlb_engine::emergency`), which Bitwarden's
+  own server speaks as Vaultwarden does — swapping one for the other is a manifest.
+  An alternative speaking another protocol (another password manager, another web SSH
+  console than `nodes: termix`) enters as a new variant, and the emergency vault's
+  dependence on the Bitwarden protocol is said where it is offered.
+- **Jellyfin's accounts are kept in step in phase 3**: a per-person `http` step beside
+  `exec` and `sql` (create, disable), Jellyfin its first user — its TV clients cannot
+  sign in through OIDC.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1220,7 +1236,8 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    action, not an app's. **Nothing built.** Left: Jellyfin keeps accounts of its own,
    made by hand, since its TV clients cannot sign in through OIDC — the one app a
    per-person HTTP step (create, disable) would serve. No step is HTTP today: an
-   `http` variant beside `exec` and `sql` when an app the owner names needs one.
+   `http` variant beside `exec` and `sql` when an app the owner names needs one —
+   named 2026-11-01: Jellyfin, in this phase.
 5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade or post-restore step;
    cross-app budgets (connections against `max_connections`) are Rust tests.
    **Measured** 2026-10-31, the step before a backup first. The nightly pass copies
