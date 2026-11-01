@@ -187,7 +187,11 @@ exported — Homelabus never bills.
   The plugin loads from `/config/plugins/<any dir>/`, its settings kept apart in
   `plugins/configurations/`. Four parts, in order: (1) Jellyfin 12.4 ✅; (2)
   `spec.downloads`, a file fetched by URL and sha256 into a volume before the app
-  starts, by a job on its data's node, the service restarted when it changes; (3) an
+  starts, by a job on its data's node, the service restarted when it changes ✅
+  2026-11-01 — `hlb_engine::download`, the job's script run in the pinned
+  `docker:cli` image against the real release (fetched, a second run fetching
+  nothing, a wrong hash refused with the old version left, a user's volume keeping its
+  owner); its Swarm placement is the lab's to prove, with part 4; (3) an
   `api` guide step signing in with a recovery login, its token in its calls' headers,
   to set the provider once; (4) the per-person `http` step beside `exec` and `sql`:
   disable the account of whoever holds no allowed role, enable it again — through

@@ -200,6 +200,20 @@ pub fn resolve_with_guide(
             }
         }
     }
+    // What the app's volume will hold, in its task's own spec: a new hash is a new
+    // task, so the service restarts on a changed download — Jellyfin reads its plugins
+    // at start only. A service-level label would change nothing that runs.
+    if !m.spec.downloads.is_empty() {
+        table.insert(
+            hlb_types::manifest::DOWNLOADS_ENV.to_string(),
+            m.spec
+                .downloads
+                .iter()
+                .map(|d| d.sha256.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
     let env: Vec<(String, String)> = table.into_iter().collect();
 
     // 4. The volumes to mount, derived from the `storage` capabilities.
@@ -352,6 +366,21 @@ pub fn resolve_with_guide(
         {
             constraints.push(hlb_types::manifest::data_constraint(owner));
         }
+    }
+
+    // Into its volume BEFORE it starts, on the node its data is on: deployed first,
+    // the app would start without them and need a restart nothing asks for.
+    for d in &m.spec.downloads {
+        plan.push(Action::FetchDownload {
+            app: app.clone(),
+            volume: format!("{app}-{}", d.storage),
+            url: d.url.clone(),
+            sha256: d.sha256.clone(),
+            into: d.into.clone(),
+            unzip: d.unzip,
+            constraints: constraints.clone(),
+            mounts: mounts.clone(),
+        });
     }
 
     plan.push(Action::DeployService {
@@ -732,6 +761,63 @@ fn render_host(tpl: &str, params: &InstallParams) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_lands_after_its_volume_and_before_its_app() {
+        let m: Manifest = serde_yaml_ng::from_str(
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: a/b, tag: "1", digest: "sha256:x" }
+  swarm: { tier: heavy }
+  requires:
+    - { kind: storage, name: config, path: /config, tier: local }
+  downloads:
+    - url: https://example.org/v1/plugin.zip
+      sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+      storage: config
+      into: plugins/plugin
+      unzip: true
+"#,
+        )
+        .expect("manifest");
+        let plan = resolve(&m, &InstallParams::default()).expect("plan");
+        let at = |f: &dyn Fn(&Action) -> bool| {
+            plan.actions
+                .iter()
+                .position(f)
+                .expect("the action is planned")
+        };
+        let volume =
+            at(&|a| matches!(a, Action::CreateVolume { name, .. } if name == "demo-config"));
+        let fetch = at(&|a| matches!(a, Action::FetchDownload { .. }));
+        let deploy = at(&|a| matches!(a, Action::DeployService { name, .. } if name == "demo"));
+        assert!(volume < fetch && fetch < deploy, "{plan}");
+        let (
+            Action::FetchDownload {
+                volume,
+                constraints,
+                mounts,
+                ..
+            },
+            Action::DeployService {
+                constraints: deployed_on,
+                mounts: deployed_with,
+                ..
+            },
+        ) = (&plan.actions[fetch], &plan.actions[deploy])
+        else {
+            unreachable!()
+        };
+        assert_eq!(volume, "demo-config");
+        // Placed as the app is, or the job fills a volume of another node.
+        assert_eq!(constraints, deployed_on);
+        assert_eq!(mounts, deployed_with);
+        // The journal matches an action by its description: a new hash is new work.
+        assert!(plan.actions[fetch].to_string().contains(&"1".repeat(64)));
+    }
 
     #[test]
     fn a_declared_mailbox_quota_reaches_the_plan() {

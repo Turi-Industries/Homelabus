@@ -1051,14 +1051,17 @@ impl Orchestrator for SwarmOrchestrator {
         Ok(v.version.unwrap_or_else(|| "unknown".into()))
     }
 
-    async fn deploy(&self, spec: &ServiceSpec) -> Result<String> {
-        let pinned;
-        let spec = if spec.keeps_data_on_its_node() {
-            pinned = self.pin_to_its_data(spec).await?;
-            &pinned
+    async fn place_with_data(&self, spec: &ServiceSpec) -> Result<ServiceSpec> {
+        if spec.keeps_data_on_its_node() {
+            self.pin_to_its_data(spec).await
         } else {
-            spec
-        };
+            Ok(spec.clone())
+        }
+    }
+
+    async fn deploy(&self, spec: &ServiceSpec) -> Result<String> {
+        let placed = self.place_with_data(spec).await?;
+        let spec = &placed;
         let mut service = Self::to_bollard(spec);
         let files = self.file_secrets(&spec.name, &spec.files).await?;
         if !files.is_empty() {

@@ -85,6 +85,18 @@ spec:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
   update:
     channel: minor
+  # Sign-in through PocketID, by MaxRink's fork of the SSO plugin: Jellyfin takes no
+  # OIDC into its core (jellyfin/jellyfin#17271), 9p4's original is archived, and
+  # K0lin's fork starts an account link unauthenticated. Loaded from any directory of
+  # `plugins/` at start, its settings kept apart in `plugins/configurations/`.
+  downloads:
+    - url: https://github.com/MaxRink/jellyfin-plugin-sso/releases/download/v6.1.0.0/sso-auth_6.1.0.0.zip
+      sha256: 6311d6b16e89a91e44ce9b5a32c09d28eda292a11b75cd6b942d7bc62664cd00
+      storage: config
+      # Unversioned: Jellyfin loads it as well, and an update replaces it whole rather
+      # than leaving the old version's directory to be loaded beside it.
+      into: plugins/SSO-Auth
+      unzip: true
   assertions:
     - id: wizard-done
       holds: nobody becomes Jellyfin's administrator through its first-run wizard

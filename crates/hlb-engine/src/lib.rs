@@ -12,6 +12,7 @@
 pub mod access;
 pub mod devices;
 pub mod domain;
+pub mod download;
 pub mod emergency;
 pub mod family;
 pub mod ingress;
@@ -64,6 +65,10 @@ pub enum Error {
     /// one takes the data and loses it on the next redeployment.
     #[error("{0}")]
     Storage(String),
+
+    /// A download its job could not fetch, or whose hash was not the one declared.
+    #[error("download: {0}")]
+    Download(String),
 
     #[error(transparent)]
     Registry(#[from] hlb_registry::Error),
@@ -1023,6 +1028,40 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
         }
     }
 
+    /// What backs one of `app`'s volumes: the same backing `CreateVolume` gave it,
+    /// so that a node creating it on first use creates the same thing. A companion's
+    /// volumes are named after its service, never in `requires`: local. Another app's
+    /// volume takes its OWNER's backing: given this app's, a volume the owner keeps on
+    /// its node would have been looked for on the pool.
+    fn backing_of(
+        &self,
+        app: &str,
+        manifest: Option<&hlb_types::Manifest>,
+        vol: &str,
+    ) -> Result<hlb_orchestrator::VolumeBacking> {
+        let (tier, holder, declared) = manifest
+            .iter()
+            .flat_map(|m| &m.spec.requires)
+            .find_map(|c| match c {
+                hlb_types::Capability::Storage {
+                    name, tier, owner, ..
+                } => {
+                    let holder = owner.as_deref().unwrap_or(app);
+                    (format!("{holder}-{name}") == vol)
+                        .then(|| (*tier, holder.to_string(), name.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or((
+                hlb_types::StorageTier::Local,
+                app.to_string(),
+                declared_volume(app, vol).to_string(),
+            ));
+        self.storage
+            .backing_for(tier, &holder, &declared)
+            .map_err(Error::Storage)
+    }
+
     async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
         match action {
             Action::DeployService {
@@ -1102,39 +1141,9 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 for c in constraints {
                     spec = spec.constraint(c);
                 }
-                // The same backing `CreateVolume` gave the volume here, so that a node
-                // creating it on first use creates the same thing. A companion's
-                // volumes are named after its service, never in `requires`: local.
-                // Another app's volume takes its OWNER's backing: given this app's, a
-                // volume the owner keeps on its node would have been looked for on the
-                // pool.
                 let manifest = self.state.app_manifest(app).await.ok();
-                let backing_of = |vol: &str| {
-                    manifest
-                        .iter()
-                        .flat_map(|m| &m.spec.requires)
-                        .find_map(|c| match c {
-                            hlb_types::Capability::Storage {
-                                name, tier, owner, ..
-                            } => {
-                                let holder = owner.as_deref().unwrap_or(app);
-                                (format!("{holder}-{name}") == vol)
-                                    .then(|| (*tier, holder.to_string(), name.clone()))
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or((
-                            hlb_types::StorageTier::Local,
-                            app.to_string(),
-                            declared_volume(app, vol).to_string(),
-                        ))
-                };
                 for (vol, path) in mounts {
-                    let (tier, holder, declared) = backing_of(vol);
-                    let backing = self
-                        .storage
-                        .backing_for(tier, &holder, &declared)
-                        .map_err(Error::Storage)?;
+                    let backing = self.backing_of(app, manifest.as_ref(), vol)?;
                     spec = spec.mount_backed(vol, path, backing);
                 }
                 // A file takes its tokens like a variable: an app configured by file
@@ -1190,6 +1199,59 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                     }
                 }
                 self.orchestrator.deploy(&spec).await?;
+                Ok(Step::Done)
+            }
+
+            Action::FetchDownload {
+                app: owner,
+                volume,
+                url,
+                sha256,
+                into,
+                unzip,
+                constraints,
+                mounts,
+            } => {
+                let manifest = self.state.app_manifest(owner).await.ok();
+                // The app as it will be deployed, for its placement alone: pinned to
+                // its data now, the app's own deployment then finds the same node.
+                let mut app_spec = ServiceSpec::new(owner, "");
+                for c in constraints {
+                    app_spec = app_spec.constraint(c);
+                }
+                for (vol, path) in mounts {
+                    let backing = self.backing_of(owner, manifest.as_ref(), vol)?;
+                    app_spec = app_spec.mount_backed(vol, path, backing);
+                }
+                let placed = self.orchestrator.place_with_data(&app_spec).await?;
+                let fetch = download::Fetch {
+                    app: owner,
+                    volume,
+                    url,
+                    sha256,
+                    into,
+                    unzip: *unzip,
+                };
+                let job = download::job(
+                    &fetch,
+                    app_spec.backing_of(volume),
+                    &placed.constraints,
+                    &self.network,
+                );
+                let out = self.orchestrator.run_job(&job, download::TIMEOUT_S).await?;
+                if !out.succeeded {
+                    return Err(Error::Download(format!(
+                        "{url} into {volume}/{into}: {}",
+                        out.output
+                            .iter()
+                            .rev()
+                            .take(5)
+                            .rev()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    )));
+                }
                 Ok(Step::Done)
             }
 
@@ -1795,6 +1857,7 @@ fn kind_of(a: &Action) -> &'static str {
         Action::ProvisionSmtpAccount { .. } => "ProvisionSmtpAccount",
         Action::ProvisionMailAccount { .. } => "ProvisionMailAccount",
         Action::DeployService { .. } => "DeployService",
+        Action::FetchDownload { .. } => "FetchDownload",
         Action::ResolveDigest { .. } => "ResolveDigest",
         Action::WaitHealthy { .. } => "WaitHealthy",
         Action::ConfigureIngress { .. } => "ConfigureIngress",
@@ -2779,6 +2842,78 @@ steps:
             "failed",
             "the app is marked as failed"
         );
+    }
+
+    const WITH_DOWNLOAD: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo }
+spec:
+  image: { repo: a/b, tag: "1", digest: "sha256:x" }
+  swarm: { tier: heavy }
+  requires:
+    - { kind: storage, name: config, path: /config, tier: local }
+  downloads:
+    - url: https://example.org/v1/plugin.zip
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      storage: config
+      into: plugins/plugin
+      unzip: true
+"#;
+
+    #[tokio::test]
+    async fn a_download_is_fetched_into_the_apps_volume_before_the_app_starts() {
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_DOWNLOAD).expect("manifest");
+        let p = hlb_resolver::resolve(&m, &hlb_resolver::InstallParams::default()).expect("plan");
+        let s = State::in_memory().await.expect("state");
+        s.upsert_app("demo", &m, None).await.expect("upsert");
+        let o = Fake::default();
+        let out = Executor::new(&o, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .expect("run");
+        assert!(out.is_success(), "{out:?}");
+
+        let jobs = o.jobs.lock().expect("mutex").clone();
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        let job = &jobs[0];
+        // The app's volume, where the app mounts it from; the app's placement.
+        assert_eq!(job.mounts[0].0, "demo-config");
+        assert_eq!(job.backing_of("demo-config"), VolumeBacking::Docker);
+        let app = o
+            .deployed_specs
+            .lock()
+            .expect("mutex")
+            .iter()
+            .find(|d| d.name == "demo")
+            .cloned()
+            .expect("the app deployed");
+        assert_eq!(job.constraints, app.constraints);
+        assert!(job
+            .command
+            .iter()
+            .any(|a| a == "https://example.org/v1/plugin.zip"));
+        // Its hash is in the task's own environment: a new one restarts the app.
+        assert!(app
+            .env
+            .iter()
+            .any(|(k, v)| k == hlb_types::manifest::DOWNLOADS_ENV && *v == "0".repeat(64)));
+
+        // A fetch refused stops the install before the app starts on what it lacks.
+        let s = State::in_memory().await.expect("state");
+        s.upsert_app("demo", &m, None).await.expect("upsert");
+        let refusing = Fake {
+            fail_jobs: true,
+            ..Default::default()
+        };
+        let out = Executor::new(&refusing, &s)
+            .apply(true)
+            .run("demo", &p)
+            .await
+            .expect("run");
+        assert!(!out.is_success());
+        assert!(refusing.deployed.lock().expect("mutex").is_empty());
     }
 
     #[tokio::test]

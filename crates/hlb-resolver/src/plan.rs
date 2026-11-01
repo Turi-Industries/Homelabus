@@ -119,6 +119,22 @@ pub enum Action {
         memory: Option<hlb_types::Memory>,
     },
 
+    /// A file fetched into one of the app's volumes, checked against its hash, by a
+    /// job on the node that volume is on.
+    FetchDownload {
+        app: String,
+        volume: String,
+        url: String,
+        sha256: String,
+        /// Relative to the volume, replaced whole.
+        into: String,
+        unzip: bool,
+        /// The app's own placement and volumes, so the job is placed — and the data
+        /// pinned — where the app's `DeployService` will be.
+        constraints: Vec<String>,
+        mounts: Vec<(String, String)>,
+    },
+
     /// The catalog declares a tag; the digest is resolved against the registry and
     /// then frozen. A tag is mutable, a digest is not.
     ResolveDigest { repo: String, tag: String },
@@ -351,6 +367,22 @@ impl fmt::Display for Action {
                 }
                 Ok(())
             }
+            // The hash is in the description: the journal matches an action by it, so
+            // a new file is a new action, never one skipped as done.
+            Self::FetchDownload {
+                app: _,
+                volume,
+                url,
+                sha256,
+                into,
+                unzip,
+                constraints: _,
+                mounts: _,
+            } => write!(
+                f,
+                "fetch {url} (sha256 {sha256}) {} {volume}/{into}, replacing it",
+                if *unzip { "unzipped into" } else { "into" }
+            ),
             Self::ResolveDigest { repo, tag } => {
                 write!(f, "resolve the digest of {repo}:{tag} against the registry")
             }

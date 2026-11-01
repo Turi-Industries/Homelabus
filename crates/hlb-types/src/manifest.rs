@@ -155,6 +155,44 @@ pub struct Spec {
     /// freed. The controller runs each when it is due; a failed run is in the inbox.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<Job>,
+
+    /// Files fetched into one of the app's volumes before it starts — what the image
+    /// does not ship and the app loads from its data: Jellyfin's SSO plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub downloads: Vec<Download>,
+}
+
+/// The variable carrying the app's downloads' hashes into its task, which restarts
+/// when one changes.
+pub const DOWNLOADS_ENV: &str = "HLB_DOWNLOADS";
+
+/// One file fetched by URL, checked against its hash, put in a volume.
+///
+/// 🔴 The hash is what pins it: a release asset can be replaced under the same URL,
+/// and what is fetched runs inside the app with its data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Download {
+    /// `https://` only.
+    pub url: String,
+    /// Lowercase hex, of the file as fetched.
+    pub sha256: String,
+    /// The `kind: storage` it goes into, by `name` — one of the app's own.
+    pub storage: String,
+    /// The directory it lands in, relative to the volume. REPLACED WHOLE, so a file
+    /// an older version had does not stay beside the new ones.
+    pub into: String,
+    /// The file is a zip, extracted there; otherwise it is put there under the URL's
+    /// last segment.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unzip: bool,
+}
+
+impl Download {
+    /// The URL's last segment: the file's name when it is not extracted.
+    pub fn file_name(&self) -> &str {
+        self.url.rsplit('/').next().unwrap_or_default()
+    }
 }
 
 /// A scheduled job, run in the app's running container.

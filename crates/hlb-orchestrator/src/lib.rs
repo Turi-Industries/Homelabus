@@ -560,6 +560,14 @@ pub trait Orchestrator: Send + Sync {
         )))
     }
 
+    /// `spec` as [`Orchestrator::deploy`] would place it: a service keeping data on its
+    /// node is pinned to that node, labelled now if none is yet. What a job working on
+    /// the volumes of a service not deployed yet is placed by, so both meet the same
+    /// node. An orchestrator with no notion of a node leaves it as it is.
+    async fn place_with_data(&self, spec: &ServiceSpec) -> Result<ServiceSpec> {
+        Ok(spec.clone())
+    }
+
     async fn reconfigure(
         &self,
         name: &str,

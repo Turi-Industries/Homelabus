@@ -485,6 +485,131 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_refuses_a_download_that_could_land_anywhere_but_its_directory() {
+        let d = "0".repeat(64);
+        let with = |download: &str| {
+            let y = format!(
+                "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: a }}\nspec:\n  \
+                 image: {{ repo: a/a, tag: \"1\", digest: \"sha256:{d}\" }}\n  \
+                 swarm: {{ memory: {{ reserve: 64M, limit: 128M }} }}\n  \
+                 requires:\n    - {{ kind: storage, name: config, path: /config, tier: local }}\n    \
+                 - {{ kind: storage, name: media, path: /media, owner: b, backup: false }}\n  \
+                 downloads:\n{download}"
+            );
+            Catalog {
+                entries: [(
+                    "a".to_string(),
+                    Entry {
+                        manifest: serde_yaml_ng::from_str(&y).expect("manifest"),
+                        path: PathBuf::new(),
+                        guide: hlb_types::Guide::default(),
+                    },
+                )]
+                .into(),
+            }
+            .validate_all()
+            .into_iter()
+            .map(|(_, e)| e.to_string())
+            .collect::<Vec<_>>()
+        };
+        let one = |url: &str, sha: &str, storage: &str, into: &str, unzip: bool| {
+            format!(
+                "    - {{ url: \"{url}\", sha256: \"{sha}\", storage: {storage}, into: \"{into}\", unzip: {unzip} }}\n"
+            )
+        };
+        let good = one(
+            "https://example.org/r/p.zip",
+            &d,
+            "config",
+            "plugins/p",
+            true,
+        );
+        assert_eq!(with(&good), Vec::<String>::new());
+        for (download, why) in [
+            (
+                one(
+                    "http://example.org/r/p.zip",
+                    &d,
+                    "config",
+                    "plugins/p",
+                    true,
+                ),
+                "not https",
+            ),
+            (
+                one(
+                    "https://example.org/r/p.zip?x=1",
+                    &d,
+                    "config",
+                    "plugins/p",
+                    true,
+                ),
+                "plain",
+            ),
+            (
+                one(
+                    "https://example.org/r/p.zip",
+                    &d.replace('0', "A"),
+                    "config",
+                    "p",
+                    true,
+                ),
+                "64 lowercase",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d[1..], "config", "p", true),
+                "64 lowercase",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "cache", "p", true),
+                "none of the app's own",
+            ),
+            // Another app's volume: its owner's data, never this app's to replace.
+            (
+                one("https://example.org/r/p.zip", &d, "media", "p", true),
+                "none of the app's own",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "config", "../p", true),
+                "relative directory",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "config", "/p", true),
+                "relative directory",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "config", "a//p", true),
+                "relative directory",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "config", "", true),
+                "relative directory",
+            ),
+            (
+                one("https://example.org/r/p.zip", &d, "config", "a/$(x)", true),
+                "relative directory",
+            ),
+            (
+                one("https://example.org/r/", &d, "config", "p", false),
+                "no file name",
+            ),
+            (
+                format!(
+                    "{good}{}",
+                    one("https://example.org/r/q.zip", &d, "config", "plugins", true)
+                ),
+                "overlaps",
+            ),
+        ] {
+            let errs = with(&download);
+            assert!(
+                errs.first().is_some_and(|e| e.contains(why)),
+                "{download} → {errs:?}, expected {why:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_catalog_refuses_an_image_without_its_digest_and_a_service_without_memory() {
         let entry = |y: &str| Entry {
             manifest: serde_yaml_ng::from_str(y).expect("manifest"),

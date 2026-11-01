@@ -21,6 +21,7 @@ hlb-updater.workspace = true
 hlb-ingress.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tempfile = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 [lints]
 workspace = true

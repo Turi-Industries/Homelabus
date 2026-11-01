@@ -174,6 +174,87 @@ fn declared_and_read(m: &Manifest, used: &[Token]) -> Result<()> {
     Ok(())
 }
 
+/// What a download may say. Its values reach a shell in a job as positional
+/// parameters, never in the script's text — these rules keep it to one place in one
+/// of the app's volumes.
+fn validate_downloads(m: &Manifest) -> Result<()> {
+    let refuse = |d: &manifest::Download, why: &str| {
+        Err(Error::Validation(format!(
+            "{}: the download {} — {why}",
+            m.metadata.name, d.url
+        )))
+    };
+    // A name the job writes: no `..`, no hidden `-` option, no surprise for `rm -rf`.
+    let segment_ok = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    for (i, d) in m.spec.downloads.iter().enumerate() {
+        let Some(rest) = d.url.strip_prefix("https://") else {
+            return refuse(d, "not https: nothing would say who served it");
+        };
+        if rest.split('/').count() < 2
+            || rest.starts_with('/')
+            || d.url
+                .bytes()
+                .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+            || d.url.contains(['?', '#'])
+        {
+            return refuse(d, "not a plain https://host/path URL");
+        }
+        if d.sha256.len() != 64
+            || !d
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return refuse(d, "its sha256 is not 64 lowercase hexadecimal digits");
+        }
+        let own = m.spec.requires.iter().any(
+            |c| matches!(c, Capability::Storage { name, owner: None, .. } if *name == d.storage),
+        );
+        if !own {
+            return refuse(
+                d,
+                &format!(
+                    "storage {:?} is none of the app's own volumes (`kind: storage`, no \
+                     `owner`)",
+                    d.storage
+                ),
+            );
+        }
+        if !d.into.split('/').all(segment_ok) {
+            return refuse(
+                d,
+                &format!(
+                    "into {:?} is not a relative directory of the volume",
+                    d.into
+                ),
+            );
+        }
+        if !d.unzip && !segment_ok(d.file_name()) {
+            return refuse(d, "its URL ends in no file name to keep it under");
+        }
+        // Each replaces its directory whole: one inside another's would be erased by it.
+        let within = |a: &str, b: &str| a == b || a.starts_with(&format!("{b}/"));
+        if let Some(o) = m.spec.downloads[..i].iter().find(|o| {
+            o.storage == d.storage && (within(&d.into, &o.into) || within(&o.into, &d.into))
+        }) {
+            return refuse(
+                d,
+                &format!(
+                    "into {:?} overlaps {:?}, which {} replaces whole",
+                    d.into, o.into, o.url
+                ),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Rules that types alone cannot express.
 ///
 /// Each rule here corresponds to a concrete way of shooting yourself in the foot.
@@ -296,6 +377,8 @@ pub fn validate(m: &Manifest) -> Result<()> {
             )));
         }
     }
+
+    validate_downloads(m)?;
 
     // 🔴 `mode: native` without `redirectPaths` produces an OIDC client with NO
     // redirect URI. PocketID then has nothing to send the user back to, and the failure
