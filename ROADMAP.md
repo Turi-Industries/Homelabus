@@ -1319,7 +1319,13 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    the redeploy and one restore per bucket backed up; `StorageUnread` when Garage is
    silent) — in `hlb reconcile`, `hlb-privd`'s loop and the drift screen — and the
    runbook's "If Garage lost its data" lists the four commands and every app's
-   buckets from the state.
+   buckets from the state. **On the lab** the same day: Fluxer's key renamed in
+   Garage, then one bucket's global alias taken off (its objects untouched), each
+   named by `hlb reconcile` with its fix and by the controller's `/api/drift` — and
+   put back, no gap. 🔴 Found on the way: the drift came out GREEN, a refusal being a
+   decision, so the issues list dropped it and the dashboard stayed calm. A drift now
+   says what it does to the app (`DriftHarm`): lost storage and a missing service are
+   red, an unread Garage amber.
    ✅ (3), PostgreSQL, built 2026-11-01 (`hlb_backup_run::engine_copy`, the owner's
    "physical copy, hot" of 2026-10-31): `copy: pg-basebackup` on the catalog's
    `postgres-data`. The pass and the copy before an update run `pg_basebackup`

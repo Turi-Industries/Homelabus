@@ -69,7 +69,11 @@ monitoring, updates and routes have their own `operations-*.md`.
 - **Reconciliation's non-actions were invisible.** Nothing distinguished "there is
   nothing to do" from "there is something and I deliberately chose not to touch it". The
   refusal names the reason, and a test requires correctable and refused to be exactly
-  complementary. A refusal is painted GREEN: it is a decision, not a failure.
+  complementary. A refusal is painted GREEN: it is a decision, not a failure — 🔴
+  unless what it refuses to touch is broken (`Drift::harm`, an exhaustive match). Read
+  from the refusal alone, the lab's Fluxer without its Garage key was green on `/drift`,
+  and the issues list drops green: nothing else said a word. A missing service is
+  `Broken` too, `StorageUnread` `Unknown` (amber).
 - **🔴 A service stopped for a while is HELD, or reconciliation starts it.** A restore
   scaled the app to zero and recorded nothing: with `--reconcile-apply` (60 s) it came
   back onto a volume half written. `restore::stop` holds what it stops

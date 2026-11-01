@@ -2691,6 +2691,15 @@
         ],
         "type": "object"
       },
+      "DriftHarm": {
+        "description": "What a gap does to the app while it stands.\n\n🔴 Separate from `corrigible`: refusing to act is a decision, but what was refused\ncan still be an outage. Read from the refusal alone, a Garage that lost Fluxer's key\nwas painted green, and the issues list drops green — Fluxer ran 1/1 against\n`No such key` with the dashboard calm.",
+        "enum": [
+          "harmless",
+          "unknown",
+          "broken"
+        ],
+        "type": "string"
+      },
       "DriftSummary": {
         "description": "A gap between what should be running and what is.\n\n## Why the reason for a refusal is a field, not a comment\n\nReconciliation never deletes an orphan, never resurrects a failed install, and\nnever forces a convergence in flight. Those refusals were **invisible**: nothing\ndistinguished \"nothing to do\" from \"there is something and I deliberately chose not\nto touch it\".\n\nThe two look alike on screen. The second, unexplained, makes you doubt the system:\nyou fix by hand what it was protecting, or you believe it saw nothing.",
         "properties": {
@@ -2712,6 +2721,10 @@
               "null"
             ]
           },
+          "harm": {
+            "$ref": "#/components/schemas/DriftHarm",
+            "description": "What the gap does to the app while it stands — apart from whether\nreconciliation touches it."
+          },
           "refusal": {
             "description": "🔴 Why it does **not** correct it. Present exactly when `corrigible` is false.",
             "type": [
@@ -2729,6 +2742,7 @@
           "corrigible",
           "description",
           "fix",
+          "harm",
           "refusal",
           "target"
         ],

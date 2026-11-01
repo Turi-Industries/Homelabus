@@ -200,6 +200,11 @@ async fn a_deleted_service_is_reported_not_recreated_without_its_volumes() {
     assert!(report.corrected.is_empty());
     let why = report.drifts[0].refusal().expect("a reason");
     assert!(why.contains("hlb install"), "{why}");
+    // Left alone on purpose, and gitea is down all the same.
+    assert_eq!(
+        report.drifts[0].summary().attention(),
+        hlb_api::Attention::Critical
+    );
 }
 
 #[tokio::test]
@@ -962,6 +967,18 @@ async fn storage_garage_lost_is_named_with_its_fix_and_left_alone() {
     );
     assert!(report.corrected.is_empty());
     assert!(o.deployed.lock().unwrap().is_empty());
+    // 🔴 Refused is a decision, not "fine": painted green, the issues list dropped it
+    // and the lab's dashboard stayed calm over a Fluxer without its key.
+    assert_eq!(d.summary().attention(), hlb_api::Attention::Critical);
+    assert_eq!(
+        hlb_api::issues::group([(
+            hlb_api::issues::Cause::Drift,
+            d.summary().attention(),
+            Some(app.clone())
+        )])
+        .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1003,6 +1020,11 @@ async fn a_garage_that_does_not_answer_is_said_never_read_as_holding_everything(
         matches!(report.drifts.as_slice(), [Drift::StorageUnread { why }] if why == "connection refused"),
         "{:?}",
         report.drifts
+    );
+    // Not read is never painted as fine.
+    assert_eq!(
+        report.drifts[0].summary().attention(),
+        hlb_api::Attention::Notice
     );
 }
 

@@ -172,6 +172,23 @@ impl Drift {
             corrigible: self.is_correctable(),
             refusal: self.refusal().map(str::to_string),
             fix: self.fix(),
+            harm: self.harm(),
+        }
+    }
+
+    /// What the gap does to the app while it stands, whoever corrects it.
+    pub fn harm(&self) -> hlb_api::DriftHarm {
+        use hlb_api::DriftHarm::{Broken, Harmless, Unknown};
+        match self {
+            // A missing companion is the silent kind: Immich without its machine
+            // learning shows every photo and recognises nobody.
+            Self::ServiceMissing { .. } | Self::StorageLost { .. } => Broken,
+            Self::StorageUnread { .. } => Unknown,
+            Self::ReplicasDiverged { .. }
+            | Self::ImageDiverged { .. }
+            | Self::OrphanService { .. }
+            | Self::Converging { .. }
+            | Self::Held { .. } => Harmless,
         }
     }
 

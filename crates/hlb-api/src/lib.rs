@@ -2684,6 +2684,10 @@ judged! {
         /// The command that repairs what it leaves alone, when one does.
         #[serde(default)]
         pub fix: Option<String>,
+        /// What the gap does to the app while it stands — apart from whether
+        /// reconciliation touches it.
+        #[serde(default)]
+        pub harm: DriftHarm,
     }
 
     rules {
@@ -2691,16 +2695,37 @@ judged! {
     }
 }
 
+/// What a gap does to the app while it stands.
+///
+/// 🔴 Separate from `corrigible`: refusing to act is a decision, but what was refused
+/// can still be an outage. Read from the refusal alone, a Garage that lost Fluxer's key
+/// was painted green, and the issues list drops green — Fluxer ran 1/1 against
+/// `No such key` with the dashboard calm.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DriftHarm {
+    /// Nothing is broken: a decision, or progress under way.
+    #[default]
+    Harmless,
+    /// Whether anything is broken could not be read — never "it is fine".
+    Unknown,
+    /// The app does not work as it should until a person acts.
+    Broken,
+}
+
 impl DriftSummary {
     pub fn attention(&self) -> Attention {
         if self.corrigible {
             // A correctable gap is not a failure: the next round will pick it up.
-            Attention::Notice
-        } else {
-            // ⚠️ A deliberate refusal is not an alert either — it is a decision.
-            // Painting it red would send you looking for a problem where the system did
-            // exactly the right thing.
-            Attention::Ok
+            return Attention::Notice;
+        }
+        match self.harm {
+            // ⚠️ A deliberate refusal over nothing broken is not an alert — it is a
+            // decision. Painting it red would send you looking for a problem where the
+            // system did exactly the right thing.
+            DriftHarm::Harmless => Attention::Ok,
+            DriftHarm::Unknown => Attention::Notice,
+            DriftHarm::Broken => Attention::Critical,
         }
     }
 }
