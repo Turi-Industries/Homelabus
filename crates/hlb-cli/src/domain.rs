@@ -249,7 +249,7 @@ fn print(r: &Reading, unread: &[String], now: i64) {
         println!("  ? {u}");
     }
     for a in domain::advice(r, now) {
-        println!("  • {a}");
+        println!("  • {}", a.line());
     }
 }
 

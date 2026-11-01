@@ -8,6 +8,7 @@
 //! the baseline; each later one is compared with it.
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// One reading of a zone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +33,8 @@ pub struct Reading {
 
 /// The first CAA set found climbing from the exposure's domain to the zone, the one an
 /// authority checks before issuing for a name below (RFC 8659 §3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = CaaGoverning)]
 pub struct Governing {
     /// Where it was found; `None` when no name up to the zone holds one.
     pub at: Option<String>,
@@ -40,7 +42,8 @@ pub struct Governing {
 }
 
 /// An ACME account that requests the house's certificates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = AcmeAccount)]
 pub struct Account {
     /// `Caddy`, `Stalwart`.
     pub who: String,
@@ -53,7 +56,8 @@ pub struct Account {
 }
 
 /// What the internet resolves, normalised so two resolvers' answers compare equal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainDns)]
 pub struct DnsSide {
     pub ns: Vec<String>,
     pub ds: Vec<String>,
@@ -76,7 +80,8 @@ impl DnsSide {
 }
 
 /// What the registry says of the name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainRegistry)]
 #[serde(rename_all = "snake_case", tag = "read")]
 pub enum Registry {
     /// Why: no RDAP for the TLD, or it did not answer.
@@ -86,7 +91,8 @@ pub enum Registry {
     Read(RegistryRecord),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainRegistryRecord)]
 pub struct RegistryRecord {
     /// The RDAP server asked.
     pub source: String,
@@ -185,7 +191,9 @@ fn vcard_name(entity: &serde_json::Value) -> Option<String> {
 }
 
 /// What a drift is of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = DomainChange)]
 pub enum Moved {
     Ns,
     Ds,
@@ -225,7 +233,8 @@ impl Moved {
 }
 
 /// One thing that moved since the baseline.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainDrift)]
 pub struct Drift {
     pub what: Moved,
     pub was: String,
@@ -264,9 +273,100 @@ pub fn drifts(baseline: &Reading, now: &Reading) -> Vec<Drift> {
     out
 }
 
-/// What is worth doing, said beside a reading and never alerted: these are how the
-/// house is set up, not something that changed.
-pub fn advice(r: &Reading, now: i64) -> Vec<String> {
+/// Something worth doing, said beside a reading and never alerted: how the house is
+/// set up, not something that changed. A value, which the CLI and the interface word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[schema(as = DomainAdvice)]
+pub enum Advice {
+    /// No transfer lock where the statuses are known.
+    NoTransferLock,
+    /// Lapsing within 30 days.
+    Expires { days: i64 },
+    /// No DS at the parent.
+    NotSigned,
+    /// A DS, and the chain does not validate: validating resolvers refuse the zone.
+    SignedNotValidating,
+    /// No CAA, and no account of the house read to pin.
+    NoCaa,
+    /// The CAA lets others issue: these records, at `at`, in place of its `issue`
+    /// ones, let the house's accounts alone.
+    Pin {
+        why: PinWhy,
+        at: String,
+        records: Vec<PinRecord>,
+    },
+}
+
+/// Why the CAA lets others issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = CaaPinWhy)]
+pub enum PinWhy {
+    /// No `issue` names an authority: any may issue.
+    NoAuthority,
+    /// Its authority is named with no account: anyone's there may issue.
+    NoAccount,
+}
+
+/// One CAA record to publish, for one account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = CaaPinRecord)]
+pub struct PinRecord {
+    pub who: String,
+    /// For its wildcard: an `issuewild` record.
+    pub wildcard: bool,
+    pub record: String,
+}
+
+impl Advice {
+    /// As the CLI prints it.
+    pub fn line(&self) -> String {
+        match self {
+            Self::NoTransferLock => {
+                "no transfer lock: ask the registrar to set one, or a registry lock where offered"
+                    .into()
+            }
+            Self::Expires { days } => {
+                format!("expires in {days} days: a name that lapses is anyone's")
+            }
+            Self::NotSigned => "not signed: no DS at the parent, so no DNSSEC".into(),
+            Self::SignedNotValidating => {
+                "signed and NOT validating: a validating resolver refuses every name in it".into()
+            }
+            Self::NoCaa => "no CAA: any certificate authority may issue for it".into(),
+            Self::Pin { why, at, records } => {
+                let why = match why {
+                    PinWhy::NoAuthority => {
+                        "no CAA names an authority: any may issue for the house's names"
+                    }
+                    PinWhy::NoAccount => {
+                        "the CAA names no account: anyone's at the same authority may issue"
+                    }
+                };
+                let lines: Vec<String> = records
+                    .iter()
+                    .map(|r| {
+                        let who = if r.wildcard {
+                            format!("{}, its wildcard", r.who)
+                        } else {
+                            r.who.clone()
+                        };
+                        format!("{who}: {}", r.record)
+                    })
+                    .collect();
+                format!(
+                    "{why}; these CAA records at {at}, in place of its `issue` ones, let the \
+                     house's accounts alone:\n    {}",
+                    lines.join("\n    ")
+                )
+            }
+        }
+    }
+}
+
+/// What is worth doing beside a reading.
+pub fn advice(r: &Reading, now: i64) -> Vec<Advice> {
     let mut out = Vec::new();
     if let Registry::Read(reg) = &r.registry {
         // `server transfer prohibited` alone is a registry lock, which counts.
@@ -275,30 +375,23 @@ pub fn advice(r: &Reading, now: i64) -> Vec<String> {
             .iter()
             .any(|s| s.ends_with("transfer prohibited"))
         {
-            out.push(
-                "no transfer lock: ask the registrar to set one, or a registry lock where offered"
-                    .into(),
-            );
+            out.push(Advice::NoTransferLock);
         }
         if let Some(expires) = reg.expires {
             let days = (expires - now).div_euclid(86_400);
             if days < 30 {
-                out.push(format!(
-                    "expires in {days} days: a name that lapses is anyone's"
-                ));
+                out.push(Advice::Expires { days });
             }
         }
     }
     if let Ok(dns) = &r.dns {
         if dns.ds.is_empty() {
-            out.push("not signed: no DS at the parent, so no DNSSEC".into());
+            out.push(Advice::NotSigned);
         } else if !dns.validated {
-            out.push(
-                "signed and NOT validating: a validating resolver refuses every name in it".into(),
-            );
+            out.push(Advice::SignedNotValidating);
         }
         if dns.caa.is_empty() && r.accounts.is_empty() {
-            out.push("no CAA: any certificate authority may issue for it".into());
+            out.push(Advice::NoCaa);
         }
     }
     if let Some(pin) = pin_advice(r) {
@@ -308,7 +401,9 @@ pub fn advice(r: &Reading, now: i64) -> Vec<String> {
 }
 
 /// What a CAA set lets one account do (RFC 8659, and 8657's `accounturi`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = CaaVerdict)]
 pub enum Verdict {
     /// No `issue` governs: any authority, any account.
     Anyone,
@@ -437,18 +532,18 @@ pub fn refused(r: &Reading) -> Vec<&Account> {
         .collect()
 }
 
-/// The lines that let the house's accounts alone issue, when the CAA lets others.
+/// The records that let the house's accounts alone issue, when the CAA lets others.
 /// Every account in one piece of advice: a set pinning one of two refuses the other.
-fn pin_advice(r: &Reading) -> Option<String> {
+fn pin_advice(r: &Reading) -> Option<Advice> {
     let g = r.caa_governing.as_ref()?;
     let verdicts: Vec<Verdict> = r.accounts.iter().map(|a| judge(&g.records, a)).collect();
     if verdicts.is_empty() || verdicts.contains(&Verdict::Refused) {
         return None;
     }
     let why = if verdicts.contains(&Verdict::Anyone) {
-        "no CAA names an authority: any may issue for the house's names"
+        PinWhy::NoAuthority
     } else if verdicts.contains(&Verdict::AnyAccount) {
-        "the CAA names no account: anyone's at the same authority may issue"
+        PinWhy::NoAccount
     } else {
         return None;
     };
@@ -457,30 +552,32 @@ fn pin_advice(r: &Reading) -> Option<String> {
         .iter()
         .filter_map(|c| parse_caa(c))
         .any(|c| c.tag == "issuewild");
-    let mut lines = Vec::new();
+    let mut records = Vec::new();
     for a in &r.accounts {
-        lines.push(format!(
-            "{}: 0 issue \"{}; accounturi={}\"",
-            a.who, a.issuer, a.uri
-        ));
+        records.push(PinRecord {
+            who: a.who.clone(),
+            wildcard: false,
+            record: format!("0 issue \"{}; accounturi={}\"", a.issuer, a.uri),
+        });
         if a.wildcard && wild_set {
-            lines.push(format!(
-                "{}, its wildcard: 0 issuewild \"{}; accounturi={}\"",
-                a.who, a.issuer, a.uri
-            ));
+            records.push(PinRecord {
+                who: a.who.clone(),
+                wildcard: true,
+                record: format!("0 issuewild \"{}; accounturi={}\"", a.issuer, a.uri),
+            });
         }
     }
-    Some(format!(
-        "{why}; these CAA records at {}, in place of its `issue` ones, let the house's \
-         accounts alone:\n    {}",
-        g.at.as_deref().unwrap_or(&r.zone),
-        lines.join("\n    ")
-    ))
+    Some(Advice::Pin {
+        why,
+        at: g.at.clone().unwrap_or_else(|| r.zone.clone()),
+        records,
+    })
 }
 
 /// A certificate a Certificate Transparency log holds for the exposure's names, as Cert
 /// Spotter reports it: a precertificate and its certificate are one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = CtIssuance)]
 pub struct Issuance {
     /// Cert Spotter's, rising: what the next reading starts after.
     pub id: String,
@@ -637,6 +734,11 @@ fn yes_no(b: bool) -> String {
 mod tests {
     use super::*;
 
+    /// The advice as the CLI words it.
+    fn said(r: &Reading) -> Vec<String> {
+        advice(r, 0).iter().map(Advice::line).collect()
+    }
+
     fn reading(dns: DnsSide, registry: Registry) -> Reading {
         Reading {
             zone: "home.example".into(),
@@ -765,7 +867,7 @@ mod tests {
                 }
             }),
         );
-        let a = advice(&r, 0).join("\n");
+        let a = said(&r).join("\n");
         for said in [
             "no transfer lock",
             "expires in 10 days",
@@ -790,7 +892,7 @@ mod tests {
     fn a_signed_zone_that_does_not_validate_is_said_so() {
         let mut dns = signed();
         dns.validated = false;
-        let a = advice(&reading(dns, locked()), 0).join("\n");
+        let a = said(&reading(dns, locked())).join("\n");
         assert!(a.contains("signed and NOT validating"), "{a}");
     }
 
@@ -909,7 +1011,7 @@ mod tests {
         });
         r.accounts = vec![account("Caddy", 1, true), account("Stalwart", 2, false)];
         assert!(refused(&r).is_empty());
-        let a = advice(&r, 0).join("\n");
+        let a = said(&r).join("\n");
         for line in [
             "Caddy: 0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
             "Caddy, its wildcard: 0 issuewild \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
@@ -945,7 +1047,7 @@ mod tests {
             records: vec![],
         });
         r.accounts = vec![account("Caddy", 1, false)];
-        let a = advice(&r, 0);
+        let a = said(&r);
         assert_eq!(a.len(), 1, "{a:?}");
         assert!(a[0].starts_with("no CAA names an authority"), "{a:?}");
         assert!(a[0].contains("records at home.example"), "{a:?}");
