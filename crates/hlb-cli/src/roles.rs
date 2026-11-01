@@ -32,6 +32,7 @@ pub async fn sync(cli: &Cli, state: &State, apply: bool) -> Result<Report> {
         vault: &vault,
         orchestrator: &orch as &dyn Orchestrator,
         reach: &reach,
+        http: &hlb_guide::HttpApi::default(),
         now: crate::now(),
     }
     .run(apply)

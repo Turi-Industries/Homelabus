@@ -172,8 +172,9 @@ the outside, which is the whole problem.
   `recovery:` carries a `proof` (one POST on the overlay, JSON, a form or HTTP Basic, a
   pointer the answer holds once signed in), required by the catalog and checked against the six
   real images; it is an assertion like the others (`recovery:<secret>`). A refusal is
-  NEVER tried again by the nightly pass — Jellyfin disables an administrator after five,
-  Stalwart bans the address — only by a person's `hlb assert`. Optional when read: a
+  NEVER tried again by the nightly pass, nor by the role sync signing in as one
+  (`access.accounts`) — Jellyfin disables an administrator after five, Stalwart bans
+  the address — only by a person's `hlb assert`. Optional when read: a
   manifest frozen before proofs reads as "not read", `hlb upgrade` named.
 - **Homelabus can verify few of the access safeguards** — the recovery drill, the
   emergency vault's verified deposit, a kit printed with today's material

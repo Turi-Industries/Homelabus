@@ -3885,11 +3885,13 @@ spec:
             .await
             .expect("bob");
         let reach = |u: &str| u.to_string();
+        let http = hlb_guide::HttpApi::default();
         let sync = |now| roles::RoleSync {
             state: &s,
             vault: &vault,
             orchestrator: &o,
             reach: &reach,
+            http: &http,
             now,
         };
         let execs = || o.execs.lock().expect("mutex").clone();
@@ -3921,6 +3923,257 @@ spec:
                     .map(String::from)
                     .to_vec()
             )
+        );
+    }
+
+    /// Jellyfin as its SSO plugin leaves it: three accounts linked to PocketID
+    /// identities, one administrator linked to none — and a password it may refuse.
+    struct Accounts {
+        sent: Mutex<Vec<Sent>>,
+        refuse: bool,
+        disabled: Mutex<std::collections::BTreeMap<String, bool>>,
+    }
+
+    impl Accounts {
+        fn new(refuse: bool) -> Self {
+            let disabled = [
+                ("acc-ada", true),
+                ("acc-bob", false),
+                ("acc-gone", false),
+                ("acc-admin", false),
+            ]
+            .map(|(a, d)| (a.to_string(), d))
+            .into();
+            Self {
+                sent: Mutex::default(),
+                refuse,
+                disabled: Mutex::new(disabled),
+            }
+        }
+        fn writes(&self) -> Vec<(String, String)> {
+            self.sent
+                .lock()
+                .expect("mutex")
+                .iter()
+                .filter(|(k, _, _)| k.starts_with("POST") && k.ends_with("/Policy"))
+                .map(|(k, _, b)| (k.clone(), b.clone()))
+                .collect()
+        }
+        fn sign_ins(&self) -> usize {
+            let sent = self.sent.lock().expect("mutex");
+            sent.iter()
+                .filter(|(k, _, _)| k.ends_with("/signin"))
+                .count()
+        }
+    }
+
+    #[async_trait]
+    impl hlb_guide::ApiClient for Accounts {
+        async fn call(
+            &self,
+            verb: &str,
+            url: &str,
+            headers: &[(String, String)],
+            body: Option<&str>,
+        ) -> std::result::Result<(u16, String), String> {
+            let key = format!("{verb} {url}");
+            self.sent.lock().expect("mutex").push((
+                key.clone(),
+                headers.to_vec(),
+                body.unwrap_or("").into(),
+            ));
+            let path = url.trim_start_matches("http://jellyfin:8096");
+            if path == "/signin" {
+                return Ok(if self.refuse {
+                    (401, String::new())
+                } else {
+                    (200, r#"{"AccessToken":"tok-1"}"#.into())
+                });
+            }
+            if headers != [("Authorization".to_string(), "Token=tok-1".to_string())] {
+                return Ok((401, String::new()));
+            }
+            let mut disabled = self.disabled.lock().expect("mutex");
+            Ok(match (verb, path) {
+                ("GET", "/Plugins/sso/Configuration") => (
+                    200,
+                    r#"{"OidConfigs":{"PocketID":{"CanonicalLinks":
+                        {"sub-ada":"acc-ada","sub-bob":"acc-bob","sub-gone":"acc-gone"}}}}"#
+                        .into(),
+                ),
+                ("GET", p) if p.starts_with("/Users/") => {
+                    let id = p.trim_start_matches("/Users/");
+                    let d = disabled.get(id).copied().unwrap_or_default();
+                    (
+                        200,
+                        format!(
+                            r#"{{"Id":"{id}","Policy":{{"IsDisabled":{d},"EnableAllFolders":true}}}}"#
+                        ),
+                    )
+                }
+                ("POST", p) if p.ends_with("/Policy") => {
+                    let id = p.trim_start_matches("/Users/").trim_end_matches("/Policy");
+                    let v: serde_json::Value =
+                        serde_json::from_str(body.unwrap_or("")).expect("a policy");
+                    disabled.insert(id.into(), v["IsDisabled"] == true);
+                    (204, String::new())
+                }
+                _ => (404, String::new()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_is_enabled_while_its_person_holds_a_role_let_in() {
+        const JELLYFIN: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: jellyfin }
+spec:
+  image: { repo: a/b, tag: "1", digest: "sha256:x" }
+  requires:
+    - { kind: sso, mode: native, redirectPaths: [/cb] }
+  env: { ID: "{{ oidc.client_id }}" }
+  ingress:
+    - { host: x.example.fr, port: 8096 }
+  recovery:
+    - secret: admin-password
+      username: admin
+      proof: { path: /signin, body: '{"u":"{{ username }}","p":"{{ password }}"}', pointer: /AccessToken }
+  access:
+    accounts:
+      apply:
+        type: http
+        signIn: admin-password
+        headers: { Authorization: "Token={{ token }}" }
+        links: { path: /Plugins/sso/Configuration, pointer: /OidConfigs/PocketID/CanonicalLinks }
+        read: { path: "/Users/{{ account }}", pointer: /Policy }
+        disabled: /IsDisabled
+        write: { verb: POST, path: "/Users/{{ account }}/Policy" }
+"#;
+        let o = Fake::default();
+        let s = State::in_memory().await.unwrap();
+        let dir = tempfile::tempdir().expect("tmp");
+        let vault = hlb_secrets::Vault::init(dir.path().join("k.key")).expect("vault");
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(JELLYFIN).expect("manifest");
+        hlb_types::validate(&m).expect("a valid manifest");
+        s.upsert_app("jellyfin", &m, Some("x.example.fr"))
+            .await
+            .expect("app");
+        s.store_secret_if_absent(
+            "jellyfin-admin-password",
+            &vault.encrypt("pw").expect("enc"),
+            "test",
+        )
+        .await
+        .expect("stored");
+        for id in ["family", "guests"] {
+            let r = hlb_users::RoleDef::new(
+                id,
+                hlb_types::Role::User,
+                hlb_users::MailLimits::standard(),
+            );
+            s.put_role(&r, "test").await.expect("role");
+        }
+        s.allow_role("jellyfin", "family", "test")
+            .await
+            .expect("allowed");
+        s.upsert_user("ada", "family", Some("sub-ada"))
+            .await
+            .expect("ada");
+        s.upsert_user("bob", "guests", Some("sub-bob"))
+            .await
+            .expect("bob");
+        async fn run(
+            s: &State,
+            vault: &hlb_secrets::Vault,
+            o: &Fake,
+            http: &Accounts,
+            apply: bool,
+        ) -> roles::Report {
+            roles::RoleSync {
+                state: s,
+                vault,
+                orchestrator: o,
+                reach: &|u: &str| u.to_string(),
+                http,
+                now: 1_000,
+            }
+            .run(apply)
+            .await
+            .expect("sync")
+        }
+        let sync = |http, apply| run(&s, &vault, &o, http, apply);
+
+        let api = Accounts::new(false);
+        let preview = sync(&api, false).await;
+        assert!(api.writes().is_empty(), "a preview writes nothing");
+        let said: Vec<(String, String)> = preview
+            .lines
+            .iter()
+            .filter(|l| l.subject.ends_with(" in jellyfin"))
+            .map(|l| (l.subject.clone(), l.change.clone()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("ada in jellyfin", "enabled again: a role let in"),
+                ("bob in jellyfin", "disabled: no role let in"),
+                (
+                    "PocketID id sub-gone, no longer in Homelabus in jellyfin",
+                    "disabled: no role let in"
+                ),
+            ]
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+        );
+
+        sync(&api, true).await;
+        let writes = api.writes();
+        assert_eq!(writes.len(), 3, "{writes:?}");
+        // 🔴 The whole policy goes back, the flag changed: Jellyfin resets what is not
+        // sent — Ada would have lost every library.
+        assert!(
+            writes.contains(&(
+                "POST http://jellyfin:8096/Users/acc-ada/Policy".into(),
+                r#"{"EnableAllFolders":true,"IsDisabled":false}"#.into()
+            )),
+            "{writes:?}"
+        );
+        let state = api.disabled.lock().expect("mutex").clone();
+        assert!(!state["acc-ada"], "enabled again");
+        assert!(state["acc-bob"] && state["acc-gone"]);
+        assert!(!state["acc-admin"], "linked to nobody: never touched");
+        assert!(
+            !api.sent
+                .lock()
+                .expect("mutex")
+                .iter()
+                .any(|(k, _, _)| k.contains("acc-admin")),
+            "not even read"
+        );
+        // In step: nothing written again.
+        sync(&api, true).await;
+        assert_eq!(api.writes().len(), 3);
+
+        // 🔴 A refused password is recorded as the nightly proof records it, and not
+        // tried again: Jellyfin disables its administrator after five.
+        let refusing = Accounts::new(true);
+        let r = sync(&refusing, true).await;
+        assert!(r.failed(), "{:?}", r.lines);
+        let readings = s.assertion_results().await.expect("read");
+        assert!(
+            readings.iter().any(|(a, r)| a == "jellyfin"
+                && r.id == "recovery:admin-password"
+                && r.verdict == hlb_api::assertions::Verdict::Broken),
+            "{readings:?}"
+        );
+        let r = sync(&refusing, true).await;
+        assert_eq!(refusing.sign_ins(), 1, "never signed in again");
+        assert!(
+            r.lines.iter().any(|l| l.subject == "jellyfin"
+                && matches!(l.outcome, roles::Outcome::NotConfigured(_))),
+            "{:?}",
+            r.lines
         );
     }
 

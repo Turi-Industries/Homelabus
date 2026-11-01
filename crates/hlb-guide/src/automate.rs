@@ -612,45 +612,103 @@ async fn sign_in_for(api: Api<'_>, base: &str, secret: &str) -> Result<String, S
             "no sign-in \"{secret}\" was looked up to sign in with"
         ));
     };
+    for _ in 0..PAGE_RETRIES {
+        match attempt(api.client, base, s).await {
+            Attempt::Token(t) => return Ok(t),
+            // A page: the app is still starting, as n8n does.
+            Attempt::Page => tokio::time::sleep(PAGE_WAIT).await,
+            Attempt::Failed(f) => return Err(f.why),
+        }
+    }
+    Err(format!(
+        "the sign-in at {} answered with a page, not its API, for {} s",
+        s.proof.path,
+        PAGE_RETRIES * PAGE_WAIT.as_secs()
+    ))
+}
+
+/// Why a sign-in gave no token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInFailed {
+    /// The app answered no to the password — what the nightly proof calls broken, and
+    /// what is never tried again by itself: Jellyfin disables an administrator after
+    /// five.
+    pub refused: bool,
+    pub why: String,
+}
+
+/// Signs in once with a recovery sign-in, as [`sign_in_for`] does but never waiting:
+/// for a pass that runs every few minutes, a page is a failure tried at the next one.
+pub async fn sign_in(
+    client: &dyn ApiClient,
+    base: &str,
+    s: &ApiSignIn,
+) -> Result<String, SignInFailed> {
+    match attempt(client, base, s).await {
+        Attempt::Token(t) => Ok(t),
+        Attempt::Page => Err(SignInFailed {
+            refused: false,
+            why: format!(
+                "the sign-in at {} answered with a page, not its API",
+                s.proof.path
+            ),
+        }),
+        Attempt::Failed(f) => Err(f),
+    }
+}
+
+enum Attempt {
+    Token(String),
+    Page,
+    Failed(SignInFailed),
+}
+
+async fn attempt(client: &dyn ApiClient, base: &str, s: &ApiSignIn) -> Attempt {
+    let failed = |refused, why| Attempt::Failed(SignInFailed { refused, why });
+    let secret = &s.credential.secret;
     let (username, password) = match &s.credential.sign_in {
         Ok((u, p)) => (u.as_str(), p.as_str()),
-        Err(why) => return Err(format!("no sign-in with \"{secret}\": {why}")),
+        Err(why) => return failed(false, format!("no sign-in with \"{secret}\": {why}")),
     };
     let p = &s.proof;
-    let filled = crate::assertions::fill(&p.body, username, password)?;
+    let filled = match crate::assertions::fill(&p.body, username, password) {
+        Ok(f) => f,
+        Err(e) => return failed(false, e),
+    };
     let (content_type, body) = if p.form {
-        (FORM, crate::assertions::form(&filled)?)
+        match crate::assertions::form(&filled) {
+            Ok(b) => (FORM, b),
+            Err(e) => return failed(false, e),
+        }
     } else {
         (JSON, filled)
     };
     let mut headers: Vec<(String, String)> = p.headers.clone().into_iter().collect();
     headers.push(("content-type".into(), content_type.into()));
     let url = format!("{base}{}", p.path);
-    for _ in 0..PAGE_RETRIES {
-        match api.client.call("POST", &url, &headers, Some(&body)).await {
-            Ok((code, answer)) if (200..300).contains(&code) => {
-                let Ok(json) = serde_json::from_str::<serde_json::Value>(&answer) else {
-                    // A page: the app is still starting, as n8n does.
-                    tokio::time::sleep(PAGE_WAIT).await;
-                    continue;
-                };
-                return match json.pointer(&p.pointer) {
-                    Some(serde_json::Value::String(t)) if !t.is_empty() => Ok(t.clone()),
-                    _ => Err(format!(
+    match client.call("POST", &url, &headers, Some(&body)).await {
+        Ok((code, answer)) if (200..300).contains(&code) => {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&answer) else {
+                return Attempt::Page;
+            };
+            match json.pointer(&p.pointer) {
+                Some(serde_json::Value::String(t)) if !t.is_empty() => Attempt::Token(t.clone()),
+                _ => failed(
+                    false,
+                    format!(
                         "the sign-in at {} answered {code} with no {} to sign in with",
                         p.path, p.pointer
-                    )),
-                };
+                    ),
+                ),
             }
-            Ok((code, _)) => return Err(format!("the sign-in at {} answered {code}", p.path)),
-            Err(e) => return Err(format!("the sign-in at {} failed: {e}", p.path)),
         }
+        // The statuses the nightly proof reads as a refusal (`judge_sign_in`).
+        Ok((code, _)) => failed(
+            matches!(code, 400 | 401 | 403),
+            format!("the sign-in at {} answered {code}", p.path),
+        ),
+        Err(e) => failed(false, format!("the sign-in at {} failed: {e}", p.path)),
     }
-    Err(format!(
-        "the sign-in at {} answered with a page, not its API, for {} s",
-        p.path,
-        PAGE_RETRIES * PAGE_WAIT.as_secs()
-    ))
 }
 
 /// How often, and how long apart, a call answered by a page is tried again: fifteen

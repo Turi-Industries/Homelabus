@@ -20,8 +20,8 @@ pub mod assertions;
 pub mod automate;
 
 pub use automate::{
-    after_restore, try_automate, try_automate_with, Api, ApiClient, ApiSignIn, AutomationOutcome,
-    HttpApi, SqlWriter,
+    after_restore, sign_in, try_automate, try_automate_with, Api, ApiClient, ApiSignIn,
+    AutomationOutcome, HttpApi, SignInFailed, SqlWriter,
 };
 
 use std::time::Duration;

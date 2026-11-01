@@ -205,9 +205,16 @@ exported — Homelabus never bills.
   working, so whoever leaves PocketID cannot come back by an old one. A setting of the
   plugin's one configuration document, which holds the provider and the links too: an
   `api` call's `merge` writes it over a GET (RFC 7386). Quick Connect checks no
-  password (`AuthenticateDirect`, from Jellyfin's source) — the lab to confirm; (4) the per-person `http` step beside `exec` and `sql`:
-  disable the account of whoever holds no allowed role, enable it again — through
-  read-modify-write of the account's policy, found by `CanonicalLinks`.
+  password (`AuthenticateDirect`, from Jellyfin's source) — the lab to confirm; (4)
+  each linked account disabled while its person holds no role let in, enabled again
+  once they do ✅ 2026-11-01 — `access.accounts` (`type: http`), run by the role sync:
+  the plugin's `CanonicalLinks` walked, each account's policy read and sent back WHOLE
+  with `IsDisabled` set; an account linked to nobody (`admin`) never read. 🔴 It signs
+  in every few minutes, so a refused recovery password is recorded as the nightly
+  proof records it (`recovery:<secret>` broken) and never tried again by either
+  before `hlb assert` — five refusals and Jellyfin disables its administrator. Not run
+  against a real Jellyfin yet: the lab, with parts 2-3 and Quick Connect under
+  `EnforceSsoOnly`.
 - **Calendars and contacts: one password per device**, made by the person in Me,
   opening mail, calendars and contacts, each revoked alone. **No `calendar` capability
   yet**: no app of the catalog consumes CalDAV, and a declaration nobody reads is worse
@@ -1317,11 +1324,11 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    can, and `hlb-bitwarden` is the emergency vault's client cryptography far more than
    the sync (171 of its 1,630 lines). Termix's hosts are a diff against Termix's own
    list, declarable — but each node's key is authorized ON the node, a machine's
-   action, not an app's. **Nothing built.** Left: Jellyfin keeps accounts of its own,
-   made by hand, since its TV clients cannot sign in through OIDC — the one app a
-   per-person HTTP step (create, disable) would serve. No step is HTTP today: an
-   `http` variant beside `exec` and `sql` when an app the owner names needs one —
-   named 2026-11-01: Jellyfin, in this phase.
+   action, not an app's. Then Jellyfin, named 2026-11-01: its accounts made by its SSO
+   plugin at a first sign-in, kept enabled by role ✅ 2026-11-01 — `access.accounts`,
+   an `http` variant signing in as a recovery sign-in, walking the APP's links
+   (PocketID id → account), not Homelabus's people, so a person deleted from Homelabus
+   is disabled too (below, "Jellyfin signs in through PocketID", part 4).
 5. **Lifecycle** — jobs run daily or weekly only; no pre-upgrade step (none needed,
    measured); post-restore steps and connection budgets built 2026-11-01.
    **Measured** 2026-10-31, the step before a backup first. The nightly pass copies

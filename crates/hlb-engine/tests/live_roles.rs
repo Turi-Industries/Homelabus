@@ -268,6 +268,7 @@ impl Lab {
             vault: &self.vault,
             orchestrator: &self.orch,
             reach: &reach,
+            http: &hlb_guide::HttpApi::default(),
             now: 1_000_000,
         }
         .run(apply)

@@ -18,7 +18,9 @@ use hlb_identity::{PocketId, User as PocketUser, UserChange};
 use hlb_orchestrator::Orchestrator;
 use hlb_secrets::Vault;
 use hlb_state::{AdminRecord, QuotaRecord, QuotaState, State};
-use hlb_types::access::{role_of_group, Members, QuotaApply, QuotaUnit, ABSENT_EXIT};
+use hlb_types::access::{
+    role_of_group, AccountsApply, Members, QuotaApply, QuotaUnit, ABSENT_EXIT,
+};
 use hlb_types::{Capability, DbEngine, Manifest};
 use hlb_users::access::{self, AdminTask, Desired, Entry, Installed, Opening, Person, QuotaTask};
 use hlb_users::RoleDef;
@@ -82,6 +84,8 @@ pub struct RoleSync<'a> {
     /// Turns an overlay address into one this process reaches: the identity in the
     /// controller, a relay from a host (`relay::reach`).
     pub reach: &'a (dyn Fn(&str) -> String + Send + Sync),
+    /// The apps' own APIs, for the accounts they keep (`access.accounts`).
+    pub http: &'a dyn hlb_guide::ApiClient,
     pub now: i64,
 }
 
@@ -221,6 +225,8 @@ impl RoleSync<'_> {
         self.admins(&desired.admins, &manifests, apply, &mut report)
             .await?;
         self.members(&desired, &manifests, apply, &mut report)
+            .await?;
+        self.accounts(&desired, &manifests, &names, apply, &mut report)
             .await?;
         if let Some((url, user, password)) = &access.stalwart_admin {
             let mail = hlb_mail::Stalwart::new(
@@ -910,6 +916,278 @@ impl RoleSync<'_> {
         }
         Ok(())
     }
+}
+
+impl RoleSync<'_> {
+    /// Each account an app links to a PocketID identity, enabled while that person
+    /// holds a role the app lets in and disabled otherwise — a person deleted from
+    /// Homelabus included, which is why the app's links are walked, not the people.
+    async fn accounts(
+        &self,
+        desired: &Desired,
+        manifests: &BTreeMap<&str, &Manifest>,
+        names: &BTreeMap<&str, &str>,
+        apply: bool,
+        report: &mut Report,
+    ) -> crate::Result<()> {
+        let readings = self.state.assertion_results().await?;
+        for (app, m) in manifests {
+            let Some(how) = m.spec.access.as_ref().and_then(|a| a.accounts.as_ref()) else {
+                continue;
+            };
+            let AccountsApply::Http { sign_in, .. } = &how.apply;
+            let proof_id = hlb_guide::assertions::recovery_id(sign_in);
+            // 🔴 Never a password the app refused last time: Jellyfin disables its
+            // administrator after five, and this pass runs every few minutes.
+            if readings.iter().any(|(a, r)| {
+                a == app && r.id == proof_id && r.verdict == hlb_api::assertions::Verdict::Broken
+            }) {
+                report.push(
+                    *app,
+                    "accounts enabled by role",
+                    Outcome::NotConfigured(format!(
+                        "{app} refused its recovery sign-in \"{sign_in}\" last time, and it \
+                         is not tried again by itself: `hlb assert {app}` once it is fixed"
+                    )),
+                );
+                continue;
+            }
+            let allowed: BTreeSet<&str> = desired
+                .doors
+                .get(*app)
+                .into_iter()
+                .flat_map(|d| &d.groups)
+                .filter_map(|g| desired.groups.get(g))
+                .flat_map(|g| g.members.iter().map(String::as_str))
+                .collect();
+            match self
+                .app_accounts(app, m, &how.apply, &allowed, names, apply, report)
+                .await
+            {
+                Ok(()) => {}
+                Err(AccountsFailed::Refused(why)) => {
+                    self.record_refusal(app, m, &proof_id, &why).await?;
+                    report.push(*app, "accounts enabled by role", Outcome::Failed(why));
+                }
+                Err(AccountsFailed::Other(why)) => {
+                    report.push(*app, "accounts enabled by role", Outcome::Failed(why));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn app_accounts(
+        &self,
+        app: &str,
+        m: &Manifest,
+        how: &AccountsApply,
+        allowed: &BTreeSet<&str>,
+        names: &BTreeMap<&str, &str>,
+        apply: bool,
+        report: &mut Report,
+    ) -> Result<(), AccountsFailed> {
+        let AccountsApply::Http {
+            sign_in,
+            headers,
+            links,
+            read,
+            disabled,
+            write,
+        } = how;
+        let other = |e: String| AccountsFailed::Other(e);
+        let credential = crate::emergency::credentials(self.state, self.vault, app, m)
+            .await
+            .map_err(|e| other(e.to_string()))?
+            .into_iter()
+            .find(|c| &c.secret == sign_in);
+        let proof = m
+            .spec
+            .recovery
+            .iter()
+            .find(|r| &r.secret == sign_in)
+            .and_then(|r| r.proof.clone());
+        let (Some(credential), Some(proof)) = (credential, proof) else {
+            return Err(other(format!(
+                "its recovery sign-in \"{sign_in}\" has no proof to sign in by: `hlb upgrade \
+                 {app}` takes the catalog's"
+            )));
+        };
+        let port = m.spec.ingress.first().map_or(80, |i| i.port);
+        let base = (self.reach)(&format!("http://{app}:{port}"));
+        let token = hlb_guide::sign_in(
+            self.http,
+            &base,
+            &hlb_guide::ApiSignIn { credential, proof },
+        )
+        .await
+        .map_err(|f| {
+            if f.refused {
+                AccountsFailed::Refused(f.why)
+            } else {
+                other(f.why)
+            }
+        })?;
+        let headers: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.replace("{{ token }}", &token)))
+            .collect();
+        let get = |path: String| {
+            let (url, headers) = (format!("{base}{path}"), &headers);
+            async move {
+                match self.http.call("GET", &url, headers, None).await {
+                    Ok((200..=299, body)) => serde_json::from_str::<serde_json::Value>(&body)
+                        .map_err(|_| format!("{path} answered no JSON")),
+                    Ok((code, _)) => Err(format!("{path} answered {code}")),
+                    Err(e) => Err(format!("{path}: {e}")),
+                }
+            }
+        };
+
+        let doc = get(links.path.clone()).await.map_err(other)?;
+        let Some(serde_json::Value::Object(found)) = doc.pointer(&links.pointer) else {
+            return Err(other(format!(
+                "{} holds no object of links at {}",
+                links.path, links.pointer
+            )));
+        };
+        // One account may be linked twice — a link migrated from an older key stays
+        // beside the new one: it is let in when any of its identities is.
+        let mut by_account: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (sub, account) in found {
+            let Some(account) = account.as_str() else {
+                return Err(other(format!("the link of {sub} is not an account id")));
+            };
+            by_account
+                .entry(account.to_string())
+                .or_default()
+                .push(sub.clone());
+        }
+        for (account, subs) in by_account {
+            // It goes into a path: anything but an id is refused rather than written in.
+            if account.is_empty()
+                || !account
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                return Err(other(format!("\"{account}\" is not an account id")));
+            }
+            let let_in = subs.iter().any(|s| allowed.contains(s.as_str()));
+            let subject = format!(
+                "{} in {app}",
+                subs.iter()
+                    .find_map(|s| names.get(s.as_str()).copied())
+                    .map_or_else(
+                        || format!("PocketID id {}, no longer in Homelabus", subs.join(", ")),
+                        str::to_string
+                    )
+            );
+            let fill = |path: &str| {
+                hlb_types::access::fill(path, |t| (t == "account").then(|| account.clone()))
+            };
+            let mut object = match get(fill(&read.path))
+                .await
+                .map(|j| j.pointer(&read.pointer).cloned())
+            {
+                Ok(Some(o)) => o,
+                Ok(None) => {
+                    report.push(
+                        subject,
+                        "reading the account",
+                        Outcome::Failed(format!("no {} in its answer", read.pointer)),
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    report.push(subject, "reading the account", Outcome::Failed(e));
+                    continue;
+                }
+            };
+            let is_disabled = object
+                .pointer(disabled)
+                .and_then(serde_json::Value::as_bool);
+            if is_disabled == Some(!let_in) {
+                report.unchanged += 1;
+                continue;
+            }
+            let said = if let_in {
+                "enabled again: a role let in"
+            } else {
+                "disabled: no role let in"
+            };
+            if !apply {
+                report.push(subject, said, Outcome::ToDo);
+                continue;
+            }
+            let Some(flag) = object.pointer_mut(disabled) else {
+                report.push(
+                    subject,
+                    said,
+                    Outcome::Failed(format!("no {disabled} in the account to set")),
+                );
+                continue;
+            };
+            *flag = serde_json::Value::Bool(!let_in);
+            let path = fill(&write.path);
+            let outcome = match self
+                .http
+                .call(
+                    &write.verb,
+                    &format!("{base}{path}"),
+                    &headers,
+                    Some(&object.to_string()),
+                )
+                .await
+            {
+                Ok((200..=299, _)) => Outcome::Done,
+                Ok((code, _)) => Outcome::Failed(format!("{path} answered {code}")),
+                Err(e) => Outcome::Failed(format!("{path}: {e}")),
+            };
+            report.push(subject, said, outcome);
+        }
+        Ok(())
+    }
+
+    /// The app refused its recovery sign-in: read as the nightly proof reads it, so
+    /// that neither tries it again before a person does.
+    async fn record_refusal(
+        &self,
+        app: &str,
+        m: &Manifest,
+        id: &str,
+        why: &str,
+    ) -> crate::Result<()> {
+        let mut mine: Vec<hlb_api::assertions::AssertionResult> = self
+            .state
+            .assertion_results()
+            .await?
+            .into_iter()
+            .filter(|(a, _)| a == app)
+            .map(|(_, r)| r)
+            .collect();
+        mine.retain(|r| r.id != id);
+        mine.push(hlb_api::assertions::AssertionResult {
+            id: id.to_string(),
+            holds: hlb_guide::assertions::declared(m)
+                .into_iter()
+                .find(|d| d.id == id)
+                .map(|d| d.holds)
+                .unwrap_or_default(),
+            verdict: hlb_api::assertions::Verdict::Broken,
+            observed: format!("refused at the role sync: {why}"),
+            checked_at: self.now,
+            fix: None,
+        });
+        self.state.record_assertions(app, &mine).await?;
+        Ok(())
+    }
+}
+
+enum AccountsFailed {
+    /// The recovery sign-in refused.
+    Refused(String),
+    Other(String),
 }
 
 /// `Done` once the write succeeded, `ToDo` when previewing — the write is not even

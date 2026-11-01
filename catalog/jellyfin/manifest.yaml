@@ -112,6 +112,22 @@ spec:
       means: Jellyfin's administration — its accounts, libraries and settings
     claims:
       hlb_jellyfin: { byLevel: { user: user, admin: admin } }
+    # 🔴 PocketID stops a removed person's next sign-in only: their TV's and phone's
+    # tokens keep working until the account is disabled (measured, 12.4 + plugin
+    # 6.1.0.0), and the plugin never enables one again. The plugin's links say whose
+    # account is whose; `admin`, linked to nobody, is never touched.
+    accounts:
+      apply:
+        type: http
+        signIn: admin-password
+        headers:
+          Authorization: 'MediaBrowser Client="Homelabus", Device="Homelabus", DeviceId="homelabus-recovery-proof", Version="1", Token="{{ token }}"'
+        links:
+          path: /Plugins/505ce9d1-d916-42fa-86ca-673ef241d7df/Configuration
+          pointer: /OidConfigs/PocketID/CanonicalLinks
+        read: { path: "/Users/{{ account }}", pointer: /Policy }
+        disabled: /IsDisabled
+        write: { verb: POST, path: "/Users/{{ account }}/Policy" }
   # Its administrator, made by the guide's first-run step: the way in when PocketID is
   # down, and the account that sets the SSO provider.
   recovery:

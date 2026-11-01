@@ -1216,45 +1216,12 @@ pub fn validate_guide(m: &Manifest, g: &Guide) -> Result<()> {
                         if step.phase == Phase::PostRestore {
                             return refuse("a restore signs in nowhere yet".into());
                         }
-                        let Some(r) = m.spec.recovery.iter().find(|r| &r.secret == secret) else {
-                            return refuse(format!(
-                                "it signs in with \"{secret}\", which no `recovery` entry names"
-                            ));
-                        };
-                        let Some(proof) = &r.proof else {
-                            return refuse(format!(
-                                "it signs in with \"{secret}\", whose recovery entry says no \
-                                 `proof` to sign in by"
-                            ));
-                        };
-                        // Basic sends the password with every request, and makes no token
-                        // a step could carry: no app of the catalog needs it here.
-                        if proof.basic {
-                            return refuse(format!(
-                                "it signs in with \"{secret}\", whose proof is HTTP Basic: a \
-                                 step carries a token, never the password"
-                            ));
-                        }
-                        if !headers.values().any(|v| v.contains("{{ token }}")) {
-                            return refuse(format!(
-                                "it signs in with \"{secret}\" and sends the token in no header"
-                            ));
+                        if let Err(why) = token_sign_in(m, secret, headers) {
+                            return refuse(why);
                         }
                     }
-                    // A header is sent as written but for the token: whatever else is
-                    // between braces would reach the app literal.
-                    for (name, value) in headers {
-                        let mut rest = value.as_str();
-                        while let Some(at) = rest.find("{{") {
-                            let inner = rest[at + 2..].split("}}").next().unwrap_or("");
-                            rest = &rest[at + 2..];
-                            if inner != " token " || sign_in.is_none() {
-                                return refuse(format!(
-                                    "header {name} holds {{{{{inner}}}}}: a header takes \
-                                     `{{{{ token }}}}`, and only from a `signIn`"
-                                ));
-                            }
-                        }
+                    if let Err(why) = token_headers(headers, sign_in.is_some()) {
+                        return refuse(why);
                     }
                     if calls.is_empty() {
                         return refuse(
@@ -1732,6 +1699,126 @@ fn validate_assertions(m: &Manifest) -> Result<()> {
     Ok(())
 }
 
+/// A recovery sign-in a request signs in with, its token carried by `headers`: a
+/// `recovery` entry with a proof, not HTTP Basic.
+fn token_sign_in(
+    m: &Manifest,
+    secret: &str,
+    headers: &std::collections::BTreeMap<String, String>,
+) -> std::result::Result<(), String> {
+    let Some(r) = m.spec.recovery.iter().find(|r| r.secret == secret) else {
+        return Err(format!(
+            "it signs in with \"{secret}\", which no `recovery` entry names"
+        ));
+    };
+    let Some(proof) = &r.proof else {
+        return Err(format!(
+            "it signs in with \"{secret}\", whose recovery entry says no `proof` to sign in by"
+        ));
+    };
+    // Basic sends the password with every request, and makes no token a request could
+    // carry: no app of the catalog needs it here.
+    if proof.basic {
+        return Err(format!(
+            "it signs in with \"{secret}\", whose proof is HTTP Basic: a request carries a \
+             token, never the password"
+        ));
+    }
+    if !headers.values().any(|v| v.contains("{{ token }}")) {
+        return Err(format!(
+            "it signs in with \"{secret}\" and sends the token in no header"
+        ));
+    }
+    Ok(())
+}
+
+/// A header is sent as written but for the token: whatever else is between braces
+/// would reach the app literal.
+fn token_headers(
+    headers: &std::collections::BTreeMap<String, String>,
+    signed_in: bool,
+) -> std::result::Result<(), String> {
+    for (name, value) in headers {
+        let mut rest = value.as_str();
+        while let Some(at) = rest.find("{{") {
+            let inner = rest[at + 2..].split("}}").next().unwrap_or("");
+            rest = &rest[at + 2..];
+            if inner != " token " || !signed_in {
+                return Err(format!(
+                    "header {name} holds {{{{{inner}}}}}: a header takes `{{{{ token }}}}`, and \
+                     only from a `signIn`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How an app's accounts are kept enabled: each request's path, pointer and verb.
+fn validate_accounts(m: &Manifest, a: &access::Accounts) -> std::result::Result<(), String> {
+    let access::AccountsApply::Http {
+        sign_in,
+        headers,
+        links,
+        read,
+        disabled,
+        write,
+    } = &a.apply;
+    if m.spec.ingress.is_empty() {
+        return Err("no ingress to take the API's port from".into());
+    }
+    token_sign_in(m, sign_in, headers)?;
+    token_headers(headers, true)?;
+    for (what, pointer) in [
+        ("links", &links.pointer),
+        ("read", &read.pointer),
+        ("disabled", disabled),
+    ] {
+        if !pointer.is_empty() && !pointer.starts_with('/') {
+            return Err(format!(
+                "{what}'s pointer \"{pointer}\" is a JSON pointer: \"\" or starting with /"
+            ));
+        }
+    }
+    // An empty pointer would make the flag the object itself: nothing to set.
+    if disabled.is_empty() {
+        return Err("`disabled` points at the flag inside the object read".into());
+    }
+    if !matches!(write.verb.as_str(), "POST" | "PUT" | "PATCH") {
+        return Err(format!(
+            "write's verb \"{}\" — POST, PUT or PATCH",
+            write.verb
+        ));
+    }
+    if !access::placeholders(&links.path).is_empty() {
+        return Err(format!(
+            "links' path \"{}\" is one request, filled by nothing",
+            links.path
+        ));
+    }
+    for (what, path) in [("read", &read.path), ("write", &write.path)] {
+        let tokens = access::placeholders(path);
+        if let Some(t) = tokens.iter().find(|t| !access::ACCOUNT_TOKENS.contains(t)) {
+            return Err(format!(
+                "{what}'s path: {{{{ {t} }}}} is filled by nothing — {}",
+                access::ACCOUNT_TOKENS.join(", ")
+            ));
+        }
+        // Without it, every account would be read or written at one path.
+        if !tokens.contains(&"account") {
+            return Err(format!(
+                "{what}'s path \"{path}\" names no {{{{ account }}}}"
+            ));
+        }
+    }
+    for path in [&links.path, &read.path, &write.path] {
+        if !path.starts_with('/') {
+            return Err(format!("path \"{path}\" starts with /"));
+        }
+    }
+    Ok(())
+}
+
 /// An app's access, against what reads it: a claim no token carries to the app, a
 /// quota nothing applies, a level no allowed role ever reaches.
 fn validate_access(m: &Manifest) -> Result<()> {
@@ -1754,12 +1841,22 @@ fn validate_access(m: &Manifest) -> Result<()> {
             "the app signs nobody in through PocketID: no role would ever be checked".into(),
         );
     }
-    if !native && (!a.claims.is_empty() || a.quota.is_some() || a.members.is_some()) {
+    if !native
+        && (!a.claims.is_empty()
+            || a.quota.is_some()
+            || a.members.is_some()
+            || a.accounts.is_some())
+    {
         return refuse(
-            "claims, quotas and members reach an app through its own OIDC client: behind \
-             the portal it never sees them"
+            "claims, quotas, members and accounts reach an app through its own OIDC client: \
+             behind the portal it never sees them"
                 .into(),
         );
+    }
+    if let Some(accounts) = &a.accounts {
+        if let Err(why) = validate_accounts(m, accounts) {
+            return refuse(format!("accounts.apply: {why}"));
+        }
     }
     if let Some(admins) = &a.admins {
         if admins.level < a.floor {
@@ -2150,6 +2247,92 @@ spec:
                 .expect_err("a token nothing fills")
                 .contains("filled by nothing")
         );
+    }
+
+    #[test]
+    fn accounts_kept_by_role_sign_in_by_token_and_name_the_account_they_write() {
+        const OK: &str = r#"
+    accounts:
+      apply:
+        type: http
+        signIn: admin-password
+        headers: { Authorization: "Token={{ token }}" }
+        links: { path: /Plugins/sso/Configuration, pointer: /OidConfigs/PocketID/CanonicalLinks }
+        read: { path: "/Users/{{ account }}", pointer: /Policy }
+        disabled: /IsDisabled
+        write: { verb: POST, path: "/Users/{{ account }}/Policy" }
+"#;
+        let with = |sso: &str, proof: &str, accounts: &str| {
+            let y = format!(
+                "{BASE}  env: {{ ID: \"{{{{ oidc.client_id }}}}\" }}\n  requires:\n    - {sso}\n  \
+                 ingress:\n    - {{ host: a.example.fr, port: 8096 }}\n  recovery:\n    \
+                 - secret: admin-password\n      username: admin\n      proof: {proof}\n  \
+                 access:{accounts}"
+            );
+            validate(&manifest(&y)).map_err(|e| e.to_string())
+        };
+        let native = "{ kind: sso, mode: native, redirectPaths: [/cb] }";
+        let token = "{ path: /s, body: '{\"u\":\"{{ username }}\",\"p\":\"{{ password }}\"}', pointer: /T }";
+        assert_eq!(with(native, token, OK), Ok(()));
+        for (sso, proof, accounts, why) in [
+            (
+                "{ kind: sso, mode: proxy-only }",
+                token,
+                OK.to_string(),
+                "behind the portal",
+            ),
+            (
+                native,
+                "{ path: /s, body: '{}', basic: true, pointer: /T }",
+                OK.to_string(),
+                "HTTP Basic",
+            ),
+            (
+                native,
+                token,
+                OK.replace("signIn: admin-password", "signIn: nobody"),
+                "no `recovery` entry",
+            ),
+            (
+                native,
+                token,
+                OK.replace("Token={{ token }}", "Token=x"),
+                "the token in no header",
+            ),
+            (
+                native,
+                token,
+                OK.replace("Token={{ token }}", "{{ token }} {{ sub }}"),
+                "a header takes",
+            ),
+            (
+                native,
+                token,
+                OK.replace("\"/Users/{{ account }}\", pointer", "/Users/me, pointer"),
+                "names no {{ account }}",
+            ),
+            (
+                native,
+                token,
+                OK.replace("{{ account }}/Policy", "{{ person.sub }}/Policy"),
+                "filled by nothing",
+            ),
+            (
+                native,
+                token,
+                OK.replace("verb: POST", "verb: GET"),
+                "POST, PUT or PATCH",
+            ),
+            (
+                native,
+                token,
+                OK.replace("disabled: /IsDisabled", "disabled: IsDisabled"),
+                "JSON pointer",
+            ),
+        ] {
+            let refusal = with(sso, proof, &accounts).expect_err(why);
+            assert!(refusal.contains(why), "{why}: {refusal}");
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ impl Privd {
             vault: &install.vault,
             orchestrator: orch.as_ref(),
             reach: &reach,
+            http: &hlb_guide::HttpApi::default(),
             now: crate::now(),
         }
         .run(apply)

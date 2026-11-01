@@ -98,6 +98,9 @@ pub struct Access {
     /// Membership Homelabus keeps inside the app itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<Members>,
+    /// The app's own accounts, each enabled while its person holds a role let in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<Accounts>,
     /// The cluster's machines, which Homelabus keeps inside the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nodes: Option<Nodes>,
@@ -311,6 +314,66 @@ impl QuotaUnit {
         serde_json::from_str(&self.amount(bytes)).unwrap_or(serde_json::Value::Null)
     }
 }
+
+/// The accounts an app keeps for the people who signed in to it through PocketID.
+///
+/// 🔴 An app that makes an account at a first sign-in keeps it after: PocketID's
+/// restriction stops the next sign-in, while the tokens its TV and phone already hold
+/// keep working — Jellyfin's, until the account is disabled. So each account the app
+/// links to a PocketID identity is disabled once that person holds no role let in —
+/// or is no longer in Homelabus at all — and enabled again once they do. An account
+/// linked to nobody (the recovery administrator) is never touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Accounts {
+    pub apply: AccountsApply,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AccountsApply {
+    /// Through the app's API, at its first ingress's port, signed in as a recovery
+    /// sign-in — never Basic: `headers` carry the token its proof reads,
+    /// `{{ token }}`.
+    Http {
+        sign_in: String,
+        headers: BTreeMap<String, String>,
+        /// A GET whose JSON at `pointer` is one object: PocketID id → the app's
+        /// account id.
+        links: JsonAt,
+        /// A GET of one account, `{{ account }}` its id, the object at `pointer`
+        /// holding `disabled`.
+        read: JsonAt,
+        /// A JSON pointer inside that object: `true` while the account is disabled.
+        disabled: String,
+        /// 🔴 Sent the WHOLE object read, `disabled` set: Jellyfin's
+        /// `POST /Users/{id}/Policy` resets every field it is not sent.
+        write: AccountWrite,
+    },
+}
+
+/// A GET, and where in its JSON the value is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonAt {
+    pub path: String,
+    pub pointer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountWrite {
+    pub verb: String,
+    pub path: String,
+}
+
+/// The token an account's paths are filled with: its id in the app.
+pub const ACCOUNT_TOKENS: [&str; 1] = ["account"];
 
 /// Membership Homelabus keeps inside the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
