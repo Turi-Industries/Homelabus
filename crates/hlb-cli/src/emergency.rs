@@ -166,8 +166,15 @@ async fn mail_relatives(
                     }
                 }
             }
-            // Handed to Stalwart is not delivered: its queue says what never left.
+            // Handed to Stalwart is not delivered: its queue says what never left, and
+            // a refusal leaves the queue at once — it comes back to the envelope's sender.
             say("`hlb mail queue` says any that has not left the house within the hour.".into());
+            if let Some(d) = &domain {
+                say(format!(
+                    "A relative's server refusing it answers {}@{d}, the administrators' box.",
+                    hlb_mail::POSTMASTER
+                ));
+            }
             Ok(all)
         }
         Err(why) => {

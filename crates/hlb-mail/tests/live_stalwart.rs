@@ -732,6 +732,10 @@ async fn the_house_sends_a_file_and_keeps_no_copy() {
         .ensure_account("camille@example.org", "a-relative-password-12345", &[])
         .await
         .expect("relative");
+    let postmaster = s
+        .ensure_shared_mailbox("postmaster", "example.org", &[])
+        .await
+        .expect("postmaster");
     let kit = b"-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24=\n-----END AGE ENCRYPTED FILE-----\n";
     s.send(&hlb_mail::Outgoing {
         from: "noreply@example.org",
@@ -787,6 +791,54 @@ async fn the_house_sends_a_file_and_keeps_no_copy() {
     ]]))
     .await;
     assert_eq!(left[0]["ids"], serde_json::json!([]), "no copy kept");
+
+    // 🔴 A relative's server refusing the kit answers the envelope's sender, which is
+    // the sending account: the refusal sat in `noreply@` and nobody learnt that a
+    // relative held no kit (lab, 2026-11-01). It reaches the administrators' box.
+    s.forward_everything("noreply@example.org", "postmaster@example.org")
+        .await
+        .expect("forwarded");
+    s.send(&hlb_mail::Outgoing {
+        from: "noreply@example.org",
+        from_name: "Homelabus",
+        reply_to: Some("postmaster@example.org"),
+        // Its null MX refuses everything, at once — and sends nothing anywhere.
+        to: "nobody@example.net",
+        subject: "The house's emergency kit",
+        text: "Keep this message.",
+        attachment: None,
+    })
+    .await
+    .expect("submitted");
+    let mut bounced = None;
+    for _ in 0..30 {
+        let a = jmap(serde_json::json!([
+            ["Email/query", { "accountId": postmaster }, "0"],
+            ["Email/get", { "accountId": postmaster,
+                "#ids": { "resultOf": "0", "name": "Email/query", "path": "/ids" },
+                "properties": ["subject", "preview"] }, "1"],
+        ]))
+        .await;
+        if let Some(m) = a[1]["list"].as_array().and_then(|l| l.first()) {
+            bounced = Some(m.clone());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let b = bounced.expect("the refusal reaches postmaster@");
+    assert!(
+        b.to_string().contains("nobody@example.net"),
+        "it names the relative not reached: {b}"
+    );
+    let left = jmap(serde_json::json!([[
+        "Email/query", { "accountId": sender.account_id }, "0"
+    ]]))
+    .await;
+    assert_eq!(
+        left[0]["ids"],
+        serde_json::json!([]),
+        "nothing waits in noreply@"
+    );
 
     // An address the house holds no account for sends nothing.
     let refused = s

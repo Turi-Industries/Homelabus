@@ -104,6 +104,11 @@ pub async fn mail_kit(
         .await
         .map_err(|e| format!("{from} could not be made to send from: {e}"))?;
     let reply_to = format!("{}@{domain}", hlb_mail::POSTMASTER);
+    // A refusal comes back to `noreply@`: the administrators must read it, as they read
+    // an answer, or a relative left without the kit goes unsaid.
+    mail.forward_everything(&from, &reply_to)
+        .await
+        .map_err(|e| format!("{from} could not hand its refusals to {reply_to}: {e}"))?;
     let subject = format!("The emergency kit of {}", k.installation);
     let body = text(k);
     let mut out = Vec::new();

@@ -77,6 +77,15 @@ the first.
   successfully sent" when the certificate was refused and nothing left; `gitea admin
   sendmail` says "Sent" before the mail is even tried. Only the recipient's mailbox
   proves a mail.
+- **🔴 A refusal comes back to the sending account, and the queue forgets it at once.**
+  A message the house sends (`Stalwart::send`) bounced — no MX, a null MX — leaves
+  the queue in the same pass: `hlb mail queue` then reads "empty: every message was
+  handed over", and the DSN lands in `noreply@`, which nobody reads (lab, 2026-11-01:
+  a relative held no kit, and nothing said so). The envelope cannot name another
+  sender: `EmailSubmission` with `envelope.mailFrom` ≠ the identity is refused,
+  `forbiddenFrom` (1.0.0). `forward_everything` gives `noreply@` one Sieve `redirect`
+  to `postmaster@`, the administrators' box. A local address that does not exist
+  bounces nothing within 30 s: the live test refuses through `example.net`'s null MX.
 - **In Roundcube `tls://` is STARTTLS, `ssl://` is TLS from the first byte.** `tls://`
   on 993 waited for a greeting that never came ("Empty startup greeting"), and nobody
   could sign in. `ssl://` on 993, `tls://` on 587.

@@ -113,6 +113,22 @@ impl Stalwart {
         Ok(submission)
     }
 
+    /// Makes the account `address` hand whatever reaches it to `to`, keeping nothing.
+    ///
+    /// The envelope's sender must be the identity's own address (1.0.0 refuses any
+    /// other, `forbiddenFrom`), so a relative's server refusing the kit answers
+    /// `noreply@` — read by nobody, and a relative left without the kit went unsaid
+    /// (lab, 2026-11-01). Its whole script is replaced, unlike a person's: its password
+    /// is drawn and forgotten, so no rule in it was ever written by hand.
+    pub async fn forward_everything(&self, address: &str, to: &str) -> Result<()> {
+        let to = to.replace('\\', "\\\\").replace('"', "\\\"");
+        // A redirect cancels the implicit keep: nothing waits in the account after.
+        let script = format!("redirect \"{to}\";\n");
+        self.apply_sieve(address, &|_| script.clone())
+            .await
+            .map(|_| ())
+    }
+
     /// The identity of `account` that sends as `address`.
     async fn identity_of(&self, account: &str, address: &str) -> Result<String> {
         let answers = self

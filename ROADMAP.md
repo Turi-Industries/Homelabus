@@ -275,8 +275,8 @@ and the kit's key opens it; `bind-disk` run again at A, from that GRUB boot, res
 three Tangs, and the third alone opens it.
 ✅ Closed by the owner 2026-10-31. Left, each under its item below: the domain's screen,
 WHOIS for the TLDs without RDAP (the owner's `.eu` among them), DANE/TLSA, the hidden
-Knot primary with secondaries of the house's own, the sealed kit mailed at each seal,
-the nodes screen showing each level, the SLSA provenance of three images, `validationmethods`,
+Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
+(✅ 2026-11-01), the nodes screen showing each level, the SLSA provenance of three images, `validationmethods`,
 and what needs real hardware or a public domain to be measured.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
@@ -1005,9 +1005,15 @@ and what needs real hardware or a public domain to be measured.
     And it counts only while the family's copy is today's: the last kit sealed for them
     keeps its own fingerprint (`family-kit-sealed`), since a plain kit printed after a
     change makes `emergency-kit` current again while theirs restores the old house.
-  - Left: the sealed kit deposited where a relative finds it without the owner — today
-    it is a file the owner sends. Decided 2026-10-31: mailed to each relative every
-    time it is sealed again.
+  - ✅ The sealed kit mailed to each relative at every seal — 2026-11-01:
+    `hlb emergency relatives add|remove|list` (an address of the house's own domain
+    refused: that copy would go down with it); `kit --sealed` and `split` send kit.age
+    to each, one message apiece, from `noreply@` with answers to `postmaster@`, no copy
+    left in the house. A relative's server refusing it reaches `postmaster@` too — the
+    queue forgets a bounce at once, and `noreply@` is read by nobody. Proven on the lab:
+    `split` and `kit --sealed` delivered to a mailbox on the lab's internet, the file
+    byte-identical; a relative behind a null MX bounced, and the refusal landed in the
+    administrators' box. Live test on Stalwart 1.0.0 and 0.16.26.
 
 **3. An app without Rust, then the catalog on its own.** Gate: an app enters through a
 pull request to the catalog, with no `hlb` release.
