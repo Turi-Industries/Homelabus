@@ -3,6 +3,7 @@
 	import { copy as write } from '#lib/clipboard.ts';
 	import { when } from '#lib/format.ts';
 	import { m } from '#lib/paraglide/messages.js';
+	import { getLocale } from '#lib/paraglide/runtime.js';
 	import { read } from '#lib/resource.svelte.ts';
 	import Card from '#lib/ui/Card.svelte';
 	import Loaded from '#lib/ui/Loaded.svelte';
@@ -23,6 +24,17 @@
 	}
 
 	const list = (v: string[]) => (v.length > 0 ? v.join(', ') : m.domain_none());
+
+	// What a CAA `validationmethods` is judged against: a refusal says which.
+	function challenges(a: Schemas['AcmeAccount']): string | undefined {
+		if (a.validations.length === 0) return undefined;
+		const or = new Intl.ListFormat(getLocale(), { type: 'disjunction' });
+		const each = a.validations.map((v) => {
+			const methods = or.format(v.methods);
+			return v.wildcard ? m.domain_account_by_wildcard({ methods }) : methods;
+		});
+		return m.domain_account_by({ methods: each.join('; ') });
+	}
 
 	function dnssec(dns: Schemas['DomainDns']): string {
 		if (dns.ds.length === 0) return m.domain_dnssec_unsigned();
@@ -86,6 +98,8 @@
 					<Row>
 						<p class="font-medium">{a.account.who}</p>
 						<p class="text-xs text-muted-text wrap-anywhere">{a.account.uri}</p>
+						{@const by = challenges(a.account)}
+						{#if by}<p class="text-xs text-muted-text">{by}</p>{/if}
 						{#snippet aside()}
 							{#if a.verdict === null}
 								<span class={muted}>{m.domain_verdict_unknown()}</span>

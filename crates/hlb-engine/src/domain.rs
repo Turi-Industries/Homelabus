@@ -2,7 +2,10 @@
 //! daemon's night. What is compared and advised is `hlb_api::domain`'s.
 
 use async_trait::async_trait;
-use hlb_api::domain::{Account, DnsSide, Governing, Issuance, Reading, Registry, Whois};
+use hlb_api::domain::{
+    Account, DnsSide, Governing, Issuance, Reading, Registry, Validation, Whois, DNS_01, HTTP_01,
+    TLS_ALPN_01,
+};
 use hlb_state::{Certificates, State};
 
 /// IANA's list of the RDAP server of each TLD.
@@ -193,6 +196,18 @@ pub async fn accounts(
         return (found, unread);
     }
     let directory = crate::mail_tls::LETS_ENCRYPT;
+    let caddy = match state.published_ingress().await {
+        Ok(served) => {
+            let hosts: Vec<String> = served.into_iter().map(|(host, _, _)| host).collect();
+            caddy_validations(&exposure.domain, exposure.dns_provider.is_some(), &hosts)
+        }
+        Err(e) => {
+            unread.push(format!(
+                "Caddy's challenges not known: its routes not read: {e}"
+            ));
+            Vec::new()
+        }
+    };
     match (orch, exposure.acme_email.as_deref()) {
         (Some(orch), Some(email)) => {
             let path = caddy_account_path(directory, email);
@@ -210,6 +225,7 @@ pub async fn accounts(
                         uri,
                         // Its wildcard is requested over DNS-01, through the provider.
                         wildcard: exposure.dns_provider.is_some(),
+                        validations: caddy.clone(),
                     }),
                     None => unread.push(format!("Caddy's account: {path} names no location")),
                 },
@@ -243,6 +259,19 @@ pub async fn accounts(
                         issuer: LETS_ENCRYPT_CAA.into(),
                         uri,
                         wildcard: false,
+                        validations: match stalwart_method(&p.challenge) {
+                            Some(m) => vec![Validation {
+                                wildcard: false,
+                                methods: vec![m.into()],
+                            }],
+                            None => {
+                                unread.push(format!(
+                                    "Stalwart's challenge {} is not one Homelabus knows",
+                                    p.challenge
+                                ));
+                                Vec::new()
+                            }
+                        },
                     }),
                     None => unread.push("Stalwart's account has no URI yet".into()),
                 },
@@ -252,6 +281,45 @@ pub async fn accounts(
         },
     }
     (found, unread)
+}
+
+/// The challenges Caddy's certificates take (certmagic 0.25.3, acmez 3.1.6). A DNS
+/// provider makes the wildcard's, and DNS-01 alone: a site whose issuer has a DNS
+/// solver disables the other two. A name beyond the wildcard's reach — two labels
+/// below the domain — has a site of its own, and HTTP-01 or TLS-ALPN-01, in an order
+/// drawn at Caddy's start and then the more successful first. A CAA refusal is not
+/// retried in the same attempt; the next one starts with the other. A name outside the
+/// domain is under another CAA than the one judged.
+fn caddy_validations(domain: &str, wildcard: bool, hosts: &[String]) -> Vec<Validation> {
+    let own = Validation {
+        wildcard: false,
+        methods: vec![HTTP_01.into(), TLS_ALPN_01.into()],
+    };
+    if !wildcard {
+        return vec![own];
+    }
+    let mut out = vec![Validation {
+        wildcard: true,
+        methods: vec![DNS_01.into()],
+    }];
+    let beyond = hosts.iter().any(|h| {
+        h.strip_suffix(domain).is_some_and(|l| l.ends_with('.'))
+            && !hlb_ingress::caddyfile::wildcard_covers(domain, h)
+    });
+    if beyond {
+        out.push(own);
+    }
+    out
+}
+
+/// RFC 8555's name for a challenge as Stalwart names it.
+fn stalwart_method(challenge: &str) -> Option<&'static str> {
+    match challenge {
+        "Http01" => Some(HTTP_01),
+        "Dns01" => Some(DNS_01),
+        "TlsAlpn01" => Some(TLS_ALPN_01),
+        _ => None,
+    }
 }
 
 /// Where Caddy keeps its account for `directory` and `email`, under the image's
@@ -554,6 +622,64 @@ async fn whois(net: &dyn Internet, zone: &str, tld: &str) -> Registry {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn caddy_takes_dns_01_for_its_wildcard_and_http_beyond_its_reach() {
+        let methods = |wildcard, hosts: &[&str]| -> Vec<(bool, Vec<String>)> {
+            let hosts: Vec<String> = hosts.iter().map(|h| h.to_string()).collect();
+            caddy_validations("home.example", wildcard, &hosts)
+                .into_iter()
+                .map(|v| (v.wildcard, v.methods))
+                .collect()
+        };
+        let own = vec![HTTP_01.to_string(), TLS_ALPN_01.to_string()];
+        let dns = vec![DNS_01.to_string()];
+        assert_eq!(
+            methods(false, &["git.home.example"]),
+            [(false, own.clone())]
+        );
+        // Under the wildcard, and outside the domain: the DNS challenge alone.
+        assert_eq!(
+            methods(
+                true,
+                &["home.example", "git.home.example", "photos.other.org"]
+            ),
+            [(true, dns.clone())]
+        );
+        assert_eq!(
+            methods(true, &["git.home.example", "a.git.home.example"]),
+            [(true, dns), (false, own)]
+        );
+        // A suffix is not a subdomain.
+        assert_eq!(methods(true, &["a.b.myhome.example"]).len(), 1);
+    }
+
+    #[test]
+    fn every_challenge_stalwart_names_has_its_rfc_name() {
+        assert_eq!(stalwart_method("Http01"), Some(HTTP_01));
+        assert_eq!(stalwart_method("Dns01"), Some(DNS_01));
+        assert_eq!(stalwart_method("TlsAlpn01"), Some(TLS_ALPN_01));
+        assert_eq!(stalwart_method("Other"), None);
+        // Every challenge Homelabus asks Stalwart for is one the judge can read.
+        let exposure = hlb_state::Exposure {
+            domain: "home.example".into(),
+            certificates: Certificates::Acme,
+            acme_email: Some("admin@home.example".into()),
+            dns_provider: None,
+            staging: false,
+            controller_host: None,
+            acme_ca: None,
+            acme_ca_root: None,
+        };
+        for dns_published in [false, true] {
+            let Ok(crate::mail_tls::Wanted::Acme { challenge, .. }) =
+                crate::mail_tls::wanted(&exposure, dns_published)
+            else {
+                panic!("acme")
+            };
+            assert!(stalwart_method(challenge).is_some(), "{challenge}");
+        }
+    }
 
     /// The internet, as a table. A name absent answers nothing; `fails` makes every
     /// DNS question fail.

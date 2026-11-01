@@ -235,10 +235,11 @@ fn print(r: &Reading, unread: &[String], now: i64) {
         }
         for a in &r.accounts {
             println!(
-                "  {:<13} {} {} — {}",
+                "  {:<13} {} {}{} — {}",
                 "ACME account",
                 a.who,
                 a.uri,
+                challenges(a),
                 match domain::judge(&g.records, a) {
                     Verdict::Pinned => "named by the CAA",
                     Verdict::AnyAccount => "allowed, as any account at its authority is",
@@ -253,6 +254,28 @@ fn print(r: &Reading, unread: &[String], now: i64) {
     }
     for a in domain::advice(r, now) {
         println!("  • {}", a.line());
+    }
+}
+
+/// The challenges an account's certificates take, which a CAA `validationmethods`
+/// is judged against: `, by dns-01 (its wildcard); http-01 or tls-alpn-01`.
+fn challenges(a: &domain::Account) -> String {
+    let each: Vec<String> = a
+        .validations
+        .iter()
+        .map(|v| {
+            let m = v.methods.join(" or ");
+            if v.wildcard {
+                format!("{m} (its wildcard)")
+            } else {
+                m
+            }
+        })
+        .collect();
+    if each.is_empty() {
+        String::new()
+    } else {
+        format!(", by {}", each.join("; "))
     }
 }
 

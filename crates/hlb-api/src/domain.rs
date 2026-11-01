@@ -55,7 +55,28 @@ pub struct Account {
     pub uri: String,
     /// It also requests a wildcard, which an `issuewild` set governs when present.
     pub wildcard: bool,
+    /// How its certificates are validated, one entry per kind. Empty in a reading
+    /// stored before they were read: a CAA `validationmethods` is then not judged.
+    #[serde(default)]
+    pub validations: Vec<Validation>,
 }
+
+/// One kind of certificate an account requests, and the challenges that may validate
+/// it — any one of them. An authority checks a CAA `validationmethods` (RFC 8657)
+/// against the challenge taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = AcmeValidation)]
+pub struct Validation {
+    /// A wildcard's: its `*.` name is governed by `issuewild` where there is one, its
+    /// base name by `issue` like every other.
+    pub wildcard: bool,
+    /// RFC 8555's names: [`HTTP_01`], [`DNS_01`], [`TLS_ALPN_01`].
+    pub methods: Vec<String>,
+}
+
+pub const HTTP_01: &str = "http-01";
+pub const DNS_01: &str = "dns-01";
+pub const TLS_ALPN_01: &str = "tls-alpn-01";
 
 /// What the internet resolves, normalised so two resolvers' answers compare equal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -624,6 +645,23 @@ struct Caa {
     /// The issuer domain, lower case; empty for `;`, which allows nobody.
     issuer: String,
     account: Option<String>,
+    /// `validationmethods`, lower case; `None` allows every one.
+    methods: Option<Vec<String>>,
+}
+
+impl Caa {
+    /// Lets `account` issue by one of `methods`; `None`: by whatever it takes, not
+    /// known.
+    fn allows(&self, account: &Account, methods: Option<&[String]>) -> bool {
+        self.issuer == account.issuer.to_ascii_lowercase()
+            && self.account.as_deref().is_none_or(|u| u == account.uri)
+            && match (&self.methods, methods) {
+                (Some(allowed), Some(taken)) => taken
+                    .iter()
+                    .any(|m| allowed.contains(&m.to_ascii_lowercase())),
+                _ => true,
+            }
+    }
 }
 
 /// `128 issue "letsencrypt.org; accounturi=https://…"`, as both resolvers answer.
@@ -638,23 +676,36 @@ fn parse_caa(record: &str) -> Option<Caa> {
         .unwrap_or(value);
     let mut fields = value.split(';');
     let issuer = fields.next().unwrap_or("").trim().to_ascii_lowercase();
-    let account = fields.find_map(|f| {
-        let (k, v) = f.split_once('=')?;
-        k.trim()
-            .eq_ignore_ascii_case("accounturi")
-            .then(|| v.trim().to_string())
-    });
+    let (mut account, mut methods) = (None, None);
+    for f in fields {
+        let Some((k, v)) = f.split_once('=') else {
+            continue;
+        };
+        let k = k.trim();
+        if k.eq_ignore_ascii_case("accounturi") {
+            account = Some(v.trim().to_string());
+        } else if k.eq_ignore_ascii_case("validationmethods") {
+            methods = Some(
+                v.split(',')
+                    .map(|m| m.trim().to_ascii_lowercase())
+                    .filter(|m| !m.is_empty())
+                    .collect(),
+            );
+        }
+    }
     Some(Caa {
         critical: flags & 0x80 != 0,
         tag,
         issuer,
         account,
+        methods,
     })
 }
 
-/// What `records` let `account` do — for a wildcard as well, when it requests one.
-/// `validationmethods` (RFC 8657) is not judged: no account here says which
-/// challenge its next renewal takes.
+/// What `records` let `account` do — for a wildcard as well, when it requests one —
+/// by the challenges its certificates take. Each kind of certificate needs one of its
+/// challenges allowed: one whose every challenge a `validationmethods` excludes is
+/// refused at its next renewal.
 pub fn judge(records: &[String], account: &Account) -> Verdict {
     let caa: Vec<Caa> = records.iter().filter_map(|r| parse_caa(r)).collect();
     if caa
@@ -663,41 +714,68 @@ pub fn judge(records: &[String], account: &Account) -> Verdict {
     {
         return Verdict::Refused;
     }
-    let under = |tag: &str| {
+    let under = |(tag, methods): (&str, Option<&[String]>)| {
         let set: Vec<&Caa> = caa.iter().filter(|c| c.tag == tag).collect();
         if set.is_empty() {
             return Verdict::Anyone;
         }
-        let ours: Vec<&&Caa> = set
-            .iter()
-            .filter(|c| c.issuer == account.issuer.to_ascii_lowercase())
-            .collect();
-        if !ours
-            .iter()
-            .any(|c| c.account.as_deref().is_none_or(|u| u == account.uri))
-        {
+        let allowing: Vec<&&Caa> = set.iter().filter(|c| c.allows(account, methods)).collect();
+        if allowing.is_empty() {
             Verdict::Refused
-        } else if ours.iter().any(|c| c.account.is_none()) {
+        } else if allowing.iter().any(|c| c.account.is_none()) {
             Verdict::AnyAccount
         } else {
             Verdict::Pinned
         }
     };
-    let plain = under("issue");
-    if !account.wildcard {
-        return plain;
-    }
     // With no `issuewild`, `issue` governs a wildcard too (§4.3).
-    let wild = if caa.iter().any(|c| c.tag == "issuewild") {
-        under("issuewild")
+    let wild_tag = if caa.iter().any(|c| c.tag == "issuewild") {
+        "issuewild"
     } else {
-        plain
+        "issue"
     };
-    if wild.badness() > plain.badness() {
-        wild
-    } else {
-        plain
+    let known = |wildcard_only: bool| -> Vec<Option<&[String]>> {
+        let found: Vec<Option<&[String]>> = account
+            .validations
+            .iter()
+            .filter(|v| v.wildcard || !wildcard_only)
+            .map(|v| Some(v.methods.as_slice()))
+            .collect();
+        if found.is_empty() {
+            vec![None]
+        } else {
+            found
+        }
+    };
+    // A wildcard's base name is under `issue` like every other name.
+    let mut checks: Vec<(&str, Option<&[String]>)> =
+        known(false).into_iter().map(|m| ("issue", m)).collect();
+    if account.wildcard {
+        checks.extend(known(true).into_iter().map(|m| (wild_tag, m)));
     }
+    checks
+        .into_iter()
+        .map(under)
+        .max_by_key(|v| v.badness())
+        .unwrap_or(Verdict::Anyone)
+}
+
+/// The methods to say again in a pin replacing the `tag` records that let `account`
+/// issue: a restriction its owner wrote is not dropped by the advice. `None` when one
+/// of those records allows every method.
+fn kept_methods(records: &[String], tag: &str, account: &Account) -> Option<Vec<String>> {
+    let mut kept = Vec::new();
+    for c in records.iter().filter_map(|r| parse_caa(r)) {
+        if c.tag != tag || !c.allows(account, None) {
+            continue;
+        }
+        for m in c.methods? {
+            if !kept.contains(&m) {
+                kept.push(m);
+            }
+        }
+    }
+    (!kept.is_empty()).then_some(kept)
 }
 
 /// The accounts the governing CAA refuses: critical, since their certificates stop
@@ -732,18 +810,24 @@ fn pin_advice(r: &Reading) -> Option<Advice> {
         .iter()
         .filter_map(|c| parse_caa(c))
         .any(|c| c.tag == "issuewild");
+    let record = |tag: &str, a: &Account| {
+        let methods = kept_methods(&g.records, tag, a)
+            .map(|m| format!("; validationmethods={}", m.join(",")))
+            .unwrap_or_default();
+        format!("0 {tag} \"{}; accounturi={}{methods}\"", a.issuer, a.uri)
+    };
     let mut records = Vec::new();
     for a in &r.accounts {
         records.push(PinRecord {
             who: a.who.clone(),
             wildcard: false,
-            record: format!("0 issue \"{}; accounturi={}\"", a.issuer, a.uri),
+            record: record("issue", a),
         });
         if a.wildcard && wild_set {
             records.push(PinRecord {
                 who: a.who.clone(),
                 wildcard: true,
-                record: format!("0 issuewild \"{}; accounturi={}\"", a.issuer, a.uri),
+                record: record("issuewild", a),
             });
         }
     }
@@ -1053,6 +1137,22 @@ mod tests {
             issuer: "letsencrypt.org".into(),
             uri: format!("https://acme-v02.api.letsencrypt.org/acme/acct/{n}"),
             wildcard,
+            validations: Vec::new(),
+        }
+    }
+
+    /// `account`, its certificates validated as `validations` say: `(wildcard, methods)`.
+    fn validated(n: u32, validations: &[(bool, &[&str])]) -> Account {
+        Account {
+            wildcard: validations.iter().any(|(w, _)| *w),
+            validations: validations
+                .iter()
+                .map(|(wildcard, methods)| Validation {
+                    wildcard: *wildcard,
+                    methods: methods.iter().map(|m| m.to_string()).collect(),
+                })
+                .collect(),
+            ..account("Caddy", n, false)
         }
     }
 
@@ -1311,6 +1411,96 @@ mod tests {
             judge(&issue_only, &account("Caddy", 1, true)),
             Verdict::Pinned
         );
+    }
+
+    #[test]
+    fn a_validationmethods_excluding_every_challenge_a_certificate_takes_refuses_it() {
+        let set = |methods: &str| {
+            records(&[&format!(
+                "0 issue \"letsencrypt.org; validationmethods={methods}\""
+            )])
+        };
+        // Stalwart takes one challenge; Caddy, with no DNS provider, either of two.
+        let stalwart = validated(2, &[(false, &[HTTP_01])]);
+        let caddy = validated(1, &[(false, &[HTTP_01, TLS_ALPN_01])]);
+        for (methods, account, verdict) in [
+            ("dns-01", &stalwart, Verdict::Refused),
+            ("http-01", &stalwart, Verdict::AnyAccount),
+            ("DNS-01, HTTP-01", &stalwart, Verdict::AnyAccount),
+            ("dns-01", &caddy, Verdict::Refused),
+            ("tls-alpn-01", &caddy, Verdict::AnyAccount),
+        ] {
+            assert_eq!(judge(&set(methods), account), verdict, "{methods}");
+        }
+        // Read before the challenges were: not judged on them.
+        assert_eq!(
+            judge(&set("dns-01"), &account("Stalwart", 2, false)),
+            Verdict::AnyAccount
+        );
+    }
+
+    #[test]
+    fn a_wildcard_house_needs_its_dns_challenge_and_its_own_names_their_challenges() {
+        let wildcard_only = validated(1, &[(true, &[DNS_01])]);
+        let and_own_names = validated(1, &[(true, &[DNS_01]), (false, &[HTTP_01, TLS_ALPN_01])]);
+        let dns_only = records(&["0 issue \"letsencrypt.org; validationmethods=dns-01\""]);
+        assert_eq!(judge(&dns_only, &wildcard_only), Verdict::AnyAccount);
+        // A name below the wildcard's reach gets a certificate of its own, over HTTP.
+        assert_eq!(judge(&dns_only, &and_own_names), Verdict::Refused);
+        // The wildcard's `*.` name under `issuewild`, its base name under `issue`.
+        let http_wild = records(&[
+            "0 issue \"letsencrypt.org\"",
+            "0 issuewild \"letsencrypt.org; validationmethods=http-01\"",
+        ]);
+        assert_eq!(judge(&http_wild, &wildcard_only), Verdict::Refused);
+        let http_issue = records(&[
+            "0 issue \"letsencrypt.org; validationmethods=http-01\"",
+            "0 issuewild \"letsencrypt.org\"",
+        ]);
+        assert_eq!(judge(&http_issue, &wildcard_only), Verdict::Refused);
+    }
+
+    #[test]
+    fn a_record_restricting_the_challenge_does_not_hide_one_that_pins_the_account() {
+        let stalwart = validated(2, &[(false, &[HTTP_01])]);
+        let set = records(&[
+            "0 issue \"letsencrypt.org; validationmethods=dns-01\"",
+            "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/2\"",
+        ]);
+        assert_eq!(judge(&set, &stalwart), Verdict::Pinned);
+    }
+
+    #[test]
+    fn a_pin_says_again_the_challenges_its_owner_restricted() {
+        let mut r = reading(signed(), locked());
+        r.caa_governing = Some(Governing {
+            at: Some("home.example".into()),
+            records: records(&[
+                "0 issue \"letsencrypt.org; validationmethods=dns-01,http-01\"",
+                "0 issuewild \"letsencrypt.org; validationmethods=dns-01\"",
+            ]),
+        });
+        r.accounts = vec![validated(1, &[(true, &[DNS_01])])];
+        let a = said(&r).join("\n");
+        for line in [
+            "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1; validationmethods=dns-01,http-01\"",
+            "0 issuewild \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1; validationmethods=dns-01\"",
+        ] {
+            assert!(a.contains(line), "{line} missing from:\n{a}");
+        }
+        // The records the advice writes are judged as it says.
+        let pinned: Vec<String> = match advice(&r, 0).pop() {
+            Some(Advice::Pin { records, .. }) => records.into_iter().map(|p| p.record).collect(),
+            other => panic!("no pin: {other:?}"),
+        };
+        assert_eq!(judge(&pinned, &r.accounts[0]), Verdict::Pinned);
+    }
+
+    #[test]
+    fn an_account_stored_before_its_validations_reads_as_none() {
+        let stored = r#"{"who":"Caddy","issuer":"letsencrypt.org","uri":"u","wildcard":true}"#;
+        let a: Account = serde_json::from_str(stored).expect("read");
+        assert!(a.validations.is_empty() && a.wildcard);
     }
 
     #[test]

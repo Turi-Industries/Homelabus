@@ -405,14 +405,19 @@ pub fn protection(hostname: Option<&str>) -> Option<hlb_api::ProtectionLevel> {
 pub fn domain(now: i64) -> hlb_api::domain::DomainView {
     use hlb_api::domain::{
         Account, DnsSide, DomainPublic, DomainView, Governing, Issuance, Reading, Registry,
-        RegistryRecord, Transparency,
+        RegistryRecord, Transparency, Validation, DNS_01, HTTP_01,
     };
     let caa = vec!["0 issue \"letsencrypt.org\"".to_string()];
+    // A house with a DNS provider: Caddy's wildcard over DNS-01, Stalwart over HTTP-01.
     let account = |who: &str, n: u32, wildcard: bool| Account {
         who: who.into(),
         issuer: "letsencrypt.org".into(),
         uri: format!("https://acme-v02.api.letsencrypt.org/acme/acct/{n}"),
         wildcard,
+        validations: vec![Validation {
+            wildcard,
+            methods: vec![if wildcard { DNS_01 } else { HTTP_01 }.into()],
+        }],
     };
     let read = |ns: &str, at: i64| Reading {
         zone: "home.example".into(),

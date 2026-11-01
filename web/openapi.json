@@ -219,6 +219,13 @@
             "description": "What a CAA `accounturi` names.",
             "type": "string"
           },
+          "validations": {
+            "description": "How its certificates are validated, one entry per kind. Empty in a reading\nstored before they were read: a CAA `validationmethods` is then not judged.",
+            "items": {
+              "$ref": "#/components/schemas/AcmeValidation"
+            },
+            "type": "array"
+          },
           "who": {
             "description": "`Caddy`, `Stalwart`.",
             "type": "string"
@@ -231,6 +238,7 @@
         "required": [
           "issuer",
           "uri",
+          "validations",
           "who",
           "wildcard"
         ],
@@ -256,6 +264,27 @@
         "required": [
           "account",
           "verdict"
+        ],
+        "type": "object"
+      },
+      "AcmeValidation": {
+        "description": "One kind of certificate an account requests, and the challenges that may validate\nit — any one of them. An authority checks a CAA `validationmethods` (RFC 8657)\nagainst the challenge taken.",
+        "properties": {
+          "methods": {
+            "description": "RFC 8555's names: [`HTTP_01`], [`DNS_01`], [`TLS_ALPN_01`].",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "wildcard": {
+            "description": "A wildcard's: its `*.` name is governed by `issuewild` where there is one, its\nbase name by `issue` like every other.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "methods",
+          "wildcard"
         ],
         "type": "object"
       },

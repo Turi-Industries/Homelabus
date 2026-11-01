@@ -276,7 +276,7 @@ three Tangs, and the third alone opens it.
 ✅ Closed by the owner 2026-10-31. Left, each under its item below: ~~the domain's screen~~ (✅ 2026-11-01),
 ~~WHOIS for the TLDs without RDAP~~ (✅ 2026-11-01, `.eu` shows no lock), DANE/TLSA, the hidden
 Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
-(✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, `validationmethods`,
+(✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, ~~`validationmethods`~~ (✅ 2026-11-01),
 and what needs real hardware or a public domain to be measured.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
@@ -872,9 +872,16 @@ and what needs real hardware or a public domain to be measured.
     and 1.0.0 in `live_mail` beside Caddy's file, two accounts; the file's path is
     certmagic 0.25's `storageKeyUserReg`, read from its source (`Safe` keeps `/` out by
     `issuerKey`, not by itself). Judged on desec.io's real set: its account pinned, any
-    other refused. Left: `validationmethods` is not judged — no account says which
-    challenge its next renewal takes; and the accounts were not read through a real
-    Swarm (the lab's exposure is internal).
+    other refused. ✅ `validationmethods` (RFC 8657) judged 2026-11-01: each account
+    says the challenges its certificates take (`Account::validations`) — Caddy's,
+    read from certmagic 0.25.3 and acmez 3.1.6, DNS-01 alone for its wildcard (a DNS
+    solver disables the other two) and HTTP-01 or TLS-ALPN-01 for a published name
+    beyond its reach, without a provider for every name; Stalwart's its provider's
+    `challengeType`. A kind of certificate with no challenge left is refused; one of
+    two is enough (acmez retries the other on the next attempt). A pin keeps the
+    methods its owner restricted. Left: the accounts were not read through a real
+    Swarm (the lab's exposure is internal), and no authority was asked under a
+    `validationmethods` — that needs a public domain.
   - Certificate Transparency — what CAA and the drift check cannot see: a domain
     moved for an hour and moved back between two nights (DNS-01 and the CAA both the
     thief's meanwhile), or an authority ignoring the CAA. **Measured** 2026-10-31:

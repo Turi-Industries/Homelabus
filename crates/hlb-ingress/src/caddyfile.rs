@@ -296,11 +296,16 @@ impl Wildcard {
     /// Does the certificate cover this host? Only one label deep: `*.example.org`
     /// covers `git.example.org`, never `a.git.example.org`.
     pub fn covers(&self, host: &str) -> bool {
-        host == self.base_domain
-            || host
-                .strip_suffix(&format!(".{}", self.base_domain))
-                .is_some_and(|label| !label.is_empty() && !label.contains('.'))
+        wildcard_covers(&self.base_domain, host)
     }
+}
+
+/// Does the wildcard of `base_domain` cover `host`? See [`Wildcard::covers`].
+pub fn wildcard_covers(base_domain: &str, host: &str) -> bool {
+    host == base_domain
+        || host
+            .strip_suffix(&format!(".{base_domain}"))
+            .is_some_and(|label| !label.is_empty() && !label.contains('.'))
 }
 
 #[derive(Debug, Clone)]
