@@ -15,6 +15,7 @@
 
 pub mod bucket;
 pub mod coverage;
+pub mod engine_copy;
 pub mod erasure;
 pub mod kit;
 pub mod placement;
@@ -29,6 +30,7 @@ use hlb_secrets::Vault;
 use hlb_state::{backup_kind, State};
 
 pub use coverage::StateSource;
+pub use engine_copy::Admins;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -197,6 +199,7 @@ pub async fn credentials(
 pub async fn provider_for(
     dest: &Destination,
     network: &str,
+    admins: Admins<'_>,
     state: &State,
     vault: &Vault,
 ) -> Result<PlacedProvider> {
@@ -221,6 +224,8 @@ pub async fn provider_for(
         state: state.clone(),
         dest: dest.clone(),
         network: network.to_string(),
+        postgres_admin: admins.postgres.map(str::to_string),
+        mariadb_admin: admins.mariadb.map(str::to_string),
         password,
         env,
         volumes,
@@ -233,6 +238,8 @@ pub struct PlacedProvider {
     state: State,
     dest: Destination,
     network: String,
+    postgres_admin: Option<String>,
+    mariadb_admin: Option<String>,
     password: String,
     env: Vec<(String, String)>,
     volumes: BTreeMap<String, Vec<String>>,
@@ -260,17 +267,7 @@ impl hlb_updater::BackupProvider for PlacedProvider {
         let stopped = stop_for_copy(&self.state, orch, app, volumes)
             .await
             .map_err(|e| e.to_string())??;
-        let taken = back_up_where_they_are(
-            &self.state,
-            orch,
-            &self.network,
-            &self.dest,
-            (&self.password, &self.env),
-            app,
-            &places,
-            None,
-        )
-        .await;
+        let taken = self.copy_and_back_up(orch, app, &places).await;
         let Some((o, services)) = stopped else {
             return taken;
         };
@@ -279,6 +276,57 @@ impl hlb_updater::BackupProvider for PlacedProvider {
             (Err(e), Ok(_)) => Err(e),
             (Err(e), Err(t)) => Err(format!("{t}; and then {e}")),
         }
+    }
+}
+
+impl PlacedProvider {
+    /// An app's volumes to the destination, those its engine's tool copies read from
+    /// that copy — taken here, and emptied after.
+    async fn copy_and_back_up(
+        &self,
+        orch: Option<&dyn hlb_orchestrator::Orchestrator>,
+        app: &str,
+        places: &BTreeMap<placement::Place, Vec<String>>,
+    ) -> std::result::Result<String, String> {
+        let copies = engine_copy::declared(&self.state, app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let admins = Admins {
+            postgres: self.postgres_admin.as_deref(),
+            mariadb: self.mariadb_admin.as_deref(),
+        };
+        let sources = if copies.is_empty() {
+            BTreeMap::new()
+        } else {
+            engine_copy::take(
+                &self.state,
+                orch,
+                &self.network,
+                admins,
+                app,
+                &copies,
+                places,
+            )
+            .await
+            .map_err(|e| e.to_string())??
+        };
+        let taken = back_up_where_they_are(
+            &self.state,
+            orch,
+            &self.network,
+            &self.dest,
+            (&self.password, &self.env),
+            app,
+            places,
+            &sources,
+            None,
+        )
+        .await;
+        // A copy left on disk costs space, not the backup: the update goes on.
+        if let Err(e) = engine_copy::clear_all(&self.state, orch, app, &sources, places).await {
+            tracing::warn!(app, error = %e, "the engine's copy was not emptied");
+        }
+        taken
     }
 }
 
@@ -306,18 +354,7 @@ async fn stop_for_copy<'o>(
     app: &str,
     volumes: &[String],
 ) -> Result<std::result::Result<Option<Stopped<'o>>, String>> {
-    let spec = state.app_manifest(app).await?.spec;
-    // Declared and not yet taken by its tool: the copy fails, never taken live instead.
-    if let Some(name) = spec.requires.iter().find_map(|c| match c {
-        hlb_types::Capability::Storage { name, copy, .. } if copy.engine().is_some() => Some(name),
-        _ => None,
-    }) {
-        return Ok(Err(format!(
-            "{app}-{name} is to be copied by its engine's own tool, which this pass \
-             cannot run yet"
-        )));
-    }
-    let names = spec.stopped_for_copy(app);
+    let names = state.app_manifest(app).await?.spec.stopped_for_copy(app);
     if names.is_empty() {
         return Ok(Ok(None));
     }
@@ -377,7 +414,8 @@ async fn locate_volumes(
 
 /// Backs up an app's volumes to `d`, each set on the machine holding it. The last
 /// snapshot's id. `pass`: the tag of the pass taking them, `None` for an update's prior
-/// backup.
+/// backup. `sources`: a volume read from another in its place — its engine's copy —,
+/// at its own path.
 #[allow(clippy::too_many_arguments)]
 async fn back_up_where_they_are(
     state: &State,
@@ -387,20 +425,23 @@ async fn back_up_where_they_are(
     (password, env): (&str, &[(String, String)]),
     app: &str,
     places: &BTreeMap<placement::Place, Vec<String>>,
+    sources: &BTreeMap<String, String>,
     pass: Option<&str>,
 ) -> std::result::Result<String, String> {
     let mut last = Err(format!("no volume of {app} to back up"));
     let tags: Vec<&str> = std::iter::once(BACKED_UP).chain(pass).collect();
     for (place, volumes) in places {
         let paths: Vec<String> = volumes.iter().map(|v| volume_path(v)).collect();
-        let (runner, location) = runner_at(orch, network, d, app, place, volumes, false)?;
+        let (runner, location) = runner_at(orch, network, d, app, place, volumes, sources, false)?;
         let repo = hlb_backup::Repository::new(runner, location, password).extra_env(env.to_vec());
         last = Ok(snapshot(&repo, (state, &d.name), app, &paths, &tags).await?);
     }
     last
 }
 
-/// restic where `volumes` are, `place`, with each mounted at its [`volume_path`].
+/// restic where `volumes` are, `place`, with each mounted at its [`volume_path`] —
+/// from the volume `sources` names in its place, if any.
+#[allow(clippy::too_many_arguments)]
 fn runner_at<'a>(
     orch: Option<&'a dyn hlb_orchestrator::Orchestrator>,
     network: &str,
@@ -408,15 +449,17 @@ fn runner_at<'a>(
     app: &str,
     place: &placement::Place,
     volumes: &[String],
+    sources: &BTreeMap<String, String>,
     writes: bool,
 ) -> std::result::Result<(placement::PlacedRunner<'a>, String), String> {
+    let source = |v: &String| sources.get(v).cloned().unwrap_or_else(|| v.clone());
     match place {
         placement::Place::Here => {
             let (mut runner, location) = d.runner(Some(network));
             for v in volumes {
                 // Mounted by NAME: the host mount point is not reachable from the
                 // Docker VM on macOS.
-                runner = runner.mount(v, volume_path(v));
+                runner = runner.mount(source(v), volume_path(v));
             }
             Ok((placement::PlacedRunner::Here(runner), location))
         }
@@ -444,7 +487,7 @@ fn runner_at<'a>(
                     node: id.clone(),
                     mounts: volumes
                         .iter()
-                        .map(|v| (v.clone(), volume_path(v)))
+                        .map(|v| (source(v), volume_path(v)))
                         .collect(),
                     network: Some(network.to_string()),
                     name: format!("hlb-backup-{app}"),
@@ -466,6 +509,7 @@ pub async fn provider_for_update(
     state: &State,
     vault: &Vault,
     network: &str,
+    admins: Admins<'_>,
     fallback: Option<&str>,
     app: &str,
 ) -> Result<Option<PlacedProvider>> {
@@ -473,7 +517,7 @@ pub async fn provider_for_update(
         .await?
         .first()
     {
-        Some(d) => Ok(Some(provider_for(d, network, state, vault).await?)),
+        Some(d) => Ok(Some(provider_for(d, network, admins, state, vault).await?)),
         None => Ok(None),
     }
 }
@@ -652,15 +696,48 @@ impl Pass<'_> {
             if due.is_empty() {
                 continue;
             }
-            // Stopped once for every destination: N stops for N copies otherwise.
+            // Stopped once for every destination, and copied by an engine's tool once:
+            // N stops and N copies for N destinations otherwise.
             let stopped = stop_for_copy(self.state, self.orchestrator, &app, &volumes).await?;
+            let copies = engine_copy::declared(self.state, &app).await?;
+            let sources = match &stopped {
+                Ok(_) if copies.is_empty() => Ok(BTreeMap::new()),
+                Ok(_) => {
+                    engine_copy::take(
+                        self.state,
+                        self.orchestrator,
+                        self.network,
+                        self.admins(),
+                        &app,
+                        &copies,
+                        &places,
+                    )
+                    .await?
+                }
+                Err(e) => Err(e.clone()),
+            };
             let mut outcomes = Vec::new();
             for d in due {
-                let outcome = match &stopped {
-                    Ok(_) => self.volumes_to(&app, d, &places, &pass).await,
+                let outcome = match &sources {
+                    Ok(sources) => self.volumes_to(&app, d, &places, sources, &pass).await,
                     Err(e) => Err(e.clone()),
                 };
                 outcomes.push((d, outcome));
+            }
+            if let Ok(sources) = &sources {
+                if let Err(error) =
+                    engine_copy::clear_all(self.state, self.orchestrator, &app, sources, &places)
+                        .await
+                {
+                    emit(
+                        Event::Failed {
+                            what: format!("{app} copy emptied after its backup"),
+                            destination: None,
+                            error,
+                        },
+                        &mut sum,
+                    );
+                }
             }
             // Started again before anything is recorded: a state error there would
             // leave the service stopped until its hold ran out.
@@ -884,6 +961,13 @@ impl Pass<'_> {
         Ok(sum)
     }
 
+    fn admins(&self) -> Admins<'_> {
+        Admins {
+            postgres: self.postgres_admin,
+            mariadb: self.mariadb_admin,
+        }
+    }
+
     /// Does this pass take `app`?
     fn includes(&self, app: &str) -> bool {
         self.only.is_none_or(|only| only == app)
@@ -1020,6 +1104,7 @@ impl Pass<'_> {
         app: &str,
         d: &Destination,
         places: &BTreeMap<placement::Place, Vec<String>>,
+        sources: &BTreeMap<String, String>,
         pass: &str,
     ) -> std::result::Result<String, String> {
         let (password, creds) = self.access(d).await?;
@@ -1032,6 +1117,7 @@ impl Pass<'_> {
             (&password, &env),
             app,
             places,
+            sources,
             Some(pass),
         )
         .await
@@ -1524,7 +1610,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_volume_for_its_engine_s_tool_is_never_copied_live_meanwhile() {
+    async fn a_volume_for_its_engine_s_tool_is_never_copied_live_without_its_administrator() {
         let state = State::in_memory().await.expect("state");
         let vault = Vault::ephemeral();
         let m: hlb_types::Manifest = serde_yaml_ng::from_str(
@@ -1549,7 +1635,7 @@ mod tests {
             events
                 .iter()
                 .any(|e| matches!(e, Event::Failed { what, error, .. }
-                if what == "postgres volumes" && error.contains("engine's own tool"))),
+                if what == "postgres volumes" && error.contains("not copied live instead"))),
             "{events:?}"
         );
     }

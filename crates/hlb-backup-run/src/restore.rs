@@ -5,7 +5,7 @@
 //! on the node holding it, under the path the pass had used, with the app stopped —
 //! in the middle of the outage.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use hlb_backup::restic::Snapshot;
@@ -453,6 +453,7 @@ impl Restore<'_> {
             app,
             place,
             &volumes,
+            &BTreeMap::new(),
             true,
         )
         .map_err(Failure::Refused)?;
@@ -654,6 +655,7 @@ impl Restore<'_> {
             app,
             place,
             &volumes,
+            &BTreeMap::new(),
             true,
         )?;
         let repo = hlb_backup::Repository::new(runner, location, password).extra_env(env);

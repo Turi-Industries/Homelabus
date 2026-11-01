@@ -61,6 +61,11 @@ during an outage.
   proves nothing. The pass copies a volume while its service runs unless it says
   `copy: stopped`: then its services are held, stopped once for every destination and
   started again — and a copy nothing can stop fails, never taken live instead.
+  PostgreSQL's directory says `copy: pg-basebackup` (`engine_copy`): written into
+  `hlb-copy-<volume>` beside it, by the SERVER's image, then backed up AT THE VOLUME'S
+  OWN PATH, so the plain volume restore puts back a directory that starts. Without its
+  administrator the copy fails. Replication needs its own `pg_hba` line: the
+  catalog's `hlb_hba.conf` includes the data directory's file first.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.

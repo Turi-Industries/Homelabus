@@ -2466,13 +2466,24 @@ async fn restic_password(
 /// The provider an update's prior backup goes through: the app's first bulky
 /// destination, or `--backup-repo`. `None` refuses the update.
 async fn build_backup_provider(
-    repo: Option<&str>,
-    network: &str,
+    cli: &Cli,
     app: &str,
     state: &State,
     vault: &Vault,
 ) -> Result<Option<hlb_backup_run::PlacedProvider>, Box<dyn std::error::Error>> {
-    Ok(hlb_backup_run::provider_for_update(state, vault, network, repo, app).await?)
+    let admins = hlb_backup_run::Admins {
+        postgres: cli.postgres_admin.as_deref(),
+        mariadb: cli.mariadb_admin.as_deref(),
+    };
+    Ok(hlb_backup_run::provider_for_update(
+        state,
+        vault,
+        &cli.platform_network,
+        admins,
+        cli.backup_repo.as_deref(),
+        app,
+    )
+    .await?)
 }
 
 /// The declared destinations.
@@ -10779,14 +10790,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                         // 🔴 No backup available, no update.
                         let vault = open_vault(&cli)?;
-                        let provider = build_backup_provider(
-                            cli.backup_repo.as_deref(),
-                            &cli.platform_network,
-                            app,
-                            &state,
-                            &vault,
-                        )
-                        .await?;
+                        let provider = build_backup_provider(&cli, app, &state, &vault).await?;
                         match hlb_updater::authorize(
                             c,
                             provider

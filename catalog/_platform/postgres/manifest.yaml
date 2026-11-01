@@ -28,11 +28,14 @@ spec:
   # 503 the first time a channel was opened. The server's keepalives cross the VIP
   # well before, for every client, whatever its pool does. After the image's own
   # entrypoint, its `Cmd` — without the configuration file, the vector extensions'
-  # `shared_preload_libraries` are lost — then the three settings.
+  # `shared_preload_libraries` are lost — then the three settings, and the access file
+  # below.
   args:
     - postgres
     - -c
     - config_file=/etc/postgresql/postgresql.conf
+    - -c
+    - hba_file=/etc/postgresql/hlb_hba.conf
     - -c
     - tcp_keepalives_idle=300
     - -c
@@ -41,11 +44,15 @@ spec:
     - tcp_keepalives_count=3
   requires:
     # Never on NFS: file locking is not reliable there.
+    #
+    # 🔴 Copied by `pg_basebackup` while the server runs, never by restic reading the
+    # directory: that takes each file at another instant, and no recovery mends it.
     - kind: storage
       name: data
       path: /var/lib/postgresql/data
       tier: local
       backup: true
+      copy: pg-basebackup
   security:
     # initdb adjusts the data directory's permissions and drops its privileges to the
     # postgres user.
@@ -72,3 +79,12 @@ spec:
   files:
     - path: /run/secrets/admin-password
       content: "{{ secret.admin-password }}"
+    # The access rules: the data directory's own first, so a line added there by hand
+    # still counts (an `include` needs PostgreSQL 16), then the replication protocol
+    # the nightly copy speaks. 🔴 The image allows replication from 127.0.0.1 only, and
+    # its `host all all all` does not match it: `pg_basebackup` from another container
+    # is refused while `psql` connects fine.
+    - path: /etc/postgresql/hlb_hba.conf
+      content: |
+        include_if_exists /var/lib/postgresql/data/pg_hba.conf
+        host replication postgres all scram-sha-256

@@ -464,3 +464,318 @@ async fn a_volume_declared_copied_stopped_is_never_copied_while_its_service_runs
         let _ = docker(&["volume", "rm", "-f", v]);
     }
 }
+
+/// Removes what the PostgreSQL copy test made, however it ends.
+struct PgCleanup;
+
+const PG_APP: &str = "hlbpgcopy";
+const PG_NET: &str = "hlb-pass-pgcopy";
+const PG_PASSWORD: &str = "pgcopy-admin-password";
+
+impl PgCleanup {
+    fn volumes() -> [String; 4] {
+        [
+            format!("{PG_APP}-data"),
+            hlb_backup_run::engine_copy::staging(&format!("{PG_APP}-data")),
+            format!("{PG_APP}-repo"),
+            format!("{PG_APP}-restored"),
+        ]
+    }
+    fn run() {
+        for c in [PG_APP, "hlbpgcopy-back"] {
+            let _ = docker(&["rm", "-f", c]);
+        }
+        for v in Self::volumes() {
+            let _ = docker(&["volume", "rm", "-f", &v]);
+        }
+        let _ = docker(&["network", "rm", PG_NET]);
+    }
+}
+
+impl Drop for PgCleanup {
+    fn drop(&mut self) {
+        Self::run();
+    }
+}
+
+fn pg_ready(container: &str) -> bool {
+    (0..120).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // On the socket: the restored server listens on nothing else.
+        docker(&["exec", container, "pg_isready", "-U", "postgres"])
+            .status
+            .success()
+            && docker(&[
+                "exec", container, "psql", "-U", "postgres", "-Atc", "SELECT 1",
+            ])
+            .status
+            .success()
+    })
+}
+
+fn rows(container: &str) -> u64 {
+    let out = docker(&[
+        "exec",
+        container,
+        "psql",
+        "-U",
+        "postgres",
+        "-d",
+        "app",
+        "-Atc",
+        "SELECT count(*) FROM t",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("a count")
+}
+
+#[tokio::test]
+#[ignore = "needs Docker and the catalog's PostgreSQL image"]
+async fn a_postgres_directory_copied_while_written_restores_into_a_server_that_starts() {
+    // 🔴 restic reading a live data directory takes each file at another instant: the
+    // copy is recorded fresh and refuses to start, or starts on torn pages. The
+    // catalog's own server — its image, its arguments, its access file — is copied
+    // while a writer inserts, and the copy is started where nothing else runs.
+    PgCleanup::run();
+    let _cleanup = PgCleanup;
+    let catalog = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../catalog/_platform/postgres/manifest.yaml");
+    let text = std::fs::read_to_string(&catalog).expect("catalog manifest");
+    let mut manifest: hlb_types::Manifest = serde_yaml_ng::from_str(&text).expect("manifest");
+    manifest.metadata.name = PG_APP.into();
+    let image = manifest.spec.image.reference();
+    let hba = manifest
+        .spec
+        .files
+        .iter()
+        .find(|f| f.path == "/etc/postgresql/hlb_hba.conf")
+        .expect("the catalog's access file")
+        .content
+        .clone();
+    let dir = tempfile::tempdir().expect("tmp");
+    let hba_path = dir.path().join("hlb_hba.conf");
+    std::fs::write(&hba_path, hba).expect("hba");
+
+    let [data, staging, repo, restored] = PgCleanup::volumes();
+    docker(&["network", "create", PG_NET]);
+    for v in [&data, &repo, &restored] {
+        docker(&["volume", "create", v]);
+    }
+    let mut run = vec![
+        "run".to_string(),
+        "-d".into(),
+        "--name".into(),
+        PG_APP.into(),
+        "--network".into(),
+        PG_NET.into(),
+        "-e".into(),
+        format!("POSTGRES_PASSWORD={PG_PASSWORD}"),
+        "-v".into(),
+        format!("{data}:/var/lib/postgresql/data"),
+        "-v".into(),
+        format!("{}:/etc/postgresql/hlb_hba.conf:ro", hba_path.display()),
+        image.clone(),
+    ];
+    run.extend(manifest.spec.args.iter().cloned());
+    let args: Vec<&str> = run.iter().map(String::as_str).collect();
+    let up = docker(&args);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(pg_ready(PG_APP), "PostgreSQL never answered");
+    for (db, sql) in [
+        ("postgres", "CREATE DATABASE app"),
+        (
+            "app",
+            "CREATE TABLE t (id bigserial PRIMARY KEY, pad text NOT NULL)",
+        ),
+    ] {
+        let out = docker(&[
+            "exec", PG_APP, "psql", "-U", "postgres", "-d", db, "-c", sql,
+        ]);
+        assert!(
+            out.status.success(),
+            "{sql}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // A writer for the whole pass: pages change under the copy.
+    let writer = docker(&[
+        "exec",
+        "-d",
+        PG_APP,
+        "sh",
+        "-c",
+        "while :; do psql -U postgres -d app -qc \
+         \"INSERT INTO t (pad) SELECT repeat(md5(random()::text), 40) FROM generate_series(1, 200)\"; done",
+    ]);
+    assert!(writer.status.success());
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let before = rows(PG_APP);
+    assert!(before > 0, "the writer writes");
+
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    state
+        .upsert_app(PG_APP, &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume(PG_APP, &data, "/unused", true, false)
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", &repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+    // The URL's host is a relay the CLI may reach the server through: the copy goes to
+    // the service owning the volume, never there.
+    let admin = format!("postgres://postgres:{PG_PASSWORD}@relay.invalid:15432/postgres");
+    let pass = Pass {
+        state: &state,
+        vault: &vault,
+        state_path: &state_path,
+        fallback_repo: None,
+        network: PG_NET,
+        postgres_admin: Some(&admin),
+        mariadb_admin: None,
+        schedule: hlb_backup::Schedule::default(),
+        force: true,
+        only: Some(PG_APP),
+        orchestrator: None,
+        s3_endpoint: None,
+    };
+    let mut events = Vec::new();
+    let sum = pass.run(&mut |e| events.push(e)).await.expect("pass");
+    assert_eq!(sum.failed, 0, "{events:#?}");
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Done { what, .. }
+            if what == &format!("{PG_APP} volumes"))),
+        "{events:#?}"
+    );
+    assert!(rows(PG_APP) > before, "written during the pass");
+    let left = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{staging}:/s"),
+        "alpine:3",
+        "sh",
+        "-c",
+        "ls -A /s | wc -l",
+    ]);
+    assert_eq!(
+        String::from_utf8_lossy(&left.stdout).trim(),
+        "0",
+        "the copy emptied after its backup"
+    );
+
+    // Put back as the volume restore does: at the volume's own path, into an empty one.
+    let password = hlb_backup_run::restic_password(&state, &vault)
+        .await
+        .expect("pw");
+    let path = hlb_backup_run::volume_path(&data);
+    let back = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{repo}:/repo"),
+        "-v",
+        &format!("{restored}:{path}"),
+        "-e",
+        &format!("RESTIC_PASSWORD={password}"),
+        "restic/restic:latest",
+        "-r",
+        "/repo",
+        "restore",
+        "latest",
+        "--target",
+        "/",
+        "--include",
+        &path,
+    ]);
+    assert!(
+        back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&back.stderr)
+    );
+    // What `pg_basebackup` leaves and a directory read by restic never holds: where
+    // recovery starts.
+    let label = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{restored}:/d"),
+        "alpine:3",
+        "sh",
+        "-c",
+        "test -f /d/backup_label && stat -c %u /d/PG_VERSION",
+    ]);
+    assert!(
+        label.status.success(),
+        "no backup_label: the directory was copied live"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&label.stdout).trim(),
+        "999",
+        "owned by the server's user"
+    );
+
+    // Started where nothing reaches it, nothing archived nor replicated from it.
+    let mut run = vec![
+        "run".to_string(),
+        "-d".into(),
+        "--name".into(),
+        "hlbpgcopy-back".into(),
+        "--network".into(),
+        "none".into(),
+        "-v".into(),
+        format!("{restored}:/var/lib/postgresql/data"),
+        "-v".into(),
+        format!("{}:/etc/postgresql/hlb_hba.conf:ro", hba_path.display()),
+        image,
+    ];
+    run.extend(manifest.spec.args.iter().cloned());
+    run.extend(
+        ["-c", "archive_mode=off", "-c", "listen_addresses="]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    let args: Vec<&str> = run.iter().map(String::as_str).collect();
+    assert!(docker(&args).status.success());
+    let started = pg_ready("hlbpgcopy-back");
+    let logs = docker(&["logs", "hlbpgcopy-back"]);
+    assert!(
+        started,
+        "the restored server did not start: {}",
+        String::from_utf8_lossy(&logs.stderr)
+    );
+    let check = docker(&[
+        "exec",
+        "hlbpgcopy-back",
+        "pg_amcheck",
+        "-U",
+        "postgres",
+        "--all",
+        // On a throwaway copy: the extension is not in the server's databases.
+        "--install-missing",
+        "--heapallindexed",
+    ]);
+    assert!(
+        check.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(rows("hlbpgcopy-back") >= before, "the rows written before");
+}
