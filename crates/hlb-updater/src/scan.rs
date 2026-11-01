@@ -198,6 +198,11 @@ pub async fn verify_signature(
 }
 
 /// Verifies an image against the signer its manifest declares, if any.
+///
+/// A signed SLSA provenance counts: cosign 3.1.4's `verify` takes any Sigstore bundle
+/// among the digest's OCI referrers, and Vaultwarden, Bulwark and Anubis publish that
+/// alone (measured 2026-11-01). A cosign that stopped doing so would refuse their
+/// updates as unsigned — closed, and `hlb-catalog`'s `signatures` test says it first.
 pub async fn verify_signed_by(image: &str, signer: Option<&ImageSigner>) -> Verdict {
     let Some(signer) = signer else {
         return Verdict::NotChecked {

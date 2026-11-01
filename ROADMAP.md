@@ -276,7 +276,7 @@ three Tangs, and the third alone opens it.
 ✅ Closed by the owner 2026-10-31. Left, each under its item below: ~~the domain's screen~~ (✅ 2026-11-01),
 ~~WHOIS for the TLDs without RDAP~~ (✅ 2026-11-01, `.eu` shows no lock), DANE/TLSA, the hidden
 Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
-(✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, ~~`validationmethods`~~ (✅ 2026-11-01),
+(✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), ~~the SLSA provenance of three images~~ (✅ 2026-11-01), ~~`validationmethods`~~ (✅ 2026-11-01),
 and what needs real hardware or a public domain to be measured.
 - ✅ Secrets as files — 2026-10-28: 60 variables moved (the count was 51 before
   Fluxer's were read), each app by its own route — `_FILE`, a config file, or a `sh -c`
@@ -956,8 +956,11 @@ and what needs real hardware or a public domain to be measured.
     Fluxer's Meilisearch, read from each signature's certificate (all GitHub Actions,
     Sigstore bundles in the OCI referrers, no `.sig` tag) and proven with cosign 3.1.4
     (`hlb-catalog/tests/signatures.rs`, ignored: cosign and the network); a wrong
-    workflow fails it. Left: the SLSA provenance of Vaultwarden, Bulwark and Anubis, no
-    cosign signature; the migrator, a constant in `stalwart_migrate.rs` no update moves;
+    workflow fails it. ✅ Vaultwarden, Bulwark and Anubis — 2026-11-01: each publishes
+    a signed SLSA v1 provenance alone (`gh attestation verify` read its signer: a
+    workflow at the release's tag), and cosign 3.1.4's `verify` takes that bundle from
+    the OCI referrers as it takes a signature — `signedBy` declared, the same check,
+    six of six clean and a wrong workflow refused. Left: the migrator, a constant in `stalwart_migrate.rs` no update moves;
     cosign missing on the machine still reads as "not checked", as Trivy does.
   - ✅ PKfail — 2026-10-30: the platform key's certificate is read from efivarfs
     (`od` of `PK`, readable by anyone) and a subject or issuer saying "DO NOT TRUST" or

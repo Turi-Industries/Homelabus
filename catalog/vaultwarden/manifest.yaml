@@ -7,7 +7,7 @@ metadata:
   homepage: https://github.com/dani-garcia/vaultwarden
 spec:
   # Official OIDC SSO since 1.35.0: the standard image, no fork.
-  image: { repo: vaultwarden/server, tag: "1.37.4", digest: "sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055" }
+  image: { repo: vaultwarden/server, tag: "1.37.4", digest: "sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055", signedBy: { github: dani-garcia/vaultwarden, workflow: release.yml } }
   requires:
     - kind: database
       engine: postgres

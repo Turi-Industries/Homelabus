@@ -1,0 +1,6 @@
+
+Verification for index.docker.io/vaultwarden/server@sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate was verified using trusted certificate authority certificates
