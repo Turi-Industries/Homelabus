@@ -42,6 +42,9 @@ spec:
     - tcp_keepalives_interval=30
     - -c
     - tcp_keepalives_count=3
+    # Shared by every app: the catalog sums their `connections` against it.
+    - -c
+    - max_connections=200
   requires:
     # Never on NFS: file locking is not reliable there.
     #

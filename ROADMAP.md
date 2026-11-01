@@ -1391,6 +1391,16 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
      setting), Mealie 15 (SQLAlchemy 5 + 10, no setting), Vaultwarden 10, n8n 2. On
      the lab at rest: 16 in use. The two tests each hold ONE app to a share; nothing
      sums them, and the next app's pool is whatever its author left.
+     ✅ Built 2026-11-01 (owner: "raise to 200"): `connections` on every database
+     requirement, summed by `catalog validate` per server (the largest twice, for its
+     update), PostgreSQL `max_connections=200`, MariaDB `--max-connections=250`; the
+     role's server-side limit is twice the app's sum (`role_connection_limit`), proven
+     on a real PostgreSQL to refuse the third connection of a role limited to 2. Pools
+     capped in the manifests: Gitea, Vikunja, Vaultwarden 10, n8n 2, Roundcube 16
+     Apache workers, Mealie one Uvicorn worker. **Not yet on the lab.**
+   - **Next, decided 2026-11-01 (owner): a `post-restore` guide phase**, its automated
+     steps run by `hlb backup restore` once the services are back — Fluxer's search
+     refresh moves there from its `post-install` tip, Seafile's `seaf-fsck` joins it.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

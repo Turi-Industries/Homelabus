@@ -1008,6 +1008,7 @@
 	"catalog_requires": "Ce qu'elle demande",
 	"need_database": "base {engine} « {name} », avec son propre rôle",
 	"need_database_extensions": "base {engine} « {name} », avec son propre rôle — l'image du serveur doit contenir : {extensions}",
+	"need_database_connections": "{need}, {connections} connexions au plus",
 	"need_cache_shared": "cache {engine}, partagé",
 	"need_cache_dedicated": "cache {engine}, à elle seule",
 	"need_sso_native": [

@@ -105,8 +105,16 @@ cleanly and is missing data.
   refusing it made Seafile, whose databases carry it, impossible to install.
 - **An app's connection pools are counted against the shared server's limit.**
   Seafile's seaf-server opens TWO pools of `[database] max_connections` (100 by default)
-  and its file server 16 more: past MariaDB's 151 on its own. Its `seafile.conf` says
-  40, and `seafile_cannot_exhaust_the_shared_mariadb` holds the sum under the limit.
+  and its file server 16 more: past MariaDB's 151 on its own. Left to their defaults,
+  Gitea's pool is unlimited, Vikunja's 100, Roundcube one per Apache worker (150) —
+  each could take PostgreSQL's 97 alone. Every database requirement says
+  `connections` (required by the catalog, optional when read); `catalog validate` sums
+  them per server, the largest twice (an update's new task opens its pool before the
+  old one closes), against the limit the server's `args` set — 200 and 250. The
+  executor sets the role's `CONNECTION LIMIT` / `MAX_USER_CONNECTIONS` to twice the
+  app's sum: past it the APP is refused, never its neighbours. The manifest caps the
+  pools in its own variables where the app has one; Immich and Mealie have none, their
+  figure read from the source.
 - **An app that creates its own databases asks for root.** Seafile's first start did,
   and Homelabus never hands out MariaDB's root: `USE_EXISTING_DB=1` makes it use the
   databases and the account already provisioned.

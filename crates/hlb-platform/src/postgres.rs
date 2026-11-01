@@ -256,6 +256,22 @@ impl PostgresProvisioner {
         Ok(())
     }
 
+    /// The most connections the server lets the role hold. Past it the APP is refused
+    /// ("too many connections for role"), where an app without one could take every
+    /// connection the shared server has.
+    pub async fn limit_connections(&self, role: &str, limit: u32) -> Result<()> {
+        validate_identifier(role)?;
+        let stmt = format!(
+            r#"ALTER ROLE "{}" CONNECTION LIMIT {limit}"#,
+            escape_ident(role)
+        );
+        sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+        Ok(())
+    }
+
     /// Rotates an existing role's password.
     pub async fn set_password(&self, role: &str, password: &str) -> Result<()> {
         validate_identifier(role)?;

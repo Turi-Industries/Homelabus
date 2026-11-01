@@ -10,6 +10,9 @@ spec:
   requires:
     - kind: database
       engine: postgres
+      # Not a setting: SQLAlchemy's 5 + 10 overflow, per Uvicorn worker — one, below
+      # (v3.29.0 `db/db_setup.py`).
+      connections: 15
     # `/login` is where Mealie sends PocketID's answer: `BASE_URL` + `/login`
     # (`routes/auth/auth.py`, v3.29.0).
     - kind: sso
@@ -24,6 +27,7 @@ spec:
   # Every variable below is read by `core/settings/settings.py` or `docker/entry.sh`
   # (v3.29.0); the entry script turns each `*_FILE` it names into its variable.
   env:
+    UVICORN_WORKERS: "1"
     # Without it, invitation links and the sign-in callback point at localhost.
     BASE_URL: "https://{{ domain }}"
     # 🔴 Root in its container, with no capability: started as 911 it cannot write the

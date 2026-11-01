@@ -12,6 +12,9 @@ spec:
     # erases the sending identities and the local contacts.
     - kind: database
       engine: postgres
+      # One per Apache worker busy with PHP (`db_persistent` is off): the workers are
+      # capped below — the image leaves Debian's prefork default, 150.
+      connections: 16
 
     # 🔴 NO SSO. Roundcube authenticates over IMAP against Stalwart with the mailbox's
     # credentials — that is what makes it a SAFETY NET: the day PocketID is down, it
@@ -81,6 +84,13 @@ spec:
   update:
     channel: minor
   files:
+    # Read after `mods-enabled/`, so it wins over prefork's 150.
+    - path: /etc/apache2/conf-enabled/hlb-workers.conf
+      content: |
+        <IfModule mpm_prefork_module>
+          ServerLimit 16
+          MaxRequestWorkers 16
+        </IfModule>
     # The image's start reads the database password from this path, and no
     # variable names it.
     - path: /run/secrets/roundcube_db_password

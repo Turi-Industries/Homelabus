@@ -14,15 +14,20 @@ spec:
     # libraries (seafile) and its web interface (seahub) — and connects to them with
     # one single account. This is the case that moved the role from the database name
     # to the app name.
+    # seaf-server opens a pool of `max_connections` (40, below) on ccnet_db and on
+    # seafile_db, its Go file server 16 more; seahub and seafevents the rest (14.0).
     - kind: database
       engine: mariadb
       name: ccnet_db
+      connections: 40
     - kind: database
       engine: mariadb
       name: seafile_db
+      connections: 56
     - kind: database
       engine: mariadb
       name: seahub_db
+      connections: 20
 
     # Cache and sessions. Seafile 13 expects a Redis; Valkey is one.
     - kind: cache

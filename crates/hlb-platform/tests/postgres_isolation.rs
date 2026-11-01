@@ -255,3 +255,58 @@ async fn an_assertion_reads_one_value_and_writes_nothing() {
     pool.close().await;
     drop_all(&p, &["hlb_assert"]).await;
 }
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
+async fn a_role_past_its_connection_limit_is_refused_its_own_connections() {
+    // 🔴 The shared server's limit is everyone's: an app left to its own pool (Gitea's
+    // is unlimited) could take all of it. Past its limit, the app alone is refused.
+    let p = provisioner().await;
+    drop_all(&p, &["hlbtest_lim"]).await;
+    p.provision("hlbtest_lim", "hlbtest_lim", "pw_lim")
+        .await
+        .expect("provisioned");
+    p.limit_connections("hlbtest_lim", 2)
+        .await
+        .expect("limited");
+
+    let base = admin_url();
+    let hostport = base
+        .rsplit('@')
+        .next()
+        .and_then(|r| r.split('/').next())
+        .expect("hostport");
+    let (host, port) = hostport.split_once(':').unwrap_or((hostport, "5432"));
+    let url = connection_url(
+        host,
+        port.parse().unwrap_or(5432),
+        "hlbtest_lim",
+        "hlbtest_lim",
+        "pw_lim",
+    );
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_lazy(&url)
+        .expect("a pool");
+    let a = pool.acquire().await.expect("first");
+    let b = pool.acquire().await.expect("second");
+    let third = pool.acquire().await;
+    assert!(third.is_err(), "a third connection past a limit of 2");
+    // Its neighbours, and the administrator, still connect.
+    drop((a, b));
+    assert!(sqlx::PgPool::connect(&admin_url()).await.is_ok());
+
+    // Provisioned again, the limit holds: idempotent, like the rest.
+    p.provision("hlbtest_lim", "hlbtest_lim", "pw_lim")
+        .await
+        .expect("again");
+    let limit: i32 =
+        sqlx::query_scalar("SELECT rolconnlimit FROM pg_roles WHERE rolname = 'hlbtest_lim'")
+            .fetch_one(&sqlx::PgPool::connect(&admin_url()).await.expect("admin"))
+            .await
+            .expect("read");
+    assert_eq!(limit, 2);
+    pool.close().await;
+    drop_all(&p, &["hlbtest_lim"]).await;
+}

@@ -168,6 +168,21 @@ impl MariadbProvisioner {
         Ok(created)
     }
 
+    /// The most connections the server lets the user hold at once: past it the APP
+    /// is refused, where one without could take every connection the server has.
+    pub async fn limit_connections(&self, user: &str, limit: u32) -> Result<()> {
+        validate_identifier(user)?;
+        let stmt = format!(
+            "ALTER USER '{}'@'{APP_HOST}' WITH MAX_USER_CONNECTIONS {limit}",
+            escape_str(user)
+        );
+        sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+        Ok(())
+    }
+
     /// Password rotation.
     pub async fn set_password(&self, user: &str, password: &str) -> Result<()> {
         validate_identifier(user)?;

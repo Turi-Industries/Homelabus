@@ -42,7 +42,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Catalog {
     entries: BTreeMap<String, Entry>,
 }
@@ -118,6 +118,86 @@ impl Catalog {
             })
             .collect();
         errs.extend(self.shared_claims());
+        errs.extend(self.connection_budgets());
+        errs
+    }
+
+    /// Every app's connections against its shared server's limit, all installed at
+    /// once — and the largest twice over, being updated: its new task opens a pool
+    /// before the old one closes its own.
+    ///
+    /// 🔴 Two tests each held ONE app to a share of its server, and nothing summed
+    /// them; one of them read the limit from where the manifest no longer set it.
+    fn connection_budgets(&self) -> Vec<(String, hlb_types::Error)> {
+        let mut errs = Vec::new();
+        for engine in [hlb_types::DbEngine::Postgres, hlb_types::DbEngine::Mariadb] {
+            // Exhaustive: an engine added to `DbEngine` must be added above.
+            match engine {
+                hlb_types::DbEngine::Postgres | hlb_types::DbEngine::Mariadb => {}
+            }
+            let server = engine.service_name();
+            let mut apps: Vec<(&str, u32)> = Vec::new();
+            for (name, e) in &self.entries {
+                let declared: u32 = e
+                    .manifest
+                    .spec
+                    .requires
+                    .iter()
+                    .filter_map(|c| match c {
+                        hlb_types::Capability::Database {
+                            engine: on,
+                            name: _,
+                            extensions: _,
+                            connections,
+                        } if *on == engine => *connections,
+                        _ => None,
+                    })
+                    .sum();
+                if declared > 0 {
+                    apps.push((name, declared));
+                }
+            }
+            // A server absent from the catalog is the graph's refusal, not this one's.
+            let Ok(entry) = self.get(server) else {
+                continue;
+            };
+            if apps.is_empty() {
+                continue;
+            }
+            let Some(limit) = Some(entry).and_then(|s| {
+                s.manifest
+                    .spec
+                    .args
+                    .iter()
+                    .find_map(|a| a.strip_prefix(engine.limit_arg()))
+                    .and_then(|n| n.parse::<u32>().ok())
+            }) else {
+                errs.push((
+                    server.to_string(),
+                    hlb_types::Error::Validation(format!(
+                        "{server}: its connection limit must be one of its args \
+                         (`{}N`) — the apps' budgets are summed against it",
+                        engine.limit_arg()
+                    )),
+                ));
+                continue;
+            };
+            let room = limit.saturating_sub(engine.kept_for_the_administrator());
+            let sum: u32 = apps.iter().map(|(_, n)| n).sum();
+            let updating = apps.iter().map(|(_, n)| *n).max().unwrap_or(0);
+            if sum + updating > room {
+                let each: Vec<String> = apps.iter().map(|(a, n)| format!("{a} {n}")).collect();
+                errs.push((
+                    server.to_string(),
+                    hlb_types::Error::Validation(format!(
+                        "{server}: the apps' connections ({}: {sum}, and {updating} more \
+                         while the largest is updated) exceed the {room} its limit of \
+                         {limit} leaves them",
+                        each.join(", ")
+                    )),
+                ));
+            }
+        }
         errs
     }
 
@@ -158,15 +238,25 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
         // 🔴 Created with `CREATE EXTENSION`, which only PostgreSQL has: declared on
         // MariaDB, the install failed at the step, after the app was recorded.
         if let hlb_types::Capability::Database {
-            engine: hlb_types::DbEngine::Mariadb,
+            engine,
             name: _,
             extensions,
+            connections,
         } = c
         {
-            if !extensions.is_empty() {
+            if *engine == hlb_types::DbEngine::Mariadb && !extensions.is_empty() {
                 return refuse(format!(
                     "a MariaDB database takes no extensions ({}) — only PostgreSQL has them",
                     extensions.join(", ")
+                ));
+            }
+            // Optional on read for a frozen manifest; in the catalog, an app that says
+            // nothing takes whatever its author left — Gitea's pool is unlimited.
+            if connections.is_none() {
+                return refuse(format!(
+                    "a {} database must say `connections`: the most the app opens to the \
+                     shared server, its pools capped to it",
+                    engine.service_name()
                 ));
             }
         }
@@ -620,6 +710,7 @@ mod tests {
                 engine: hlb_types::DbEngine::Mariadb,
                 name: None,
                 extensions: vec!["vector".into()],
+                connections: Some(10),
             });
         maria
             .manifest
@@ -695,77 +786,112 @@ mod tests {
         );
     }
 
-    /// Seafile's pools stay under the shared MariaDB's limit: two of `max_connections`
-    /// in seaf-server, 16 in its Go file server, and room for seahub, seafevents and
-    /// the notification server (`seaf-utils.c`, `fileserver.go`, 13.0). At Seafile's
-    /// default of 100 it was past MariaDB's 151 alone.
+    /// Fluxer's four pools are what it declares: the role's limit is set from the
+    /// declaration, and a companion whose pool grew past it is refused its connections.
     #[test]
-    fn seafile_cannot_exhaust_the_shared_mariadb() {
+    fn fluxer_s_pools_add_up_to_what_it_declares() {
         let c = Catalog::load(repo_catalog()).expect("catalog should load");
-        let mariadb = &c.get("mariadb").expect("mariadb").manifest;
-        // MariaDB's own default, unless its manifest sets one.
-        let limit = mariadb
+        let fluxer = &c.get("fluxer").expect("fluxer").manifest;
+        let declared = fluxer
             .spec
-            .command
+            .requires
             .iter()
-            .find_map(|a| a.strip_prefix("--max-connections="))
-            .map_or(151, |n| n.parse::<u32>().expect("a number"));
-        let seafile = &c.get("seafile").expect("seafile").manifest;
-        let script = seafile
+            .find_map(|r| match r {
+                hlb_types::Capability::Database { connections, .. } => *connections,
+                _ => None,
+            })
+            .expect("fluxer declares its connections");
+        // Every companion saying a pool, not a list of the ones that connect today.
+        let sum: u32 = fluxer
             .spec
-            .files
+            .companions
             .iter()
-            .find(|f| f.path.ends_with("seafile-conf.py"))
-            .expect("the configuration Seafile is given");
-        let pool: u32 = script
-            .content
-            .split("\"max_connections\": \"")
-            .nth(1)
-            .and_then(|r| r.split('"').next())
-            .and_then(|n| n.parse().ok())
-            .expect("max_connections set");
-        let others = 16 + 20;
+            .filter_map(|x| {
+                x.environment(&fluxer.spec)
+                    .get("FLUXER_POSTGRES_MAX_CONNECTIONS")
+                    .map(|n| n.parse::<u32>().expect("a number"))
+            })
+            .sum();
+        assert_eq!(sum, declared);
+    }
+
+    /// The apps' connections are summed against their server's limit, the largest
+    /// counted twice for its update — through `validate_all`, which the CLI runs.
+    #[test]
+    fn the_catalog_refuses_apps_that_would_exhaust_their_shared_server() {
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        assert!(c.validate_all().is_empty(), "{:?}", c.validate_all());
+        let refused = |c: &Catalog| {
+            c.validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
+        };
+        let set = |c: &mut Catalog, app: &str, n: Option<u32>| {
+            for r in &mut c.entries.get_mut(app).expect("app").manifest.spec.requires {
+                if let hlb_types::Capability::Database { connections, .. } = r {
+                    *connections = n;
+                }
+            }
+        };
+
+        // Vikunja left at its own default of 100.
+        let mut over = c.clone();
+        set(&mut over, "vikunja", Some(100));
+        let r = refused(&over);
         assert!(
-            2 * pool + others < limit,
-            "2 × {pool} + {others} against MariaDB's {limit}"
+            r.len() == 1 && r[0].contains("postgres") && r[0].contains("vikunja 100"),
+            "{r:?}"
+        );
+
+        // Saying nothing is not a budget.
+        let mut silent = c.clone();
+        set(&mut silent, "gitea", None);
+        let r = refused(&silent);
+        assert!(
+            r.iter()
+                .any(|e| e.contains("gitea") && e.contains("connections")),
+            "{r:?}"
+        );
+
+        // A limit the server's manifest does not set is not one to sum against.
+        let mut unset = c.clone();
+        unset
+            .entries
+            .get_mut("postgres")
+            .expect("postgres")
+            .manifest
+            .spec
+            .args
+            .retain(|a| !a.starts_with("max_connections="));
+        let r = refused(&unset);
+        assert!(
+            r.iter().any(|e| e.contains("its connection limit")),
+            "{r:?}"
         );
     }
 
-    /// Fluxer's pools stay a quarter of the shared PostgreSQL's limit: its compose
-    /// gives the api, the worker, `users` and `messages` 25 + 25 + 20 + 20 — 90 of the
-    /// server's 100, which every app shares.
     #[test]
-    fn fluxer_cannot_exhaust_the_shared_postgres() {
-        let c = Catalog::load(repo_catalog()).expect("catalog should load");
-        let postgres = &c.get("postgres").expect("postgres").manifest;
-        let limit = postgres
-            .spec
-            .command
-            .iter()
-            .find_map(|a| a.strip_prefix("max_connections="))
-            .map_or(100, |n| n.parse::<u32>().expect("a number"));
-        let fluxer = &c.get("fluxer").expect("fluxer").manifest;
-        // The services that connect (`fluxer_svc/src/postgres.rs`, the api's
-        // `APILifecycle`): each must say its pool, or it takes Fluxer's default.
-        let mut sum = 0;
-        for name in ["api", "worker", "users", "messages"] {
-            let companion = fluxer
-                .spec
-                .companions
-                .iter()
-                .find(|x| x.name == name)
-                .unwrap_or_else(|| panic!("{name} is a companion"));
-            let pool: u32 = companion
-                .environment(&fluxer.spec)
-                .get("FLUXER_POSTGRES_MAX_CONNECTIONS")
-                .unwrap_or_else(|| panic!("{name} says its pool"))
-                .parse()
-                .expect("a number");
-            sum += pool;
-        }
-        assert!(
-            sum * 4 <= limit,
-            "{sum} connections against PostgreSQL's {limit}"
+    fn a_role_may_hold_twice_its_app_s_connections_on_that_engine_only() {
+        use hlb_types::{Capability, DbEngine};
+        let db = |engine, n| Capability::Database {
+            engine,
+            name: None,
+            extensions: Vec::new(),
+            connections: n,
+        };
+        let seafile = [
+            db(DbEngine::Mariadb, Some(40)),
+            db(DbEngine::Mariadb, Some(56)),
+            db(DbEngine::Mariadb, Some(20)),
+        ];
+        let limit = hlb_types::capability::role_connection_limit;
+        assert_eq!(limit(&seafile, DbEngine::Mariadb), Some(232));
+        assert_eq!(limit(&seafile, DbEngine::Postgres), None);
+        // Frozen before the field: the role is left as it was.
+        assert_eq!(
+            limit(&[db(DbEngine::Postgres, None)], DbEngine::Postgres),
+            None
         );
     }
 

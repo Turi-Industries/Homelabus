@@ -29,6 +29,9 @@ pub enum Action {
         /// Extensions to enable. ⚠️ They must be present in the IMAGE.
         #[allow(clippy::struct_field_names)]
         extensions: Vec<String>,
+        /// What the server lets the role hold (`role_connection_limit`): an app past
+        /// its budget is refused its own connections, never its neighbours'.
+        connection_limit: Option<u32>,
     },
 
     /// An S3 bucket with its own isolated access key.
@@ -164,6 +167,7 @@ impl fmt::Display for Action {
                 role,
                 password_secret,
                 extensions,
+                connection_limit,
             } => {
                 write!(
                     f,
@@ -173,6 +177,9 @@ impl fmt::Display for Action {
                 )?;
                 if !extensions.is_empty() {
                     write!(f, " + extensions {}", extensions.join(", "))?;
+                }
+                if let Some(n) = connection_limit {
+                    write!(f, ", at most {n} connections")?;
                 }
                 Ok(())
             }

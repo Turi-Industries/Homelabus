@@ -55,6 +55,15 @@ pub enum Capability {
         /// the app start against an incomplete database.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         extensions: Vec<String>,
+        /// The most connections the app opens to it — every process and companion
+        /// together — and what its manifest caps it to.
+        ///
+        /// 🔴 The server's limit is shared: left to their own defaults, Gitea's pool is
+        /// unlimited, Vikunja's 100 and Roundcube's one per Apache worker (150), each
+        /// able to take every connection alone. The catalog sums these against the
+        /// server's limit. Optional on read: a manifest frozen before it still loads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connections: Option<u32>,
     },
 
     /// A cache. Shared by default, dedicated when the app cannot tolerate neighbours.
@@ -180,6 +189,30 @@ impl Capability {
     }
 }
 
+/// The most connections an app's role may hold on one engine, as the server is told
+/// it: twice what its databases there declare, since an update starts the new task
+/// before the old one stops and each opens its own pool. `None` when one of them
+/// declares nothing — a manifest frozen before the field, left as it was.
+pub fn role_connection_limit(requires: &[Capability], on: DbEngine) -> Option<u32> {
+    let mut sum = 0u32;
+    let mut any = false;
+    for c in requires {
+        if let Capability::Database {
+            engine,
+            name: _,
+            extensions: _,
+            connections,
+        } = c
+        {
+            if *engine == on {
+                sum = sum.saturating_add((*connections)?);
+                any = true;
+            }
+        }
+    }
+    any.then(|| sum.saturating_mul(2))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DbEngine {
@@ -192,6 +225,25 @@ impl DbEngine {
         match self {
             Self::Postgres => "postgres",
             Self::Mariadb => "mariadb",
+        }
+    }
+
+    /// How the server's manifest sets its connection limit, as one of its `args`.
+    pub fn limit_arg(&self) -> &'static str {
+        match self {
+            Self::Postgres => "max_connections=",
+            Self::Mariadb => "--max-connections=",
+        }
+    }
+
+    /// Of the server's limit, what the apps cannot take: Homelabus connects as the
+    /// administrator, for whom the server keeps room the apps' roles never reach.
+    pub fn kept_for_the_administrator(&self) -> u32 {
+        match self {
+            // `superuser_reserved_connections`, whose default the manifest keeps.
+            Self::Postgres => 3,
+            // A SUPER account gets one connection PAST `max_connections` instead.
+            Self::Mariadb => 0,
         }
     }
 }
@@ -313,6 +365,7 @@ mod tests {
                 engine: DbEngine::Postgres,
                 name: Some("vikunja".into()),
                 extensions: Vec::new(),
+                connections: None,
             }
         );
         assert_eq!(c.platform_service(), Some("postgres"));

@@ -4041,6 +4041,15 @@
         "oneOf": [
           {
             "properties": {
+              "connections": {
+                "description": "The most it opens to the shared server, which every app's budget shares.",
+                "format": "int32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "engine": {
                 "description": "The engine's own name (`postgres`), which is not translated.",
                 "type": "string"
@@ -4063,6 +4072,7 @@
               }
             },
             "required": [
+              "connections",
               "engine",
               "extensions",
               "kind",

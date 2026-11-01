@@ -81,6 +81,7 @@ fn declared_and_read(m: &Manifest, used: &[Token]) -> Result<()> {
                 engine,
                 name: _,
                 extensions: _,
+                connections: _,
             } = c
             {
                 Some(engine)
@@ -375,10 +376,12 @@ pub fn validate(m: &Manifest) -> Result<()> {
     for c in &m.spec.requires {
         let its_tokens = || used.iter().any(|t| t.requires() == Some(c.id()));
         let read = match c {
+            // Its `connections` is read by the catalog, summed against the server's.
             Capability::Database {
                 engine: _,
                 name: _,
                 extensions: _,
+                connections: _,
             }
             | Capability::Cache {
                 engine: _,

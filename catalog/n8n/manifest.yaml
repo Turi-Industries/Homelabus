@@ -13,6 +13,8 @@ spec:
   requires:
     - kind: database
       engine: postgres
+      # `DB_POSTGRESDB_POOL_SIZE` below, its own default (3.0.0).
+      connections: 2
 
     # 🔴 NO native SSO: n8n's OIDC is reserved for the enterprise edition.
     # The community one has its own accounts (the first registrant is the
@@ -49,6 +51,7 @@ spec:
   env:
     DB_TYPE: postgresdb
     DB_POSTGRESDB_HOST: "{{ db.host }}"
+    DB_POSTGRESDB_POOL_SIZE: "2"
     DB_POSTGRESDB_PORT: "{{ db.port }}"
     DB_POSTGRESDB_DATABASE: "{{ db.name }}"
     DB_POSTGRESDB_USER: "{{ db.user }}"

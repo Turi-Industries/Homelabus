@@ -15,6 +15,8 @@ spec:
     # each create at their start, as the database's owner: no extension.
     - kind: database
       engine: postgres
+      # The four companions' `FLUXER_POSTGRES_MAX_CONNECTIONS`: 4 + 4 + 8 + 6.
+      connections: 22
     - kind: sso
       mode: native
       redirectPaths: ["/auth/sso/callback"]

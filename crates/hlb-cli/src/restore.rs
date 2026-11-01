@@ -398,6 +398,7 @@ fn databases_of<'m>(
                 engine,
                 name,
                 extensions,
+                connections: _,
             } => Some((
                 *engine,
                 name.clone().unwrap_or_else(|| app.to_string()),

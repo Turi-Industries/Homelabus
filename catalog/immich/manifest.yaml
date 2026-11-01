@@ -14,6 +14,9 @@ spec:
     # goes with it.
     - kind: database
       engine: postgres
+      # Not a setting: its api and microservices each open a pool of 10, and one more
+      # connection at boot (v3.3.1 `main.ts`, `app.module.ts`).
+      connections: 21
       # cube and earthdistance too, cube first: Immich's geolocation creates them at
       # start, which its isolated role is not allowed to do — it died on "permission
       # denied to create extension earthdistance" (found on a real cluster).

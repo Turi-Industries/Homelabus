@@ -147,6 +147,19 @@ pub fn resolve_with_guide(
     for cap in &m.spec.requires {
         resolve_capability(cap, app, params, &mut plan)?;
     }
+    // The role's limit is the app's, across its databases on the engine: Seafile's
+    // three share one role, so no single requirement knows it.
+    for a in &mut plan.actions {
+        if let Action::ProvisionDatabase {
+            engine,
+            connection_limit,
+            ..
+        } = a
+        {
+            *connection_limit =
+                hlb_types::capability::role_connection_limit(&m.spec.requires, *engine);
+        }
+    }
 
     // 2. The digest, if it is not already pinned.
     if !m.spec.image.is_pinned() {
@@ -480,6 +493,8 @@ fn resolve_capability(
             engine,
             name,
             extensions,
+            // The role's limit is set from every requirement, once they are all read.
+            connections: _,
         } => {
             let db = name.clone().unwrap_or_else(|| app.to_string());
             let secret = format!("{app}-db-password");
@@ -515,6 +530,7 @@ fn resolve_capability(
                 role: app.to_string(),
                 password_secret: secret,
                 extensions: extensions.clone(),
+                connection_limit: None,
             });
         }
 
@@ -1236,6 +1252,7 @@ steps:
             role: "gitea".into(),
             password_secret: "gitea-db-password".into(),
             extensions: Vec::new(),
+            connection_limit: None,
         }));
         // One role per app, never a reused password.
         assert!(p.actions.iter().any(

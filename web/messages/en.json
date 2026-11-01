@@ -1004,6 +1004,7 @@
 	"catalog_requires": "What it asks for",
 	"need_database": "{engine} database “{name}”, with a role of its own",
 	"need_database_extensions": "{engine} database “{name}”, with a role of its own — the server's image must carry: {extensions}",
+	"need_database_connections": "{need}, {connections} connections at most",
 	"need_cache_shared": "{engine} cache, shared",
 	"need_cache_dedicated": "{engine} cache, its own",
 	"need_sso_native": [

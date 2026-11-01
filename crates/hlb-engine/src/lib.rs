@@ -1315,6 +1315,7 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 role,
                 password_secret,
                 extensions,
+                connection_limit,
             } => {
                 let Some(vault) = self.vault else {
                     return Ok(Step::NotImplemented);
@@ -1336,13 +1337,21 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                         let Some(pg) = self.postgres else {
                             return Ok(Step::NotImplemented);
                         };
-                        pg.provision(database, role, &password).await?
+                        let created = pg.provision(database, role, &password).await?;
+                        if let Some(n) = connection_limit {
+                            pg.limit_connections(role, *n).await?;
+                        }
+                        created
                     }
                     hlb_types::DbEngine::Mariadb => {
                         let Some(my) = self.mariadb else {
                             return Ok(Step::NotImplemented);
                         };
-                        my.provision(database, role, &password).await?
+                        let created = my.provision(database, role, &password).await?;
+                        if let Some(n) = connection_limit {
+                            my.limit_connections(role, *n).await?;
+                        }
+                        created
                     }
                 };
 

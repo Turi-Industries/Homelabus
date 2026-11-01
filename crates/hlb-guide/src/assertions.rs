@@ -387,6 +387,7 @@ fn database_of(m: &Manifest, wanted: Option<&str>) -> Option<(DbEngine, String)>
             engine,
             name,
             extensions: _,
+            connections: _,
         } => {
             let db = name.clone().unwrap_or_else(|| m.metadata.name.clone());
             (wanted.is_none() || wanted == Some(db.as_str())).then_some((*engine, db))

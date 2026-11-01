@@ -11,6 +11,8 @@ spec:
   requires:
     - kind: database
       engine: postgres
+      # `DATABASE_MAX_CONNS` below, its own default (1.37.4).
+      connections: 10
     - kind: sso
       mode: native
       # Callback derived from DOMAIN by Vaultwarden itself.
@@ -25,6 +27,7 @@ spec:
   env:
     # 🔴 `db.url` carries the password: it is a SECRET, despite looking like an address.
     DATABASE_URL_FILE: /run/secrets/db-url
+    DATABASE_MAX_CONNS: "10"
     DOMAIN: "https://{{ domain }}"
 
     # 🔴 Without SMTP_FROM, 1.37 refuses to START ("Both `SMTP_HOST` and `SMTP_FROM`

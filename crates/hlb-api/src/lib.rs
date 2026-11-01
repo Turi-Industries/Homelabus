@@ -2092,6 +2092,8 @@ pub enum Need {
         name: String,
         /// They must be in the server's image, so they are worth reading before.
         extensions: Vec<String>,
+        /// The most it opens to the shared server, which every app's budget shares.
+        connections: Option<u32>,
     },
     Cache {
         engine: String,
@@ -2145,10 +2147,12 @@ impl Need {
                 engine,
                 name,
                 extensions,
+                connections,
             } => Self::Database {
                 engine: engine.service_name().into(),
                 name: name.clone().unwrap_or_else(|| app.into()),
                 extensions: extensions.clone(),
+                connections: *connections,
             },
             C::Cache { engine, dedicated } => Self::Cache {
                 engine: engine.service_name().into(),
@@ -4775,6 +4779,7 @@ mod tests {
             engine: hlb_types::DbEngine::Postgres,
             name: None,
             extensions: vec!["vector".into()],
+            connections: Some(21),
         };
         let bucket = hlb_types::Capability::ObjectStorage {
             bucket: None,
@@ -4787,6 +4792,7 @@ mod tests {
                 engine: "postgres".into(),
                 name: "immich".into(),
                 extensions: vec!["vector".into()],
+                connections: Some(21),
             }
         );
         assert_eq!(

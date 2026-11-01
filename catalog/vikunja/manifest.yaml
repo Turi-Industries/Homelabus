@@ -10,6 +10,8 @@ spec:
   requires:
     - kind: database
       engine: postgres
+      # `MAXOPENCONNECTIONS` below: Vikunja's own default is 100 (v2.7.1 `config.go`).
+      connections: 10
     - kind: sso
       mode: native
       redirectPaths: ["/auth/openid/pocketid"]
@@ -22,6 +24,7 @@ spec:
   # Vikunja reads its configuration through VIKUNJA_* variables.
   env:
     VIKUNJA_DATABASE_TYPE: postgres
+    VIKUNJA_DATABASE_MAXOPENCONNECTIONS: "10"
     VIKUNJA_DATABASE_HOST: "{{ db.host }}"
     VIKUNJA_DATABASE_DATABASE: "{{ db.name }}"
     VIKUNJA_DATABASE_USER: "{{ db.user }}"

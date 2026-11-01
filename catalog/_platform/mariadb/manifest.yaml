@@ -19,6 +19,8 @@ spec:
     - --tcp-keepalive-time=300
     - --tcp-keepalive-interval=30
     - --tcp-keepalive-probes=3
+    # Shared by every app: the catalog sums their `connections` against it.
+    - --max-connections=250
   requires:
     # Never on NFS, the same reason as PostgreSQL: file locking is not
     # reliable there, and InnoDB depends on it.

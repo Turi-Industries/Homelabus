@@ -138,10 +138,12 @@ pub fn refusals(frozen: &Manifest, next: &Manifest) -> Vec<String> {
                      data. Remove and install the app once the data is saved elsewhere"
                 )),
             },
+            // A budget that moves is no stranded data: the plan sets the role's new limit.
             Capability::Database {
                 engine,
                 name,
                 extensions: _,
+                connections: _,
             } => {
                 // Matched by name: Seafile has three, and against the catalog's first
                 // one each of the other two read as renamed — its upgrade was refused.
@@ -246,6 +248,7 @@ fn databases(m: &Manifest) -> Vec<(&hlb_types::DbEngine, &Option<String>)> {
                 engine,
                 name,
                 extensions: _,
+                connections: _,
             } => Some((engine, name)),
             _ => None,
         })

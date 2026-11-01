@@ -13,6 +13,9 @@ spec:
   requires:
     - kind: database
       engine: postgres
+      # `MAX_OPEN_CONNS` below: Gitea's own default, 0, is unlimited (v28.2.0
+      # `modules/setting/database.go`).
+      connections: 10
     - kind: sso
       mode: native
       redirectPaths: ["/user/oauth2/PocketID/callback"]
@@ -26,6 +29,7 @@ spec:
   # Gitea receives its coordinates through GITEA__section__key variables.
   env:
     GITEA__database__DB_TYPE: postgres
+    GITEA__database__MAX_OPEN_CONNS: "10"
     GITEA__database__HOST: "{{ db.host }}:{{ db.port }}"
     GITEA__database__NAME: "{{ db.name }}"
     GITEA__database__USER: "{{ db.user }}"

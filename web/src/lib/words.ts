@@ -185,10 +185,14 @@ export const reach: Record<Schemas['Reach'], () => string> = {
 /** What an application asks the platform for, before installing it or once it runs. */
 export function need(n: Schemas['Need']): string {
 	switch (n.kind) {
-		case 'database':
-			return n.extensions.length === 0
-				? m.need_database({ engine: n.engine, name: n.name })
-				: m.need_database_extensions({ engine: n.engine, name: n.name, extensions: n.extensions.join(', ') });
+		case 'database': {
+			const base =
+				n.extensions.length === 0
+					? m.need_database({ engine: n.engine, name: n.name })
+					: m.need_database_extensions({ engine: n.engine, name: n.name, extensions: n.extensions.join(', ') });
+			// The share of the server every app's budget is summed against.
+			return n.connections === null ? base : m.need_database_connections({ need: base, connections: n.connections });
+		}
 		case 'cache':
 			return n.dedicated ? m.need_cache_dedicated({ engine: n.engine }) : m.need_cache_shared({ engine: n.engine });
 		case 'sso':
