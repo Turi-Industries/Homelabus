@@ -1357,6 +1357,41 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    Seafile's three databases with every table (13, 46, 127, as live),
    `mariadb-check --extended` 0.
 
+   **The rest of gap 5, measured 2026-11-01** (upstream sources at the pinned tags; the
+   577 compose files of Umbrel and CasaOS; the lab):
+   - **Job cadence — nothing to build.** The catalog declares one job (Seafile's
+     weekly gc). Of the 577 apps, 2 schedule anything more often than daily from their
+     compose (Nextcloud every 5 min, FreshRSS every 30), both a cron inside the app's
+     own container — a companion, not a job Homelabus runs.
+   - **A step before an upgrade — nothing to build.** None of the 13 apps' upgrade
+     notes asks for one within its major that its start does not do (Gitea 28.2's
+     migrations, Roundcube's `initdb.sh --update` in its entrypoint, Seafile 14.0.x
+     "change the image"); the copy before an update is already taken.
+   - **A step after a restore — two apps.** Fluxer's message search, rebuilt by one
+     call — written today as a `post-install` tip a person must remember and paste;
+     Seafile's `seaf-fsck` (its binary install's doc; the Docker doc omits it, the
+     start does not run it). Gitea's `regenerate hooks`/`keys` run at every start
+     already; Immich's dump needs its `search_path` line handled by the restore
+     itself; n8n, Termix and Vaultwarden need only their keys restored with the data.
+   - **NATS copied live — safe, nothing to build.** Fluxer's `fluxer-nats-data`
+     snapshot `9ea218a5` restored on deb1 (`/root/natsdrill.sh`): the live copy's
+     `index.db` disagreed with its blocks ("Recovering stream state from index
+     errored"), NATS 2.15 rebuilt it from the blocks — healthy, `JOBS_DLQ`'s 3
+     messages there. With `index.db` gone, the last block cut mid-record, or the
+     consumers' `o.dat` gone: healthy each time (an empty stream's sequence restarts
+     at 0). JetStream's file store recovers from a crash's shape; a block removed
+     during the copy fails the pass out loud (restic exit 3), one written after its
+     listing is a copy taken earlier.
+   - 🔴 **Connection budgets — any one of three apps exhausts the shared
+     PostgreSQL.** 97 connections (100 − 3 reserved); 9 consumers, 2 capped by the
+     catalog (Fluxer 4 × ≤ 25 by a test, Seafile on MariaDB by another). Upstream
+     defaults: **Gitea unlimited** (`MAX_OPEN_CONNS` 0, `modules/setting/database.go:83`),
+     **Vikunja 100** (`config.go:433`), **Roundcube one per Apache worker, 150**
+     (prefork default, non-persistent); then Immich 20 fixed (2 processes × 10, no
+     setting), Mealie 15 (SQLAlchemy 5 + 10, no setting), Vaultwarden 10, n8n 2. On
+     the lab at rest: 16 in use. The two tests each hold ONE app to a share; nothing
+     sums them, and the next app's pool is whatever its author left.
+
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000
   Claude Code loads of a rule in a 200K session, split by `paths:` the same day into six
