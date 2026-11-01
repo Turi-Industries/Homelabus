@@ -94,6 +94,11 @@ pub enum Error {
          on a missing domain; create it first"
     )]
     UnknownDomain(String),
+
+    /// Something 0.16 keeps another way, asked of a 0.16: refused by name rather than
+    /// written under a schema it does not read.
+    #[error("{0} needs Stalwart 1.0 — this server is 0.16; migrate it first (`hlb mail migrate`)")]
+    NeedsV1(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -946,6 +951,121 @@ impl Stalwart {
             });
         }
         Ok(())
+    }
+
+    /// The passwords an account's devices sign in with, oldest first. Their secrets
+    /// are never read back: Stalwart answers `****`.
+    pub async fn app_passwords(&self, account_id: &str) -> Result<Vec<AppPassword>> {
+        self.v1_only("a device password").await?;
+        let args = self
+            .call(
+                "x:AppPassword/get",
+                serde_json::json!({
+                    "accountId": account_id,
+                    "properties": ["description", "createdAt"],
+                }),
+            )
+            .await?;
+        let mut list: Vec<AppPassword> = args
+            .get("list")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                Some(AppPassword {
+                    id: p.get("id")?.as_str()?.to_string(),
+                    description: p
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    created_at: p
+                        .get("createdAt")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                })
+            })
+            .collect();
+        // RFC 3339 in UTC sorts as text.
+        list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        Ok(list)
+    }
+
+    /// Makes a password for one device of an account, which opens its mail, calendars
+    /// and contacts. Stalwart draws the secret and answers it ONCE: nothing reads it
+    /// back after this.
+    ///
+    /// Made by the administrator in the account's name (`accountId`): the account's
+    /// own password is drawn and discarded at its creation, so nobody could make one
+    /// as the account.
+    pub async fn create_app_password(
+        &self,
+        account_id: &str,
+        description: &str,
+    ) -> Result<NewAppPassword> {
+        self.v1_only("a device password").await?;
+        let args = self
+            .call(
+                "x:AppPassword/set",
+                serde_json::json!({
+                    "accountId": account_id,
+                    "create": { CREATION_ID: { "description": description } },
+                }),
+            )
+            .await?;
+        if let Some(err) = args.get("notCreated").and_then(|v| v.get(CREATION_ID)) {
+            return Err(Error::NotCreated {
+                object: format!("a device password for account \"{account_id}\""),
+                reason: describe_set_error(err),
+            });
+        }
+        let created = args
+            .get("created")
+            .and_then(|v| v.get(CREATION_ID))
+            .ok_or_else(|| Error::Unexpected("a device password created with no answer".into()))?;
+        let field = |name: &str| {
+            created
+                .get(name)
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    Error::Unexpected(format!("a device password created with no {name}"))
+                })
+        };
+        Ok(NewAppPassword {
+            id: field("id")?,
+            secret: field("secret")?,
+        })
+    }
+
+    /// Revokes one device's password: refused from the next request on. `false` when
+    /// the account had no such password.
+    pub async fn revoke_app_password(&self, account_id: &str, id: &str) -> Result<bool> {
+        self.v1_only("a device password").await?;
+        let args = self
+            .call(
+                "x:AppPassword/set",
+                serde_json::json!({ "accountId": account_id, "destroy": [id] }),
+            )
+            .await?;
+        if let Some(err) = args.get("notDestroyed").and_then(|v| v.get(id)) {
+            if err.get("type").and_then(|v| v.as_str()) == Some("notFound") {
+                return Ok(false);
+            }
+            return Err(Error::NotCreated {
+                object: format!("the revocation of device password \"{id}\""),
+                reason: describe_set_error(err),
+            });
+        }
+        Ok(ids_in(&args, "destroyed").iter().any(|d| d == id))
+    }
+
+    async fn v1_only(&self, what: &str) -> Result<()> {
+        match self.generation().await? {
+            Generation::V1 => Ok(()),
+            Generation::V016 => Err(Error::NeedsV1(what.into())),
+        }
     }
 
     /// Never bans an address of `cidr` for failed sign-ins, and lifts a ban already
@@ -2013,6 +2133,33 @@ pub const SUBMISSION_PORT: u16 = 587;
 pub const POSTMASTER: &str = "postmaster";
 pub const POSTMASTER_ALIASES: &[&str] = &["abuse"];
 
+/// A device's password, as Stalwart lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPassword {
+    pub id: String,
+    /// The name given at its creation — the device's.
+    pub description: String,
+    /// RFC 3339, UTC.
+    pub created_at: Option<String>,
+}
+
+/// A device's password as it is made: the one moment its secret is known.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NewAppPassword {
+    pub id: String,
+    pub secret: String,
+}
+
+// By hand: a derived `Debug` would print the secret into whatever logs a result.
+impl std::fmt::Debug for NewAppPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewAppPassword")
+            .field("id", &self.id)
+            .field("secret", &"…")
+            .finish()
+    }
+}
+
 /// One DKIM key of a domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DkimKey {
@@ -2344,7 +2491,12 @@ fn and(conditions: &[serde_json::Value]) -> serde_json::Value {
 
 /// The ids returned by a `/query`.
 fn ids(args: &serde_json::Value) -> Vec<String> {
-    args.get("ids")
+    ids_in(args, "ids")
+}
+
+/// A list of ids under `key`: `ids` of a query, `destroyed` of a set.
+fn ids_in(args: &serde_json::Value, key: &str) -> Vec<String> {
+    args.get(key)
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()

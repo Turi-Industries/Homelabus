@@ -615,3 +615,81 @@ async fn an_app_account_sends_on_submission_as_itself_only() {
     let _ = docker(&["rm", "-f", NAME]);
     let _ = docker(&["network", "rm", NET]);
 }
+
+/// What a phone gets in place of the mailbox's password, which nobody is ever shown:
+/// one password per device, made by the administrator FOR the account, opening its
+/// mail, calendars and contacts — and nothing once revoked.
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn a_device_password_opens_calendars_and_contacts_until_revoked() {
+    let s = start();
+    let account = s
+        .ensure_account("lena@example.org", "the-mailbox-password-nobody-sees", &[])
+        .await
+        .expect("account");
+    if s.generation().await.expect("session") == hlb_mail::Generation::V016 {
+        // 0.16 keeps app passwords elsewhere: refused by name, never half-made.
+        let refused = s.create_app_password(&account.account_id, "phone").await;
+        assert!(
+            matches!(refused, Err(hlb_mail::Error::NeedsV1(_))),
+            "{refused:?}"
+        );
+        println!("✓ 0.16: refused by name");
+        stop();
+        return;
+    }
+    let made = s
+        .create_app_password(&account.account_id, "Lena's phone")
+        .await
+        .expect("made");
+    assert!(!made.secret.is_empty());
+    assert!(
+        !format!("{made:?}").contains(&made.secret),
+        "a Debug print leaks the secret"
+    );
+    let listed = s.app_passwords(&account.account_id).await.expect("listed");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].id, made.id);
+    assert_eq!(listed[0].description, "Lena's phone");
+    assert!(listed[0].created_at.is_some(), "{listed:?}");
+    println!("✓ made for the account by the administrator, listed by its name");
+
+    let url = format!("http://127.0.0.1:{PORT}");
+    let status = |path: &'static str, secret: String| {
+        let url = url.clone();
+        async move {
+            reqwest::Client::new()
+                .request(
+                    reqwest::Method::from_bytes(b"PROPFIND").expect("method"),
+                    format!("{url}{path}"),
+                )
+                .header("Depth", "0")
+                .basic_auth("lena@example.org", Some(secret))
+                .send()
+                .await
+                .expect("reached")
+                .status()
+                .as_u16()
+        }
+    };
+    assert_eq!(status("/dav/cal/", made.secret.clone()).await, 207);
+    assert_eq!(status("/dav/card/", made.secret.clone()).await, 207);
+    println!("✓ CalDAV and CardDAV open with it");
+
+    assert!(s
+        .revoke_app_password(&account.account_id, &made.id)
+        .await
+        .expect("revoked"));
+    assert!(!s
+        .revoke_app_password(&account.account_id, &made.id)
+        .await
+        .expect("revoked twice"));
+    assert_eq!(status("/dav/cal/", made.secret.clone()).await, 401);
+    assert!(s
+        .app_passwords(&account.account_id)
+        .await
+        .expect("listed")
+        .is_empty());
+    println!("✓ revoked: refused at once, gone from the list");
+    stop();
+}
