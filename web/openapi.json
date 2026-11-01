@@ -208,6 +208,57 @@
         },
         "type": "object"
       },
+      "AcmeAccount": {
+        "description": "An ACME account that requests the house's certificates.",
+        "properties": {
+          "issuer": {
+            "description": "The authority's CAA domain: `letsencrypt.org`.",
+            "type": "string"
+          },
+          "uri": {
+            "description": "What a CAA `accounturi` names.",
+            "type": "string"
+          },
+          "who": {
+            "description": "`Caddy`, `Stalwart`.",
+            "type": "string"
+          },
+          "wildcard": {
+            "description": "It also requests a wildcard, which an `issuewild` set governs when present.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "issuer",
+          "uri",
+          "who",
+          "wildcard"
+        ],
+        "type": "object"
+      },
+      "AcmeAccountJudged": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AcmeAccount"
+          },
+          "verdict": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaaVerdict",
+                "description": "What the governing CAA lets it do; `None` when no resolver said which governs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "verdict"
+        ],
+        "type": "object"
+      },
       "ActionResult": {
         "description": "The outcome of an action: what it WOULD do, or what it did.\n\n## 🔴 Preview by default, over HTTP as on the command line\n\nAn action route returns this plan **without doing anything**. It acts only with\n`?apply=true`. This is the exact transposition of `Executor::apply(true)`, and the\nmost important invariant of this project: the default mode changes nothing.\n\nThe type carries `applied` so the interface cannot confuse \"here is what would\nhappen\" with \"here is what happened\" — the most expensive confusion possible on a\nscreen that triggers actions.",
         "properties": {
@@ -1370,6 +1421,68 @@
           "verdict"
         ],
         "type": "object"
+      },
+      "CaaGoverning": {
+        "description": "The first CAA set found climbing from the exposure's domain to the zone, the one an\nauthority checks before issuing for a name below (RFC 8659 §3).",
+        "properties": {
+          "at": {
+            "description": "Where it was found; `None` when no name up to the zone holds one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "records": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "at",
+          "records"
+        ],
+        "type": "object"
+      },
+      "CaaPinRecord": {
+        "description": "One CAA record to publish, for one account.",
+        "properties": {
+          "record": {
+            "type": "string"
+          },
+          "who": {
+            "type": "string"
+          },
+          "wildcard": {
+            "description": "For its wildcard: an `issuewild` record.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "record",
+          "who",
+          "wildcard"
+        ],
+        "type": "object"
+      },
+      "CaaPinWhy": {
+        "description": "Why the CAA lets others issue.",
+        "enum": [
+          "no_authority",
+          "no_account"
+        ],
+        "type": "string"
+      },
+      "CaaVerdict": {
+        "description": "What a CAA set lets one account do (RFC 8659, and 8657's `accounturi`).",
+        "enum": [
+          "anyone",
+          "any_account",
+          "pinned",
+          "refused"
+        ],
+        "type": "string"
       },
       "CatalogItem": {
         "description": "A catalog entry, as browsed before installing.",
@@ -2567,6 +2680,102 @@
         },
         "type": "object"
       },
+      "CtIssuance": {
+        "description": "A certificate a Certificate Transparency log holds for the exposure's names, as Cert\nSpotter reports it: a precertificate and its certificate are one.",
+        "properties": {
+          "id": {
+            "description": "Cert Spotter's, rising: what the next reading starts after.",
+            "type": "string"
+          },
+          "issuer": {
+            "description": "As Cert Spotter names it: `Let's Encrypt`.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The SHA-256 of its key's SPKI, hex: what says whether the house holds it.",
+            "type": "string"
+          },
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "not_before": {
+            "description": "RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "issuer",
+          "key",
+          "names",
+          "not_before"
+        ],
+        "type": "object"
+      },
+      "CtWatch": {
+        "description": "Where the watch over the Certificate Transparency logs stands.",
+        "oneOf": [
+          {
+            "description": "Its record could not be read.",
+            "properties": {
+              "watch": {
+                "enum": [
+                  "unread"
+                ],
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "watch",
+              "why"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No baseline accepted: nothing is judged yet.",
+            "properties": {
+              "watch": {
+                "enum": [
+                  "not_started"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "watch"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Issuances under a key the house does not hold, kept until accepted.",
+            "properties": {
+              "foreign": {
+                "items": {
+                  "$ref": "#/components/schemas/CtIssuance"
+                },
+                "type": "array"
+              },
+              "watch": {
+                "enum": [
+                  "watched"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "foreign",
+              "watch"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "DefaultMailboxRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2771,6 +2980,468 @@
         ],
         "type": "object"
       },
+      "DomainAdvice": {
+        "description": "Something worth doing, said beside a reading and never alerted: how the house is\nset up, not something that changed. A value, which the CLI and the interface word.",
+        "oneOf": [
+          {
+            "description": "No transfer lock where the statuses are known.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "no_transfer_lock"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Lapsing within 30 days.",
+            "properties": {
+              "days": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "expires"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "days",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No DS at the parent.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "not_signed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A DS, and the chain does not validate: validating resolvers refuse the zone.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "signed_not_validating"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No CAA, and no account of the house read to pin.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "no_caa"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The CAA lets others issue: these records, at `at`, in place of its `issue`\nones, let the house's accounts alone.",
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "pin"
+                ],
+                "type": "string"
+              },
+              "records": {
+                "items": {
+                  "$ref": "#/components/schemas/CaaPinRecord"
+                },
+                "type": "array"
+              },
+              "why": {
+                "$ref": "#/components/schemas/CaaPinWhy"
+              }
+            },
+            "required": [
+              "at",
+              "kind",
+              "records",
+              "why"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DomainChange": {
+        "description": "What a drift is of.",
+        "enum": [
+          "ns",
+          "ds",
+          "validated",
+          "caa",
+          "registrar",
+          "statuses",
+          "delegation"
+        ],
+        "type": "string"
+      },
+      "DomainDns": {
+        "description": "What the internet resolves, normalised so two resolvers' answers compare equal.",
+        "properties": {
+          "caa": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "validated": {
+            "description": "The resolver validated the chain (`AD`). False for a zone not signed too.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "caa",
+          "ds",
+          "ns",
+          "validated"
+        ],
+        "type": "object"
+      },
+      "DomainDnsRead": {
+        "description": "The DNS half: read, or why not.",
+        "oneOf": [
+          {
+            "properties": {
+              "read": {
+                "enum": [
+                  "not_read"
+                ],
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "read",
+              "why"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DomainDns"
+              },
+              {
+                "properties": {
+                  "read": {
+                    "enum": [
+                      "read"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "read"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
+      },
+      "DomainDrift": {
+        "description": "One thing that moved since the baseline.",
+        "properties": {
+          "now": {
+            "$ref": "#/components/schemas/DomainDriftSide"
+          },
+          "was": {
+            "$ref": "#/components/schemas/DomainDriftSide"
+          },
+          "what": {
+            "$ref": "#/components/schemas/DomainChange"
+          }
+        },
+        "required": [
+          "now",
+          "was",
+          "what"
+        ],
+        "type": "object"
+      },
+      "DomainDriftSide": {
+        "description": "One side of a drift, as a value: the interface words it.",
+        "oneOf": [
+          {
+            "description": "Name servers, DS, CAA, statuses, a delegation; a registrar, one or none named.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "names"
+                ],
+                "type": "string"
+              },
+              "names": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "names"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "validates"
+                ],
+                "type": "string"
+              },
+              "validates": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "validates"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DomainPublic": {
+        "properties": {
+          "baseline_at": {
+            "description": "When the baseline was read; `None` while none was accepted for this zone.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "domain": {
+            "description": "The exposure's.",
+            "type": "string"
+          },
+          "drifts": {
+            "description": "What moved since the baseline; empty without one.",
+            "items": {
+              "$ref": "#/components/schemas/DomainDrift"
+            },
+            "type": "array"
+          },
+          "logs": {
+            "$ref": "#/components/schemas/CtWatch"
+          },
+          "reading": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DomainSeen",
+                "description": "`None`: never read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "zone": {
+            "description": "The reading's, or the exposure's domain before any.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "baseline_at",
+          "domain",
+          "drifts",
+          "logs",
+          "reading",
+          "zone"
+        ],
+        "type": "object"
+      },
+      "DomainRegistry": {
+        "description": "What the registry says of the name.",
+        "oneOf": [
+          {
+            "description": "Why: no RDAP for the TLD, or it did not answer.",
+            "properties": {
+              "read": {
+                "enum": [
+                  "not_read"
+                ],
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "read",
+              "why"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DomainRegistryRecord"
+              },
+              {
+                "properties": {
+                  "read": {
+                    "enum": [
+                      "read"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "read"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
+      },
+      "DomainRegistryRecord": {
+        "properties": {
+          "expires": {
+            "description": "Seconds since the epoch.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "nameservers": {
+            "description": "The delegation the registry holds — what a resolver follows.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "registrar": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "The RDAP server asked.",
+            "type": "string"
+          },
+          "statuses": {
+            "description": "EPP statuses as RDAP spells them: `client transfer prohibited`…",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expires",
+          "nameservers",
+          "registrar",
+          "source",
+          "statuses"
+        ],
+        "type": "object"
+      },
+      "DomainSeen": {
+        "description": "The last reading, judged.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AcmeAccountJudged"
+            },
+            "type": "array"
+          },
+          "advice": {
+            "items": {
+              "$ref": "#/components/schemas/DomainAdvice"
+            },
+            "type": "array"
+          },
+          "caa_governing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CaaGoverning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dns": {
+            "$ref": "#/components/schemas/DomainDnsRead"
+          },
+          "read_at": {
+            "description": "Seconds since the epoch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/DomainRegistry"
+          },
+          "stale": {
+            "description": "Older than `STALE_AFTER_S`: what it said still stands, the silence since is\nsaid too.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accounts",
+          "advice",
+          "caa_governing",
+          "dns",
+          "read_at",
+          "registry",
+          "stale"
+        ],
+        "type": "object"
+      },
       "DomainSummary": {
         "properties": {
           "concentrated": {
@@ -2797,6 +3468,66 @@
           "nodes"
         ],
         "type": "object"
+      },
+      "DomainView": {
+        "description": "The domain as its screen shows it: what the night recorded, judged by the rules\nthe inbox and `hlb domain watch` say it with.",
+        "oneOf": [
+          {
+            "description": "No exposure: nothing is published by name.",
+            "properties": {
+              "scope": {
+                "enum": [
+                  "no_exposure"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Served under the house's own root: no registry holds it, no public authority\ncertifies it, nothing to watch.",
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "scope": {
+                "enum": [
+                  "internal"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "domain",
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DomainPublic"
+              },
+              {
+                "properties": {
+                  "scope": {
+                    "enum": [
+                      "public"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "scope"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
       },
       "DriftHarm": {
         "description": "What a gap does to the app while it stands.\n\n🔴 Separate from `corrigible`: refusing to act is a decision, but what was refused\ncan still be an outage. Read from the refusal alone, a Garage that lost Fluxer's key\nwas painted green, and the issues list drops green — Fluxer ran 1/1 against\n`No such key` with the dashboard calm.",
@@ -8358,6 +9089,35 @@
           }
         },
         "summary": "The real backup coverage, app by app.",
+        "x-hlb-requires": "read"
+      }
+    },
+    "/api/domain": {
+      "get": {
+        "operationId": "domain",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "The house's domain: the last reading, what moved since the baseline, what the CAA\nlets each account do, and what the logs hold under a key the house does not.",
         "x-hlb-requires": "read"
       }
     },

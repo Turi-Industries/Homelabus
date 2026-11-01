@@ -827,8 +827,7 @@ pub async fn start(
                                     .await;
                             }
                             for d in found.drifts {
-                                let line =
-                                    format!("{}: was {}, now {}", d.what.label(), d.was, d.now);
+                                let line = d.line();
                                 tracing::error!("🔴 domain {line}");
                                 notif
                                     .tell(&hlb_notify::Notification::critical(

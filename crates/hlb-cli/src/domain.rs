@@ -119,7 +119,7 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                 day(baseline.read_at).unwrap_or_default()
             );
             for d in &drifts {
-                println!("  🔴 {}: was {}, now {}", d.what.label(), d.was, d.now);
+                println!("  🔴 {}", d.line());
             }
             Ok(ExitCode::FAILURE)
         }
@@ -140,7 +140,7 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                             day(b.read_at).unwrap_or_default()
                         );
                         for d in &drifts {
-                            println!("  {}: was {}, now {}", d.what.label(), d.was, d.now);
+                            println!("  {}", d.line());
                         }
                     }
                 }

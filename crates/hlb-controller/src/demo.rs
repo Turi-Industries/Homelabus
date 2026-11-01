@@ -398,6 +398,68 @@ pub fn protection(hostname: Option<&str>) -> Option<hlb_api::ProtectionLevel> {
     }
 }
 
+/// The domain's screen, judged by the real rules from a fabricated night: the demo has
+/// no exposure. One name server moved, a lock lifted, a renewal near, a signed zone
+/// that does not validate, a CAA naming no account — so its pin is advised — and a
+/// stranger's wildcard in the logs: each wording is on the screen the suite crawls.
+pub fn domain(now: i64) -> hlb_api::domain::DomainView {
+    use hlb_api::domain::{
+        Account, DnsSide, DomainPublic, DomainView, Governing, Issuance, Reading, Registry,
+        RegistryRecord, Transparency,
+    };
+    let caa = vec!["0 issue \"letsencrypt.org\"".to_string()];
+    let account = |who: &str, n: u32, wildcard: bool| Account {
+        who: who.into(),
+        issuer: "letsencrypt.org".into(),
+        uri: format!("https://acme-v02.api.letsencrypt.org/acme/acct/{n}"),
+        wildcard,
+    };
+    let read = |ns: &str, at: i64| Reading {
+        zone: "home.example".into(),
+        read_at: at,
+        dns: Ok(DnsSide::new(
+            vec!["ns1.desec.io".into(), ns.into()],
+            vec!["53307 13 2 3f6a815a28593ba6".into()],
+            false,
+            caa.clone(),
+        )),
+        registry: Registry::Read(RegistryRecord {
+            source: "https://rdap.example-registry.net/".into(),
+            registrar: Some("Example Registrar SAS".into()),
+            statuses: vec!["client delete prohibited".into()],
+            nameservers: vec!["ns1.desec.io".into(), "ns2.desec.org".into()],
+            expires: Some(now + 12 * 86_400),
+        }),
+        caa_governing: Some(Governing {
+            at: Some("home.example".into()),
+            records: caa.clone(),
+        }),
+        accounts: vec![
+            account("Caddy", 21_844_061, true),
+            account("Stalwart", 21_844_062, false),
+        ],
+    };
+    let baseline = read("ns2.desec.org", now - 40 * 86_400);
+    let reading = read("ns2.thief.example", now - 6 * 3_600);
+    let transparency = Transparency {
+        after: Some("8812345".into()),
+        foreign: vec![Issuance {
+            id: "8812346".into(),
+            names: vec!["*.home.example".into()],
+            issuer: "ZeroSSL".into(),
+            not_before: "2026-10-30T09:12:00Z".into(),
+            key: "9c1f".into(),
+        }],
+    };
+    DomainView::Public(Box::new(DomainPublic::judge(
+        "home.example",
+        Some(&reading),
+        Some(&baseline),
+        Ok(&transparency),
+        now,
+    )))
+}
+
 /// The Swarm side of a demo node, found by hostname in [`topology`].
 ///
 /// 🔴 It reads `topology()` rather than carrying a second list: the demonstration's

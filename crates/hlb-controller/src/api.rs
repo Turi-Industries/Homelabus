@@ -1010,6 +1010,29 @@ async fn exposure(
     )
 }
 
+/// The house's domain: the last reading, what moved since the baseline, what the CAA
+/// lets each account do, and what the logs hold under a key the house does not.
+#[utoipa::path(
+    get,
+    path = "/api/domain",
+    responses(
+        (status = 200, body = hlb_api::domain::DomainView)
+    ),
+    extensions(
+        ("x-hlb-requires" = json!("read"))
+    )
+)]
+async fn domain(
+    _auth: Authorized<CanRead>,
+    AxumState(s): AxumState<Arc<AppState>>,
+) -> ApiResult<hlb_api::domain::DomainView> {
+    let now = crate::auth::now();
+    match crate::domain::view(&s.state, now).await? {
+        hlb_api::domain::DomainView::NoExposure if s.demo => Ok(Json(crate::demo::domain(now))),
+        v => Ok(Json(v)),
+    }
+}
+
 /// The gaps between what should be running and what is running (batch 9.8).
 #[utoipa::path(
     get,
@@ -1701,6 +1724,7 @@ pub fn api() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(app_detail))
         .routes(routes!(drifts))
         .routes(routes!(exposure))
+        .routes(routes!(domain))
         .routes(routes!(installation_health))
         .routes(routes!(timeline))
         .routes(routes!(secret_rotation))

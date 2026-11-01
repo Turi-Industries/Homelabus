@@ -317,3 +317,61 @@ export function healthFinding(f: Schemas['HealthFinding']): string {
 	const _: never = f;
 	return _;
 }
+
+/** What a drift of the domain is of. */
+export const domainChange: Record<Schemas['DomainChange'], () => string> = {
+	ns: m.domain_change_ns,
+	ds: m.domain_change_ds,
+	validated: m.domain_change_validated,
+	caa: m.domain_change_caa,
+	registrar: m.domain_change_registrar,
+	statuses: m.domain_change_statuses,
+	delegation: m.domain_change_delegation
+};
+
+/** One side of a drift: a registrar is one name or none. */
+export function driftSide(s: Schemas['DomainDriftSide'], what: Schemas['DomainChange']): string {
+	switch (s.kind) {
+		case 'names':
+			if (s.names.length > 0) return s.names.join(', ');
+			return what === 'registrar' ? m.domain_not_named() : m.domain_none();
+		case 'validates':
+			return s.validates ? m.domain_validates() : m.domain_not_validating();
+	}
+	const _: never = s;
+	return _;
+}
+
+/** What the governing CAA lets an ACME account do. */
+export const caaVerdict: Record<Schemas['CaaVerdict'], () => string> = {
+	pinned: m.domain_verdict_pinned,
+	any_account: m.domain_verdict_any_account,
+	anyone: m.domain_verdict_anyone,
+	refused: m.domain_verdict_refused
+};
+
+/** Advice beside a reading; a pin's records are the page's to show. */
+export function domainAdvice(a: Schemas['DomainAdvice']): string {
+	switch (a.kind) {
+		case 'no_transfer_lock':
+			return m.domain_advice_no_transfer_lock();
+		case 'expires':
+			return a.days < 0 ? m.domain_advice_expired() : m.domain_advice_expires({ days: number(a.days) });
+		case 'not_signed':
+			return m.domain_advice_not_signed();
+		case 'signed_not_validating':
+			return m.domain_advice_signed_not_validating();
+		case 'no_caa':
+			return m.domain_advice_no_caa();
+		case 'pin':
+			switch (a.why) {
+				case 'no_authority':
+					return m.domain_advice_pin_no_authority({ at: a.at });
+				case 'no_account':
+					return m.domain_advice_pin_no_account({ at: a.at });
+			}
+			return a.why satisfies never;
+	}
+	const _: never = a;
+	return _;
+}

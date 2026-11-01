@@ -10,6 +10,7 @@ export const module: Module = {
 	icon: Shield,
 	pages: [
 		{ path: '/exposure', label: m.page_security_exposure, reads: ['/api/exposure'] },
+		{ path: '/domain', label: m.page_security_domain, reads: ['/api/domain'] },
 		{ path: '/secrets', label: m.page_security_secrets, reads: ['/api/secrets'] },
 		{ path: '/secrets/rotation', label: m.page_security_rotation, reads: ['/api/secrets/rotation'] }
 	],

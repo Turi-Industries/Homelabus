@@ -237,8 +237,42 @@ impl Moved {
 #[schema(as = DomainDrift)]
 pub struct Drift {
     pub what: Moved,
-    pub was: String,
-    pub now: String,
+    pub was: Side,
+    pub now: Side,
+}
+
+/// One side of a drift, as a value: the interface words it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[schema(as = DomainDriftSide)]
+pub enum Side {
+    /// Name servers, DS, CAA, statuses, a delegation; a registrar, one or none named.
+    Names {
+        names: Vec<String>,
+    },
+    Validates {
+        validates: bool,
+    },
+}
+
+impl Drift {
+    /// As the CLI and the notification print it.
+    pub fn line(&self) -> String {
+        let said = |s: &Side| match s {
+            Side::Names { names } if names.is_empty() && self.what == Moved::Registrar => {
+                "none named".to_string()
+            }
+            Side::Names { names } => list(names),
+            Side::Validates { validates: true } => "validates".into(),
+            Side::Validates { validates: false } => "does not validate".into(),
+        };
+        format!(
+            "{}: was {}, now {}",
+            self.what.label(),
+            said(&self.was),
+            said(&self.now)
+        )
+    }
 }
 
 /// What moved between the baseline and a reading. A half either could not read
@@ -246,28 +280,37 @@ pub struct Drift {
 /// renewal moves it.
 pub fn drifts(baseline: &Reading, now: &Reading) -> Vec<Drift> {
     let mut out = Vec::new();
-    let mut moved = |what: Moved, was: String, now: String| {
+    let mut moved = |what: Moved, was: Side, now: Side| {
         if was != now {
             out.push(Drift { what, was, now });
         }
     };
+    let names = |v: &[String]| Side::Names { names: v.to_vec() };
     if let (Ok(b), Ok(n)) = (&baseline.dns, &now.dns) {
-        moved(Moved::Ns, list(&b.ns), list(&n.ns));
-        moved(Moved::Ds, list(&b.ds), list(&n.ds));
-        moved(Moved::Validated, yes_no(b.validated), yes_no(n.validated));
-        moved(Moved::Caa, list(&b.caa), list(&n.caa));
+        moved(Moved::Ns, names(&b.ns), names(&n.ns));
+        moved(Moved::Ds, names(&b.ds), names(&n.ds));
+        moved(
+            Moved::Validated,
+            Side::Validates {
+                validates: b.validated,
+            },
+            Side::Validates {
+                validates: n.validated,
+            },
+        );
+        moved(Moved::Caa, names(&b.caa), names(&n.caa));
     }
     if let (Registry::Read(b), Registry::Read(n)) = (&baseline.registry, &now.registry) {
         moved(
             Moved::Registrar,
-            b.registrar.clone().unwrap_or_else(|| "none named".into()),
-            n.registrar.clone().unwrap_or_else(|| "none named".into()),
+            names(b.registrar.as_slice()),
+            names(n.registrar.as_slice()),
         );
-        moved(Moved::Statuses, list(&b.statuses), list(&n.statuses));
+        moved(Moved::Statuses, names(&b.statuses), names(&n.statuses));
         moved(
             Moved::Delegation,
-            list(&b.nameservers),
-            list(&n.nameservers),
+            names(&b.nameservers),
+            names(&n.nameservers),
         );
     }
     out
@@ -701,6 +744,127 @@ pub fn issuance_line(i: &Issuance) -> String {
     )
 }
 
+/// The domain as its screen shows it: what the night recorded, judged by the rules
+/// the inbox and `hlb domain watch` say it with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum DomainView {
+    /// No exposure: nothing is published by name.
+    NoExposure,
+    /// Served under the house's own root: no registry holds it, no public authority
+    /// certifies it, nothing to watch.
+    Internal {
+        domain: String,
+    },
+    Public(Box<DomainPublic>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DomainPublic {
+    /// The exposure's.
+    pub domain: String,
+    /// The reading's, or the exposure's domain before any.
+    pub zone: String,
+    /// `None`: never read.
+    pub reading: Option<DomainSeen>,
+    /// When the baseline was read; `None` while none was accepted for this zone.
+    pub baseline_at: Option<i64>,
+    /// What moved since the baseline; empty without one.
+    pub drifts: Vec<Drift>,
+    pub logs: CtWatch,
+}
+
+/// The last reading, judged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DomainSeen {
+    /// Seconds since the epoch.
+    pub read_at: i64,
+    /// Older than `STALE_AFTER_S`: what it said still stands, the silence since is
+    /// said too.
+    pub stale: bool,
+    pub dns: DomainDnsRead,
+    pub registry: Registry,
+    pub caa_governing: Option<Governing>,
+    pub accounts: Vec<AcmeAccountJudged>,
+    pub advice: Vec<Advice>,
+}
+
+/// The DNS half: read, or why not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case", tag = "read")]
+pub enum DomainDnsRead {
+    NotRead { why: String },
+    Read(DnsSide),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AcmeAccountJudged {
+    pub account: Account,
+    /// What the governing CAA lets it do; `None` when no resolver said which governs.
+    pub verdict: Option<Verdict>,
+}
+
+/// Where the watch over the Certificate Transparency logs stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case", tag = "watch")]
+pub enum CtWatch {
+    /// Its record could not be read.
+    Unread { why: String },
+    /// No baseline accepted: nothing is judged yet.
+    NotStarted,
+    /// Issuances under a key the house does not hold, kept until accepted.
+    Watched { foreign: Vec<Issuance> },
+}
+
+impl DomainPublic {
+    /// Judges what the night recorded. `baseline` counts for its own zone only;
+    /// `transparency` is `Err` when its record could not be read.
+    pub fn judge(
+        domain: &str,
+        reading: Option<&Reading>,
+        baseline: Option<&Reading>,
+        transparency: Result<&Transparency, String>,
+        now: i64,
+    ) -> Self {
+        let baseline = baseline.filter(|b| reading.is_none_or(|r| r.zone == b.zone));
+        Self {
+            domain: domain.to_string(),
+            zone: reading.map_or_else(|| domain.to_string(), |r| r.zone.clone()),
+            reading: reading.map(|r| DomainSeen {
+                read_at: r.read_at,
+                stale: now - r.read_at > crate::assertions::STALE_AFTER_S,
+                dns: match &r.dns {
+                    Ok(d) => DomainDnsRead::Read(d.clone()),
+                    Err(why) => DomainDnsRead::NotRead { why: why.clone() },
+                },
+                registry: r.registry.clone(),
+                caa_governing: r.caa_governing.clone(),
+                accounts: r
+                    .accounts
+                    .iter()
+                    .map(|a| AcmeAccountJudged {
+                        account: a.clone(),
+                        verdict: r.caa_governing.as_ref().map(|g| judge(&g.records, a)),
+                    })
+                    .collect(),
+                advice: advice(r, now),
+            }),
+            baseline_at: baseline.map(|b| b.read_at),
+            drifts: match (baseline, reading) {
+                (Some(b), Some(r)) => drifts(b, r),
+                _ => Vec::new(),
+            },
+            logs: match transparency {
+                Err(why) => CtWatch::Unread { why },
+                Ok(t) if t.after.is_none() => CtWatch::NotStarted,
+                Ok(t) => CtWatch::Watched {
+                    foreign: t.foreign.clone(),
+                },
+            },
+        }
+    }
+}
+
 /// A host name as compared: lower case, no final dot.
 fn host(n: &str) -> String {
     n.trim().trim_end_matches('.').to_ascii_lowercase()
@@ -724,10 +888,6 @@ fn list(v: &[String]) -> String {
     } else {
         v.join(", ")
     }
-}
-
-fn yes_no(b: bool) -> String {
-    if b { "validates" } else { "does not validate" }.into()
 }
 
 #[cfg(test)]
@@ -816,7 +976,19 @@ mod tests {
         let d = drifts(&before, &after);
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].what, Moved::Ns);
-        assert_eq!(d[0].now, "ns1.thief.example");
+        assert_eq!(
+            d[0].now,
+            Side::Names {
+                names: vec!["ns1.thief.example".into()]
+            }
+        );
+        assert_eq!(
+            d[0].line(),
+            format!(
+                "name servers: was {}, now ns1.thief.example",
+                list(&signed().ns)
+            )
+        );
     }
 
     #[test]
@@ -1148,5 +1320,109 @@ mod tests {
         t.advance(&[], vec![got[1].clone()]);
         assert_eq!(t.after.as_deref(), Some("17743719754"));
         assert_eq!(t.foreign.len(), 1);
+    }
+
+    fn ct(after: Option<&str>) -> Transparency {
+        Transparency {
+            after: after.map(String::from),
+            foreign: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_domain_never_read_shows_its_exposure_as_the_zone_and_nothing_judged() {
+        let p = DomainPublic::judge("home.example", None, None, Ok(&ct(None)), 0);
+        assert_eq!(p.zone, "home.example");
+        assert_eq!(p.reading, None);
+        assert_eq!(p.baseline_at, None);
+        assert_eq!(p.logs, CtWatch::NotStarted);
+    }
+
+    #[test]
+    fn the_view_carries_each_accounts_verdict_the_advice_and_the_drift() {
+        let baseline = Reading {
+            read_at: 10,
+            ..reading(signed(), locked())
+        };
+        let mut now = Reading {
+            read_at: 100,
+            caa_governing: Some(Governing {
+                at: None,
+                records: records(&["0 issue \"letsencrypt.org\""]),
+            }),
+            accounts: vec![account("Caddy", 1, false)],
+            ..reading(signed(), locked())
+        };
+        if let Ok(dns) = &mut now.dns {
+            dns.ns = vec!["ns1.thief.example".into()];
+        }
+        let p = DomainPublic::judge(
+            "home.example",
+            Some(&now),
+            Some(&baseline),
+            Ok(&ct(Some("7"))),
+            100,
+        );
+        assert_eq!(p.baseline_at, Some(10));
+        assert_eq!(p.drifts, drifts(&baseline, &now));
+        assert_eq!(p.drifts.len(), 1);
+        let seen = p.reading.expect("read");
+        assert!(!seen.stale);
+        assert_eq!(seen.accounts[0].verdict, Some(Verdict::AnyAccount));
+        assert_eq!(seen.advice, advice(&now, 100));
+        assert!(
+            matches!(seen.advice[..], [Advice::Pin { .. }]),
+            "{:?}",
+            seen.advice
+        );
+        assert_eq!(p.logs, CtWatch::Watched { foreign: vec![] });
+    }
+
+    #[test]
+    fn a_baseline_of_another_zone_compares_nothing_and_an_old_reading_is_stale() {
+        let other = Reading {
+            zone: "elsewhere.example".into(),
+            ..reading(signed(), locked())
+        };
+        let now = reading(
+            DnsSide::new(vec!["ns1.thief.example".into()], vec![], false, vec![]),
+            locked(),
+        );
+        let later = crate::assertions::STALE_AFTER_S + 1;
+        let p = DomainPublic::judge(
+            "home.example",
+            Some(&now),
+            Some(&other),
+            Err("locked".into()),
+            later,
+        );
+        assert_eq!(p.baseline_at, None);
+        assert!(p.drifts.is_empty());
+        assert!(p.reading.expect("read").stale);
+        assert_eq!(
+            p.logs,
+            CtWatch::Unread {
+                why: "locked".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_dns_half_not_read_says_why_and_no_verdict_without_a_governing_set() {
+        let r = Reading {
+            dns: Err("every resolver timed out".into()),
+            accounts: vec![account("Caddy", 1, false)],
+            ..reading(signed(), locked())
+        };
+        let seen = DomainPublic::judge("home.example", Some(&r), None, Ok(&ct(None)), 0)
+            .reading
+            .expect("read");
+        assert_eq!(
+            seen.dns,
+            DomainDnsRead::NotRead {
+                why: "every resolver timed out".into()
+            }
+        );
+        assert_eq!(seen.accounts[0].verdict, None);
     }
 }

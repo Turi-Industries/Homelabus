@@ -5,66 +5,81 @@
 //! prints with. A domain never read, or not lately, is `DomainUnknown`: a reading
 //! that is missing is not a domain that did not move.
 
-use hlb_api::assertions::STALE_AFTER_S;
+use hlb_api::domain::{CtWatch, DomainDnsRead, DomainPublic, DomainView, Verdict};
 use hlb_api::issues::{Cause, Finding};
 use hlb_api::Attention;
 use hlb_state::{Certificates, State};
 
+/// What the screen shows. A state that cannot be read is an error, never "no
+/// exposure"; only the logs' record, kept apart, is said unread on its own.
+pub async fn view(state: &State, now: i64) -> Result<DomainView, hlb_state::Error> {
+    let Some(exposure) = state.exposure().await? else {
+        return Ok(DomainView::NoExposure);
+    };
+    if exposure.certificates == Certificates::Internal {
+        return Ok(DomainView::Internal {
+            domain: exposure.domain,
+        });
+    }
+    let reading = state.domain_reading().await?;
+    let baseline = state.domain_baseline().await?;
+    let transparency = state.domain_transparency().await.map_err(|e| e.to_string());
+    Ok(DomainView::Public(Box::new(DomainPublic::judge(
+        &exposure.domain,
+        reading.as_ref(),
+        baseline.as_ref(),
+        transparency.as_ref().map_err(Clone::clone),
+        now,
+    ))))
+}
+
 /// Nothing without an exposure, or under the house's own root: no registry holds
 /// those names, and no public authority certifies them.
 pub async fn findings(state: &State, now: i64) -> Vec<Finding> {
-    let Ok(Some(exposure)) = state.exposure().await else {
-        return Vec::new();
-    };
-    if exposure.certificates == Certificates::Internal {
-        return Vec::new();
+    match view(state, now).await {
+        Ok(DomainView::Public(p)) => findings_of(&p),
+        Ok(DomainView::NoExposure | DomainView::Internal { .. }) => Vec::new(),
+        // Unreadable is not unmoved.
+        Err(_) => vec![(Cause::DomainUnknown, Attention::Notice, None)],
     }
+}
+
+/// The inbox's lines, from the view the screen shows: the two cannot disagree.
+fn findings_of(p: &DomainPublic) -> Vec<Finding> {
+    let zone = || Some(p.zone.clone());
     let mut out: Vec<Finding> = Vec::new();
-    let reading = state.domain_reading().await.ok().flatten();
-    let zone = reading
-        .as_ref()
-        .map_or(exposure.domain.clone(), |r| r.zone.clone());
-    match &reading {
-        Some(r) if now - r.read_at <= STALE_AFTER_S && r.dns.is_ok() => {}
-        _ => out.push((Cause::DomainUnknown, Attention::Notice, Some(zone.clone()))),
+    match &p.reading {
+        Some(r) if !r.stale && matches!(r.dns, DomainDnsRead::Read(_)) => {}
+        _ => out.push((Cause::DomainUnknown, Attention::Notice, zone())),
     }
-    if let Some(r) = &reading {
-        out.extend(hlb_api::domain::refused(r).into_iter().map(|a| {
-            (
-                Cause::CaaRefusesAccount,
-                Attention::Critical,
-                Some(a.who.clone()),
-            )
-        }));
-        let baseline = state
-            .domain_baseline()
-            .await
-            .ok()
-            .flatten()
-            .filter(|b| b.zone == r.zone);
-        match baseline {
-            None => out.push((
-                Cause::DomainUnwatched,
-                Attention::Notice,
-                Some(zone.clone()),
-            )),
-            Some(b) if !hlb_api::domain::drifts(&b, r).is_empty() => {
-                out.push((Cause::DomainMoved, Attention::Critical, Some(zone.clone())));
-            }
-            Some(_) => {}
+    if let Some(r) = &p.reading {
+        out.extend(
+            r.accounts
+                .iter()
+                .filter(|a| a.verdict == Some(Verdict::Refused))
+                .map(|a| {
+                    (
+                        Cause::CaaRefusesAccount,
+                        Attention::Critical,
+                        Some(a.account.who.clone()),
+                    )
+                }),
+        );
+        if p.baseline_at.is_none() {
+            out.push((Cause::DomainUnwatched, Attention::Notice, zone()));
+        } else if !p.drifts.is_empty() {
+            out.push((Cause::DomainMoved, Attention::Critical, zone()));
         }
     }
-    match state.domain_transparency().await {
-        Ok(t) if t.after.is_none() => {
-            out.push((Cause::DomainUnwatched, Attention::Notice, Some(zone)));
-        }
-        Ok(t) => out.extend(
-            t.foreign
-                .into_iter()
-                .flat_map(|i| i.names)
+    match &p.logs {
+        CtWatch::NotStarted => out.push((Cause::DomainUnwatched, Attention::Notice, zone())),
+        CtWatch::Watched { foreign } => out.extend(
+            foreign
+                .iter()
+                .flat_map(|i| i.names.clone())
                 .map(|name| (Cause::CertificateForeign, Attention::Critical, Some(name))),
         ),
-        Err(_) => out.push((Cause::DomainUnknown, Attention::Notice, Some(zone))),
+        CtWatch::Unread { .. } => out.push((Cause::DomainUnknown, Attention::Notice, zone())),
     }
     out
 }
@@ -72,6 +87,7 @@ pub async fn findings(state: &State, now: i64) -> Vec<Finding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hlb_api::assertions::STALE_AFTER_S;
     use hlb_api::domain::{DnsSide, Issuance, Reading, Registry, Transparency};
     use hlb_api::issues::group;
 
@@ -202,5 +218,27 @@ mod tests {
                 vec!["*.home.org".into(), "home.org".into()]
             )]
         );
+    }
+
+    #[test]
+    fn the_demonstration_shows_a_move_a_pin_and_a_stranger_s_certificate() {
+        use hlb_api::domain::{Advice, DomainView};
+        let DomainView::Public(p) = crate::demo::domain(1_800_000_000) else {
+            panic!("the demonstration's domain is public");
+        };
+        assert_eq!(p.drifts.len(), 1, "{:?}", p.drifts);
+        let seen = p.reading.as_ref().expect("read");
+        assert!(
+            seen.advice.iter().any(|a| matches!(a, Advice::Pin { .. })),
+            "{:?}",
+            seen.advice
+        );
+        assert!(matches!(&p.logs, CtWatch::Watched { foreign } if !foreign.is_empty()));
+        // What the inbox would say of it: each critical line the screen explains.
+        let said: Vec<Cause> = group(findings_of(&p))
+            .into_iter()
+            .map(|i| i.cause)
+            .collect();
+        assert_eq!(said, [Cause::DomainMoved, Cause::CertificateForeign]);
     }
 }

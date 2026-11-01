@@ -168,14 +168,12 @@ export function where(issue: Issue): string {
 		case 'mail_blocklists_refused':
 		case 'mail_waiting':
 			return '/apps/stalwart';
-		// No page reads the domain yet: the exposure is where its names are published,
-		// and `hlb domain watch` says the rest.
 		case 'domain_moved':
 		case 'caa_refuses_account':
 		case 'certificate_foreign':
 		case 'domain_unwatched':
 		case 'domain_unknown':
-			return '/exposure';
+			return '/domain';
 		case 'guide_blocking':
 		case 'guide_pending':
 			return '/todo';

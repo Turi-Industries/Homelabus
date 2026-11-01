@@ -273,7 +273,7 @@ opens alone in 38 s; after `update-initramfs -u` the hook reseals and it opens a
 the firmware's boot manager, both Tangs up, it waits — two minutes, nothing mounted —
 and the kit's key opens it; `bind-disk` run again at A, from that GRUB boot, reseals to
 three Tangs, and the third alone opens it.
-✅ Closed by the owner 2026-10-31. Left, each under its item below: the domain's screen,
+✅ Closed by the owner 2026-10-31. Left, each under its item below: ~~the domain's screen~~ (✅ 2026-11-01),
 WHOIS for the TLDs without RDAP (the owner's `.eu` among them), DANE/TLSA, the hidden
 Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
 (✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, `validationmethods`,
@@ -830,9 +830,15 @@ and what needs real hardware or a public domain to be measured.
     `domain_moved`, `caa_refuses_account` and `certificate_foreign` critical,
     `domain_unwatched` (no baseline, of the zone or of the logs) and `domain_unknown`
     (not read for two days, or no resolver answered) notices — judged from what the
-    night recorded, by the rules `hlb domain watch` prints with; filed under security,
-    leading to the exposure. Left: a screen; WHOIS for the TLDs without RDAP, parsed
-    per registry; the nightly pass not run on the lab, whose exposure is internal —
+    night recorded, by the rules `hlb domain watch` prints with; filed under security.
+    ✅ The screen, 2026-11-01 (`/domain`, `GET /api/domain`): one pure judgment
+    (`DomainPublic::judge`) of the reading, the baseline and the logs' watch, which the
+    inbox's lines are now derived from too — the screen and the inbox cannot disagree;
+    the moves, the baseline with `hlb domain accept --apply` to copy, the foreign
+    certificates, the advice with a pin's records, each account's CAA verdict, both
+    halves of the reading. A drift's sides are values (`Side`), worded by the
+    interface. The demonstration judges a fabricated night by the same rules. Left:
+    WHOIS for the TLDs without RDAP, parsed per registry; the nightly pass not run on the lab, whose exposure is internal —
     nothing to watch.
   - CAA with `accounturi`. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
     offline where no CA was to be reached): Caddy keeps its account in
