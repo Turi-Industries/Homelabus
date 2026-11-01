@@ -3370,15 +3370,18 @@
             ]
           },
           "source": {
-            "description": "The RDAP server asked.",
+            "description": "The RDAP server, or the WHOIS host, asked.",
             "type": "string"
           },
           "statuses": {
-            "description": "EPP statuses as RDAP spells them: `client transfer prohibited`…",
+            "description": "EPP statuses as RDAP spells them: `client transfer prohibited`… `None`: the\nregistry does not say (`.eu`'s WHOIS) — not a name without a lock.",
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [

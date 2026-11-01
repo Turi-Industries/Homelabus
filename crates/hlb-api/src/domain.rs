@@ -2,10 +2,12 @@
 //! talked into moving the name servers, a lock lifted, a transfer begun.
 //!
 //! A reading has two halves. The DNS's, from a public resolver — every TLD alike. The
-//! registry's, from RDAP where the TLD has one: `.eu`, `.de`, `.io`, `.be` and `.ch`
-//! have none (IANA's bootstrap, 2026-10-30), and `.eu`'s WHOIS shows no status at all,
-//! so that half is said "not read" rather than guessed. The first reading accepted is
-//! the baseline; each later one is compared with it.
+//! registry's, from RDAP where the TLD has one, and from the registry's WHOIS where it
+//! has none — `.eu`, `.de`, `.io`, `.be` and `.ch` (IANA's bootstrap, 2026-10-30). A
+//! WHOIS says less, and each says it its own way: `.eu`'s shows no status at all, so
+//! its statuses are unknown rather than empty; `.de`'s names no registrar; `.ch`'s
+//! answers registrars only, and is said not read. The first reading accepted is the
+//! baseline; each later one is compared with it.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -94,11 +96,12 @@ pub enum Registry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(as = DomainRegistryRecord)]
 pub struct RegistryRecord {
-    /// The RDAP server asked.
+    /// The RDAP server, or the WHOIS host, asked.
     pub source: String,
     pub registrar: Option<String>,
-    /// EPP statuses as RDAP spells them: `client transfer prohibited`…
-    pub statuses: Vec<String>,
+    /// EPP statuses as RDAP spells them: `client transfer prohibited`… `None`: the
+    /// registry does not say (`.eu`'s WHOIS) — not a name without a lock.
+    pub statuses: Option<Vec<String>>,
     /// The delegation the registry holds — what a resolver follows.
     pub nameservers: Vec<String>,
     /// Seconds since the epoch.
@@ -168,12 +171,142 @@ pub fn parse_rdap(source: &str, body: &serde_json::Value) -> (RegistryRecord, Op
         RegistryRecord {
             source: source.to_string(),
             registrar,
-            statuses,
+            statuses: Some(statuses),
             nameservers,
             expires: None,
         },
         expiry,
     )
+}
+
+/// The WHOIS host IANA names for a TLD: the `whois:` line of `whois.iana.org`'s answer.
+pub fn whois_server(iana: &str) -> Option<String> {
+    iana.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        let v = v.trim().to_ascii_lowercase();
+        // Read over plain TCP, so a host name and nothing else: whatever answered is
+        // not trusted to name an address or a port.
+        let host = !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+        (k.trim().eq_ignore_ascii_case("whois") && host).then_some(v)
+    })
+}
+
+/// What to send `server` for `name`. DENIC answers a bare name with its status alone;
+/// its name servers come with `-T dn,ace`.
+pub fn whois_query(server: &str, name: &str) -> String {
+    if server == "whois.denic.de" {
+        format!("-T dn,ace {name}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// A WHOIS answer for one name.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Whois {
+    /// The expiry is left to the caller, which parses dates.
+    Held(RegistryRecord, Option<String>),
+    /// The registry holds no such name: a parent may be the registered one.
+    NotHeld,
+    /// An answer that is no record: a refusal, a limit, a shape not known. Its first
+    /// line, said as the registry wrote it.
+    Unread(String),
+}
+
+/// A WHOIS answer, in the two shapes measured (2026-11-01): `key: value` lines —
+/// ICANN's (`.io`) and DENIC's — and EURid's and DNS Belgium's blocks, a heading
+/// followed by indented lines. Statuses are spelled as RDAP spells them, so a TLD
+/// gaining RDAP compares with the baseline WHOIS gave.
+pub fn parse_whois(source: &str, text: &str) -> Whois {
+    let mut domain = false;
+    let mut registrar = None;
+    let mut statuses: Option<Vec<String>> = None;
+    let mut nameservers = Vec::new();
+    let mut expiry = None;
+    let mut section = String::new();
+    let mut first = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('%')
+            || trimmed.starts_with('#')
+            || trimmed.starts_with(">>>")
+        {
+            continue;
+        }
+        first.get_or_insert(trimmed);
+        let indented = line.starts_with([' ', '\t']);
+        let (key, value) = match trimmed.split_once(':') {
+            Some((k, v)) => (k.trim().to_ascii_lowercase(), v.trim()),
+            None => (String::new(), trimmed),
+        };
+        if !indented {
+            section = if value.is_empty() {
+                key.clone()
+            } else {
+                String::new()
+            };
+        }
+        let status = |statuses: &mut Option<Vec<String>>, v: &str| {
+            statuses.get_or_insert_with(Vec::new).push(epp_words(v));
+        };
+        match (indented, section.as_str(), key.as_str()) {
+            (false, _, "domain" | "domain name") => domain = true,
+            (false, _, "status" | "domain status") => match value.to_ascii_lowercase().as_str() {
+                "available" | "free" => return Whois::NotHeld,
+                // DNS Belgium's: the name is taken, which is not an EPP status.
+                "not available" => {}
+                _ => status(&mut statuses, value),
+            },
+            (false, _, "registrar") if !value.is_empty() => registrar = Some(value.to_string()),
+            (false, _, "name server" | "nserver") => nameservers.extend(first_word(value)),
+            (false, _, "registry expiry date") => expiry = Some(value.to_string()),
+            (true, "registrar", "name") => registrar = Some(value.to_string()),
+            (true, "name servers" | "nameservers", _) => nameservers.extend(first_word(trimmed)),
+            (true, "flags", _) => status(&mut statuses, trimmed),
+            _ => {}
+        }
+    }
+    if !domain {
+        let first = first.unwrap_or("nothing");
+        let lower = first.to_ascii_lowercase();
+        return if lower.starts_with("domain not found") || lower.starts_with("no match") {
+            Whois::NotHeld
+        } else {
+            Whois::Unread(first.to_string())
+        };
+    }
+    Whois::Held(
+        RegistryRecord {
+            source: source.to_string(),
+            registrar,
+            statuses: statuses.map(|s| normalised(s.into_iter())),
+            nameservers: normalised(nameservers.into_iter()),
+            expires: None,
+        },
+        expiry,
+    )
+}
+
+/// `ns1.example (192.0.2.1)` → `ns1.example`.
+fn first_word(s: &str) -> Option<String> {
+    s.split_whitespace().next().map(host)
+}
+
+/// `clientTransferProhibited https://icann.org/epp#…` → `client transfer prohibited`,
+/// as RDAP spells it; `connect` stays.
+fn epp_words(s: &str) -> String {
+    let code = s.split_whitespace().next().unwrap_or("");
+    let mut out = String::new();
+    for c in code.chars() {
+        if c.is_ascii_uppercase() && !out.is_empty() {
+            out.push(' ');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// `fn` of a jCard: `["vcard", [["fn", {}, "text", "Name"], …]]`.
@@ -306,7 +439,10 @@ pub fn drifts(baseline: &Reading, now: &Reading) -> Vec<Drift> {
             names(b.registrar.as_slice()),
             names(n.registrar.as_slice()),
         );
-        moved(Moved::Statuses, names(&b.statuses), names(&n.statuses));
+        // A registry that does not say compares nothing, as a half not read.
+        if let (Some(b), Some(n)) = (&b.statuses, &n.statuses) {
+            moved(Moved::Statuses, names(b), names(n));
+        }
         moved(
             Moved::Delegation,
             names(&b.nameservers),
@@ -412,11 +548,12 @@ impl Advice {
 pub fn advice(r: &Reading, now: i64) -> Vec<Advice> {
     let mut out = Vec::new();
     if let Registry::Read(reg) = &r.registry {
-        // `server transfer prohibited` alone is a registry lock, which counts.
-        if !reg
+        // `server transfer prohibited` alone is a registry lock, which counts. Statuses
+        // the registry does not show advise nothing: the lock may be there.
+        if reg
             .statuses
-            .iter()
-            .any(|s| s.ends_with("transfer prohibited"))
+            .as_ref()
+            .is_some_and(|s| !s.iter().any(|s| s.ends_with("transfer prohibited")))
         {
             out.push(Advice::NoTransferLock);
         }
@@ -936,7 +1073,7 @@ mod tests {
         Registry::Read(RegistryRecord {
             source: "https://rdap.example/".into(),
             registrar: Some("Gandi SAS".into()),
-            statuses: vec!["client transfer prohibited".into()],
+            statuses: Some(vec!["client transfer prohibited".into()]),
             nameservers: vec!["ns1.desec.io".into(), "ns2.desec.org".into()],
             expires: Some(400 * 86_400),
         })
@@ -996,7 +1133,7 @@ mod tests {
         let before = reading(signed(), locked());
         let mut after = before.clone();
         if let Registry::Read(r) = &mut after.registry {
-            r.statuses = vec!["pending transfer".into()];
+            r.statuses = Some(vec!["pending transfer".into()]);
             r.registrar = Some("Elsewhere Ltd".into());
         }
         let whats: Vec<_> = drifts(&before, &after).iter().map(|d| d.what).collect();
@@ -1031,7 +1168,7 @@ mod tests {
         let r = reading(
             DnsSide::new(vec!["ns1.example".into()], vec![], false, vec![]),
             Registry::Read(RegistryRecord {
-                statuses: vec!["active".into()],
+                statuses: Some(vec!["active".into()]),
                 expires: Some(10 * 86_400),
                 ..match locked() {
                     Registry::Read(r) => r,
@@ -1055,7 +1192,7 @@ mod tests {
     fn a_registry_lock_counts_as_a_transfer_lock() {
         let mut r = reading(signed(), locked());
         if let Registry::Read(reg) = &mut r.registry {
-            reg.statuses = vec!["server transfer prohibited".into()];
+            reg.statuses = Some(vec!["server transfer prohibited".into()]);
         }
         assert!(advice(&r, 0).is_empty());
     }
@@ -1105,8 +1242,13 @@ mod tests {
         let (r, expiry) = parse_rdap("https://rdap.verisign.com/com/v1/", &body);
         assert_eq!(r.registrar.as_deref(), Some("MarkMonitor Inc."));
         assert_eq!(
-            r.statuses,
-            ["client delete prohibited", "client transfer prohibited"]
+            r.statuses.as_deref(),
+            Some(
+                &[
+                    "client delete prohibited".to_string(),
+                    "client transfer prohibited".into()
+                ][..]
+            )
         );
         assert_eq!(r.nameservers, ["ns1.google.com", "ns2.google.com"]);
         assert_eq!(expiry.as_deref(), Some("2028-09-14T04:00:00Z"));
@@ -1424,5 +1566,147 @@ mod tests {
             }
         );
         assert_eq!(seen.accounts[0].verdict, None);
+    }
+
+    /// Real answers, kept as the registries wrote them on 2026-11-01.
+    fn whois(name: &str) -> &'static str {
+        match name {
+            "eu" => include_str!("../tests/whois/eu.txt"),
+            "eu-free" => include_str!("../tests/whois/eu-free.txt"),
+            "eu-subdomain" => include_str!("../tests/whois/eu-subdomain.txt"),
+            "de" => include_str!("../tests/whois/de.txt"),
+            "de-free" => include_str!("../tests/whois/de-free.txt"),
+            "io" => include_str!("../tests/whois/io.txt"),
+            "io-free" => include_str!("../tests/whois/io-free.txt"),
+            "be" => include_str!("../tests/whois/be.txt"),
+            "ch" => include_str!("../tests/whois/ch.txt"),
+            "iana-eu" => include_str!("../tests/whois/iana-eu.txt"),
+            other => panic!("no answer kept for {other}"),
+        }
+    }
+
+    fn held(answer: &str, source: &str) -> (RegistryRecord, Option<String>) {
+        match parse_whois(source, whois(answer)) {
+            Whois::Held(r, e) => (r, e),
+            other => panic!("{answer}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iana_names_each_tld_s_whois_and_denic_is_asked_for_its_name_servers() {
+        assert_eq!(whois_server(whois("iana-eu")).as_deref(), Some("whois.eu"));
+        assert_eq!(whois_server("% nothing here"), None);
+        assert_eq!(whois_server("whois: 192.0.2.1:8080"), None);
+        assert_eq!(
+            whois_query("whois.denic.de", "home.de"),
+            "-T dn,ace home.de"
+        );
+        assert_eq!(whois_query("whois.eu", "home.eu"), "home.eu");
+    }
+
+    #[test]
+    fn eurid_names_the_registrar_and_the_delegation_and_no_status() {
+        let (r, expiry) = held("eu", "whois.eu");
+        assert_eq!(r.registrar.as_deref(), Some("ClearMedia NV"));
+        assert_eq!(r.statuses, None, "EURid shows none: unknown, not empty");
+        assert!(r.nameservers.contains(&"ns1bru.europa.eu".to_string()));
+        assert!(r.nameservers.contains(&"ans1.cw.net".to_string()));
+        // Listed once per address, kept once.
+        assert_eq!(
+            r.nameservers
+                .iter()
+                .filter(|n| *n == "ns3bru.europa.eu")
+                .count(),
+            1
+        );
+        assert_eq!(expiry, None);
+        let read = Reading {
+            registry: Registry::Read(r),
+            ..reading(signed(), locked())
+        };
+        assert!(
+            !advice(&read, 0).contains(&Advice::NoTransferLock),
+            "a lock nobody shows is not a lock missing"
+        );
+    }
+
+    #[test]
+    fn denic_gives_its_status_and_name_servers_and_no_registrar() {
+        let (r, _) = held("de", "whois.denic.de");
+        assert_eq!(r.registrar, None);
+        assert_eq!(r.statuses, Some(vec!["connect".to_string()]));
+        assert_eq!(
+            r.nameservers,
+            [
+                "ns1.denic.de",
+                "ns2.denic.de",
+                "ns3.denic.de",
+                "ns4.denic.net"
+            ]
+        );
+    }
+
+    #[test]
+    fn icann_s_format_gives_the_locks_as_rdap_spells_them_and_the_expiry() {
+        let (r, expiry) = held("io", "whois.nic.io");
+        assert_eq!(
+            r.statuses,
+            Some(vec![
+                "server delete prohibited".to_string(),
+                "server transfer prohibited".into(),
+                "server update prohibited".into()
+            ])
+        );
+        assert_eq!(
+            r.registrar.as_deref(),
+            Some("Registry Operator acts as Registrar (9999)")
+        );
+        assert_eq!(expiry.as_deref(), Some("2027-05-01T00:00:02Z"));
+        assert!(!r.nameservers.is_empty());
+    }
+
+    #[test]
+    fn dns_belgium_s_flags_are_its_statuses_and_taken_is_not_one() {
+        let (r, _) = held("be", "whois.dns.be");
+        assert_eq!(r.registrar.as_deref(), Some("DNS BE vzw/asbl"));
+        assert_eq!(
+            r.statuses,
+            Some(vec![
+                "client transfer prohibited".to_string(),
+                "server transfer prohibited".into()
+            ])
+        );
+        assert_eq!(
+            r.nameservers,
+            ["ns1.dns.be", "ns2.dns.be", "ns3.dns.be", "ns5.dns.be"]
+        );
+    }
+
+    #[test]
+    fn a_free_name_is_not_held_and_a_refusal_is_said_as_written() {
+        for free in ["eu-free", "de-free", "io-free"] {
+            assert_eq!(parse_whois("x", whois(free)), Whois::NotHeld, "{free}");
+        }
+        assert_eq!(
+            parse_whois("whois.nic.ch", whois("ch")),
+            Whois::Unread(
+                "Requests of this client are not permitted. Please use https://www.nic.ch/whois/ for queries."
+                    .into()
+            )
+        );
+        assert!(matches!(
+            parse_whois("whois.eu", whois("eu-subdomain")),
+            Whois::Unread(_)
+        ));
+    }
+
+    #[test]
+    fn statuses_a_registry_does_not_show_compare_nothing() {
+        let before = reading(signed(), locked());
+        let mut after = before.clone();
+        if let Registry::Read(r) = &mut after.registry {
+            r.statuses = None;
+        }
+        assert!(drifts(&before, &after).is_empty());
     }
 }

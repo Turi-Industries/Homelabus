@@ -1,0 +1,80 @@
+% The WHOIS service offered by EURid and the access to the records
+% in the EURid WHOIS database are provided for information purposes
+% only. It allows persons to check whether a specific domain name
+% is still available or not and to obtain information related to
+% the registration records of existing domain names.
+%
+% EURid cannot, under any circumstances, be held liable in case the
+% stored information would prove to be wrong, incomplete or not
+% accurate in any sense.
+%
+% By submitting a query, you agree not to use the information made
+% available to:
+%
+% - allow, enable or otherwise support the transmission of unsolicited,
+%   commercial advertising or other solicitations whether via email or
+%   otherwise;
+% - target advertising in any possible way;
+% - cause nuisance in any possible way by sending messages to registrants,
+%   whether by automated, electronic processes capable of enabling
+%   high volumes or by other possible means.
+%
+% Without prejudice to the above, it is explicitly forbidden to extract,
+% copy and/or use or re-utilise in any form and by any means
+% (electronically or not) the whole or a quantitatively or qualitatively
+% substantial part of the contents of the WHOIS database without prior
+% and explicit permission by EURid, nor in any attempt hereof, to apply
+% automated, electronic processes to EURid (or its systems).
+%
+% You agree that any reproduction and/or transmission of data for
+% commercial purposes will always be considered as the extraction of a
+% substantial part of the content of the WHOIS database.
+%
+% By submitting the query, you agree to abide by this policy and accept
+% that EURid can take measures to limit the use of its WHOIS services
+% to protect the privacy of its registrants or the integrity
+% of the database.
+%
+% The EURid WHOIS service on port 43 (textual WHOIS) never discloses
+% any information concerning the registrant.
+% Registrant and on-site contact information can be obtained through use of the
+% web-based WHOIS service available from the EURid website www.eurid.eu
+%
+% WHOIS europa.eu
+Domain: europa.eu
+Script: LATIN
+
+Registrant:
+        NOT DISCLOSED!
+        Visit www.eurid.eu for the web-based WHOIS.
+
+Technical:
+        Organisation: ClearMedia NV
+        Language: nl
+        Email: support@clearmedia.be
+
+Registrar:
+        Name: ClearMedia NV
+        Website: https://www.clearmedia.be
+
+Name servers:
+        ns3bru.europa.eu (2a01:7080:14:101::2)
+        ns3bru.europa.eu (147.67.250.4)
+        ns2lux.europa.eu (147.67.12.3)
+        ns1bru.europa.eu (147.67.250.2)
+        ns3lux.europa.eu (2a01:7080:24:101::2)
+        ns3lux.europa.eu (147.67.12.4)
+        ns1lux.europa.eu (147.67.12.2)
+        ans2.cw.net
+        ns4az1.europa.eu (2a05:d018:c5f:3701:cc8a:9177:b28:c034)
+        ns4az1.europa.eu (54.154.94.36)
+        ns4az2.europa.eu (2a05:d018:c5f:3702:4df4:7b41:c0a1:34e4)
+        ns4az2.europa.eu (34.255.155.194)
+        ans1.cw.net
+        ns2bru.europa.eu (147.67.250.3)
+
+Keys:
+        flags:KSK protocol:3 algorithm:RSA_SHA256 pubKey:AwEAAfKX5A/wIWblwrXsFCDw8WSAZUaxRmB5tQSlhAiTVkPNwhgcCE5ockRYQey6kdPX6YyVw7fDIAZQjzg5efHoKXzvaRWMK1XC09NXrIrnIkLVE7c6twDnEJBAd61kGablPeKR8sVOOJ7yFiISioat+t5woQCozU9c9w8RNKKHFuhdlega9qsWxxqaRI36ok6cFmEEPpOtEatgL7JoG4hnHf5UqcNbVb08F3Em0W+7WfcpPKXpWs437Q2GydKRoxg6kwxI/pOtzNxQVS8DNEE4XMTqP3SwkUuVMeqKWUYzrIE9wzzmGRff/9xjAzhC76XfCr1KTmd3WnINMDE4rtDacJE=
+        flags:KSK protocol:3 algorithm:RSA_SHA256 pubKey:AwEAAd6ILwCObzteZw4iDDFF5Ab0GGaEvtogmEvjNeZyjczgtq641zpu38BNDMmgRM6tDqoYtphAoqWjEUkI8XiTYW6go+VGtqY06VDdX5+Hl0l2YOAAxKUo6EYlB9nos5wzKD5FeEYaBP2UCmyzk1hZyfTIOcLXkZt1uUQF7l3MmQ1ETB38pOvbwxU0EQVKuG9YmKKogjW7Ujab4JFIVxqyN+Fxhh7isrceHce0ITryL8e64wVwX9GQNA3zLxK7XQvOJswv82ebYwsl8PmIRwi7hkpJMuz+oQe/i5E6xLpAXRfCDENrcHgXi9FbRmC9Vk9RVU82BpYfrsoNZSNSeRDrJl5iftwtacOpf+QvaI1je7O5cd0VwehjteT9Rfs0Gx27WlZ7KBw7ZurwLdosvNUjKzzvLpmUiKvEyicmgZ+5cGYSTAIdhcAri+mKVpN776qeF2v6fOSEtHFK/Bpu7HMO6FQ3e7KtFiQPMdYe6WSaXODA1EoVHX2IcSNhxnMuhvt7QUaPLVfs0kbzhd2XlZH56D07kLLNAsnwl6ZeBnoqbe/vlio8/HXzDFlPmWTTUqLbPNdx0kfqbQEmkc1IRHnB0upy6/Vve86K9cl4FBW2eYdWZprm2c+ZdEJXsVAGo3w4LutKFjHLweABS0y/BNQN0a0Ga8GVTzmKK9csklZRqj3d
+
+Please visit www.eurid.eu for more info.

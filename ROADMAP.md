@@ -274,7 +274,7 @@ the firmware's boot manager, both Tangs up, it waits — two minutes, nothing mo
 and the kit's key opens it; `bind-disk` run again at A, from that GRUB boot, reseals to
 three Tangs, and the third alone opens it.
 ✅ Closed by the owner 2026-10-31. Left, each under its item below: ~~the domain's screen~~ (✅ 2026-11-01),
-WHOIS for the TLDs without RDAP (the owner's `.eu` among them), DANE/TLSA, the hidden
+~~WHOIS for the TLDs without RDAP~~ (✅ 2026-11-01, `.eu` shows no lock), DANE/TLSA, the hidden
 Knot primary with secondaries of the house's own, ~~the sealed kit mailed at each seal~~
 (✅ 2026-11-01), ~~the nodes screen showing each level~~ (✅ 2026-11-01), the SLSA provenance of three images, `validationmethods`,
 and what needs real hardware or a public domain to be measured.
@@ -837,8 +837,16 @@ and what needs real hardware or a public domain to be measured.
     the moves, the baseline with `hlb domain accept --apply` to copy, the foreign
     certificates, the advice with a pin's records, each account's CAA verdict, both
     halves of the reading. A drift's sides are values (`Side`), worded by the
-    interface. The demonstration judges a fabricated night by the same rules. Left:
-    WHOIS for the TLDs without RDAP, parsed per registry; the nightly pass not run on the lab, whose exposure is internal —
+    interface. The demonstration judges a fabricated night by the same rules.
+    ✅ WHOIS for the TLDs without RDAP, 2026-11-01: the host IANA's WHOIS names, asked
+    on port 43 for the zone then each parent; two shapes parsed — `key: value` (ICANN's,
+    `.io`; DENIC's, asked `-T dn,ace`) and EURid's and DNS Belgium's indented blocks —
+    statuses spelled as RDAP spells them. **Measured**: `.eu` registrar and delegation,
+    NO status — unknown now (`statuses: None`), never advised as a missing lock nor
+    compared; `.de` `connect` and the delegation, no registrar; `.be` its `Flags` as
+    statuses; `.ch` refuses anyone but a registrar, said not read in its own words.
+    The real answers are kept (`hlb-api/tests/whois/`); `live_whois` reads them again.
+    Left: the nightly pass not run on the lab, whose exposure is internal —
     nothing to watch.
   - CAA with `accounturi`. **Measured** 2026-10-30 (`hlb-caddy:dev`, Pebble 2.8.0,
     offline where no CA was to be reached): Caddy keeps its account in

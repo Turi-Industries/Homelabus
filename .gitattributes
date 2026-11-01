@@ -10,3 +10,6 @@
 web/openapi.json linguist-generated=true
 Cargo.lock linguist-generated=true -diff
 web/bun.lock linguist-generated=true -diff
+
+# WHOIS answers as the registries wrote them, CRLF included: the parser reads both.
+crates/hlb-api/tests/whois/*.txt -text

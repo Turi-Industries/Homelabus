@@ -40,7 +40,7 @@ sha1 = "0.11"
 sha2 = "0.11"
 rustls-pemfile = "2"
 # Waiting for Caddy's update to conclude.
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "net", "io-util"] }
 # A guide's `sql` automation reaches the app's database through `hlb_guide::SqlWriter`.
 async-trait.workspace = true
 # The domain's registry, read over RDAP (`domain.rs`).

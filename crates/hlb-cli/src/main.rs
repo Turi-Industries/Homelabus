@@ -1561,7 +1561,7 @@ enum RelayCmd {
 enum DomainCmd {
     /// Read the zone holding the exposure's domain — NS, DS, DNSSEC validation and CAA
     /// from a public resolver; registrar, locks, delegation and expiry from the
-    /// registry's RDAP, where its TLD has one — record it, and compare it with the
+    /// registry's RDAP, or its WHOIS where the TLD has no RDAP — record it, and compare it with the
     /// baseline; and the certificates the Certificate Transparency logs hold for its
     /// names since the last night, judged by whether the house holds their key. Exits 1
     /// on anything moved, a certificate under another key, or with no baseline.

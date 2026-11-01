@@ -218,7 +218,10 @@ fn print(r: &Reading, unread: &[String], now: i64) {
                 "registrar",
                 reg.registrar.as_deref().unwrap_or("not named")
             );
-            line("statuses", &reg.statuses);
+            match &reg.statuses {
+                Some(s) => line("statuses", s),
+                None => println!("  {:<13} not shown by the registry", "statuses"),
+            }
             line("delegation", &reg.nameservers);
             if let Some(e) = reg.expires.and_then(day) {
                 println!("  {:<13} {e}", "expires");

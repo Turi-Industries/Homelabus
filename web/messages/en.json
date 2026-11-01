@@ -2231,5 +2231,6 @@
 	"domain_advice_no_caa": "No CAA: any certificate authority may issue for it.",
 	"domain_advice_pin_no_authority": "No CAA names an authority, so any may issue for the house's names. These records at {at}, in place of its issue ones, let the house's accounts alone:",
 	"domain_advice_pin_no_account": "The CAA names no account, so anyone's at the same authority may issue. These records at {at}, in place of its issue ones, let the house's accounts alone:",
-	"domain_pin_wildcard": "{who}, its wildcard"
+	"domain_pin_wildcard": "{who}, its wildcard",
+	"domain_statuses_unshown": "not shown by the registry"
 }

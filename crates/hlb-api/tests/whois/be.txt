@@ -1,0 +1,71 @@
+% .be Whois Server 6.1
+%
+% The WHOIS service offered by DNS Belgium and the access to the records in the DNS Belgium
+% WHOIS database are provided for information purposes only. It allows
+% persons to check whether a specific domain name is still available or not
+% and to obtain information related to the registration records of
+% existing domain names.
+%
+% DNS Belgium cannot, under any circumstances, be held liable where the stored
+% information would prove to be incomplete or inaccurate in any sense.
+%
+% By submitting a query you agree not to use the information made available
+% to:
+%   - allow, enable or otherwise support the transmission of unsolicited,
+%     commercial advertising or other solicitations whether via email or otherwise;
+%   - target advertising in any possible way;
+%   - to cause nuisance in any possible way to the domain name holders by sending 
+%     messages to them (whether by automated, electronic processes capable of
+%     enabling high volumes or other possible means).
+% 
+% Without prejudice to the above, it is explicitly forbidden to extract, copy
+% and/or use or re-utilise in any form and by any means (electronically or
+% not) the whole or a quantitatively or qualitatively substantial part
+% of the contents of the WHOIS database without prior and explicit permission
+% by DNS Belgium, nor in any attempt thereof, to apply automated, electronic
+% processes to DNS Belgium (or its systems).
+%
+% You agree that any reproduction and/or transmission of data for commercial
+% purposes will always be considered as the extraction of a substantial
+% part of the content of the WHOIS database.
+%
+% By submitting the query you agree to abide by this policy and accept that
+% DNS Belgium can take measures to limit the use of its whois services in order to
+% protect the privacy of its registrants or the integrity of the database.
+%
+
+Domain:	dns.be
+Status:	NOT AVAILABLE
+Registered:	Mon Jan 1 1996
+
+Registrant:
+	Not shown, please visit www.dnsbelgium.be for webbased whois.
+
+Registrar Technical Contacts:
+	Organisation:	DNS Belgium vzw
+	Language:	en
+	Phone:	+32.16284970
+
+
+Registrar:
+	Name:	DNS BE vzw/asbl
+	Website:	http://www.dns.be
+
+Nameservers:
+	ns1.dns.be (52.213.12.197)
+	ns1.dns.be (2a05:d018:48e:3d06:0:0:0:10)
+	ns2.dns.be (18.195.220.217)
+	ns2.dns.be (2a05:d014:15b:7f06:0:0:0:10)
+	ns3.dns.be (192.174.68.100)
+	ns3.dns.be (2001:67c:1bc:0:0:0:0:100)
+	ns5.dns.be (194.0.25.43)
+	ns5.dns.be (2001:678:20:0:0:0:0:43)
+
+Keys:
+	keyTag:60273 flags:KSK protocol:3 algorithm:ECDSAP256SHA256 pubKey:DCMdQ9Jw7ZYbXY7vJ/mIX9YSPpoQshrfENbHhsUHf9GHoP7qN5zzm4uGiKiVNS+M80qo0KCzzehgNTf/mKB/mg==
+
+Flags:
+	clientTransferProhibited
+	serverTransferProhibited
+
+Please visit www.dnsbelgium.be for more info.

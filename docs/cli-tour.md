@@ -491,8 +491,9 @@ to add:
 ```
 
 The domain itself is watched the same night: its name servers, DS, DNSSEC and CAA as
-the internet resolves them, its registrar, locks and expiry from the registry's RDAP
-where its TLD publishes one. A theft through a registrar's support moves these first;
+the internet resolves them, its registrar, locks and expiry from the registry's RDAP —
+or its WHOIS where the TLD publishes no RDAP, which says less: `.eu`'s shows no lock,
+`.de`'s no registrar, and `.ch`'s answers registrars only. A theft through a registrar's support moves these first;
 once a reading is accepted, any change is a critical alert. Under Let's Encrypt it also
 reads the house's ACME accounts — Caddy's from its storage, Stalwart's over JMAP — and
 judges the CAA governing the exposure's names against them: one it refuses is critical

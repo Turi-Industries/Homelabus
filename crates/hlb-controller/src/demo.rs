@@ -426,7 +426,7 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
         registry: Registry::Read(RegistryRecord {
             source: "https://rdap.example-registry.net/".into(),
             registrar: Some("Example Registrar SAS".into()),
-            statuses: vec!["client delete prohibited".into()],
+            statuses: Some(vec!["client delete prohibited".into()]),
             nameservers: vec!["ns1.desec.io".into(), "ns2.desec.org".into()],
             expires: Some(now + 12 * 86_400),
         }),

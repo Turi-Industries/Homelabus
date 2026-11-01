@@ -2,11 +2,14 @@
 //! daemon's night. What is compared and advised is `hlb_api::domain`'s.
 
 use async_trait::async_trait;
-use hlb_api::domain::{Account, DnsSide, Governing, Issuance, Reading, Registry};
+use hlb_api::domain::{Account, DnsSide, Governing, Issuance, Reading, Registry, Whois};
 use hlb_state::{Certificates, State};
 
 /// IANA's list of the RDAP server of each TLD.
 pub const RDAP_BOOTSTRAP: &str = "https://data.iana.org/rdap/dns.json";
+
+/// IANA's WHOIS: asked a TLD, it names the registry's WHOIS host.
+pub const IANA_WHOIS: &str = "whois.iana.org";
 
 /// Where a reading comes from. A trait so a reading is tried without the internet.
 #[async_trait]
@@ -16,6 +19,8 @@ pub trait Internet: Send + Sync {
     /// A JSON document; `Ok(None)` for a 404, which RDAP answers for a name it does not
     /// hold.
     async fn json(&self, url: &str) -> Result<Option<serde_json::Value>, String>;
+    /// One WHOIS question (RFC 3912) to `server`'s port 43: the answer as written.
+    async fn whois(&self, server: &str, query: &str) -> Result<String, String>;
 }
 
 /// The public resolvers `hlb mail dns` asks, and HTTPS.
@@ -67,6 +72,33 @@ impl Internet for Public {
         serde_json::from_slice(&body)
             .map(Some)
             .map_err(|e| e.to_string())
+    }
+
+    async fn whois(&self, server: &str, query: &str) -> Result<String, String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // A record is a few kilobytes; whatever runs past this is not one.
+        const MAX: u64 = 1024 * 1024;
+        let ask = async {
+            let mut s = tokio::net::TcpStream::connect((server, 43))
+                .await
+                .map_err(|e| e.to_string())?;
+            s.write_all(format!("{query}\r\n").as_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut body = Vec::new();
+            s.take(MAX + 1)
+                .read_to_end(&mut body)
+                .await
+                .map_err(|e| e.to_string())?;
+            if body.len() as u64 > MAX {
+                return Err(format!("an answer larger than {MAX} bytes, not read"));
+            }
+            Ok(String::from_utf8_lossy(&body).into_owned())
+        };
+        // The server ends its answer by closing: one that never does is no answer.
+        tokio::time::timeout(std::time::Duration::from_secs(20), ask)
+            .await
+            .map_err(|_| "no answer within 20 s".to_string())?
     }
 }
 
@@ -459,9 +491,7 @@ async fn registry(net: &dyn Internet, zone: &str) -> Registry {
         Err(e) => return not_read(format!("IANA's RDAP list not read: {e}")),
     };
     let Some(base) = hlb_api::domain::rdap_base(&bootstrap, tld) else {
-        return not_read(format!(
-            "no RDAP for .{tld}: its registry publishes none, and its WHOIS is not read"
-        ));
+        return whois(net, zone, tld).await;
     };
     let base = format!("{}/", base.trim_end_matches('/'));
     let labels: Vec<&str> = zone.split('.').collect();
@@ -483,6 +513,43 @@ async fn registry(net: &dyn Internet, zone: &str) -> Registry {
     not_read(format!("{base} holds no name of {zone}"))
 }
 
+/// The registry's WHOIS, for a TLD with no RDAP: the host IANA names, asked for the
+/// zone and then each parent, as RDAP is.
+async fn whois(net: &dyn Internet, zone: &str, tld: &str) -> Registry {
+    let not_read = |why: String| Registry::NotRead { why };
+    let server = match net.whois(IANA_WHOIS, tld).await {
+        Ok(iana) => match hlb_api::domain::whois_server(&iana) {
+            Some(s) => s,
+            None => return not_read(format!("no RDAP for .{tld}, and IANA names no WHOIS")),
+        },
+        Err(e) => return not_read(format!("no RDAP for .{tld}, and {IANA_WHOIS}: {e}")),
+    };
+    let labels: Vec<&str> = zone.split('.').collect();
+    let mut why = None;
+    for start in 0..labels.len().saturating_sub(1) {
+        let name = labels[start..].join(".");
+        let text = match net
+            .whois(&server, &hlb_api::domain::whois_query(&server, &name))
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => return not_read(format!("{server}: {e}")),
+        };
+        match hlb_api::domain::parse_whois(&server, &text) {
+            Whois::Held(mut record, expiry) => {
+                record.expires = expiry
+                    .and_then(|d| chrono::DateTime::parse_from_rfc3339(&d).ok())
+                    .map(|d| d.timestamp());
+                return Registry::Read(record);
+            }
+            Whois::NotHeld => {}
+            // EURid answers a name below a registered one so: its parent may be held.
+            Whois::Unread(first) => why = Some(format!("{server} answered: {first}")),
+        }
+    }
+    not_read(why.unwrap_or_else(|| format!("{server} holds no name of {zone}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +561,7 @@ mod tests {
     struct Table {
         dns: HashMap<(String, String), (Vec<String>, bool)>,
         http: HashMap<String, serde_json::Value>,
+        whois: HashMap<(String, String), String>,
         fails: bool,
     }
 
@@ -508,6 +576,12 @@ mod tests {
 
         fn page(mut self, url: &str, body: serde_json::Value) -> Self {
             self.http.insert(url.into(), body);
+            self
+        }
+
+        fn whois(mut self, server: &str, query: &str, answer: &str) -> Self {
+            self.whois
+                .insert((server.into(), query.into()), answer.into());
             self
         }
     }
@@ -527,6 +601,13 @@ mod tests {
 
         async fn json(&self, url: &str) -> Result<Option<serde_json::Value>, String> {
             Ok(self.http.get(url).cloned())
+        }
+
+        async fn whois(&self, server: &str, query: &str) -> Result<String, String> {
+            self.whois
+                .get(&(server.into(), query.into()))
+                .cloned()
+                .ok_or_else(|| format!("connection refused by {server}"))
         }
     }
 
@@ -556,21 +637,65 @@ mod tests {
         let Registry::Read(reg) = r.registry else {
             panic!("the registry was not read: {:?}", r.registry)
         };
-        assert_eq!(reg.statuses, ["client transfer prohibited"]);
+        assert_eq!(
+            reg.statuses,
+            Some(vec!["client transfer prohibited".to_string()])
+        );
         assert_eq!(reg.expires, Some(1_893_456_000));
     }
 
+    /// The registries' real answers, kept by `hlb-api`.
+    fn kept(name: &str) -> &'static str {
+        match name {
+            "iana-eu" => include_str!("../../hlb-api/tests/whois/iana-eu.txt"),
+            "eu" => include_str!("../../hlb-api/tests/whois/eu.txt"),
+            "eu-subdomain" => include_str!("../../hlb-api/tests/whois/eu-subdomain.txt"),
+            "ch" => include_str!("../../hlb-api/tests/whois/ch.txt"),
+            other => panic!("no answer kept for {other}"),
+        }
+    }
+
     #[tokio::test]
-    async fn a_tld_without_rdap_is_said_not_read_and_its_dns_still_is() {
+    async fn a_tld_without_rdap_is_read_from_the_whois_iana_names_as_its_parent() {
         let net = Table::default()
+            .record("lab.europa.eu", "NS", &["ns1.example."], false)
+            .page(RDAP_BOOTSTRAP, bootstrap())
+            .whois(IANA_WHOIS, "eu", kept("iana-eu"))
+            .whois("whois.eu", "lab.europa.eu", kept("eu-subdomain"))
+            .whois("whois.eu", "europa.eu", kept("eu"));
+        let r = read(&net, "lab.europa.eu", 0).await;
+        assert!(r.dns.is_ok());
+        let Registry::Read(reg) = r.registry else {
+            panic!("the WHOIS was not read: {:?}", r.registry)
+        };
+        assert_eq!(reg.source, "whois.eu");
+        assert_eq!(reg.registrar.as_deref(), Some("ClearMedia NV"));
+        assert_eq!(reg.statuses, None);
+    }
+
+    #[tokio::test]
+    async fn a_whois_refusing_or_silent_is_said_not_read_with_its_reason() {
+        let iana_ch =
+            "refer:        whois.nic.ch\n\ndomain:       CH\nwhois:        whois.nic.ch\n";
+        let refused = Table::default()
+            .record("home.ch", "NS", &["ns1.example."], false)
+            .page(RDAP_BOOTSTRAP, bootstrap())
+            .whois(IANA_WHOIS, "ch", iana_ch)
+            .whois("whois.nic.ch", "home.ch", kept("ch"));
+        let Registry::NotRead { why } = read(&refused, "home.ch", 0).await.registry else {
+            panic!("read a registry that refused")
+        };
+        assert!(
+            why.contains("whois.nic.ch answered: Requests of this client are not permitted"),
+            "{why}"
+        );
+        let silent = Table::default()
             .record("home.eu", "NS", &["ns1.example."], false)
             .page(RDAP_BOOTSTRAP, bootstrap());
-        let r = read(&net, "home.eu", 0).await;
-        assert!(r.dns.is_ok());
-        let Registry::NotRead { why } = r.registry else {
-            panic!("read a registry that has no RDAP")
+        let Registry::NotRead { why } = read(&silent, "home.eu", 0).await.registry else {
+            panic!("read a registry nobody answered for")
         };
-        assert!(why.contains("no RDAP for .eu"), "{why}");
+        assert!(why.contains("no RDAP for .eu, and whois.iana.org"), "{why}");
     }
 
     #[tokio::test]

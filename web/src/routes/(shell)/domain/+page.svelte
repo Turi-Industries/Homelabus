@@ -58,7 +58,7 @@
 			<dl>
 				{@render field(m.domain_registry_source(), seen.registry.source)}
 				{@render field(m.domain_registrar(), seen.registry.registrar ?? m.domain_not_named())}
-				{@render field(m.domain_statuses(), list(seen.registry.statuses))}
+				{@render field(m.domain_statuses(), seen.registry.statuses === null ? m.domain_statuses_unshown() : list(seen.registry.statuses))}
 				{@render field(m.domain_delegation(), list(seen.registry.nameservers))}
 				{#if seen.registry.expires !== null}{@render field(m.domain_expires(), when(seen.registry.expires))}{/if}
 			</dl>
