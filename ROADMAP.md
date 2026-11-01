@@ -1340,7 +1340,12 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    until the entrypoint's upgrade path recreates one. Proven on
    the catalog's image the same way: healthy under the catalog's probe,
    `mariadb-check --all-databases --extended` clean, every row; live, no prepared
-   `mariadb_backup_checkpoints` — fails first. Left: the lab.
+   `mariadb_backup_checkpoints` — fails first. **On the lab**: `hlb upgrade mariadb
+   --apply` (still 11.8: the copy runs in the server's own image), the pass in 7.7 s
+   to both destinations; snapshot `88c1fb67` restored into a throwaway volume and
+   started with no network: `log-applied`, the probe healthy with no upgrade run,
+   Seafile's three databases with every table (13, 46, 127, as live),
+   `mariadb-check --extended` 0.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000
