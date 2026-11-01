@@ -372,6 +372,13 @@ the outside, which is the whole problem.
   rehearsal: the new shares were never tried. 🔴 It counts while the FAMILY's copy is
   current (`FAMILY_KIT`, its own fingerprint), not the owner's: one plain kit printed
   after a new destination made the safeguard green over a sealed kit that predates it.
+- **The sealed kit is MAILED to each relative at every seal** (`hlb_engine::family`),
+  from `noreply@` (reserved: nobody's mailbox), one message each — none learns the
+  others' addresses — and destroyed in the sending account once submitted
+  (`onSuccessDestroyEmail`), so no Sent folder holds it. An address of the house's own
+  domain is refused: that copy would go down with the house. A relative not reached
+  fails the run — the kit is written all the same — and with the kit on standard
+  output every line about the mail goes to stderr, or `> kit.age` stops opening.
 - **`hlb secrets-rekey` never races the controller.** It holds the old key in memory and
   writes secrets under it: refused while its Swarm service runs, `--apply` requires
   `--controller-stopped` for one run by hand, and the rewrite is a compare-and-swap

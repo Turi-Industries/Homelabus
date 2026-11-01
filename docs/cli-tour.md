@@ -140,13 +140,17 @@ new destination makes the printed one stale, and the recovery screen says so.
 The family without the owner: the kit's key split among relatives, any three of five
 opening the kit sealed to it, fewer nothing. A share is a printed sheet, typed back in
 modhex (the same keys on any layout); the sealed kit is a file safe to send to them all,
-sealed again after any change without a share moving. Combining needs no state and no
-vault, so it runs on a relative's laptop; without `--kit` it only checks the shares.
+sealed again after any change without a share moving — and mailed, each time, to every
+relative named, at an address of their own outside the house. Combining needs no state
+and no vault, so it runs on a relative's laptop; without `--kit` it only checks the shares.
 
 ```sh
+./target/debug/hlb emergency relatives add lena@example.net   # --apply; every sealed kit is mailed to them
+./target/debug/hlb emergency relatives list
+./target/debug/hlb emergency relatives remove lena@example.net   # --apply; what they hold stays theirs
 ./target/debug/hlb emergency split --out /tmp/family        # share-1.txt … share-5.txt, kit.age
 ./target/debug/hlb emergency split --threshold 2 --shares 3 --out /tmp/family --replace
-./target/debug/hlb emergency kit --sealed --out /tmp/kit.age   # after a change: send it again
+./target/debug/hlb emergency kit --sealed --out /tmp/kit.age   # after a change: mailed to each relative
 ./target/debug/hlb emergency combine                         # type 3 shares: do they open it?
 ./target/debug/hlb emergency combine --kit kit.age --out kit.txt
 ./target/debug/hlb emergency rehearsed cbde-fghi-jkln-rtuv   # the code that ends the opened kit

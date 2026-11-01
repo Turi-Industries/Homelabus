@@ -810,6 +810,36 @@ impl State {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Adds a relative the sealed kit is mailed to; `false` when already there.
+    pub async fn add_relative(&self, address: &str) -> Result<bool> {
+        let r = sqlx::query(
+            "INSERT INTO relatives (address, added)
+             VALUES (?1, CAST(strftime('%s','now') AS INTEGER)) ON CONFLICT DO NOTHING",
+        )
+        .bind(address)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    /// `false` when `address` was not a relative.
+    pub async fn remove_relative(&self, address: &str) -> Result<bool> {
+        let r = sqlx::query("DELETE FROM relatives WHERE address = ?1")
+            .bind(address)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    /// The relatives, in the order they were added.
+    pub async fn relatives(&self) -> Result<Vec<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT address FROM relatives ORDER BY added, address")
+                .fetch_all(&self.pool)
+                .await?,
+        )
+    }
+
     /// Holds `services` stopped for `secs`: reconciliation leaves them as they are.
     pub async fn hold_services(&self, services: &[String], why: &str, secs: i64) -> Result<()> {
         for s in services {

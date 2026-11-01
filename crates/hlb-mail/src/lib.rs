@@ -66,6 +66,9 @@
 use serde::{Deserialize, Serialize};
 
 pub mod public_dns;
+mod send;
+
+pub use send::{Attachment, Outgoing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

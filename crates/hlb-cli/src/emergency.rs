@@ -10,7 +10,9 @@ use hlb_bitwarden::emergency::Verdict;
 use hlb_engine::emergency::{EmergencyVault, Report};
 use hlb_engine::roles::Outcome;
 
-use crate::{open_state, open_vault, relay, Cli, EmergencyCmd, ACTOR_ROLE};
+use crate::{
+    mail_admin, open_state, open_vault, relay, Cli, EmergencyCmd, RelativesCmd, ACTOR_ROLE,
+};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -26,6 +28,152 @@ pub async fn run(cli: &Cli, cmd: &EmergencyCmd) -> Result<ExitCode> {
         } => split(cli, *threshold, *shares, out, *replace).await,
         EmergencyCmd::Combine { kit, out } => combine(kit.as_deref(), out.as_deref()),
         EmergencyCmd::Rehearsed { code } => rehearsed(cli, code).await,
+        EmergencyCmd::Relatives(cmd) => relatives(cli, cmd).await,
+    }
+}
+
+/// The domain the house sends from: the one its mail is configured with, else its
+/// exposure's.
+async fn mail_domain(state: &hlb_state::State) -> Result<Option<String>> {
+    if let Ok(d) = std::env::var("HLB_MAIL_DOMAIN") {
+        return Ok(Some(d));
+    }
+    Ok(state.exposure().await?.map(|e| e.domain))
+}
+
+async fn relatives(cli: &Cli, cmd: &RelativesCmd) -> Result<ExitCode> {
+    let state = open_state(cli).await?;
+    let list = state.relatives().await?;
+    let (address, apply, adding) = match cmd {
+        RelativesCmd::List => {
+            if list.is_empty() {
+                println!("No relative: a sealed kit is mailed to nobody.");
+                println!("  hlb emergency relatives add <address> --apply");
+            } else {
+                println!("Every sealed kit is mailed to:");
+                for a in &list {
+                    println!("  {a}");
+                }
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        RelativesCmd::Add { address, apply } => (address.trim(), *apply, true),
+        RelativesCmd::Remove { address, apply } => (address.trim(), *apply, false),
+    };
+    let known = list.iter().any(|a| a.eq_ignore_ascii_case(address));
+    if adding {
+        if let Some(why) =
+            hlb_engine::family::address_refusal(address, mail_domain(&state).await?.as_deref())
+        {
+            eprintln!("🔴 {why}");
+            return Ok(ExitCode::FAILURE);
+        }
+        if known {
+            println!("{address} is a relative already.");
+            return Ok(ExitCode::SUCCESS);
+        }
+    } else if !known {
+        eprintln!("🔴 {address} is not a relative — `hlb emergency relatives list` names them.");
+        return Ok(ExitCode::FAILURE);
+    }
+    let (verb, action) = if adding {
+        ("mail every sealed kit to", "relative-add")
+    } else {
+        ("stop mailing the sealed kit to", "relative-remove")
+    };
+    if !apply {
+        println!("Preview — {verb} {address}");
+        if !adding {
+            println!(
+                "⚠️ the kits they already received stay theirs: a sealed kit cannot be called back"
+            );
+        }
+        println!("\nRe-run with --apply to apply it.");
+        state
+            .audit("cli", ACTOR_ROLE, action, address, "preview", None)
+            .await?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if adding {
+        state.add_relative(address).await?;
+    } else {
+        // The stored spelling, which may differ in case from the one typed.
+        let stored = list.iter().find(|a| a.eq_ignore_ascii_case(address));
+        state
+            .remove_relative(stored.map_or(address, String::as_str))
+            .await?;
+    }
+    state
+        .audit("cli", ACTOR_ROLE, action, address, "ok", None)
+        .await?;
+    println!("✓ {verb} {address}");
+    if adding {
+        println!(
+            "The next sealed kit reaches them: `hlb emergency kit --sealed --out kit.age` \
+             sends today's."
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Mails the sealed kit to every relative and says how each went. `false` when one
+/// was not sent: the kit is written all the same, and the owner sends it by hand.
+async fn mail_relatives(
+    cli: &Cli,
+    state: &hlb_state::State,
+    sealed: &hlb_engine::family::Sealed<'_>,
+    kit_on_stdout: bool,
+) -> Result<bool> {
+    // 🔴 With the kit on standard output, a line here would land inside the file
+    // `> kit.age` writes: the relatives would get a kit that no longer opens.
+    let say = |l: String| {
+        if kit_on_stdout {
+            eprintln!("{l}");
+        } else {
+            println!("{l}");
+        }
+    };
+    let mail = mail_admin(cli);
+    let domain = mail_domain(state).await?;
+    match hlb_engine::family::mail_kit(state, mail.as_ref(), domain.as_deref(), sealed).await {
+        Ok(sent) if sent.is_empty() => {
+            say(
+                "No relative to mail it to: `hlb emergency relatives add <address> --apply` \
+                 sends every sealed kit to each."
+                    .into(),
+            );
+            Ok(true)
+        }
+        Ok(sent) => {
+            let mut all = true;
+            for s in &sent {
+                let outcome = if s.outcome.is_ok() { "ok" } else { "failed" };
+                state
+                    .audit(
+                        "cli",
+                        ACTOR_ROLE,
+                        "kit-mailed",
+                        &s.to,
+                        outcome,
+                        Some(sealed.fingerprint),
+                    )
+                    .await?;
+                match &s.outcome {
+                    Ok(_) => say(format!("✓ mailed to {}", s.to)),
+                    Err(e) => {
+                        all = false;
+                        eprintln!("✗ not mailed to {} — {e}", s.to);
+                    }
+                }
+            }
+            // Handed to Stalwart is not delivered: its queue says what never left.
+            say("`hlb mail queue` says any that has not left the house within the hour.".into());
+            Ok(all)
+        }
+        Err(why) => {
+            eprintln!("🔴 {why}");
+            Ok(false)
+        }
     }
 }
 
@@ -158,6 +306,24 @@ async fn kit(cli: &Cli, out: Option<&Path>, sealed: bool) -> Result<ExitCode> {
             )
             .await?;
     }
+    let mut mailed = true;
+    if let Some(split) = &split {
+        mailed = mail_relatives(
+            cli,
+            &state,
+            &hlb_engine::family::Sealed {
+                installation: &state.brand().await?.name,
+                split_id: &split.id(),
+                threshold: split.threshold,
+                count: split.count,
+                fingerprint: &kit.fingerprint,
+                printed: &printed,
+                kit: &sheet,
+            },
+            out.is_none(),
+        )
+        .await?;
+    }
     match (out, &split) {
         (Some(path), None) => println!(
             "The kit is in {} (fingerprint {}): print it, keep the sheet away from \
@@ -175,7 +341,11 @@ async fn kit(cli: &Cli, out: Option<&Path>, sealed: bool) -> Result<ExitCode> {
         ),
         (None, _) => {}
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(if mailed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -> Result<ExitCode> {
@@ -262,7 +432,26 @@ async fn split(cli: &Cli, threshold: u8, count: u8, out: &Path, replace: bool) -
     );
     println!("Then delete the directory. After any change to the kit, send them");
     println!("`hlb emergency kit --sealed --out kit.age`; their shares stay as they are.");
-    Ok(ExitCode::SUCCESS)
+    let mailed = mail_relatives(
+        cli,
+        &state,
+        &hlb_engine::family::Sealed {
+            installation: &installation,
+            split_id: &record.id(),
+            threshold,
+            count,
+            fingerprint: &kit.fingerprint,
+            printed: &printed,
+            kit: &sealed,
+        },
+        false,
+    )
+    .await?;
+    Ok(if mailed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 async fn rehearsed(cli: &Cli, code: &str) -> Result<ExitCode> {

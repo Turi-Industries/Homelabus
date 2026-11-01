@@ -1505,6 +1505,27 @@ enum EmergencyCmd {
         /// As read off the opened kit: four groups of four letters.
         code: String,
     },
+    /// The relatives every sealed kit is mailed to, at an address of their own outside
+    /// the house — mailed by `kit --sealed` and `split` each time.
+    #[command(subcommand)]
+    Relatives(RelativesCmd),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RelativesCmd {
+    List,
+    /// Preview by default.
+    Add {
+        address: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Preview by default. Their copies already sent stay theirs.
+    Remove {
+        address: String,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5096,6 +5117,25 @@ fn open_vault(cli: &Cli) -> Result<Vault, Box<dyn std::error::Error>> {
     Ok(Vault::open_or_init(&cli.master_key)?)
 }
 
+/// Stalwart's administrator, when its URL and credentials are given; `None` otherwise,
+/// and what needs mail says so rather than pretending.
+pub(crate) fn mail_admin(cli: &Cli) -> Option<hlb_mail::Stalwart> {
+    match (
+        &cli.stalwart_url,
+        &cli.stalwart_admin,
+        &cli.stalwart_password,
+    ) {
+        (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
+            relay::reach(u, &cli.platform_network),
+            hlb_mail::Auth::Basic {
+                user: a.clone(),
+                password: p.clone(),
+            },
+        )),
+        _ => None,
+    }
+}
+
 /// Opens the state, creating it only where [`Cli::may_create_state`] allows.
 async fn open_state(cli: &Cli) -> Result<State, Box<dyn std::error::Error>> {
     if !cli.state.exists() && !cli.may_create_state {
@@ -5280,20 +5320,7 @@ async fn execute_plan(
 
     // Stalwart: same rule as the others. Without credentials, mailbox
     // provisioning stays "unimplemented", never simulated.
-    let mail = match (
-        &cli.stalwart_url,
-        &cli.stalwart_admin,
-        &cli.stalwart_password,
-    ) {
-        (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
-            relay::reach(u, &cli.platform_network),
-            hlb_mail::Auth::Basic {
-                user: a.clone(),
-                password: p.clone(),
-            },
-        )),
-        _ => None,
-    };
+    let mail = mail_admin(cli);
 
     // The guides' `api` steps reach each app by its overlay name: through a relay here.
     let network = cli.platform_network.clone();
@@ -7566,20 +7593,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         .map(|e| e.domain)
                         .unwrap_or_else(|| "local".into()),
                 };
-                let mail = match (
-                    &cli.stalwart_url,
-                    &cli.stalwart_admin,
-                    &cli.stalwart_password,
-                ) {
-                    (Some(u), Some(a), Some(p)) => Some(hlb_mail::Stalwart::new(
-                        relay::reach(u, &cli.platform_network),
-                        hlb_mail::Auth::Basic {
-                            user: a.clone(),
-                            password: p.clone(),
-                        },
-                    )),
-                    _ => None,
-                };
+                let mail = mail_admin(&cli);
 
                 match cmd {
                     UserCmd::Invite { role, uses, days, note, apply } => {

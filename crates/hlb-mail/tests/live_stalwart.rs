@@ -514,7 +514,7 @@ async fn an_app_account_sends_on_submission_as_itself_only() {
             if s.ping().await.is_ok() {
                 return s;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            std::thread::sleep(std::time::Duration::from_secs(1));
         }
         panic!("Stalwart did not answer");
     };
@@ -691,5 +691,115 @@ async fn a_device_password_opens_calendars_and_contacts_until_revoked() {
         .expect("listed")
         .is_empty());
     println!("✓ revoked: refused at once, gone from the list");
+    stop();
+}
+
+/// One JMAP request as the administrator, its answers' arguments in order.
+async fn jmap(calls: serde_json::Value) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{PORT}/jmap/"))
+        .basic_auth("admin", Some(ADMIN_PASSWORD))
+        .json(&serde_json::json!({
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": calls,
+        }))
+        .send()
+        .await
+        .expect("jmap")
+        .json()
+        .await
+        .expect("json");
+    v["methodResponses"]
+        .as_array()
+        .expect("answers")
+        .iter()
+        .map(|r| r[1].clone())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn the_house_sends_a_file_and_keeps_no_copy() {
+    // The family's sealed kit leaves this way: written into the house's own account by
+    // the administrator, submitted, and destroyed there — a Sent folder holding the
+    // kit would be one more place to read it from.
+    let s = start();
+    let sender = s
+        .ensure_account("noreply@example.org", "a-sender-password-123456", &[])
+        .await
+        .expect("sender");
+    let relative = s
+        .ensure_account("camille@example.org", "a-relative-password-12345", &[])
+        .await
+        .expect("relative");
+    let kit = b"-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24=\n-----END AGE ENCRYPTED FILE-----\n";
+    s.send(&hlb_mail::Outgoing {
+        from: "noreply@example.org",
+        from_name: "Homelabus",
+        reply_to: Some("postmaster@example.org"),
+        to: "camille@example.org",
+        subject: "The house's emergency kit",
+        text: "Keep this message.",
+        attachment: Some(hlb_mail::Attachment {
+            name: "kit.age",
+            mime: "application/octet-stream",
+            bytes: kit,
+        }),
+    })
+    .await
+    .expect("submitted");
+
+    let mut got = None;
+    for _ in 0..30 {
+        let a = jmap(serde_json::json!([
+            ["Email/query", { "accountId": relative.account_id }, "0"],
+            ["Email/get", { "accountId": relative.account_id,
+                "#ids": { "resultOf": "0", "name": "Email/query", "path": "/ids" },
+                "properties": ["subject", "from", "replyTo", "attachments"] }, "1"],
+        ]))
+        .await;
+        if let Some(m) = a[1]["list"].as_array().and_then(|l| l.first()) {
+            got = Some(m.clone());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let m = got.expect("delivered");
+    assert_eq!(m["subject"], "The house's emergency kit");
+    assert_eq!(m["replyTo"][0]["email"], "postmaster@example.org");
+    let blob = m["attachments"][0]["blobId"].as_str().expect("attached");
+    let bytes = reqwest::Client::new()
+        .get(format!(
+            "http://127.0.0.1:{PORT}/jmap/download/{}/{blob}/kit.age",
+            relative.account_id
+        ))
+        .basic_auth("admin", Some(ADMIN_PASSWORD))
+        .send()
+        .await
+        .expect("download")
+        .bytes()
+        .await
+        .expect("bytes");
+    assert_eq!(&bytes[..], &kit[..], "the file arrives as it left");
+
+    let left = jmap(serde_json::json!([[
+        "Email/query", { "accountId": sender.account_id }, "0"
+    ]]))
+    .await;
+    assert_eq!(left[0]["ids"], serde_json::json!([]), "no copy kept");
+
+    // An address the house holds no account for sends nothing.
+    let refused = s
+        .send(&hlb_mail::Outgoing {
+            from: "nobody@example.org",
+            from_name: "x",
+            reply_to: None,
+            to: "camille@example.org",
+            subject: "x",
+            text: "x",
+            attachment: None,
+        })
+        .await;
+    assert!(refused.is_err());
     stop();
 }

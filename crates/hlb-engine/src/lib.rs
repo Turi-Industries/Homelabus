@@ -13,6 +13,7 @@ pub mod access;
 pub mod devices;
 pub mod domain;
 pub mod emergency;
+pub mod family;
 pub mod ingress;
 pub mod install;
 pub mod jobs;
