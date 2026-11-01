@@ -1306,6 +1306,16 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    --app stalwart --force`, two destinations, `nas` and `rest`): SMTP on port 25 stopped
    answering for **5.0 s** (probed every 0.5 s), the pass took 8.3 s — against senders
    that retry for days, so the stop stays. Released after: reconciliation sees no gap.
+   ✅ `garage-meta` decided 2026-11-01 (owner, on the drill): **no longer backed up.**
+   Its blocks are not, so a restored `meta` names objects whose bytes are gone. Drilled
+   on deb1 first: Garage's service and both volumes deleted, then `hlb install garage`,
+   `hlb garage init`, `hlb redeploy fluxer` (its four buckets and a new key, the vault
+   updated — 71 actions) and `hlb backup restore fluxer fluxer`: 4 objects of 4, md5
+   identical, the attachment served through Caddy by Fluxer's media proxy. 🔴 Found on
+   the way: **nothing notices a Garage that lost an app's buckets or key** — Fluxer ran
+   1/1 against `No such key` until the redeploy, reconciliation saw no gap, and
+   `hlb upgrade` says "nothing to apply". Left: that drift found by reconciliation and
+   named with its fix, and the four commands in the generated runbook.
 
 **The sessions themselves.**
 - ✅ `interface.md` (36,187 characters) and `operations.md` (36,862), near the 40,000

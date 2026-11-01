@@ -11,16 +11,17 @@ spec:
   requires:
     # Metadata: which objects exist, where, with what permissions.
     #
-    # 🔴 Backed up, and it is the part that counts. Losing it makes the data unreadable
-    # even if the blocks are intact: Garage would no longer know which block belongs to
-    # which object. It is the equivalent of a library catalogue.
+    # NOT backed up: it indexes blocks that are not backed up either, so a copy put
+    # back onto an empty Garage names objects whose bytes are gone — worse than empty.
+    # What it holds comes back without it: `hlb redeploy <app>` makes each app's buckets
+    # and key again, and the bucket's own archive puts the objects back (drilled on the
+    # lab 2026-11-01: Garage's two volumes deleted, Fluxer's objects back byte for byte
+    # and served). Copied live it was an LMDB caught mid-write besides.
     - kind: storage
       name: meta
       path: /var/lib/garage/meta
       tier: local
-      backup: true
-      # An LMDB database, not SQLite — the flag does not apply, but the principle does:
-      # stopping the service before copying stays the only way to be consistent.
+      backup: false
 
     # The data blocks themselves.
     #
