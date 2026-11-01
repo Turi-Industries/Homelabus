@@ -267,11 +267,15 @@ pub async fn start(
     // The platform's admin credentials live in the vault, generated at install: a flag
     // still wins, but none is needed for what Homelabus installed itself.
     let mut ntfy_account = None;
+    // Reconciliation reads Garage's buckets and keys with it: what Garage lost of an
+    // app is no service's gap, and nothing else would say it.
+    let mut garage_admin = None;
     if cfg.master_key.exists() {
         if let Ok(vault) = hlb_secrets::Vault::open(&cfg.master_key) {
             match hlb_engine::access::from_vault(&state, &vault).await {
                 Ok(a) => {
                     ntfy_account = a.ntfy_publisher.clone();
+                    garage_admin = a.garage_admin.clone();
                     if cfg.postgres_admin.is_none() {
                         cfg.postgres_admin = a.postgres_admin;
                     }
@@ -379,12 +383,17 @@ pub async fn start(
     let reconciled: super::LastReconciled =
         Arc::new(std::sync::atomic::AtomicI64::new(crate::now()));
     if let Some(orch) = orchestrator {
-        let rl = Arc::new(
-            super::ReconcileLoop::new(orch, state.clone())
-                .apply(cfg.reconcile_apply)
-                .published_in(drift_state.clone())
-                .reports_to(reconciled.clone()),
-        );
+        let mut rl = super::ReconcileLoop::new(orch, state.clone())
+            .apply(cfg.reconcile_apply)
+            .published_in(drift_state.clone())
+            .reports_to(reconciled.clone());
+        if let Some((url, token)) = garage_admin {
+            rl = rl.with_store(
+                Arc::new(hlb_objstore::Garage::new(url, token)),
+                hlb_secrets::Vault::open(&cfg.master_key).ok().map(Arc::new),
+            );
+        }
+        let rl = Arc::new(rl);
         let rx = shutdown_rx.clone();
         let mirror = cfg.git_mirror.clone();
         let st = state.clone();

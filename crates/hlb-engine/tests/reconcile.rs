@@ -852,3 +852,170 @@ async fn a_service_held_for_a_copy_is_left_stopped_until_the_hold_lapses() {
         .expect("release");
     assert_eq!(s.held("gitea").await.expect("read"), None);
 }
+
+/// A Garage answering what it was given, or failing as told.
+struct Store(Result<hlb_objstore::Inventory, String>);
+
+#[async_trait]
+impl hlb_engine::reconcile::StoreInventory for Store {
+    async fn inventory(&self) -> Result<hlb_objstore::Inventory, String> {
+        self.0.clone()
+    }
+}
+
+fn held(buckets: &[&str], keys: &[(&str, &str)]) -> Store {
+    Store(Ok(hlb_objstore::Inventory {
+        buckets: buckets.iter().map(|b| b.to_string()).collect(),
+        keys: keys
+            .iter()
+            .map(|(n, i)| (n.to_string(), i.to_string()))
+            .collect(),
+    }))
+}
+
+const FLUXER: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: fluxer }
+spec:
+  image: { repo: fluxer/api, tag: "1" }
+  requires:
+    - kind: object-storage
+    - kind: object-storage
+      bucket: fluxer-uploads
+    - kind: object-storage
+      bucket: fluxer-staging
+      backup: false
+"#;
+
+/// Fluxer running, its key id `GKfluxer` in the vault as provisioning leaves it.
+async fn state_with_running_fluxer(dir: &std::path::Path) -> (State, hlb_secrets::Vault) {
+    let s = State::in_memory().await.unwrap();
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(FLUXER).unwrap();
+    s.upsert_app("fluxer", &m, None).await.unwrap();
+    s.set_app_status("fluxer", "running").await.unwrap();
+    let v = hlb_secrets::Vault::open_or_init(dir.join("k.key")).unwrap();
+    s.store_secret_if_absent(
+        &hlb_types::capability::s3_key_secrets("fluxer").0,
+        &v.encrypt("GKfluxer").unwrap(),
+        "S3 access key id",
+    )
+    .await
+    .unwrap();
+    (s, v)
+}
+
+fn fluxer_runs() -> Fake {
+    Fake::with(vec![svc("fluxer", "fluxer/api:1", 1, 1)])
+}
+
+#[tokio::test]
+async fn an_app_whose_buckets_and_key_garage_holds_has_no_storage_drift() {
+    let dir = tempfile::tempdir().unwrap();
+    let (s, v) = state_with_running_fluxer(dir.path()).await;
+    let o = fluxer_runs();
+    let g = held(
+        &["fluxer", "fluxer-uploads", "fluxer-staging"],
+        &[("fluxer", "GKfluxer")],
+    );
+    let report = Reconciler::new(&o, &s)
+        .with_store(&g, Some(&v))
+        .reconcile(true)
+        .await
+        .unwrap();
+    assert!(report.is_clean(), "{:?}", report.drifts);
+}
+
+#[tokio::test]
+async fn storage_garage_lost_is_named_with_its_fix_and_left_alone() {
+    // 🔴 Garage wiped and rebuilt: Fluxer ran 1/1 against `No such key`, and
+    // reconciliation said nothing — every service was where it should be.
+    let dir = tempfile::tempdir().unwrap();
+    let (s, v) = state_with_running_fluxer(dir.path()).await;
+    let o = fluxer_runs();
+    let g = held(&["fluxer"], &[]);
+    let report = Reconciler::new(&o, &s)
+        .with_store(&g, Some(&v))
+        .reconcile(true)
+        .await
+        .unwrap();
+    let [d] = report.drifts.as_slice() else {
+        panic!("{:?}", report.drifts)
+    };
+    let Drift::StorageLost { app, buckets, key } = d else {
+        panic!("{d:?}")
+    };
+    assert_eq!(app, "fluxer");
+    let names: Vec<&str> = buckets.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["fluxer-uploads", "fluxer-staging"]);
+    assert_eq!(key.as_deref(), Some("its key fluxer"));
+    assert!(!d.is_correctable() && d.refusal().is_some());
+    // The restore names the BUCKET, and only one whose objects a backup holds: the
+    // staging bucket comes back empty, and the description says so.
+    assert_eq!(
+        d.fix().as_deref(),
+        Some("hlb redeploy fluxer --apply, then hlb backup restore fluxer fluxer-uploads")
+    );
+    assert!(
+        d.to_string().contains("fluxer-staging (not backed up"),
+        "{d}"
+    );
+    assert!(report.corrected.is_empty());
+    assert!(o.deployed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_key_of_the_app_s_name_that_is_not_the_one_it_signs_with_is_lost_too() {
+    // A key made again by hand under the same name: Garage "has" it, and the app's
+    // signature still names the old one.
+    let dir = tempfile::tempdir().unwrap();
+    let (s, v) = state_with_running_fluxer(dir.path()).await;
+    let o = fluxer_runs();
+    let g = held(
+        &["fluxer", "fluxer-uploads", "fluxer-staging"],
+        &[("fluxer", "GKother")],
+    );
+    let report = Reconciler::new(&o, &s)
+        .with_store(&g, Some(&v))
+        .reconcile(false)
+        .await
+        .unwrap();
+    assert!(
+        matches!(report.drifts.as_slice(), [Drift::StorageLost { buckets, key: Some(k), .. }]
+            if buckets.is_empty() && k.contains("signs with")),
+        "{:?}",
+        report.drifts
+    );
+}
+
+#[tokio::test]
+async fn a_garage_that_does_not_answer_is_said_never_read_as_holding_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let (s, v) = state_with_running_fluxer(dir.path()).await;
+    let o = fluxer_runs();
+    let g = Store(Err("connection refused".into()));
+    let report = Reconciler::new(&o, &s)
+        .with_store(&g, Some(&v))
+        .reconcile(false)
+        .await
+        .unwrap();
+    assert!(
+        matches!(report.drifts.as_slice(), [Drift::StorageUnread { why }] if why == "connection refused"),
+        "{:?}",
+        report.drifts
+    );
+}
+
+#[tokio::test]
+async fn garage_is_not_asked_when_no_running_app_holds_a_bucket() {
+    // A Garage down on an installation whose apps hold no bucket is no gap of theirs.
+    let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24", 2, 2)]);
+    let s = state_with_running_gitea().await;
+    let g = Store(Err("connection refused".into()));
+    let report = Reconciler::new(&o, &s)
+        .with_store(&g, None)
+        .reconcile(false)
+        .await
+        .unwrap();
+    assert!(report.is_clean(), "{:?}", report.drifts);
+}

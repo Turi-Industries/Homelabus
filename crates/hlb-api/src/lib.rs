@@ -2207,7 +2207,7 @@ impl Need {
                 backup: _,
                 expire_after_days: _,
             } => Self::Bucket {
-                name: bucket.clone().unwrap_or_else(|| app.into()),
+                name: hlb_types::capability::bucket_name(bucket.as_deref(), app).into(),
                 backed_up: false,
             },
         }
@@ -2681,6 +2681,9 @@ judged! {
         /// 🔴 Why it does **not** correct it. Present exactly when `corrigible` is false.
         #[serde(default)]
         pub refusal: Option<String>,
+        /// The command that repairs what it leaves alone, when one does.
+        #[serde(default)]
+        pub fix: Option<String>,
     }
 
     rules {

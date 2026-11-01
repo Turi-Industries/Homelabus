@@ -79,6 +79,13 @@ monitoring, updates and routes have their own `operations-*.md`.
   tier alone — no volume, no environment, no probe — and reported "1 gap corrected". The
   drift is reported with its refusal; `hlb install <app> --apply` redeploys a service
   marked done and gone since, whole.
+- **🔴 A Garage that lost an app's buckets or key is no service's gap.** Wiped and
+  rebuilt, it left Fluxer 1/1 against `No such key` while reconciliation saw every
+  service in place. Each pass reads Garage's buckets and keys once (`StoreInventory`)
+  against each running app's (`app_buckets`) and the key id it signs with:
+  `StorageLost`, refused, its `fix` the redeploy then one restore per BUCKET backed up
+  — never `<app> <app>`, a bucket has its own name. Garage silent is `StorageUnread`,
+  never "all there". The runbook prints the same recovery from the installed apps.
 
 ## Guides and what an app holds open
 

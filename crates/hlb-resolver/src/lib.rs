@@ -604,7 +604,8 @@ fn resolve_capability(
             backup: _,
             expire_after_days,
         } => {
-            let bucket_name = bucket.clone().unwrap_or_else(|| app.to_string());
+            let bucket_name =
+                hlb_types::capability::bucket_name(bucket.as_deref(), app).to_string();
             let secret = hlb_types::capability::s3_key_secrets(app).1;
 
             // The secret BEFORE the bucket that uses it, as for databases — once, for

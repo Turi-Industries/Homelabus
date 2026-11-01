@@ -1314,8 +1314,12 @@ ranked by how many apps they would have spared (audit of 2026-10-27):
    identical, the attachment served through Caddy by Fluxer's media proxy. 🔴 Found on
    the way: **nothing notices a Garage that lost an app's buckets or key** — Fluxer ran
    1/1 against `No such key` until the redeploy, reconciliation saw no gap, and
-   `hlb upgrade` says "nothing to apply". Left: that drift found by reconciliation and
-   named with its fix, and the four commands in the generated runbook.
+   `hlb upgrade` says "nothing to apply". ✅ Both built 2026-11-01: reconciliation
+   reads Garage's buckets and keys every pass (`Drift::StorageLost`, refused, its fix
+   the redeploy and one restore per bucket backed up; `StorageUnread` when Garage is
+   silent) — in `hlb reconcile`, `hlb-privd`'s loop and the drift screen — and the
+   runbook's "If Garage lost its data" lists the four commands and every app's
+   buckets from the state.
    ✅ (3), PostgreSQL, built 2026-11-01 (`hlb_backup_run::engine_copy`, the owner's
    "physical copy, hot" of 2026-10-31): `copy: pg-basebackup` on the catalog's
    `postgres-data`. The pass and the copy before an update run `pg_basebackup`

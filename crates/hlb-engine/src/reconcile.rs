@@ -21,6 +21,9 @@
 //!   volumes, no environment, no probe — the data then landed in the container's
 //!   ephemeral layer, and the report said "1 gap corrected". Rebuilding it whole is the
 //!   installation's job, and `hlb install <app> --apply` does it.
+//! - **Recreate a bucket or a key Garage lost.** A new key's secret must reach the
+//!   vault AND the app's environment, and the objects come back from a backup: the
+//!   redeploy and the restore do that, and the drift names both.
 
 use std::collections::BTreeSet;
 
@@ -28,6 +31,11 @@ use hlb_orchestrator::Orchestrator;
 use hlb_state::State;
 
 use crate::Error;
+
+/// Where the app's key id is kept: what it signs with.
+fn key_id_secret(app: &str) -> String {
+    hlb_types::capability::s3_key_secrets(app).0
+}
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -64,6 +72,21 @@ pub enum Drift {
     /// Stopped on purpose — a restore, a store stopped for its copy — until the hold
     /// is released or lapses.
     Held { app: String, why: String },
+
+    /// Garage no longer holds a bucket the app was given, or its key — or holds a key
+    /// of its name that is not the one the app signs with. 🔴 The app's service runs
+    /// 1/1 against `No such key` and no other check says a word.
+    StorageLost {
+        app: String,
+        /// Each bucket gone, and whether the backup pass holds its objects.
+        buckets: Vec<AppBucket>,
+        /// What became of its key, when that is lost too.
+        key: Option<String>,
+    },
+
+    /// Garage did not answer: whether the apps' buckets are there is not known — never
+    /// read as "they are".
+    StorageUnread { why: String },
 }
 
 impl Drift {
@@ -73,6 +96,28 @@ impl Drift {
             self,
             Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. }
         )
+    }
+
+    /// The command that repairs a drift reconciliation leaves alone, when there is one.
+    pub fn fix(&self) -> Option<String> {
+        match self {
+            Self::StorageLost { app, buckets, .. } => {
+                let mut fix = format!("hlb redeploy {app} --apply");
+                // The objects come back from the backup: a bucket restored is named by
+                // its own name, which is the app's only when it declared none.
+                for b in buckets.iter().filter(|b| b.backed_up) {
+                    fix.push_str(&format!(", then hlb backup restore {app} {}", b.name));
+                }
+                Some(fix)
+            }
+            Self::ServiceMissing { .. }
+            | Self::ReplicasDiverged { .. }
+            | Self::ImageDiverged { .. }
+            | Self::OrphanService { .. }
+            | Self::Converging { .. }
+            | Self::Held { .. }
+            | Self::StorageUnread { .. } => None,
+        }
     }
 
     /// Why this drift is **deliberately not** corrected.
@@ -105,6 +150,28 @@ impl Drift {
                 "stopped on purpose, and started again by whoever stopped it: started \
                  here, it would write to a volume being copied or restored",
             ),
+            Self::StorageLost { .. } => Some(
+                "a key made here would reach neither the vault nor the app's \
+                 environment, and an empty bucket holds none of the app's objects: \
+                 the redeploy makes them and hands the app its new key, the restore \
+                 puts the objects back",
+            ),
+            Self::StorageUnread { .. } => Some(
+                "nothing is known of the apps' buckets until Garage answers: nothing \
+                 is done on a guess",
+            ),
+        }
+    }
+
+    /// As the API shows it — the one translation, so a field cannot reach one screen
+    /// and not another.
+    pub fn summary(&self) -> hlb_api::DriftSummary {
+        hlb_api::DriftSummary {
+            target: self.app().to_string(),
+            description: self.to_string(),
+            corrigible: self.is_correctable(),
+            refusal: self.refusal().map(str::to_string),
+            fix: self.fix(),
         }
     }
 
@@ -114,8 +181,10 @@ impl Drift {
             | Self::ReplicasDiverged { app, .. }
             | Self::ImageDiverged { app, .. }
             | Self::Converging { app, .. }
-            | Self::Held { app, .. } => app,
+            | Self::Held { app, .. }
+            | Self::StorageLost { app, .. } => app,
             Self::OrphanService { name } => name,
+            Self::StorageUnread { .. } => "garage",
         }
     }
 }
@@ -155,6 +224,27 @@ impl std::fmt::Display for Drift {
                 write!(f, "{app}: converging ({running}/{desired})")
             }
             Self::Held { app, why } => write!(f, "{app}: held stopped — {why}"),
+            Self::StorageLost { app, buckets, key } => {
+                let lost: Vec<String> = buckets
+                    .iter()
+                    .map(|b| {
+                        if b.backed_up {
+                            format!("its bucket {}", b.name)
+                        } else {
+                            format!("its bucket {} (not backed up: it comes back empty)", b.name)
+                        }
+                    })
+                    .chain(key.iter().cloned())
+                    .collect();
+                write!(
+                    f,
+                    "{app}: Garage no longer has {} — the app runs against storage that is gone",
+                    lost.join(", ")
+                )
+            }
+            Self::StorageUnread { why } => {
+                write!(f, "garage: the apps' buckets could not be read — {why}")
+            }
         }
     }
 }
@@ -232,9 +322,58 @@ fn expected_services(
     out
 }
 
+/// A bucket an app was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppBucket {
+    pub name: String,
+    /// Whether the backup pass reads it — whether there is anything to put back.
+    pub backed_up: bool,
+}
+
+/// What the object store holds — Garage's admin API, or a test's.
+#[async_trait::async_trait]
+pub trait StoreInventory: Send + Sync {
+    async fn inventory(&self) -> std::result::Result<hlb_objstore::Inventory, String>;
+}
+
+#[async_trait::async_trait]
+impl StoreInventory for hlb_objstore::Garage {
+    async fn inventory(&self) -> std::result::Result<hlb_objstore::Inventory, String> {
+        hlb_objstore::Garage::inventory(self)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The buckets an app was given — as the resolver named them — each with whether it is
+/// backed up. Their one key is named after the app.
+pub fn app_buckets(app: &str, manifest: &hlb_types::Manifest) -> Vec<AppBucket> {
+    manifest
+        .spec
+        .requires
+        .iter()
+        .filter_map(|c| match c {
+            hlb_types::Capability::ObjectStorage {
+                bucket,
+                backup,
+                expire_after_days: _,
+            } => Some(AppBucket {
+                name: hlb_types::capability::bucket_name(bucket.as_deref(), app).to_string(),
+                backed_up: *backup,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 pub struct Reconciler<'a, O: Orchestrator> {
     orchestrator: &'a O,
     state: &'a State,
+    /// Without it the apps' buckets are not looked at — said by the caller, which
+    /// knows whether it holds Garage's token.
+    store: Option<&'a dyn StoreInventory>,
+    /// To compare Garage's key with the one the app signs with.
+    vault: Option<&'a hlb_secrets::Vault>,
 }
 
 impl<'a, O: Orchestrator> Reconciler<'a, O> {
@@ -242,7 +381,69 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         Self {
             orchestrator,
             state,
+            store: None,
+            vault: None,
         }
+    }
+
+    /// Checks every app's buckets and key against what the store holds.
+    pub fn with_store(
+        mut self,
+        store: &'a dyn StoreInventory,
+        vault: Option<&'a hlb_secrets::Vault>,
+    ) -> Self {
+        self.store = Some(store);
+        self.vault = vault;
+        self
+    }
+
+    /// What Garage lost of each running app's storage: read once for all of them.
+    async fn storage_drifts(
+        &self,
+        given: &[(String, Vec<AppBucket>)],
+        drifts: &mut Vec<Drift>,
+    ) -> Result<()> {
+        let Some(store) = self.store else {
+            return Ok(());
+        };
+        if given.is_empty() {
+            return Ok(());
+        }
+        let held = match store.inventory().await {
+            Ok(h) => h,
+            Err(why) => {
+                drifts.push(Drift::StorageUnread { why });
+                return Ok(());
+            }
+        };
+        for (app, buckets) in given {
+            let gone: Vec<AppBucket> = buckets
+                .iter()
+                .filter(|b| !held.buckets.contains(&b.name))
+                .cloned()
+                .collect();
+            let key = match held.keys.get(app) {
+                None => Some(format!("its key {app}")),
+                Some(id) => {
+                    let signs_with =
+                        match (self.vault, self.state.secret(&key_id_secret(app)).await?) {
+                            (Some(v), Some(ct)) => Some(v.decrypt(&ct)?),
+                            _ => None,
+                        };
+                    signs_with.filter(|s| s != id).map(|_| {
+                        format!("the key {app} signs with (a key of that name is another)")
+                    })
+                }
+            };
+            if !gone.is_empty() || key.is_some() {
+                drifts.push(Drift::StorageLost {
+                    app: app.clone(),
+                    buckets: gone,
+                    key,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Detects drifts. **Strictly read-only.**
@@ -254,6 +455,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         // Every service an app runs, whatever its status: a failed install's companion
         // is its app's, not an orphan.
         let mut known: BTreeSet<String> = BTreeSet::new();
+        let mut storage = Vec::new();
 
         for (name, status) in &apps {
             let manifest = self.state.app_manifest(name).await?;
@@ -262,6 +464,10 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             known.extend(expected.iter().map(|e| e.service.clone()));
             if !is_reconcilable(status) {
                 continue;
+            }
+            let buckets = app_buckets(name, &manifest);
+            if !buckets.is_empty() {
+                storage.push((name.clone(), buckets));
             }
 
             for e in expected {
@@ -314,6 +520,8 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 }
             }
         }
+
+        self.storage_drifts(&storage, &mut drifts).await?;
 
         // A managed service the state does not know about.
         for svc in &observed {
@@ -375,7 +583,9 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             Drift::ServiceMissing { .. }
             | Drift::OrphanService { .. }
             | Drift::Converging { .. }
-            | Drift::Held { .. } => Ok(()),
+            | Drift::Held { .. }
+            | Drift::StorageLost { .. }
+            | Drift::StorageUnread { .. } => Ok(()),
         }
     }
 }
@@ -414,6 +624,14 @@ mod tests {
             Drift::Held {
                 app: "gitea".into(),
                 why: "restore of gitea-data".into(),
+            },
+            Drift::StorageLost {
+                app: "fluxer".into(),
+                buckets: Vec::new(),
+                key: Some("its key fluxer".into()),
+            },
+            Drift::StorageUnread {
+                why: "connection refused".into(),
             },
         ];
 

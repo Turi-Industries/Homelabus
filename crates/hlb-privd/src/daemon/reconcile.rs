@@ -30,6 +30,9 @@ pub struct ReconcileLoop<O: Orchestrator> {
     drifts: Option<DriftState>,
     /// When a pass last reconciled, for the heartbeat.
     reconciled: Option<LastReconciled>,
+    /// Garage, whose buckets and keys each pass checks the apps' against.
+    store: Option<Arc<hlb_objstore::Garage>>,
+    vault: Option<Arc<hlb_secrets::Vault>>,
 }
 
 /// When reconciliation last completed a pass, in seconds since the epoch. Shared with
@@ -50,7 +53,20 @@ impl<O: Orchestrator> ReconcileLoop<O> {
             apply: false,
             drifts: None,
             reconciled: None,
+            store: None,
+            vault: None,
         }
+    }
+
+    /// Check the apps' buckets and keys against Garage on every pass.
+    pub fn with_store(
+        mut self,
+        store: Arc<hlb_objstore::Garage>,
+        vault: Option<Arc<hlb_secrets::Vault>>,
+    ) -> Self {
+        self.store = Some(store);
+        self.vault = vault;
+        self
     }
 
     /// Record, on every pass that completes, when it did.
@@ -73,10 +89,11 @@ impl<O: Orchestrator> ReconcileLoop<O> {
     pub async fn tick(&self) -> TickReport {
         let mut r = TickReport::default();
 
-        match Reconciler::new(&*self.orchestrator, &self.state)
-            .reconcile(self.apply)
-            .await
-        {
+        let mut reconciler = Reconciler::new(&*self.orchestrator, &self.state);
+        if let Some(g) = &self.store {
+            reconciler = reconciler.with_store(&**g, self.vault.as_deref());
+        }
+        match reconciler.reconcile(self.apply).await {
             Ok(report) => {
                 r.examined = report.drifts.len();
                 r.acted = report.corrected.len();
@@ -95,12 +112,7 @@ impl<O: Orchestrator> ReconcileLoop<O> {
                         .drifts
                         .iter()
                         .filter(|d| !report.corrected.contains(d))
-                        .map(|d| hlb_api::DriftSummary {
-                            target: d.app().to_string(),
-                            description: d.to_string(),
-                            corrigible: d.is_correctable(),
-                            refusal: d.refusal().map(str::to_string),
-                        })
+                        .map(hlb_engine::Drift::summary)
                         .collect();
                 }
             }

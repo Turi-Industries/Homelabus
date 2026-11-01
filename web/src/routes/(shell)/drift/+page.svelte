@@ -6,7 +6,7 @@
 	import Loaded from '#lib/ui/Loaded.svelte';
 	import Mark from '#lib/ui/Mark.svelte';
 	import Row from '#lib/ui/Row.svelte';
-	import { muted } from '#lib/ui/styles.ts';
+	import { code, muted } from '#lib/ui/styles.ts';
 
 	const drift = read('/api/drift');
 </script>
@@ -34,6 +34,7 @@
 							<Row>
 								<p class="text-sm font-medium">{d.description}</p>
 								{#if d.refusal}<p class="text-sm text-muted-text">{d.refusal}</p>{/if}
+								{#if d.fix}<code class="mt-1 block {code}">{d.fix}</code>{/if}
 								{#snippet aside()}<Mark attention={d.attention} />{/snippet}
 							</Row>
 						{/each}

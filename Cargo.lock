@@ -1961,6 +1961,7 @@ dependencies = [
  "hlb-mail",
  "hlb-metrics",
  "hlb-notify",
+ "hlb-objstore",
  "hlb-orchestrator",
  "hlb-platform",
  "hlb-registry",

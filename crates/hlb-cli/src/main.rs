@@ -6440,7 +6440,24 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let state = open_state(&cli).await?;
                 let orch = SwarmOrchestrator::connect().await?;
 
-                let report = Reconciler::new(&orch, &state).reconcile(*apply).await?;
+                // Garage through its admin token, from the vault: without it the apps'
+                // buckets are not looked at, and the report says so.
+                let garage = match (&cli.garage_url, &cli.garage_token) {
+                    (Some(u), Some(t)) => Some(hlb_objstore::Garage::new(
+                        relay::reach(u, &cli.platform_network),
+                        t.clone(),
+                    )),
+                    _ => None,
+                };
+                let vault = open_vault(&cli).ok();
+                let mut reconciler = Reconciler::new(&orch, &state);
+                if let Some(g) = &garage {
+                    reconciler = reconciler.with_store(g, vault.as_ref());
+                }
+                let report = reconciler.reconcile(*apply).await?;
+                if garage.is_none() {
+                    println!("(Garage's admin token unknown: the apps' buckets were not checked)");
+                }
                 if *apply && !(report.corrected.is_empty() && report.failed.is_empty()) {
                     state
                         .audit(
@@ -6478,6 +6495,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         "ℹ️ "
                     };
                     println!("  {mark} {d}");
+                    if let Some(fix) = d.fix() {
+                        println!("       → {fix}");
+                    }
                 }
 
                 if !apply {

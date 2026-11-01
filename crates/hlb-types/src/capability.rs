@@ -19,6 +19,13 @@ pub fn s3_key_secrets(app: &str) -> (String, String) {
     (format!("{app}-s3-key-id"), format!("{app}-s3-secret"))
 }
 
+/// The bucket Garage gives an `objectStorage` need: its `bucket`, or the app's own name.
+/// ⚠️ Stored in Garage: the resolver makes it, the backup, the app's variables and the
+/// reconciliation read it — one rule, or a bucket is looked for where none was made.
+pub fn bucket_name<'a>(bucket: Option<&'a str>, app: &'a str) -> &'a str {
+    bucket.unwrap_or(app)
+}
+
 /// A need declared by an application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 // `rename_all` covers variant names, `rename_all_fields` covers fields: without the

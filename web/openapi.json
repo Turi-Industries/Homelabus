@@ -2705,6 +2705,13 @@
             "description": "The finding, in one sentence.",
             "type": "string"
           },
+          "fix": {
+            "description": "The command that repairs what it leaves alone, when one does.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "refusal": {
             "description": "🔴 Why it does **not** correct it. Present exactly when `corrigible` is false.",
             "type": [
@@ -2721,6 +2728,7 @@
           "attention",
           "corrigible",
           "description",
+          "fix",
           "refusal",
           "target"
         ],

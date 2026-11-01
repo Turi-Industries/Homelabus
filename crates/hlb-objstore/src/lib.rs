@@ -126,6 +126,15 @@ struct BucketList {
     global_aliases: Vec<String>,
 }
 
+/// What Garage holds, as the apps' storage is checked against it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inventory {
+    /// Every bucket's global aliases.
+    pub buckets: std::collections::BTreeSet<String>,
+    /// Every key's id, by its name.
+    pub keys: std::collections::BTreeMap<String, String>,
+}
+
 /// A node Garage has seen on the network, whether or not it carries any capacity yet.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,19 +299,36 @@ impl Garage {
 
     /// The id of the bucket carrying this alias, if there is one.
     pub async fn bucket_id(&self, alias: &str) -> Result<Option<String>> {
-        let body = self
-            .call("ListBuckets", reqwest::Method::GET, "/v2/ListBuckets", None)
-            .await?;
-
-        let list: Vec<BucketList> = serde_json::from_str(&body).map_err(|e| Error::Malformed {
-            operation: "ListBuckets",
-            reason: e.to_string(),
-        })?;
-
-        Ok(list
+        Ok(self
+            .buckets()
+            .await?
             .into_iter()
             .find(|b| b.global_aliases.iter().any(|a| a == alias))
             .map(|b| b.id))
+    }
+
+    async fn buckets(&self) -> Result<Vec<BucketList>> {
+        let body = self
+            .call("ListBuckets", reqwest::Method::GET, "/v2/ListBuckets", None)
+            .await?;
+        serde_json::from_str(&body).map_err(|e| Error::Malformed {
+            operation: "ListBuckets",
+            reason: e.to_string(),
+        })
+    }
+
+    /// Every bucket alias and every key Garage holds, in two calls — what a check over
+    /// every app reads once rather than twice per app.
+    pub async fn inventory(&self) -> Result<Inventory> {
+        Ok(Inventory {
+            buckets: self
+                .buckets()
+                .await?
+                .into_iter()
+                .flat_map(|b| b.global_aliases)
+                .collect(),
+            keys: self.keys().await?,
+        })
     }
 
     /// Creates the bucket, or returns the existing one.
@@ -385,6 +411,12 @@ impl Garage {
 
     /// The id of a key with this name, if there is one.
     pub async fn key_id(&self, name: &str) -> Result<Option<String>> {
+        Ok(self.keys().await?.remove(name))
+    }
+
+    /// Every named key, by name. ⚠️ Two keys of one name: the first listed wins, as
+    /// `key_id` always had it.
+    async fn keys(&self) -> Result<std::collections::BTreeMap<String, String>> {
         let body = self
             .call("ListKeys", reqwest::Method::GET, "/v2/ListKeys", None)
             .await?;
@@ -395,15 +427,19 @@ impl Garage {
                 reason: e.to_string(),
             })?;
 
-        Ok(list
-            .into_iter()
-            .find(|k| k.get("name").and_then(|n| n.as_str()) == Some(name))
-            .and_then(|k| {
-                k.get("id")
-                    .or_else(|| k.get("accessKeyId"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            }))
+        let mut keys = std::collections::BTreeMap::new();
+        for k in list {
+            let name = k.get("name").and_then(|n| n.as_str());
+            let id = k
+                .get("id")
+                .or_else(|| k.get("accessKeyId"))
+                .and_then(|v| v.as_str());
+            if let (Some(name), Some(id)) = (name, id) {
+                keys.entry(name.to_string())
+                    .or_insert_with(|| id.to_string());
+            }
+        }
+        Ok(keys)
     }
 
     /// Grants the key read and write on the bucket - **never** ownership.

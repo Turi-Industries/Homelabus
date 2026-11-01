@@ -120,7 +120,10 @@ fn declared_and_read(m: &Manifest, used: &[Token]) -> Result<()> {
                 bucket,
                 backup: _,
                 expire_after_days,
-            } => Some((bucket.as_deref().unwrap_or(app), *expire_after_days)),
+            } => Some((
+                capability::bucket_name(bucket.as_deref(), app),
+                *expire_after_days,
+            )),
             _ => None,
         })
         .collect();

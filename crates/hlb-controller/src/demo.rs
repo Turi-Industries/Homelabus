@@ -439,14 +439,17 @@ pub fn drifts() -> Vec<hlb_api::DriftSummary> {
             running: 1,
             desired: 2,
         },
+        Drift::StorageLost {
+            app: "immich".into(),
+            buckets: vec![hlb_engine::AppBucket {
+                name: "immich".into(),
+                backed_up: true,
+            }],
+            key: Some("its key immich".into()),
+        },
     ]
     .iter()
-    .map(|d| hlb_api::DriftSummary {
-        target: d.app().to_string(),
-        description: d.to_string(),
-        corrigible: d.is_correctable(),
-        refusal: d.refusal().map(str::to_string),
-    })
+    .map(Drift::summary)
     .collect()
 }
 

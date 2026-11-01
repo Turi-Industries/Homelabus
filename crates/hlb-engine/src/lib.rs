@@ -30,7 +30,7 @@ pub mod termix;
 pub mod trust;
 pub mod upgrade;
 
-pub use reconcile::{Drift, Reconciler, Report};
+pub use reconcile::{AppBucket, Drift, Reconciler, Report};
 
 use hlb_identity::PocketId;
 use hlb_mail::Stalwart;
@@ -142,7 +142,7 @@ fn s3_key_id(app: &str) -> String {
 /// ⚠️ A Swarm service name, not a public URL: object traffic stays on the internal
 /// network. Exposing it would send bytes out of the cluster that have no reason to
 /// leave, and Garage has no authentication beyond the S3 signature.
-const S3_ENDPOINT: &str = hlb_objstore::S3_URL;
+pub const S3_ENDPOINT: &str = hlb_objstore::S3_URL;
 
 /// Garage ignores the region, but the S3 SIGNATURE covers it: a client announcing a
 /// different one has its requests refused on a signature error that says nothing about
@@ -941,7 +941,8 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                     }
 
                     hlb_types::Capability::ObjectStorage { bucket, .. } => {
-                        let bucket_name = bucket.clone().unwrap_or_else(|| app.to_string());
+                        let bucket_name =
+                            hlb_types::capability::bucket_name(bucket.as_deref(), app).to_string();
                         s3.insert("{{ s3.bucket }}".to_string(), bucket_name);
                         s3.insert("{{ s3.endpoint }}".to_string(), S3_ENDPOINT.into());
                         s3.insert("{{ s3.region }}".to_string(), S3_REGION.into());

@@ -129,6 +129,10 @@ pub async fn generate(state: &State, nodes: &[hlb_api::NodeSummary], now: i64) -
          reachable.\n\n",
     );
 
+    if let Some(section) = garage_recovery(state, &dests).await {
+        s.push_str(&section);
+    }
+
     s.push_str("## If you can no longer sign in\n\n");
     s.push_str(
         "PocketID is the single point of failure on ACCESS: if it is down, you can no \
@@ -146,6 +150,73 @@ pub async fn generate(state: &State, nodes: &[hlb_api::NodeSummary], now: i64) -
     ));
 
     s
+}
+
+/// What brings Garage back when it lost its data, app by app, from the real state.
+///
+/// 🔴 Garage's metadata is not backed up — its blocks are not, and a restored index
+/// names objects whose bytes are gone —, so Garage comes back EMPTY: each app is given
+/// its buckets and a new key again, then its objects come back from its backups. Run
+/// 1/1 on a wiped Garage, Fluxer answered `No such key` and nothing else said so.
+async fn garage_recovery(
+    state: &State,
+    dests: &[(String, String, String, Option<String>)],
+) -> Option<String> {
+    let mut apps = Vec::new();
+    for (name, status) in state.installed_apps().await.ok()? {
+        if status == "failed" {
+            continue;
+        }
+        let Ok(m) = state.app_manifest(&name).await else {
+            continue;
+        };
+        let buckets = hlb_engine::reconcile::app_buckets(&name, &m);
+        if !buckets.is_empty() {
+            apps.push((name, buckets));
+        }
+    }
+    if apps.is_empty() {
+        return None;
+    }
+    let mut s = String::from("## If Garage lost its data\n\n");
+    s.push_str(
+        "Garage is rebuilt empty: its metadata is not backed up, since its blocks are \
+         not. `hlb reconcile` names each app whose buckets or key are gone.\n\n\
+         1. `hlb install garage --apply`\n\
+         2. `hlb garage init --apply`\n\
+         3. For each app below, `hlb redeploy <app> --apply`: its buckets and a new key, \
+         handed to the app.\n\
+         4. Each bucket backed up: `hlb backup restore <app> <bucket>` — the preview \
+         names the snapshot —, then the same with `--snapshot … --from … --apply`.\n\n",
+    );
+    s.push_str("| App | Buckets restored | Back empty (not backed up) |\n|---|---|---|\n");
+    for (app, buckets) in &apps {
+        let list = |backed: bool| {
+            let names: Vec<String> = buckets
+                .iter()
+                .filter(|b| b.backed_up == backed)
+                .map(|b| format!("`{}`", b.name))
+                .collect();
+            if names.is_empty() {
+                "—".to_string()
+            } else {
+                names.join(", ")
+            }
+        };
+        s.push_str(&format!("| `{app}` | {} | {} |\n", list(true), list(false)));
+    }
+    s.push('\n');
+    // A repository kept IN Garage went with it: what it held comes back from another.
+    for (name, location, _, _) in dests {
+        if location.contains(hlb_engine::S3_ENDPOINT.trim_start_matches("http://")) {
+            s.push_str(&format!(
+                "🔴 The destination `{name}` was in this Garage: its snapshots are gone. \
+                 Restore from another destination, then `hlb backup dest garage --apply` \
+                 makes it again.\n\n"
+            ));
+        }
+    }
+    Some(s)
 }
 
 /// "2026-08-19 07:12", in UTC.
@@ -216,6 +287,48 @@ mod tests {
 
         let r = generate(&s, &[], 1_787_097_600).await;
         assert!(!r.contains("tres-secret"), "a secret value leaked");
+    }
+
+    #[tokio::test]
+    async fn the_runbook_rebuilds_garage_app_by_app_from_the_installed_buckets() {
+        let s = State::in_memory().await.expect("state");
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: fluxer }
+spec:
+  image: { repo: fluxer/api, tag: "1" }
+  requires:
+    - kind: object-storage
+    - kind: object-storage
+      bucket: fluxer-uploads
+      backup: false
+"#,
+        )
+        .expect("manifest");
+        s.upsert_app("fluxer", &m, None).await.expect("app");
+        s.set_app_status("fluxer", "running").await.expect("status");
+        s.upsert_destination("garage", "s3:http://garage:3900/hlb", "critical", None)
+            .await
+            .expect("destination");
+        let r = generate(&s, &[], 1_787_097_600).await;
+        assert!(r.contains("`hlb garage init --apply`"), "{r}");
+        assert!(
+            r.contains("| `fluxer` | `fluxer` | `fluxer-uploads` |"),
+            "{r}"
+        );
+        assert!(
+            r.contains("The destination `garage` was in this Garage"),
+            "{r}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_garage_section_when_no_app_holds_a_bucket() {
+        let s = State::in_memory().await.expect("state");
+        let r = generate(&s, &[], 1_787_097_600).await;
+        assert!(!r.contains("If Garage lost its data"), "{r}");
     }
 
     #[tokio::test]

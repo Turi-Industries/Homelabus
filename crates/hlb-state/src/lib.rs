@@ -1298,7 +1298,7 @@ impl State {
                     bucket,
                     backup: true,
                     expire_after_days: _,
-                } => Some(bucket.clone().unwrap_or_else(|| app.to_string())),
+                } => Some(hlb_types::capability::bucket_name(bucket.as_deref(), app).to_string()),
                 _ => None,
             })
             .collect())
