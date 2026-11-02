@@ -1227,7 +1227,7 @@ pull request to the catalog, with no `hlb` release.
 - Quality levels computed by CI, never declared: install, update from the published
   version, back up, restore, prove, uninstall — on each pull request and weekly; shown
   as *installs, updates, restores, maintained for N months*.
-  🟡 The results — 2026-11-02: `quality-v1.json` beside the index (`hlb_types::quality`,
+  ✅ The results — 2026-11-02: `quality-v1.json` beside the index (`hlb_types::quality`,
   its format frozen with the index's, which 0.4.0 reads `deny_unknown_fields`), built by
   `hlb catalog index build --quality <runs>` over the previous file (the day each app
   entered is carried, the newer run kept), signed with the index and held to its
@@ -1236,8 +1236,13 @@ pull request to the catalog, with no `hlb` release.
   and the install window the run, step by step. The catalog's `scripts/quality.sh`
   rehearsed whole on a fresh Debian 12 VM with Mealie (published version, a guide
   change as the update, volume and database restored: every step passed), with the
-  `Quality` workflow and the Index's gathering. Left: 0.4.1 released and mirrored, so
-  hosted runners can run it.
+  `Quality` workflow and the Index's gathering. On hosted runners with 0.4.2, catalog
+  PR #2: all 13 apps pass every step that applies — install, back up, restore,
+  uninstall; the update from the published version for Fluxer and Termix, the two the
+  PR changed (the other eleven had no newer version to update to: `notRun`); LibreSpeed
+  keeps nothing, so no restore. Immich and Jellyfin keep their volumes on a local NFS
+  export. Fluxer's restore reached green once its search rebuild worked on a house with
+  no community (Fluxer's full refresh fails until a threads refresh readies its index).
 - ✅ Before installing, the preview shows what the app receives — 2026-11-02.
   `Manifest::grants` names what the manifest opened past the closed defaults: exposure
   to the internet (now or after its guide), paths open to anyone, ports published on
