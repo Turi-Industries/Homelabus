@@ -12,7 +12,7 @@ description = "Secret vault, encrypted with age."
 age = { version = "0.11", features = ["armor"] }
 # Shamir over GF(256) for the kit's split: Distrust's fork of `sharks`, whose
 # coefficients skip zero (RUSTSEC-2024-0398, never fixed there).
-bech32 = "0.9"
+bech32 = "0.12"
 blahaj = "0.7"
 rand = "0.10"
 secrecy = "0.10"
