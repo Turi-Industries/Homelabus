@@ -1283,16 +1283,36 @@ pub async fn start(
     {
         let (catalog, dir, st) = (catalog.clone(), cfg.catalog.clone(), state.clone());
         let notif = notif.clone();
+        // Beside the state, where `hlb catalog source fetch` keeps it too: the first
+        // tick runs at start, so a house that never fetched reads the official index
+        // from its first minute.
+        let official = hlb_engine::sources::Official::carried(
+            std::path::absolute(&cfg.state)
+                .unwrap_or_else(|_| cfg.state.clone())
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("catalog-sources")
+                .join(hlb_catalog::OFFICIAL),
+        );
         tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(86_400),
             shutdown_rx.clone(),
             move || {
-                let (catalog, dir, st, notif) =
-                    (catalog.clone(), dir.clone(), st.clone(), notif.clone());
+                let (catalog, dir, st, notif, official) = (
+                    catalog.clone(),
+                    dir.clone(),
+                    st.clone(),
+                    notif.clone(),
+                    official.clone(),
+                );
                 async move {
-                    let fetched =
-                        match hlb_engine::sources::fetch_all(&st, "controller", hlb_types::Role::Admin)
-                            .await
+                    let fetched = match hlb_engine::sources::fetch_all(
+                        &st,
+                        official.as_ref(),
+                        "controller",
+                        hlb_types::Role::Admin,
+                    )
+                    .await
                         {
                             Ok(f) => f,
                             Err(e) => {

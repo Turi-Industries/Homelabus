@@ -1175,13 +1175,16 @@ pull request to the catalog, with no `hlb` release.
   signed source nightly and notifies a revoked install; privd and the controller hold
   the catalog in a `catalog::Shared` read again every 10 minutes and after a fetch, an
   official catalog unreadable now keeping the one read before.
-  🟡 The official source, first half — 2026-11-02: `hlb_catalog::OFFICIAL` (reserved),
+  🟡 The official source — 2026-11-02: `hlb_catalog::OFFICIAL` (reserved),
   `OFFICIAL_URL`, `OFFICIAL_KEY` (`None` until the owner generates it);
   `Catalog::add_official` lays the official index over the carried catalog — its apps
   under bare names, the platform kept, an app with no version for this `hlb` kept as
-  carried, an expired index changing nothing but keeping its revocations. Left: the
-  `official` row created and fetched by `hlb_engine::sources` when a key is compiled
-  in, `hlb catalog source add|remove official` refused, the key itself.
+  carried, an expired index changing nothing but keeping its revocations. Once a key is
+  compiled in, `hlb_engine::sources::ensure_official` writes the `official` row
+  (`State::set_carried_source`: address and key from the binary, the counter kept) before
+  every fetch — the daemon's first tick at start, `hlb catalog source fetch` — and a
+  revoked official install (no source recorded) is named. `hlb catalog source
+  add|remove official` refused. Left: the key itself, the owner's.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

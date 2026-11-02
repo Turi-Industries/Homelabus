@@ -913,7 +913,32 @@ impl State {
         Ok(done.rows_affected() == 1)
     }
 
-    /// The third-party catalog sources, by name.
+    /// Records where a source this `hlb` names itself is served and the key it is held
+    /// to — the official catalog's, carried by the binary. Written again at each start,
+    /// so a release moving its address or rotating its key takes effect; the counter is
+    /// KEPT, or a replay of an index older than the last one read would land after an
+    /// upgrade.
+    pub async fn set_carried_source(&self, source: &CatalogSource) -> Result<()> {
+        let (url, key) = source
+            .signed
+            .as_ref()
+            .map(|s| (s.url.as_str(), s.key.as_str()))
+            .unzip();
+        sqlx::query(
+            "INSERT INTO catalog_sources (name, directory, url, key) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name) DO UPDATE SET
+               directory = excluded.directory, url = excluded.url, key = excluded.key",
+        )
+        .bind(&source.name)
+        .bind(&source.directory)
+        .bind(url)
+        .bind(key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The catalog sources, by name.
     pub async fn catalog_sources(&self) -> Result<Vec<CatalogSource>> {
         let rows = sqlx::query(
             "SELECT name, directory, url, key, counter FROM catalog_sources ORDER BY name",
@@ -5287,6 +5312,38 @@ mod tests {
             .expect("down"));
         let read = s.catalog_sources().await.expect("read");
         assert_eq!(read[0].signed.as_ref().and_then(|s| s.counter), Some(4));
+    }
+
+    #[tokio::test]
+    async fn a_carried_source_written_again_keeps_its_counter() {
+        let s = State::in_memory().await.expect("state");
+        let source = |url: &str| CatalogSource {
+            name: "official".into(),
+            directory: "/var/lib/homelabus/catalog-sources/official".into(),
+            signed: Some(SignedSource {
+                url: url.into(),
+                key: "00".repeat(32),
+                counter: None,
+            }),
+        };
+        s.set_carried_source(&source("https://a.example/catalog"))
+            .await
+            .expect("written");
+        assert!(s
+            .raise_catalog_source_counter("official", 7)
+            .await
+            .expect("up"));
+        // A release moving the address: the bar a replay must clear stays where it was.
+        s.set_carried_source(&source("https://b.example/catalog"))
+            .await
+            .expect("again");
+        let read = s.catalog_sources().await.expect("read");
+        assert_eq!(read.len(), 1);
+        let signed = read[0].signed.as_ref().expect("signed");
+        assert_eq!(
+            (signed.url.as_str(), signed.counter),
+            ("https://b.example/catalog", Some(7))
+        );
     }
 
     fn manifest(name: &str) -> Manifest {

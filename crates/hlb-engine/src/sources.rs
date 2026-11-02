@@ -205,9 +205,12 @@ pub async fn fetch(
     };
     // 🔴 A revoked version keeps running until someone moves it: said where the
     // revocation arrives, and every day after in the inbox.
+    // An app installed from the official catalog records no source: its name is the
+    // bare one, whether the carried copy or the index's.
+    let from = (name != hlb_catalog::OFFICIAL).then_some(name.as_str());
     let mut revoked = Vec::new();
     for (app, _) in state.installed_apps().await.map_err(e)? {
-        if state.app_source(&app).await.map_err(e)?.as_deref() != Some(name.as_str()) {
+        if state.app_source(&app).await.map_err(e)?.as_deref() != from {
             continue;
         }
         let Some(version) = state.app_release(&app).await.map_err(e)?.version else {
@@ -225,13 +228,57 @@ pub async fn fetch(
     }))
 }
 
-/// Fetches every source served over the network. One unreachable never keeps the
-/// others stale: each has its own outcome.
+/// Where the official catalog's signed index is served, the key it is held to and
+/// where it is kept — what this `hlb` carries, once the owner has given a key.
+#[derive(Debug, Clone)]
+pub struct Official {
+    pub url: String,
+    pub key: String,
+    pub cache: PathBuf,
+}
+
+impl Official {
+    /// What this binary carries: `None` while [`hlb_catalog::OFFICIAL_KEY`] is, and the
+    /// carried catalog is then the whole official one.
+    pub fn carried(cache: PathBuf) -> Option<Self> {
+        hlb_catalog::OFFICIAL_KEY.map(|key| Self {
+            url: hlb_catalog::OFFICIAL_URL.to_string(),
+            key: key.to_string(),
+            cache,
+        })
+    }
+}
+
+/// Writes the official source's row from what this `hlb` carries, before anything
+/// reads the sources. Its counter is kept: a row written by an older release still
+/// bars the indexes it had read past.
+pub async fn ensure_official(state: &State, official: Option<&Official>) -> hlb_state::Result<()> {
+    let Some(o) = official else {
+        return Ok(());
+    };
+    state
+        .set_carried_source(&CatalogSource {
+            name: hlb_catalog::OFFICIAL.to_string(),
+            directory: o.cache.display().to_string(),
+            signed: Some(hlb_state::SignedSource {
+                url: o.url.clone(),
+                key: o.key.clone(),
+                counter: None,
+            }),
+        })
+        .await
+}
+
+/// Fetches every source served over the network, the official one first written from
+/// what this `hlb` carries. One unreachable never keeps the others stale: each has its
+/// own outcome.
 pub async fn fetch_all(
     state: &State,
+    official: Option<&Official>,
     actor: &str,
     role: hlb_types::Role,
 ) -> hlb_state::Result<Vec<(String, std::result::Result<Fetched, String>)>> {
+    ensure_official(state, official).await?;
     let mut out = Vec::new();
     for src in state.catalog_sources().await? {
         if let Some(r) = fetch(state, &src, actor, role).await.transpose() {
@@ -418,5 +465,95 @@ mod tests {
             third.revoked,
             vec![("librespeed".to_string(), version, "leaks".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn the_official_source_is_written_then_fetched_and_names_its_revoked_installs() {
+        let cat = catalog();
+        let served = tempfile::tempdir().expect("served");
+        let name = hlb_catalog::OFFICIAL;
+        let one = index::build(cat.path(), name, None, served.path(), now()).expect("built");
+        index::sign(served.path(), &SEED, None, now()).expect("signed");
+        let version = one.apps["librespeed"][0].version.clone();
+        // Revoked in the next index, signed over the first.
+        let previous = tempfile::tempdir().expect("previous");
+        let copied = std::process::Command::new("cp")
+            .arg("-r")
+            .arg(format!("{}/.", served.path().display()))
+            .arg(previous.path())
+            .status()
+            .expect("cp")
+            .success();
+        assert!(copied);
+        std::fs::remove_dir_all(served.path()).expect("cleared");
+        std::fs::write(
+            cat.path().join(index::REVOKED_FILE),
+            format!("librespeed: [ {{ version: \"{version}\", why: leaks }} ]\n"),
+        )
+        .expect("revoked");
+        index::build(
+            cat.path(),
+            name,
+            Some(previous.path()),
+            served.path(),
+            now(),
+        )
+        .expect("built");
+        index::sign(served.path(), &SEED, Some(&one), now()).expect("signed");
+        let url = serve(served.path().to_path_buf()).await;
+
+        let state = State::in_memory().await.expect("state");
+        let manifest = hlb_catalog::Catalog::load(cat.path())
+            .expect("catalog")
+            .get("librespeed")
+            .expect("librespeed")
+            .manifest
+            .clone();
+        state
+            .upsert_app("librespeed", &manifest, None)
+            .await
+            .expect("app");
+        // Installed from the official index: no source, a version.
+        state
+            .set_app_source(
+                "librespeed",
+                None,
+                &hlb_state::Release {
+                    index: Some(1),
+                    version: Some(version.clone()),
+                },
+            )
+            .await
+            .expect("source");
+
+        let home = tempfile::tempdir().expect("home");
+        let official = Official {
+            url,
+            key: index::public_key(&SEED),
+            cache: home.path().join(name),
+        };
+        assert!(state.catalog_sources().await.expect("read").is_empty());
+        let fetched = fetch_all(&state, Some(&official), "test", hlb_types::Role::Admin)
+            .await
+            .expect("fetched");
+        let [(n, Ok(f))] = fetched.as_slice() else {
+            panic!("one source fetched: {fetched:?}");
+        };
+        assert_eq!(n, name);
+        assert_eq!(f.index.counter, 2);
+        assert_eq!(
+            f.revoked,
+            vec![("librespeed".to_string(), version, "leaks".to_string())]
+        );
+        let row = &state.catalog_sources().await.expect("read")[0];
+        assert_eq!(row.signed.as_ref().and_then(|s| s.counter), Some(2));
+
+        // Without a key carried, nothing is written.
+        let bare = State::in_memory().await.expect("state");
+        assert!(fetch_all(&bare, None, "test", hlb_types::Role::Admin)
+            .await
+            .expect("nothing")
+            .is_empty());
+        assert!(bare.catalog_sources().await.expect("read").is_empty());
     }
 }

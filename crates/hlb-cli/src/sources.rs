@@ -110,6 +110,10 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
             key,
             apply,
         } => {
+            if name == hlb_catalog::OFFICIAL {
+                eprintln!("🔴 {}", hlb_catalog::Error::Reserved);
+                return Ok(ExitCode::FAILURE);
+            }
             // Checked before the name becomes a path under the cache.
             if !hlb_catalog::is_source_name(name) {
                 eprintln!(
@@ -150,6 +154,10 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
         }
 
         SourceCmd::Fetch { name } => {
+            // The official source's row, from what this `hlb` carries: written here too,
+            // so a house without the controller fetches it.
+            let official = sources::Official::carried(cache_dir(cli, hlb_catalog::OFFICIAL));
+            sources::ensure_official(&state, official.as_ref()).await?;
             let sources = state.catalog_sources().await?;
             let mut chosen: Vec<_> = sources
                 .iter()
@@ -188,6 +196,15 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
         }
 
         SourceCmd::Remove { name, apply } => {
+            if name == hlb_catalog::OFFICIAL {
+                // Its row is written again from the binary at the next fetch: removed,
+                // only the replay bar its counter holds would go.
+                eprintln!(
+                    "🔴 the official catalog is not removed: it is what this hlb carries, \
+                     read whatever is added beside it"
+                );
+                return Ok(ExitCode::FAILURE);
+            }
             let Some(src) = state
                 .catalog_sources()
                 .await?
