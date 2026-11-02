@@ -808,6 +808,62 @@ impl State {
             })
     }
 
+    /// Freezes the catalog source an app is installed from; `None` is the official one.
+    pub async fn set_app_source(&self, name: &str, source: Option<&str>) -> Result<()> {
+        let done = sqlx::query("UPDATE apps SET source = ?2 WHERE name = ?1")
+            .bind(name)
+            .bind(source)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::UnknownApp(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// The catalog source an app was installed from — `None` for the official catalog.
+    pub async fn app_source(&self, name: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT source FROM apps WHERE name = ?1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::UnknownApp(name.to_string()))?;
+        Ok(row.try_get("source")?)
+    }
+
+    /// Adds a third-party catalog source; `false` if one of that name exists already.
+    pub async fn add_catalog_source(&self, name: &str, directory: &str) -> Result<bool> {
+        let done = sqlx::query(
+            "INSERT INTO catalog_sources (name, directory) VALUES (?1, ?2)
+             ON CONFLICT(name) DO NOTHING",
+        )
+        .bind(name)
+        .bind(directory)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    /// The third-party catalog sources, `(name, directory)`, by name.
+    pub async fn catalog_sources(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT name, directory FROM catalog_sources ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("name")?, r.try_get("directory")?)))
+            .collect()
+    }
+
+    /// Removes a catalog source; `false` if there was none of that name. The apps
+    /// installed from it keep running from their frozen manifests.
+    pub async fn remove_catalog_source(&self, name: &str) -> Result<bool> {
+        let done = sqlx::query("DELETE FROM catalog_sources WHERE name = ?1")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     /// The domain chosen at install time, needed to resolve the templates.
     pub async fn app_domain(&self, name: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT domain FROM apps WHERE name = ?1")

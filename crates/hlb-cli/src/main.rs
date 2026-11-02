@@ -15,6 +15,7 @@ mod relay;
 mod restore;
 mod roles;
 mod seal;
+mod sources;
 mod storage;
 mod termix;
 mod verify_boot;
@@ -2059,6 +2060,30 @@ enum CatalogCmd {
     /// digest it names. Preview by default; `--apply` writes them into the manifests.
     /// A major is said, never written: a person rehearses it first.
     Images {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// The third-party sources read beside the official catalog, each a directory
+    /// whose apps install as `<source>/<app>`.
+    #[command(subcommand)]
+    Source(SourceCmd),
+}
+
+#[derive(Subcommand)]
+enum SourceCmd {
+    /// The sources added, and what each holds.
+    List,
+    /// Read a directory of apps beside the official catalog. Preview by default.
+    Add {
+        /// Lower-case letters, digits and dashes: what its apps' names start with.
+        name: String,
+        directory: std::path::PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Stop reading a source; the apps installed from it keep running.
+    Remove {
+        name: String,
         #[arg(long)]
         apply: bool,
     },
@@ -5593,8 +5618,20 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let cli = with_platform_access(cli);
 
     match &cli.command {
+        Command::Catalog(CatalogCmd::Source(cmd)) => {
+            tokio::runtime::Runtime::new()?.block_on(sources::run(&cli, cmd))
+        }
+
         Command::Catalog(CatalogCmd::List) => {
-            let c = Catalog::load(&cli.catalog)?;
+            // With an installation, its sources too; a bare node has the official alone.
+            let c = if cli.state.exists() {
+                tokio::runtime::Runtime::new()?.block_on(async {
+                    let state = open_state(&cli).await?;
+                    sources::catalog_with_sources(&cli, &state).await
+                })?
+            } else {
+                Catalog::load(&cli.catalog)?
+            };
             println!(
                 "{} in {}\n",
                 hlb_api::plural(c.len() as u64, "application", "applications"),
@@ -5604,7 +5641,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let m = &e.manifest;
                 println!(
                     "  {:<14} {:<10} {:<22} {:?}",
-                    m.metadata.name,
+                    e.name(),
                     format!("{:?}", m.kind).to_lowercase(),
                     m.spec.image.reference(),
                     m.spec.update.channel,
@@ -5985,33 +6022,35 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
 
         Command::Install {
-            app,
+            app: asked,
             domain,
             mail_domain,
             apply,
         } => {
-            let c = Catalog::load(&cli.catalog)?;
-            let entry = c.get(app)?;
-
-            // 🔴 BEFORE freezing the manifest. A `tier: nfs` volume with no server
-            // configured cannot be provisioned, and discovering it once the app is
-            // recorded leaves a half-install whose first action failed.
-            let storage = hlb_engine::StorageConfig {
-                local_root: cli.storage_root.clone(),
-                nfs_server: cli.nfs_server.clone(),
-                nfs_export: cli.nfs_export.clone(),
-            };
-            let missing = storage.blockers_for(&entry.manifest);
-            if !missing.is_empty() {
-                for m in &missing {
-                    eprintln!("🔴 {m}");
-                }
-                return Ok(ExitCode::FAILURE);
-            }
-
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = open_state(&cli).await?;
+                let c = sources::catalog_with_sources(&cli, &state).await?;
+                let entry = c.get(asked)?;
+                // `community/foo` installs as `foo`.
+                let app = &entry.manifest.metadata.name;
+
+                // 🔴 BEFORE freezing the manifest. A `tier: nfs` volume with no server
+                // configured cannot be provisioned, and discovering it once the app is
+                // recorded leaves a half-install whose first action failed.
+                let storage = hlb_engine::StorageConfig {
+                    local_root: cli.storage_root.clone(),
+                    nfs_server: cli.nfs_server.clone(),
+                    nfs_export: cli.nfs_export.clone(),
+                };
+                let missing = storage.blockers_for(&entry.manifest);
+                if !missing.is_empty() {
+                    for m in &missing {
+                        eprintln!("🔴 {m}");
+                    }
+                    return Ok(ExitCode::FAILURE);
+                }
+
                 let exposure = state.exposure().await?;
 
                 // The ingress refuses at preview what would leave it unplaced, or
@@ -6050,6 +6089,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let basis = match hlb_engine::install::basis(
                     &state,
                     app,
+                    entry.source.as_deref(),
                     &entry.manifest,
                     &entry.guide,
                     domain,
@@ -6095,16 +6135,17 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             apply,
         } => {
             use hlb_engine::upgrade;
-            let c = Catalog::load(&cli.catalog)?;
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 let state = open_state(&cli).await?;
+                let c = sources::catalog_with_sources(&cli, &state).await?;
 
                 let Some(app) = app else {
                     // Which installed apps the catalog has moved since.
                     let mut behind = 0;
                     for (name, _) in state.installed_apps().await? {
-                        let Ok(entry) = c.get(&name) else {
+                        let source = state.app_source(&name).await?;
+                        let Ok(entry) = c.followed(&name, source.as_deref()) else {
                             println!("  {name}: no longer in the catalog");
                             continue;
                         };
@@ -6138,7 +6179,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 };
 
-                let entry = c.get(app)?;
+                let entry = c.followed(app, state.app_source(app).await?.as_deref())?;
                 let frozen = state.app_manifest(app).await?;
                 let next = upgrade::next(&frozen, &entry.manifest);
                 let mut changed = upgrade::changes(&frozen, &next);
@@ -10750,11 +10791,16 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     });
                 }
 
-                let catalog: std::collections::BTreeMap<_, _> = Catalog::load(&cli.catalog)?
-                    .manifests()
-                    .into_iter()
-                    .map(|m| (m.metadata.name.clone(), m))
-                    .collect();
+                // Each installed app against its own source's manifest, never another
+                // source's app of the same name.
+                let sources = sources::catalog_with_sources(&cli, &state).await?;
+                let mut catalog = std::collections::BTreeMap::new();
+                for (app, _) in state.installed_apps().await? {
+                    let source = state.app_source(&app).await?;
+                    if let Ok(e) = sources.followed(&app, source.as_deref()) {
+                        catalog.insert(app, e.manifest.clone());
+                    }
+                }
                 let at = chrono::Utc::now().timestamp();
                 let checked = hlb_updater::check(&state, &registry, &now, at, &catalog).await?;
                 for (app, why) in &checked.unreadable {

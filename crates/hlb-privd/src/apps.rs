@@ -30,6 +30,9 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
         Ok(e) => e,
         Err(e) => return Acted::Unplannable(e.to_string()),
     };
+    // `community/foo` installs as `foo`; the command line names it as asked.
+    let asked = app;
+    let app = input.manifest.metadata.name.clone();
 
     // A recorded app that is not running — a failed or interrupted install — resumes
     // here, as `hlb install` resumes it: refused, the interface had no way out of a
@@ -92,6 +95,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
     let basis = match hlb_engine::install::basis(
         &p.state,
         &app,
+        input.source.as_deref(),
         &input.manifest,
         &input.guide,
         domain.clone(),
@@ -122,7 +126,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
             applied: false,
             summary: format!("install {app} — impossible as things stand"),
             steps: Vec::new(),
-            cli_command: format!("hlb install {app} --domain <domain> --apply"),
+            cli_command: format!("hlb install {asked} --domain <domain> --apply"),
             blockers,
             warnings: Vec::new(),
             confirmation_required: None,
@@ -139,7 +143,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
                 applied: false,
                 summary: format!("install {app} — impossible as things stand"),
                 steps: Vec::new(),
-                cli_command: format!("hlb install {app} --mail-domain <domain> --apply"),
+                cli_command: format!("hlb install {asked} --mail-domain <domain> --apply"),
                 blockers: vec!["this application sends mail: a mail domain is required \
                      (\"mail_domain\" in the request body), or one for the installation \
                      with \"hlb config exposure\""
@@ -220,8 +224,8 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
     }
 
     let command = match &named {
-        Some(d) => format!("hlb install {app} --domain {d} --apply"),
-        None => format!("hlb install {app} --apply"),
+        Some(d) => format!("hlb install {asked} --domain {d} --apply"),
+        None => format!("hlb install {asked} --apply"),
     };
 
     Acted::Planned(ActionResult {
@@ -275,7 +279,8 @@ pub(crate) async fn catalog_changes(p: &Privd, app: &str) -> Vec<String> {
     let (Some(cat), Ok(frozen)) = (&p.catalog, p.state.app_manifest(app).await) else {
         return Vec::new();
     };
-    let Ok(entry) = cat.get(app) else {
+    let source = p.state.app_source(app).await.ok().flatten();
+    let Ok(entry) = cat.followed(app, source.as_deref()) else {
         return Vec::new();
     };
     let guide = p.state.app_guide(app).await.ok().flatten();
@@ -302,7 +307,8 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
     let Ok(frozen) = p.state.app_manifest(&app).await else {
         return Acted::Unplannable(format!("\"{app}\" is not installed"));
     };
-    let input = match cat.get(&app) {
+    let source = p.state.app_source(&app).await.ok().flatten();
+    let input = match cat.followed(&app, source.as_deref()) {
         Ok(e) => e,
         Err(e) => return Acted::Unplannable(e.to_string()),
     };

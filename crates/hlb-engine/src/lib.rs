@@ -2615,7 +2615,7 @@ steps:
         catalog.spec.image.digest = None;
         catalog.spec.swarm.replicas = 3;
         // And its guide lost the prerequisite.
-        let basis = install::basis(&s, "demo", &catalog, &Default::default(), None, None)
+        let basis = install::basis(&s, "demo", None, &catalog, &Default::default(), None, None)
             .await
             .expect("read")
             .expect("resumable");
@@ -2661,6 +2661,7 @@ steps:
         let moved = install::basis(
             &s,
             "demo",
+            None,
             &catalog,
             &Default::default(),
             Some("y.example.fr".into()),
@@ -2669,6 +2670,77 @@ steps:
         .await
         .expect("read");
         assert!(moved.is_err(), "another domain is not a resume: {moved:?}");
+
+        // 🔴 `community/demo` installs as `demo`: it would take the official one's
+        // services, volumes and databases over.
+        let theirs = install::basis(
+            &s,
+            "demo",
+            Some("community"),
+            &catalog,
+            &Default::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("read")
+        .expect_err("another source's app of the same name");
+        assert!(
+            theirs.contains("installed from the official catalog")
+                && theirs.contains("the source \"community\""),
+            "{theirs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_install_freezes_the_source_it_came_from() {
+        // `state()` records the official "demo": this one is new.
+        let s = state().await;
+        let basis = install::basis(
+            &s,
+            "theirs",
+            Some("community"),
+            &manifest(),
+            &Default::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("read")
+        .expect("a new app");
+        install::record(&s, "theirs", &basis)
+            .await
+            .expect("recorded");
+        assert_eq!(
+            s.app_source("theirs").await.expect("source").as_deref(),
+            Some("community")
+        );
+        // Resumed, it keeps its source; the official app of that name is refused.
+        let again = install::basis(
+            &s,
+            "theirs",
+            Some("community"),
+            &manifest(),
+            &Default::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("read")
+        .expect("resumed");
+        assert_eq!(again.source.as_deref(), Some("community"));
+        let official = install::basis(
+            &s,
+            "theirs",
+            None,
+            &manifest(),
+            &Default::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("read");
+        assert!(official.is_err(), "{official:?}");
     }
 
     #[tokio::test]

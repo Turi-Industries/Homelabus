@@ -156,28 +156,29 @@ pub async fn catalog(
         return Json(Vec::new());
     };
 
-    let installed: Vec<String> = s
-        .state
-        .installed_apps()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
+    // Installed is this entry's app: `community/foo` is not installed by the official
+    // `foo`, which holds the name it would install as.
+    let mut installed: Vec<String> = Vec::new();
+    for (n, _) in s.state.installed_apps().await.unwrap_or_default() {
+        let source = s.state.app_source(&n).await.ok().flatten();
+        installed.push(hlb_catalog::qualified(source.as_deref(), &n));
+    }
 
     let mut out: Vec<hlb_api::CatalogItem> = cat
         .entries()
         .map(|e| {
             let m = &e.manifest;
             hlb_api::CatalogItem {
-                installed: installed.contains(&m.metadata.name),
-                icon: crate::api::catalog_icon_path(&s.catalog_dir, &m.metadata.name).is_some(),
+                installed: installed.contains(&e.name()),
+                // The icons served are the official catalog's.
+                icon: e.source.is_none()
+                    && crate::api::catalog_icon_path(&s.catalog_dir, &m.metadata.name).is_some(),
                 display_name: m
                     .metadata
                     .display_name
                     .clone()
                     .unwrap_or_else(|| m.metadata.name.clone()),
-                name: m.metadata.name.clone(),
+                name: e.name(),
                 category: m.metadata.category.clone(),
                 homepage: m.metadata.homepage.clone(),
                 image: m.spec.image.reference(),

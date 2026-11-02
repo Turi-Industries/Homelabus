@@ -1231,7 +1231,7 @@ pub async fn start(
     // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
     // from starting: the rest of the API keeps all its value, and the message says
     // what is missing.
-    let catalog = match hlb_catalog::Catalog::load(&cfg.catalog) {
+    let catalog = match crate::catalog::load(&cfg.catalog, &state).await {
         Ok(c) => {
             tracing::info!(apps = c.len(), directory = %cfg.catalog.display(), "catalog loaded");
             Some(Arc::new(c))

@@ -18,6 +18,7 @@ use hlb_state::State;
 
 mod apps;
 pub mod backup;
+pub mod catalog;
 mod confirm;
 pub mod daemon;
 pub mod demo;

@@ -10,6 +10,8 @@ use hlb_types::{Guide, Manifest};
 /// What an install of an app plans and freezes.
 #[derive(Debug, Clone)]
 pub struct Basis {
+    /// The catalog source it is installed from, `None` for the official one.
+    pub source: Option<String>,
     pub manifest: Manifest,
     /// The guide it plans with, frozen beside the manifest.
     pub guide: Guide,
@@ -31,10 +33,16 @@ pub struct Basis {
 /// change reaches a recorded app through `hlb upgrade`.
 ///
 /// `Err` is a refusal to say: a domain that is not a domain name, one another app or
-/// the platform answers at already, or one asked for that is not the one the app has.
+/// the platform answers at already, one asked for that is not the one the app has, or
+/// an app of that name installed from another catalog source.
+///
+/// 🔴 `community/foo` installs as `foo` — its service, volumes and databases keep the
+/// bare name — so it never sits beside an official `foo`: the second would take over
+/// the first's volumes and database. `source` is the catalog entry's.
 pub async fn basis(
     state: &State,
     app: &str,
+    source: Option<&str>,
     catalog: &Manifest,
     catalog_guide: &Guide,
     domain: Option<String>,
@@ -56,6 +64,7 @@ pub async fn basis(
             }
         }
         return Ok(Ok(Basis {
+            source: source.map(str::to_string),
             manifest: catalog.clone(),
             guide: catalog_guide.clone(),
             domain,
@@ -63,6 +72,20 @@ pub async fn basis(
             resumed: None,
         }));
     };
+    let installed_from = state.app_source(app).await?;
+    if installed_from.as_deref() != source {
+        let from = |s: Option<&str>| match s {
+            Some(s) => format!("the source \"{s}\""),
+            None => "the official catalog".to_string(),
+        };
+        return Ok(Err(format!(
+            "\"{app}\" is installed from {} — {} has an app of the same name, and the two \
+             would share its services, volumes and databases: remove one before installing \
+             the other",
+            from(installed_from.as_deref()),
+            from(source)
+        )));
+    }
     let recorded = state.app_domain(app).await?;
     if let Some(asked) = domain
         .as_deref()
@@ -75,6 +98,7 @@ pub async fn basis(
         )));
     }
     Ok(Ok(Basis {
+        source: installed_from,
         manifest: state.app_manifest(app).await?,
         guide: installed_guide(state, app, || Some(catalog_guide.clone())).await?,
         domain: recorded,
@@ -157,6 +181,7 @@ pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()
             .upsert_app(app, &basis.manifest, basis.domain.as_deref())
             .await?;
         state.set_app_guide(app, Some(&basis.guide)).await?;
+        state.set_app_source(app, basis.source.as_deref()).await?;
     }
     state
         .set_app_mail_domain(app, basis.mail_domain.as_deref())
@@ -199,6 +224,7 @@ mod tests {
         basis(
             state,
             app,
+            None,
             &manifest(app),
             &Default::default(),
             Some(domain.into()),
@@ -261,6 +287,7 @@ mod tests {
         let b = basis(
             &state,
             "gitea",
+            None,
             &manifest("gitea"),
             &Default::default(),
             Some(" Git.Example.org ".into()),
@@ -284,6 +311,7 @@ mod tests {
         let first = basis(
             &state,
             "gitea",
+            None,
             &manifest("gitea"),
             &guide("dns"),
             None,
@@ -304,6 +332,7 @@ mod tests {
         let again = basis(
             &state,
             "gitea",
+            None,
             &manifest("gitea"),
             &guide("other"),
             None,

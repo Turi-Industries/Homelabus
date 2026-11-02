@@ -43,9 +43,39 @@ pub enum Error {
     /// In the catalog, for another `hlb`: its range leaves this one out.
     #[error("{why}")]
     SetAside { app: String, why: String },
+
+    #[error(
+        "\"{0}\" is no source name — lower-case letters, digits and dashes, 32 at most, \
+         starting with a letter or a digit"
+    )]
+    SourceName(String),
+
+    #[error("source \"{0}\" is added already")]
+    SourceTaken(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Between a third-party source's name and its app's.
+pub const SEPARATOR: char = '/';
+
+/// The name an app is found under in a catalog holding several sources.
+pub fn qualified(source: Option<&str>, app: &str) -> String {
+    match source {
+        Some(s) => format!("{s}{SEPARATOR}{app}"),
+        None => app.to_string(),
+    }
+}
+
+/// A source's name: what an app's catalog name carries, and a directory's.
+pub fn is_source_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 32
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Catalog {
@@ -57,6 +87,9 @@ pub struct Catalog {
 
 #[derive(Debug, Clone)]
 pub struct Entry {
+    /// The source it came from; `None` for the official catalog, whose apps keep their
+    /// bare names. A third-party app is `<source>/<app>`, so it never shadows one.
+    pub source: Option<String>,
     pub manifest: Manifest,
     pub path: PathBuf,
     /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
@@ -65,6 +98,13 @@ pub struct Entry {
     /// The manifest and the guide as written, for the schema of an older release:
     /// parsed and written again, they would carry every default this build adds.
     written: (serde_json::Value, serde_json::Value),
+}
+
+impl Entry {
+    /// The name it is found under: `<source>/<app>` for a third-party source.
+    pub fn name(&self) -> String {
+        qualified(self.source.as_deref(), &self.manifest.metadata.name)
+    }
 }
 
 impl Catalog {
@@ -88,6 +128,71 @@ impl Catalog {
         Ok(catalog)
     }
 
+    /// Adds a third-party source's apps, each under `<source>/<app>`. A source that
+    /// cannot be read leaves the catalog as it was: the official apps never go with it.
+    ///
+    /// 🔴 A third-party source may REQUIRE a capability, never PROVIDE one. The graph
+    /// finds a capability's provider by its bare name (`postgres`, `pocket-id`), and a
+    /// third-party app installs under its bare name: one called `postgres` would be the
+    /// database every app's credentials go to. So a platform service, or an app named
+    /// like one of the official catalog's, is set aside here.
+    pub fn add_source(&mut self, source: &str, root: impl AsRef<Path>) -> Result<()> {
+        if !is_source_name(source) {
+            return Err(Error::SourceName(source.to_string()));
+        }
+        let prefix = format!("{source}{SEPARATOR}");
+        if self
+            .entries
+            .keys()
+            .chain(self.set_aside.keys())
+            .any(|k| k.starts_with(&prefix))
+        {
+            return Err(Error::SourceTaken(source.to_string()));
+        }
+        let theirs = Self::load(root)?;
+        let platform: Vec<String> = self
+            .entries
+            .values()
+            .filter(|e| e.source.is_none() && e.manifest.kind == hlb_types::Kind::PlatformService)
+            .map(|e| e.manifest.metadata.name.clone())
+            .collect();
+        for (app, why) in theirs.set_aside {
+            self.set_aside.insert(format!("{prefix}{app}"), why);
+        }
+        for (app, mut e) in theirs.entries {
+            let key = format!("{prefix}{app}");
+            let refused = if e.manifest.kind == hlb_types::Kind::PlatformService {
+                Some(format!(
+                    "\"{key}\" is a platform service: a source other than the official \
+                     catalog may require a capability, never provide one"
+                ))
+            } else if platform.contains(&app) {
+                Some(format!(
+                    "\"{key}\" is named like the official platform service \"{app}\", whose \
+                     place it would take for every app that requires it"
+                ))
+            } else {
+                None
+            };
+            match refused {
+                Some(why) => {
+                    self.set_aside.insert(key, why);
+                }
+                None => {
+                    e.source = Some(source.to_string());
+                    self.entries.insert(key, e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The entry an installed app follows: its own source's, never another's of the
+    /// same name.
+    pub fn followed(&self, app: &str, source: Option<&str>) -> Result<&Entry> {
+        self.get(&qualified(source, app))
+    }
+
     pub fn get(&self, name: &str) -> Result<&Entry> {
         if let Some(why) = self.set_aside.get(name) {
             return Err(Error::SetAside {
@@ -101,7 +206,7 @@ impl Catalog {
     }
 
     /// The apps in the catalog for another `hlb`, and why each is left out.
-    pub fn set_aside(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn left_out(&self) -> impl Iterator<Item = (&str, &str)> {
         self.set_aside.iter().map(|(n, w)| (n.as_str(), w.as_str()))
     }
 
@@ -491,6 +596,7 @@ fn load_one(path: &Path, release: &Version) -> Result<Loaded> {
     let written = (as_json(&raw, path)?, as_json(&guide_raw, &guide_path)?);
 
     Ok(Loaded::Entry(Box::new(Entry {
+        source: None,
         manifest,
         path: path.to_path_buf(),
         guide,
@@ -564,6 +670,7 @@ mod tests {
                 .get_or_insert_with(|| ">=0.4.0".into());
             let written = serde_json::to_value(&manifest).expect("json");
             Self {
+                source: None,
                 manifest,
                 path: PathBuf::new(),
                 guide: hlb_types::Guide::default(),
@@ -995,6 +1102,93 @@ mod tests {
         );
     }
 
+    /// A source holding copies of the official catalog's apps, under the names given.
+    fn source_of(apps: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (from, name) in apps {
+            let at = dir.path().join(name);
+            std::fs::create_dir_all(&at).expect("dir");
+            let found = |under: &str| repo_catalog().join(under).join(from).join("manifest.yaml");
+            let path = [found(""), found("_platform")]
+                .into_iter()
+                .find(|p| p.exists())
+                .expect("an official app");
+            let text = std::fs::read_to_string(path).expect("manifest");
+            let text = text.replace(&format!("name: {from}\n"), &format!("name: {name}\n"));
+            std::fs::write(at.join("manifest.yaml"), text).expect("written");
+        }
+        dir
+    }
+
+    #[test]
+    fn a_third_party_app_never_shadows_the_official_one() {
+        let theirs = source_of(&[("librespeed", "librespeed"), ("mealie", "recipes")]);
+        let mut c = Catalog::load(repo_catalog()).expect("catalog");
+        let official = c.len();
+        c.add_source("community", theirs.path()).expect("added");
+
+        assert_eq!(c.len(), official + 2);
+        assert_eq!(c.get("librespeed").expect("official").source, None);
+        let e = c.get("community/librespeed").expect("theirs");
+        assert_eq!(e.source.as_deref(), Some("community"));
+        assert_eq!(e.name(), "community/librespeed");
+        // Installed, each follows its own source.
+        let followed = c
+            .followed("librespeed", Some("community"))
+            .expect("followed");
+        assert_eq!(followed.source.as_deref(), Some("community"));
+        assert!(c.followed("recipes", None).is_err());
+        assert!(c.followed("recipes", Some("community")).is_ok());
+    }
+
+    #[test]
+    fn a_third_party_source_may_require_a_capability_never_provide_one() {
+        // `postgres` as it is, and an app renamed `valkey`: either would be what every
+        // app requiring a database or a cache is handed to.
+        let theirs = source_of(&[
+            ("postgres", "postgres"),
+            ("librespeed", "valkey"),
+            ("gitea", "forge"),
+        ]);
+        let mut c = Catalog::load(repo_catalog()).expect("catalog");
+        c.add_source("community", theirs.path()).expect("added");
+
+        let why = |app: &str| c.get(app).expect_err("set aside").to_string();
+        assert!(
+            why("community/postgres").contains("never provide"),
+            "{}",
+            why("community/postgres")
+        );
+        assert!(
+            why("community/valkey").contains("official platform service \"valkey\""),
+            "{}",
+            why("community/valkey")
+        );
+        // Requiring a database is what an app does.
+        assert!(c.get("community/forge").is_ok());
+        assert_eq!(c.get("postgres").expect("official").source, None);
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_read_leaves_the_official_catalog_whole() {
+        let mut c = Catalog::load(repo_catalog()).expect("catalog");
+        let official = c.len();
+        assert!(c.add_source("gone", "/does/not/exist").is_err());
+        for bad in ["", "Community", "-x", "a/b", &"x".repeat(33)] {
+            assert!(
+                matches!(c.add_source(bad, repo_catalog()), Err(Error::SourceName(_))),
+                "{bad:?} accepted"
+            );
+        }
+        let theirs = source_of(&[("librespeed", "librespeed")]);
+        c.add_source("mine", theirs.path()).expect("added");
+        assert!(matches!(
+            c.add_source("mine", theirs.path()),
+            Err(Error::SourceTaken(_))
+        ));
+        assert_eq!(c.len(), official + 1);
+    }
+
     /// A copy of the repository's catalog, one manifest's range rewritten.
     fn with_range(app: &str, range: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1031,7 +1225,7 @@ mod tests {
             err.contains(">=9.0.0") && err.contains("update hlb"),
             "{err}"
         );
-        assert_eq!(c.set_aside().count(), 1);
+        assert_eq!(c.left_out().count(), 1);
         assert!(!c.names().any(|n| n == "jellyfin"));
         // Validated by this hlb, the catalog is not one it can run.
         assert!(c

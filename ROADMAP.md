@@ -227,6 +227,25 @@ exported — Homelabus never bills.
   yet**: no app of the catalog consumes CalDAV, and a declaration nobody reads is worse
   than none — it comes with the first app that does.
 
+#### Decided by the owner, 2026-11-02
+
+- **Phase 3's order**: the guide frozen at install, then the `hlb` range per app, then
+  sources and a signed index, then the split into `homelabus-catalog` — creating that
+  repository is asked for before it is done.
+- **The index is signed by `hlb catalog sign`**: Ed25519, the private key a file
+  encrypted under a passphrase, on the owner's machine. The command refuses an index
+  whose counter does not rise above the published one or whose expiry is not ahead —
+  over `minisign`, which signs whatever bytes it is given, and a FIDO key, whose
+  verification nothing in the workspace offers yet.
+- **An index is valid 30 days**: the owner signs at least monthly, merge or not, and a
+  mirror can hide a fix for a month at most.
+- **An expired index blocks what is new, never what runs**: installed apps keep running
+  and redeploy from their frozen manifest; an install or an update from that source is
+  refused, naming the expiry and the command that fetches a fresh index.
+- **One `foo` installed at a time**: `community/foo` installs as `foo` — service,
+  volumes and databases keep the bare name — and is refused at preview while `foo` from
+  another source is installed, and the other way round. They never sit side by side.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1112,6 +1131,15 @@ pull request to the catalog, with no `hlb` release.
   is set aside instead of refusing the whole catalog, and `catalog validate` holds a
   range to the schema its floor's release committed (`crates/hlb-types/schemas/`).
   Every app starts at 0.4.0: the field itself is unknown to 0.3.0.
+- ✅ Sources, unsigned — 2026-11-02 (step 3, first half). `hlb catalog source
+  add|list|remove`: a directory read beside the official catalog, its apps
+  `<source>/<app>`, installed under the bare name and refused while another source's
+  app of that name is installed (`install::basis`). A platform service in a source, or
+  an app named after one of the official catalog's, is set aside: the graph finds a
+  provider by its bare name. The source is frozen in `apps.source` (migration 0052);
+  `upgrade` and `update check` follow it (`Catalog::followed`). The controller and
+  privd read the sources once at startup. Left for the second half: the signed index
+  and its fetch, so a source can be a URL.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

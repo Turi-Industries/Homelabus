@@ -23,6 +23,19 @@ preview" in [`.claude/rules/interface-api.md`](../.claude/rules/interface-api.md
 ./target/debug/hlb plan gitea --domain git.example.org
 ```
 
+A directory of apps can be read beside the official catalog. Its apps are named
+`<source>/<app>` and install under their bare name, so one never sits beside an official
+app of the same name. A source may require a capability but never provide one: a
+platform service in it, or an app named after one, is set aside.
+
+```sh
+./target/debug/hlb catalog source add community ./my-apps           # preview: what it holds and sets aside
+./target/debug/hlb catalog source add community ./my-apps --apply
+./target/debug/hlb catalog source list
+./target/debug/hlb install community/recipes --domain recipes.example.org
+./target/debug/hlb catalog source remove community --apply          # what it installed keeps running
+```
+
 ## Installing and running an app
 
 ```sh

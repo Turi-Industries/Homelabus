@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
     // from starting: the rest of the API keeps all its value, and the message says
     // what is missing.
-    let catalog = match hlb_catalog::Catalog::load(&cli.daemon.catalog) {
+    let catalog = match hlb_privd::catalog::load(&cli.daemon.catalog, &state).await {
         Ok(c) => {
             tracing::info!(apps = c.len(), directory = %cli.daemon.catalog.display(), "catalog loaded");
             Some(Arc::new(c))
