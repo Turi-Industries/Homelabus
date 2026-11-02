@@ -1179,6 +1179,12 @@ pull request to the catalog, with no `hlb` release.
   trusted explicitly per app or per source), local (a directory). An app carries its
   source's name, so `community/foo` never shadows `foo`; a third-party source may
   REQUIRE a capability and never PROVIDE one. A revocation list `hlb` reads.
+  🟡 Revocation, first half — 2026-11-02: `index.revoked` (signed with the index), fed
+  by the catalog's `revoked.yaml`, carried by every later build and never dropped, a
+  version no index holds refused; a revoked version is never offered, an app whose
+  every version is revoked set aside with the reason. Left: `apps.source_version`
+  (an install records the version it took) and a `version_revoked` cause in the inbox
+  for a house running one.
 - A signed `index.json` — each manifest's and image's digest, a counter that only
   rises, an expiry, so a mirror can neither replay nor freeze it — one key per source;
   the frozen install keeps its source and index number. Each app version declares the

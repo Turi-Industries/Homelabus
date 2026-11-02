@@ -45,6 +45,23 @@ pub enum Error {
     #[error("\"{0}\" declares no `metadata.hlb`: an index says which hlb each version runs on")]
     NoRange(String),
 
+    #[error(
+        "{file} revokes {app} {version}, which no index of this source holds — a version is \
+         named as the index names it (`apps/{app}/<version>`)"
+    )]
+    UnknownRevocation {
+        file: PathBuf,
+        app: String,
+        version: String,
+    },
+
+    #[error("{path}: {source}")]
+    Yaml {
+        path: PathBuf,
+        #[source]
+        source: serde_yaml_ng::Error,
+    },
+
     #[error("{0} is not empty: an index is built into a directory of its own")]
     OutNotEmpty(PathBuf),
 
@@ -164,11 +181,13 @@ pub fn build(
         apps.insert(app.clone(), versions);
     }
 
+    let revoked = revocations(catalog_dir, before.as_ref().map(|(i, _)| i), &apps)?;
     let idx = Index {
         source: source.to_string(),
         counter: before.map_or(1, |(i, _)| i.counter + 1),
         expires: now + index::VALIDITY_SECS,
         apps,
+        revoked,
     };
     let mut text = serde_json::to_string_pretty(&idx).map_err(|source| Error::Json {
         path: out.join(index::FILE),
@@ -177,6 +196,52 @@ pub fn build(
     text.push('\n');
     write(&out.join(index::FILE), text.as_bytes())?;
     Ok(idx)
+}
+
+/// The file of a catalog listing its revoked versions: `<app>: [{ version, why }]`.
+pub const REVOKED_FILE: &str = "revoked.yaml";
+
+/// The previous index's revocations, and the catalog's `revoked.yaml` added to them. A
+/// revocation is never dropped — a file edited by mistake would quietly bring a
+/// withdrawn version back — and a new one must name a version the index holds, or a
+/// typo would revoke nothing while reading as done.
+fn revocations(
+    catalog_dir: &Path,
+    before: Option<&Index>,
+    apps: &BTreeMap<String, Vec<AppVersion>>,
+) -> Result<BTreeMap<String, Vec<index::Revoked>>> {
+    let mut out = before.map(|i| i.revoked.clone()).unwrap_or_default();
+    let file = catalog_dir.join(REVOKED_FILE);
+    let listed: BTreeMap<String, Vec<index::Revoked>> = match std::fs::read_to_string(&file) {
+        Ok(text) => serde_yaml_ng::from_str(&text).map_err(|source| Error::Yaml {
+            path: file.clone(),
+            source,
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(source) => return Err(Error::Io { path: file, source }),
+    };
+    for (app, versions) in listed {
+        for r in versions {
+            let held = apps
+                .get(&app)
+                .into_iter()
+                .chain(before.and_then(|b| b.apps.get(&app)))
+                .flatten()
+                .any(|v| v.version == r.version);
+            if !held {
+                return Err(Error::UnknownRevocation {
+                    file: file.clone(),
+                    app,
+                    version: r.version,
+                });
+            }
+            let list = out.entry(app.clone()).or_default();
+            if !list.iter().any(|x| x.version == r.version) {
+                list.push(r);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Signs the index in `dir` with `seed`, writing `index.json.sig` beside it.
@@ -645,6 +710,52 @@ mod tests {
     }
 
     #[test]
+    fn a_revocation_is_carried_for_good_and_never_offered() {
+        let cat = catalog();
+        let (one, first) = built(cat.path(), None);
+        let v = first.apps["mealie"][0].version.clone();
+
+        // A version no index holds is a typo, refused rather than read as done.
+        std::fs::write(
+            cat.path().join(REVOKED_FILE),
+            "mealie: [ { version: \"0.0.0\", why: x } ]\n",
+        )
+        .expect("written");
+        let out = tempfile::tempdir().expect("out");
+        assert!(matches!(
+            build(cat.path(), "community", Some(one.path()), out.path(), NOW),
+            Err(Error::UnknownRevocation { .. })
+        ));
+
+        std::fs::write(
+            cat.path().join(REVOKED_FILE),
+            format!("mealie: [ {{ version: \"{v}\", why: \"leaks sessions — upgrade\" }} ]\n"),
+        )
+        .expect("written");
+        let (two, idx) = built(cat.path(), Some(one.path()));
+        assert_eq!(
+            idx.revocation("mealie", &v),
+            Some("leaks sessions — upgrade")
+        );
+        // The file emptied, the revocation stays.
+        std::fs::remove_file(cat.path().join(REVOKED_FILE)).expect("removed");
+        let (three, idx) = built(cat.path(), Some(two.path()));
+        assert!(idx.revocation("mealie", &v).is_some(), "dropped");
+
+        // Its only version revoked, the app is set aside, saying why.
+        sign(three.path(), &SEED, None, NOW).expect("signed");
+        let mut c = Catalog::default();
+        c.add_signed_source("community", three.path(), &public_key(&SEED), NOW)
+            .expect("added");
+        let why = c
+            .get("community/mealie")
+            .expect_err("set aside")
+            .to_string();
+        assert!(why.contains("revoked: leaks sessions"), "{why}");
+        assert!(c.get("community/librespeed").is_ok());
+    }
+
+    #[test]
     fn a_build_never_mixes_with_what_a_directory_holds() {
         let cat = catalog();
         let out = tempfile::tempdir().expect("out");
@@ -684,6 +795,7 @@ mod tests {
             ("app", "1", "/etc/passwd"),
         ] {
             let idx = Index {
+                revoked: BTreeMap::new(),
                 source: "community".into(),
                 counter: 1,
                 expires: NOW,

@@ -39,6 +39,21 @@ pub struct Index {
     pub expires: i64,
     /// Each app's versions, oldest first.
     pub apps: BTreeMap<String, Vec<AppVersion>>,
+    /// The versions withdrawn, by app: never installed or upgraded to again, and named
+    /// on every house running one. Signed with the rest, so a mirror cannot hide a
+    /// revocation longer than it can hide the index — and never taken back: a version
+    /// revoked by mistake is followed by a new one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub revoked: BTreeMap<String, Vec<Revoked>>,
+}
+
+/// A version withdrawn from a source, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Revoked {
+    pub version: String,
+    /// Said to whoever runs it: what is wrong, and what to do.
+    pub why: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -57,11 +72,20 @@ pub struct AppVersion {
 
 impl Index {
     /// The version of `app` this `hlb` installs: the newest its range accepts.
+    /// A revoked version is never it, whatever its range.
     pub fn newest_for(&self, app: &str, release: &crate::release::Version) -> Option<&AppVersion> {
-        self.apps
+        self.apps.get(app)?.iter().rev().find(|v| {
+            crate::release::accepts(&v.hlb, release).unwrap_or(false)
+                && self.revocation(app, &v.version).is_none()
+        })
+    }
+
+    /// Why `version` of `app` was revoked, if it was.
+    pub fn revocation(&self, app: &str, version: &str) -> Option<&str> {
+        self.revoked
             .get(app)?
             .iter()
-            .rev()
-            .find(|v| crate::release::accepts(&v.hlb, release).unwrap_or(false))
+            .find(|r| r.version == version)
+            .map(|r| r.why.as_str())
     }
 }

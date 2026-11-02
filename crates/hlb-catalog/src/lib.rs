@@ -191,6 +191,20 @@ impl Catalog {
                 continue;
             }
             let Some(v) = idx.newest_for(app, &release) else {
+                // Its range accepts this hlb and the source withdrew it: the why is
+                // the source's, and says what to do.
+                if let Some(why) = versions.iter().rev().find_map(|v| {
+                    hlb_types::release::accepts(&v.hlb, &release)
+                        .unwrap_or(false)
+                        .then(|| idx.revocation(app, &v.version))
+                        .flatten()
+                }) {
+                    theirs.set_aside.insert(
+                        app.clone(),
+                        format!("every version of \"{app}\" this hlb runs is revoked: {why}"),
+                    );
+                    continue;
+                }
                 let ranges: Vec<&str> = versions.iter().map(|v| v.hlb.as_str()).collect();
                 theirs.set_aside.insert(
                     app.clone(),
