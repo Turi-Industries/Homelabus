@@ -69,7 +69,7 @@ fn run(args: &[&str]) {
 /// The value an SQL assertion of the catalog's manifest reads, as the controller's
 /// reader would: the first column of the first row.
 fn assertion(id: &str) -> String {
-    let m = catalog("vaultwarden");
+    let m = catalog("apps/vaultwarden");
     let a = m
         .spec
         .assertions
@@ -144,7 +144,7 @@ async fn start() {
         // here their domain is let in, and the invited account's.
         "-e",
         "SIGNUPS_DOMAINS_WHITELIST=owner.example.org,example.org",
-        &catalog("vaultwarden").spec.image.reference(),
+        &catalog("apps/vaultwarden").spec.image.reference(),
     ]);
     let http = reqwest::Client::new();
     for _ in 0..90 {

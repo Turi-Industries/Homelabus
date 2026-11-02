@@ -345,7 +345,7 @@ mod tests {
     /// A catalog holding a copy of one official app.
     fn catalog() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("catalog");
-        let official = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/librespeed");
+        let official = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/apps/librespeed");
         let ok = std::process::Command::new("cp")
             .arg("-r")
             .arg(official)

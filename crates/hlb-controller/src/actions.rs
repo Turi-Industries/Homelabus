@@ -172,7 +172,7 @@ pub async fn catalog(
                 installed: installed.contains(&e.name()),
                 // The icons served are the official catalog's.
                 icon: e.source.is_none()
-                    && crate::api::catalog_icon_path(&s.catalog_dir, &m.metadata.name).is_some(),
+                    && crate::api::catalog_icon_path(&cat, &m.metadata.name).is_some(),
                 display_name: m
                     .metadata
                     .display_name

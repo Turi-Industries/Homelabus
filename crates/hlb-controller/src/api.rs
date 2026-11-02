@@ -1225,9 +1225,9 @@ async fn appearance_logo(AxumState(s): AxumState<Arc<AppState>>) -> Result<Respo
 /// which is the catalog, shipped with the source, identical on every installation.
 /// Nothing about what is INSTALLED here goes through it.
 ///
-/// The icon lives at `catalog/<name>/icon.png`, beside the manifest it belongs to, so
-/// adding an application is adding one folder. Platform services are looked up under
-/// `_platform/` as a second attempt, because that is where the catalog keeps them.
+/// The icon lives beside the manifest it belongs to, so adding an application is adding
+/// one folder — wherever the catalog read it from: `catalog/apps`, `_platform`, or the
+/// official index's cache, which carries each version's files.
 #[utoipa::path(
     get,
     path = "/api/catalog/{name}/icon",
@@ -1256,7 +1256,8 @@ async fn catalog_icon(
         return Err(ApiError::NotFound("no icon".into()));
     }
 
-    if let Some(path) = catalog_icon_path(&s.catalog_dir, &name) {
+    let path = s.catalog.get().and_then(|c| catalog_icon_path(&c, &name));
+    if let Some(path) = path {
         if let Ok(png) = tokio::fs::read(&path).await {
             return Ok((
                 [
@@ -1281,15 +1282,13 @@ async fn catalog_icon(
 /// catalog listing's `icon` read, so the listing cannot promise an icon the route
 /// would refuse.
 pub(crate) fn catalog_icon_path(
-    catalog_dir: &std::path::Path,
+    catalog: &hlb_catalog::Catalog,
     name: &str,
 ) -> Option<std::path::PathBuf> {
-    [
-        catalog_dir.join(name).join("icon.png"),
-        catalog_dir.join("_platform").join(name).join("icon.png"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
+    // The official catalog's alone: a third-party source's logo is its owner's to
+    // vouch for, and a bare name is the official app's whatever a source holds.
+    let e = catalog.get(name).ok().filter(|e| e.source.is_none())?;
+    Some(e.path.parent()?.join("icon.png")).filter(|p| p.is_file())
 }
 
 /// Every theme a person may pick — the shipped ones, then the installation's — painted

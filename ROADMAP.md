@@ -252,6 +252,11 @@ exported — Homelabus never bills.
   signed index** — a `revoked` list, so it needs no second key and a mirror cannot hide
   it past the index's 30 days. **Quality levels run on GitHub's hosted runners**, a
   single-node Swarm each — no runner of the owner's exposed to a stranger's pull request.
+- **The catalog's CI gets `hlb` from a mirror** (2026-11-02): Homelabus and its releases
+  are private, and a fork's pull request gets no token. `scripts/mirror-hlb.sh` in the
+  catalog copies a release, verified by its own `install.sh`, into the catalog's
+  releases; CI pins `install.sh` by the sum written in `hlb.env`, which checks the
+  binary's signature by Homelabus's release workflow.
 
 #### The phases
 
@@ -1188,6 +1193,20 @@ pull request to the catalog, with no `hlb` release.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.
+  ✅ The split — 2026-11-02: `Turi-Industries/homelabus-catalog` created public, ONE
+  commit (the history starts over, as Homelabus's will), mounted here at `catalog/apps`
+  as a submodule; `_platform` stays. Its CI validates a pull request with `hlb catalog
+  validate --apps .` (its apps over the platform that `hlb` carries, a platform service
+  among them refused) and builds the next index on merge and twice a month;
+  `scripts/publish.sh` signs it on the owner's machine and pushes it to GitHub Pages,
+  `scripts/github-settings.sh` sets the repository (squash only, read-only token, the
+  rules on main, immutable releases). Rehearsed locally with a throwaway key: built,
+  signed `--first`, verified, built again over it and signed as index 2. The carried
+  catalog stays in `hlb` and the image as the fallback the official index lays over.
+  An icon is read beside its entry's manifest, wherever the catalog read it from.
+  Left: the owner's key (`hlb catalog key generate`, then `official.pub` there and
+  `OFFICIAL_KEY` here), a release carrying `--apps`, mirrored (`scripts/mirror-hlb.sh`),
+  before its CI passes.
 - Three levels of source — official (its key built into `hlb`), community (any URL,
   trusted explicitly per app or per source), local (a directory). An app carries its
   source's name, so `community/foo` never shadows `foo`; a third-party source may

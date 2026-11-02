@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     fn copy(app: &str, into: &std::path::Path) {
-        let official = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog");
+        let official = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/apps");
         let ok = std::process::Command::new("cp")
             .arg("-r")
             .arg(official.join(app))

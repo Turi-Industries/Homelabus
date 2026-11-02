@@ -9069,7 +9069,7 @@
     },
     "/api/catalog/{name}/icon": {
       "get": {
-        "description": "🔴 Unauthenticated, like `appearance_logo` and for a weaker version of the same\nreason: it is decoration. What leaks is which applications this catalog offers —\nwhich is the catalog, shipped with the source, identical on every installation.\nNothing about what is INSTALLED here goes through it.\n\nThe icon lives at `catalog/<name>/icon.png`, beside the manifest it belongs to, so\nadding an application is adding one folder. Platform services are looked up under\n`_platform/` as a second attempt, because that is where the catalog keeps them.",
+        "description": "🔴 Unauthenticated, like `appearance_logo` and for a weaker version of the same\nreason: it is decoration. What leaks is which applications this catalog offers —\nwhich is the catalog, shipped with the source, identical on every installation.\nNothing about what is INSTALLED here goes through it.\n\nThe icon lives beside the manifest it belongs to, so adding an application is adding\none folder — wherever the catalog read it from: `catalog/apps`, `_platform`, or the\nofficial index's cache, which carries each version's files.",
         "operationId": "catalog_icon",
         "parameters": [
           {

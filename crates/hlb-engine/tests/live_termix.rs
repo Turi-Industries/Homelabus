@@ -88,7 +88,7 @@ impl Drop for Cleanup {
 
 fn catalog() -> hlb_types::Manifest {
     let p = format!(
-        "{}/../../catalog/termix/manifest.yaml",
+        "{}/../../catalog/apps/termix/manifest.yaml",
         env!("CARGO_MANIFEST_DIR")
     );
     serde_yaml_ng::from_str(&std::fs::read_to_string(p).expect("manifest")).expect("parsed")

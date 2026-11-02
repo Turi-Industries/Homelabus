@@ -56,6 +56,12 @@ pub enum Error {
 
     #[error("\"{OFFICIAL}\" is the official catalog's name: a source takes another")]
     Reserved,
+
+    #[error(
+        "\"{0}\" is a platform service, or named like one: the platform moves with hlb, \
+         in its own repository, never in the apps' catalog"
+    )]
+    PlatformInApps(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -149,6 +155,31 @@ impl Catalog {
         let mut catalog = Self::default();
         collect(root, release, &mut catalog)?;
         Ok(catalog)
+    }
+
+    /// The official catalog in its two repositories: the platform services of the
+    /// catalog in `platform` — this `hlb`'s, which they move with — and the apps of
+    /// `apps`, the catalog repository's checkout, in place of `platform`'s. What a pull
+    /// request to the catalog is validated as: its apps beside the platform they will
+    /// run with.
+    ///
+    /// 🔴 A platform service among the apps is refused, and an app named like one: the
+    /// official index's platform is never read (`add_official`), so it would validate
+    /// here and never run anywhere.
+    pub fn load_apps_over(platform: impl AsRef<Path>, apps: impl AsRef<Path>) -> Result<Self> {
+        let mut c = Self::load(platform)?;
+        let is_platform = |e: &Entry| e.manifest.kind == hlb_types::Kind::PlatformService;
+        c.entries.retain(|_, e| is_platform(e));
+        c.set_aside.clear();
+        let theirs = Self::load(apps)?;
+        for (app, e) in theirs.entries {
+            if is_platform(&e) || c.entries.contains_key(&app) {
+                return Err(Error::PlatformInApps(app));
+            }
+            c.entries.insert(app, e);
+        }
+        c.set_aside.extend(theirs.set_aside);
+        Ok(c)
     }
 
     /// Adds a third-party source's apps, each under `<source>/<app>`. A source that
@@ -949,6 +980,35 @@ mod tests {
     }
 
     #[test]
+    fn the_apps_repository_is_read_over_the_platform_and_holds_no_platform_service() {
+        let copy = |from: &Path, to: &Path| {
+            let ok = std::process::Command::new("cp")
+                .arg("-r")
+                .arg(from)
+                .arg(to)
+                .status()
+                .expect("cp")
+                .success();
+            assert!(ok);
+        };
+        let apps = tempfile::tempdir().expect("apps");
+        copy(&repo_catalog().join("apps/mealie"), apps.path());
+        let c = Catalog::load_apps_over(repo_catalog(), apps.path()).expect("read");
+        // Its apps alone: one the carried catalog holds and the repository does not
+        // is gone, as a removal merged there is.
+        assert!(c.get("mealie").is_ok());
+        assert!(matches!(c.get("gitea"), Err(Error::UnknownApp(_))));
+        assert!(c.get("postgres").is_ok());
+        assert!(c.validate_all().is_empty(), "{:?}", c.validate_all());
+
+        copy(&repo_catalog().join("_platform/postgres"), apps.path());
+        assert!(matches!(
+            Catalog::load_apps_over(repo_catalog(), apps.path()),
+            Err(Error::PlatformInApps(a)) if a == "postgres"
+        ));
+    }
+
+    #[test]
     fn loads_the_bundled_catalog() {
         let c = Catalog::load(repo_catalog()).expect("catalog should load");
         assert!(c.len() >= 6, "{} entries found", c.len());
@@ -1362,7 +1422,7 @@ mod tests {
             let at = dir.path().join(name);
             std::fs::create_dir_all(&at).expect("dir");
             let found = |under: &str| repo_catalog().join(under).join(from).join("manifest.yaml");
-            let path = [found(""), found("_platform")]
+            let path = [found("apps"), found("_platform")]
                 .into_iter()
                 .find(|p| p.exists())
                 .expect("an official app");
@@ -1454,7 +1514,11 @@ mod tests {
                 .expect("cp")
         };
         assert!(copy(&repo_catalog(), dir.path()).success());
-        let path = dir.path().join("catalog").join(app).join("manifest.yaml");
+        let path = dir
+            .path()
+            .join("catalog/apps")
+            .join(app)
+            .join("manifest.yaml");
         let text = std::fs::read_to_string(&path).expect("manifest");
         let text = text.replace("hlb: \">=0.4.0\"", &format!("hlb: \"{range}\""));
         std::fs::write(&path, text).expect("written");
@@ -1467,7 +1531,7 @@ mod tests {
         // install, every nightly re-check — for an app nobody here had asked for.
         let dir = with_range("jellyfin", ">=9.0.0");
         // And a field no release knows yet, which this build would refuse.
-        let path = dir.path().join("catalog/jellyfin/manifest.yaml");
+        let path = dir.path().join("catalog/apps/jellyfin/manifest.yaml");
         let text = std::fs::read_to_string(&path).expect("manifest") + "futureField: true\n";
         std::fs::write(&path, text).expect("written");
 

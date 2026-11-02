@@ -34,6 +34,15 @@ out=()
 if [[ $gitdir != "$common" && -x scripts/worktree-target.sh ]]; then
     seeded=$(scripts/worktree-target.sh "$root" 2>&1) && [[ -n $seeded ]] && out+=("$seeded")
 fi
+# `catalog/apps` is the `homelabus-catalog` repository: a fresh worktree has it empty,
+# and the build refuses to carry a catalog with no app.
+if [[ -f .gitmodules && ! -e catalog/apps/.git ]]; then
+    if git submodule update --init --quiet 2>/dev/null; then
+        out+=("\`catalog/apps\` checked out (the \`homelabus-catalog\` submodule).")
+    else
+        out+=("⚠️ \`catalog/apps\` is empty and \`git submodule update --init\` failed: nothing builds until it is checked out.")
+    fi
+fi
 if [[ $gitdir == "$common" ]]; then
     out+=("This session is in the MAIN checkout, on \`$branch\`.")
 else

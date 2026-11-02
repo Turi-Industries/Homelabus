@@ -420,7 +420,7 @@ mod tests {
         let theirs = tempfile::tempdir().expect("source");
         let copied = std::process::Command::new("cp")
             .arg("-r")
-            .arg(official.join("librespeed"))
+            .arg(official.join("apps/librespeed"))
             .arg(theirs.path())
             .status()
             .expect("cp")

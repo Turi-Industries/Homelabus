@@ -30,7 +30,7 @@ fn docker(args: &[&str]) -> std::process::Output {
 fn image() -> String {
     let p = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../catalog/vaultwarden/manifest.yaml"
+        "/../../catalog/apps/vaultwarden/manifest.yaml"
     );
     let m: hlb_types::manifest::Manifest =
         serde_yaml_ng::from_str(&std::fs::read_to_string(p).expect("manifest")).expect("parsed");

@@ -456,7 +456,7 @@ fn seafile() {
         let _ = docker(&["rm", "-f", c]);
     }
     let _ = docker(&["network", "create", NETWORK]);
-    let m = catalog("seafile");
+    let m = catalog("apps/seafile");
     let mariadb = catalog("_platform/mariadb").spec.image.reference();
     let valkey = catalog("_platform/valkey").spec.image.reference();
     assert!(docker(&[
@@ -592,7 +592,11 @@ async fn a_role_s_quota_and_a_person_s_reach_seafile() {
     })
     .await;
     lab.state
-        .upsert_app("seafile", &catalog("seafile"), Some("files.example.org"))
+        .upsert_app(
+            "seafile",
+            &catalog("apps/seafile"),
+            Some("files.example.org"),
+        )
         .await
         .expect("installed");
     let mut family = hlb_users::RoleDef::new(
@@ -748,7 +752,7 @@ async fn an_immich_account_s_quota_follows_its_role_after_its_creation() {
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    let m = catalog("immich");
+    let m = catalog("apps/immich");
     assert!(docker(&[
         "run",
         "-d",

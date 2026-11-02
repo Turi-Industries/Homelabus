@@ -1,0 +1,3 @@
+[submodule "catalog/apps"]
+	path = catalog/apps
+	url = https://github.com/Turi-Industries/homelabus-catalog.git

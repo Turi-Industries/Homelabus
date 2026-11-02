@@ -165,8 +165,14 @@ written by hand: `src/lib/api/schema.d.ts` (types, from `openapi.json`),
 
 ## Adding an app to the catalog
 
-An app is a folder under `catalog/` holding its `manifest.yaml` and, if it needs one, a
-`guide.yaml`. `hlb catalog validate` must pass; it refuses a typo with its line number.
+An app is a folder of [`homelabus-catalog`](https://github.com/Turi-Industries/homelabus-catalog),
+mounted here at `catalog/apps` as a submodule, holding its `manifest.yaml` and, if it
+needs one, a `guide.yaml`. It enters by a pull request THERE, and reaches every
+installation through the official signed index without a release of `hlb`; that
+repository's CONTRIBUTING carries these rules too. A platform service — what an app
+requires, never installs — stays here, under `catalog/_platform`, and moves with `hlb`.
+`hlb catalog validate --apps catalog/apps` must pass; it refuses a typo with its line
+number.
 
 - **Needs, never addresses.** `requires` says what the app needs (`database`, `sso`,
   `smtp`, `storage`…); `env` and `files` receive it through tokens —

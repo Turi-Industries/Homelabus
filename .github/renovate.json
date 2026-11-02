@@ -62,7 +62,7 @@
       "groupName": "GitHub Actions"
     },
     {
-      "description": "A catalog app is rehearsed before its version moves: one pull request per app, holding every image its manifest names — a companion moves with its app, never apart.",
+      "description": "A platform service is rehearsed before its version moves: one pull request per service, holding every image its manifest names — a companion moves with its service, never apart. The apps are homelabus-catalog's, moved by its own Renovate.",
       "matchFileNames": ["catalog/**"],
       "groupName": "{{parentDir}}",
       "labels": ["dependencies", "catalog"]
@@ -71,15 +71,6 @@
       "description": "Its refs are branches (`stable`, `1.94.0`), which Renovate's tag lookup cannot read; and the MSRV's must never move by itself.",
       "matchPackageNames": ["dtolnay/rust-toolchain"],
       "enabled": false
-    },
-    {
-      "description": "Over 60,000 tags on ghcr (a variant per accelerator, a build per pull request): Renovate's lookup gives up. Immich requires it at the server's exact version, so the server's pull request says to move it by hand.",
-      "matchPackageNames": ["ghcr.io/immich-app/immich-machine-learning"],
-      "enabled": false
-    },
-    {
-      "matchFileNames": ["catalog/immich/**"],
-      "prBodyNotes": ["🔴 Move `immich-machine-learning` to the same tag, with its digest, in this pull request: Immich refuses a machine-learning service of another version, and Renovate cannot look it up."]
     }
   ],
   "customManagers": [

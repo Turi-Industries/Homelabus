@@ -87,7 +87,8 @@ topology is.
 with a `_ =>` arm; note that a `..` in a pattern does the same damage more quietly.
 
 ```
-catalog/*/manifest.yaml
+catalog/{_platform,apps}/*/manifest.yaml  apps/ is homelabus-catalog, a submodule: an app
+   is committed THERE, reaching houses by the signed index; the platform moves with hlb
    ↓  hlb-catalog     load, validate, check folder name == metadata.name
 Manifest (hlb-types)
    ↓  hlb-resolver    capability resolution + dependency graph

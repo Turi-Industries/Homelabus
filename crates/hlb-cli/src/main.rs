@@ -2056,7 +2056,13 @@ enum CatalogCmd {
     /// List the available apps.
     List,
     /// Validate every manifest and the dependency graph.
-    Validate,
+    Validate {
+        /// The catalog repository's checkout: its apps validated beside the platform
+        /// services of `--catalog` (this hlb's own when there is none here), in place
+        /// of its apps.
+        #[arg(long)]
+        apps: Option<std::path::PathBuf>,
+    },
     /// The newest mature version of each image's own tag shape and major, and the
     /// digest it names. Preview by default; `--apply` writes them into the manifests.
     /// A major is said, never written: a person rehearses it first.
@@ -5841,8 +5847,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
-        Command::Catalog(CatalogCmd::Validate) => {
-            let c = Catalog::load(&cli.catalog)?;
+        Command::Catalog(CatalogCmd::Validate { apps }) => {
+            let c = match apps {
+                Some(apps) => Catalog::load_apps_over(&cli.catalog, apps)?,
+                None => Catalog::load(&cli.catalog)?,
+            };
             let errs = c.validate_all();
 
             for (name, e) in &errs {

@@ -50,6 +50,10 @@ fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // The catalog repository's own `.github/` and `.git` are not the catalog.
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         if path.is_dir() {
             walk(&path, files);
             // A directory's rename or removal changes what is carried.

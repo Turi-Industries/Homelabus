@@ -22,6 +22,9 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# Every checkout takes `catalog/apps`, the `homelabus-catalog` repository: the build
+# carries the catalog into `hlb` (`hlb-cli/build.rs`), and refuses to build without one.
+#
 # Every job names its image, as the other workflows do: `ubuntu-latest` moves to the next
 # release on GitHub's date, and the browser job relies on the libraries this one ships.
 jobs:
@@ -32,6 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
@@ -48,6 +52,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Integration tests are #[ignore]d on purpose: they need Docker, a live
@@ -65,6 +70,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - run: bun install --frozen-lockfile
       # Against the lockfile, the advisories of the day: a dependency nobody changed can
@@ -99,6 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -129,6 +136,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       # RustSec's own build, by its version and its digest: the auditor is code that
       # reads ours. Compiling it took 2m40s of every run.
@@ -153,6 +161,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       - uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: cargo check
@@ -165,6 +174,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: true
       # Every file says who owns it and under what licence (REUSE.toml): a logo or a
       # key copied in without saying whose it is fails here, not in a takedown.
       - uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0

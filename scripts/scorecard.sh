@@ -80,35 +80,38 @@ row "3 never stolen" "nodes per protection level (A verified boot … D a virtua
 row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tangs (lab, 2026-10-29: enc2, Debian 13, from \`node preseed --encrypt\` to \`node bind-disk\` — away from both Tangs, nothing mounted after 2 min, the initrd's SSH alone answering; its disk on another TPM, Tangs up, closed; the kit's key opens it. Level A, 2026-10-29: enc3, UEFI and Secure Boot — GRUB chosen in the firmware, Tangs up, it waits; the kit's key opens it)" "nothing readable"
 
 # 4. An app without Rust -------------------------------------------------------------
-# The history restarted as one commit (2026-10-27) holding every app and every crate:
-# an app added there reads as needing all of the Rust, whatever it needed, so those
-# are said apart instead of counted — counted, the row read "0 of 12" for good.
-root=$(git rev-list --max-parents=0 HEAD | tail -1)
-apps=0
-pure=0
-before=0
-for manifest in catalog/*/manifest.yaml; do
-    [[ $manifest == catalog/_platform/* ]] && continue
-    added=$(git log --diff-filter=A --format=%H -- "$manifest" | tail -1)
-    [[ -n $added ]] || continue
-    if [[ $added == "$root" ]]; then
-        before=$((before + 1))
-        continue
-    fi
-    apps=$((apps + 1))
-    rust=$(git show --numstat --format= "$added" -- 'crates/*/src/**' | awk '{s += $1 + $2} END {print s + 0}')
-    ((rust == 0)) && pure=$((pure + 1))
-done
-row "4 no Rust" "apps whose first commit changed no Rust under \`crates/*/src\`" "$pure of $apps added since the history restarted ($before predate it, uncounted)" "every app added from now on"
-
-# Phase 3's gate: an app reaching the house with no release means the catalog is neither
-# baked into the controller's image nor kept in this repository.
-if grep -q '^COPY catalog ' Dockerfile; then
-    catalog="0 — the catalog is copied into the controller's image (\`Dockerfile\`): a new app needs a release"
+# An app enters by a pull request to `homelabus-catalog`, mounted at `catalog/apps`: no
+# commit there can carry Rust, so what this counts is the apps that came that way. A
+# schema field one of them needed is a Homelabus commit before it, and shows in phase
+# 3's other measures, not here. The catalog's history began as one commit (2026-11-02)
+# holding every app then: those are said apart.
+if [[ -d catalog/apps/.git || -f catalog/apps/.git ]]; then
+    root=$(git -C catalog/apps rev-list --max-parents=0 HEAD | tail -1)
+    apps=0
+    before=0
+    for manifest in catalog/apps/*/manifest.yaml; do
+        added=$(git -C catalog/apps log --diff-filter=A --format=%H -- "${manifest#catalog/apps/}" | tail -1)
+        [[ -n $added ]] || continue
+        if [[ $added == "$root" ]]; then
+            before=$((before + 1))
+        else
+            apps=$((apps + 1))
+        fi
+    done
+    added_apps="$apps added through \`homelabus-catalog\` ($before predate it, uncounted)"
 else
-    catalog="the catalog is out of the image — probe: a pull request to \`homelabus-catalog\` installed on the lab"
+    added_apps="UNMEASURED — \`catalog/apps\` is not checked out: \`git submodule update --init\`"
 fi
-row "4 no Rust" "apps that reached an installed house through a catalog pull request, with no \`hlb\` release" "$catalog" "every app, once \`homelabus-catalog\` exists"
+row "4 no Rust" "apps that entered by a pull request to the catalog, which holds no Rust" "$added_apps" "every app added from now on"
+
+# Phase 3's gate: an app reaching the house with no release means the house reads an
+# index the owner signs, not only the catalog its binary carries.
+if grep -q 'pub const OFFICIAL_KEY: Option<&str> = None;' crates/hlb-catalog/src/lib.rs; then
+    catalog="0 — no official key compiled in (\`hlb_catalog::OFFICIAL_KEY\`): a house reads the catalog its hlb carries, and a new app needs a release"
+else
+    catalog="the official index is read — probe: a pull request to \`homelabus-catalog\` installed on the lab"
+fi
+row "4 no Rust" "apps that reached an installed house through a catalog pull request, with no \`hlb\` release" "$catalog" "every app, once its index is signed"
 
 # 5. Always available ---------------------------------------------------------------
 row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"

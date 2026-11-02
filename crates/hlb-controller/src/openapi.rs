@@ -484,7 +484,8 @@ mod tests {
             .await
             .expect("binding");
         let logo = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/gitea/icon.png"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../catalog/apps/gitea/icon.png"),
         )
         .expect("a PNG to use as a logo");
         st.set_logo(Some(&logo)).await.expect("logo");

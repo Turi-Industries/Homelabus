@@ -1,9 +1,10 @@
 ---
 name: new-app
-description: Add an application to the catalog as a manifest and a guide, with no Rust — and when the schema cannot say something, record the gap instead of special-casing the app. Use when asked to add, package or port an app into catalog/.
+description: Add an application to the catalog as a manifest and a guide, with no Rust — and when the schema cannot say something, record the gap instead of special-casing the app. Use when asked to add, package or port an app into catalog/apps (the homelabus-catalog repository).
 ---
 
-The goal this serves: **an app is a folder under `catalog/`, never a Rust change.** Of the
+The goal this serves: **an app is a folder of `homelabus-catalog` (`catalog/apps`, a
+submodule), never a Rust change.** Of the
 twelve commits that last added or completed an app, eight touched Rust (measured
 2026-10-27) — each time because a closed list (a deploy knob, a token, a secret form, a
 database engine) lacked an entry. This skill is how the ninth stays out of `crates/`.
@@ -38,7 +39,7 @@ reaching the host have no field: they are a decision (§4).
 | object storage, many companions | `fluxer` |
 | behind the proxy only (no OIDC of its own) | `n8n` |
 
-Write `catalog/<name>/manifest.yaml` (the folder name IS `metadata.name`) and, when
+Write `catalog/apps/<name>/manifest.yaml` (the folder name IS `metadata.name`) and, when
 the app needs steps after it starts, `guide.yaml`. Needs, never addresses: `requires`
 plus tokens (`{{ db.url }}`, `{{ oidc.client_id }}`, `{{ secret.<name> }}`).
 `metadata` says `hlb: ">=<the release that first reads it>"` and `criticality:` —
@@ -50,7 +51,7 @@ is, is the owner's call: ask when unsure.
 
 ```sh
 export HLB_STATE=/tmp/<name>.db HLB_MASTER_KEY=/tmp/<name>.key
-cargo run -q -p hlb-cli -- catalog validate          # a typo refused with its line
+cargo run -q -p hlb-cli -- catalog validate --apps catalog/apps   # a typo refused with its line
 cargo run -q -p hlb-cli -- install <name>            # the preview: every action, nothing done
 cargo run -q -p hlb-cli -- catalog images            # the newest mature tag of each, by digest
 ```
@@ -89,3 +90,8 @@ does not rediscover.
 
 The commit message says what was proven, on which version, and what was not; update
 the catalog count in `ROADMAP.md` if it states one.
+
+The app is committed in `catalog/apps`, on a branch of `homelabus-catalog`, and goes in
+by a pull request there — its CI validates it with the `hlb` it mirrors, so an app
+needing a schema field that release lacks waits for the release (and its
+`metadata.hlb` says so). Here, only the submodule pointer moves, once it is merged.

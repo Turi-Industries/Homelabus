@@ -4,6 +4,10 @@
 **/*.db
 **/*.db-*
 .git
+# The catalog submodule's pointer to `.git/modules`, and its own CI and scripts.
+catalog/apps/.git
+catalog/apps/.github
+catalog/apps/scripts
 target
 web/node_modules
 web/build

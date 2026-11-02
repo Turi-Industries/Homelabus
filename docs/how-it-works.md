@@ -27,7 +27,8 @@ topology is.
 ### The flow
 
 ```
-catalog/*/manifest.yaml
+catalog/apps/*/manifest.yaml        the homelabus-catalog repository
+catalog/_platform/*/manifest.yaml   the platform services, which move with hlb
    ↓  hlb-catalog       load, validate, check folder name == metadata.name
 Manifest (hlb-types)
    ↓  hlb-resolver      capability resolution + dependency graph

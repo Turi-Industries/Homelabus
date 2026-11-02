@@ -19,6 +19,7 @@ preview" in [`.claude/rules/interface-api.md`](../.claude/rules/interface-api.md
 
 ```sh
 ./target/debug/hlb catalog validate
+./target/debug/hlb catalog validate --apps ../homelabus-catalog    # the catalog repository's apps over this hlb's platform
 ./target/debug/hlb order
 ./target/debug/hlb plan gitea --domain git.example.org
 ```
