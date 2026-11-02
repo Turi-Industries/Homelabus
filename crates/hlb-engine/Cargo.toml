@@ -8,6 +8,7 @@ description = "Plan executor: preview by default, idempotent, resumable."
 
 [dependencies]
 hlb-types.workspace = true
+hlb-catalog.workspace = true
 hlb-resolver.workspace = true
 hlb-orchestrator.workspace = true
 hlb-state.workspace = true

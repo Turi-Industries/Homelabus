@@ -27,6 +27,7 @@ pub mod pki;
 pub mod prune;
 pub mod reconcile;
 pub mod roles;
+pub mod sources;
 pub mod stalwart_migrate;
 pub mod submission;
 pub mod termix;

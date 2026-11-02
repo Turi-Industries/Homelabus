@@ -87,7 +87,7 @@ pub struct Privd {
     state: Arc<State>,
     orchestrator: Option<Arc<dyn Orchestrator>>,
     /// The catalog every intent re-derives an application from.
-    catalog: Option<Arc<hlb_catalog::Catalog>>,
+    catalog: catalog::SharedCatalog,
     install: Option<Arc<InstallContext>>,
     identity: Option<Arc<hlb_identity::PocketId>>,
     mail: Option<Arc<hlb_mail::Stalwart>>,
@@ -115,7 +115,7 @@ impl Privd {
         Self {
             state,
             orchestrator: None,
-            catalog: None,
+            catalog: Default::default(),
             install: None,
             identity: None,
             mail: None,
@@ -143,6 +143,12 @@ impl Privd {
     }
 
     pub fn with_catalog(mut self, c: Option<Arc<hlb_catalog::Catalog>>) -> Self {
+        self.catalog = catalog::SharedCatalog::new(c);
+        self
+    }
+
+    /// Reads from `c`, which its owner reads again.
+    pub fn with_shared_catalog(mut self, c: catalog::SharedCatalog) -> Self {
         self.catalog = c;
         self
     }

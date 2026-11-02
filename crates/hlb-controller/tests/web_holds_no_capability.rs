@@ -23,6 +23,10 @@ const READ_BY_THE_WEB: &[(&str, &str)] = &[
     ),
     ("Catalog", "the web side browses the catalog it shows"),
     (
+        "SharedCatalog",
+        "the same catalog, read again as its sources are fetched",
+    ),
+    (
         "PathBuf",
         "a path: the web side reads the Git mirror's history, which only the daemon writes",
     ),

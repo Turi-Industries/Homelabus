@@ -20,7 +20,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
     } = i;
     let mut blockers = Vec::new();
 
-    let Some(cat) = &p.catalog else {
+    let Some(cat) = p.catalog.get() else {
         return Acted::Unplannable(
             "no catalog loaded — start the controller with --catalog <directory>".into(),
         );
@@ -286,7 +286,7 @@ fn platform_executor<'a>(
 /// What the catalog has changed in an installed app, field by field. Empty when it
 /// matches — and when no catalog is loaded, or the app left it: nothing to compare.
 pub(crate) async fn catalog_changes(p: &Privd, app: &str) -> Vec<String> {
-    let (Some(cat), Ok(frozen)) = (&p.catalog, p.state.app_manifest(app).await) else {
+    let (Some(cat), Ok(frozen)) = (p.catalog.get(), p.state.app_manifest(app).await) else {
         return Vec::new();
     };
     let source = p.state.app_source(app).await.ok().flatten();
@@ -309,7 +309,7 @@ pub(crate) async fn catalog_changes(p: &Privd, app: &str) -> Vec<String> {
 /// before anything changes, by `hlb_engine::upgrade`'s decisions.
 pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
     let Upgrade { app, apply } = i;
-    let Some(cat) = &p.catalog else {
+    let Some(cat) = p.catalog.get() else {
         return Acted::Unplannable(
             "no catalog loaded — start the controller with --catalog <directory>".into(),
         );
@@ -573,9 +573,8 @@ pub(crate) async fn attest_guide(p: &Privd, i: AttestGuide) -> ActionResult {
     // what anyone attests.
     let guide = hlb_engine::install::installed_guide(&p.state, &app, || {
         p.catalog
-            .as_ref()
-            .and_then(|c| c.get(&app).ok())
-            .map(|e| e.guide.clone())
+            .get()
+            .and_then(|c| c.get(&app).ok().map(|e| e.guide.clone()))
     })
     .await;
     let check = match guide {

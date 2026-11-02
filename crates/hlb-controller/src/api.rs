@@ -79,7 +79,7 @@ pub struct AppState {
     pub mail_domain: String,
     /// The application catalog. `None` = directory absent or unreadable; the screens
     /// say so rather than show an empty list.
-    pub catalog: Option<Arc<hlb_catalog::Catalog>>,
+    pub catalog: hlb_privd::catalog::SharedCatalog,
     /// Where that catalog was read from — needed to serve each application's own
     /// `icon.png`, which is a FILE beside its manifest rather than a parsed field.
     pub catalog_dir: std::path::PathBuf,
@@ -2995,7 +2995,7 @@ pub(crate) mod tests {
             mirror: None,
             public_url: None,
             demo: false,
-            catalog: None,
+            catalog: Default::default(),
             public_status: false,
             mail_domain: "local".into(),
         }
@@ -3009,7 +3009,7 @@ pub(crate) mod tests {
         s.privd = hlb_privd::Privd::new(s.state.clone())
             .with_mail(None, &s.mail_domain)
             .with_catalog(Some(cat.clone()));
-        s.catalog = Some(cat);
+        s.catalog = hlb_privd::catalog::SharedCatalog::new(Some(cat));
         s
     }
 
@@ -5177,7 +5177,7 @@ pub(crate) mod tests {
             .with_catalog(Some(cat.clone()))
             .with_orchestrator(Some(o))
             .with_install(Some(Arc::new(install)));
-        e.catalog = Some(cat);
+        e.catalog = hlb_privd::catalog::SharedCatalog::new(Some(cat));
         Arc::new(e)
     }
 

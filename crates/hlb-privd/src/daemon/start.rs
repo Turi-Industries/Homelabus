@@ -1228,9 +1228,8 @@ pub async fn start(
         _ => None,
     };
     let mail_domain = cfg.mail_domain.clone().unwrap_or_else(|| "local".into());
-    // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
-    // from starting: the rest of the API keeps all its value, and the message says
-    // what is missing.
+    // An unreadable catalog must not stop the controller from starting: the rest of
+    // the API keeps all its value, and the message says what is missing.
     let catalog = match crate::catalog::load(&cfg.catalog, &state).await {
         Ok(c) => {
             tracing::info!(apps = c.len(), directory = %cfg.catalog.display(), "catalog loaded");
@@ -1244,12 +1243,13 @@ pub async fn start(
             None
         }
     };
+    let catalog = crate::catalog::SharedCatalog::new(catalog);
     let backup = Some(Arc::new(pass_config) as Arc<dyn crate::backup::BackUpNow>);
     // 🔴 The capabilities go to the privileged side, and to the daemon's own loops
     // below: the web side's `AppState` holds none of them, only the door.
     let privd = Privd::new(state.clone())
         .with_orchestrator(orch_api.clone())
-        .with_catalog(catalog.clone())
+        .with_shared_catalog(catalog.clone())
         .with_install(install.clone())
         .with_identity(identity)
         .with_mail(mail, &mail_domain)
@@ -1263,6 +1263,70 @@ pub async fn start(
         install,
         orchestrator: orch_api,
     });
+
+    // What `hlb catalog source` added or removed since, read again.
+    {
+        let (catalog, dir, st) = (catalog.clone(), cfg.catalog.clone(), state.clone());
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(crate::catalog::RELOAD_SECS),
+            shutdown_rx.clone(),
+            move || {
+                let (catalog, dir, st) = (catalog.clone(), dir.clone(), st.clone());
+                async move { catalog.reload(&dir, &st).await }
+            },
+        )));
+    }
+
+    // 🔴 Every signed source fetched each night, then read again. Fetched by hand only,
+    // its index expired after a fortnight and nothing more installed from it; and a
+    // revocation reached no house that did not think to fetch.
+    {
+        let (catalog, dir, st) = (catalog.clone(), cfg.catalog.clone(), state.clone());
+        let notif = notif.clone();
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(86_400),
+            shutdown_rx.clone(),
+            move || {
+                let (catalog, dir, st, notif) =
+                    (catalog.clone(), dir.clone(), st.clone(), notif.clone());
+                async move {
+                    let fetched =
+                        match hlb_engine::sources::fetch_all(&st, "controller", hlb_types::Role::Admin)
+                            .await
+                        {
+                            Ok(f) => f,
+                            Err(e) => {
+                                tracing::warn!("catalog sources not fetched: {e}");
+                                return;
+                            }
+                        };
+                    let mut revoked = Vec::new();
+                    for (name, r) in fetched {
+                        match r {
+                            Ok(f) => {
+                                tracing::info!(source = %name, index = f.index.counter, "catalog source fetched");
+                                revoked.extend(f.revoked.into_iter().map(|(app, version, why)| {
+                                    format!("{app} {version} ({name}): {why}")
+                                }));
+                            }
+                            // Kept as it was: an index still valid keeps serving.
+                            Err(e) => tracing::warn!(source = %name, "catalog source not fetched: {e}"),
+                        }
+                    }
+                    catalog.reload(&dir, &st).await;
+                    if !revoked.is_empty() {
+                        notif
+                            .tell(&hlb_notify::Notification::critical(
+                                "version-revoked",
+                                "An application runs a version its source revoked",
+                                &format!("{}\n`hlb upgrade <app>` takes the newest version still offered.", revoked.join("\n")),
+                            ))
+                            .await;
+                    }
+                }
+            },
+        )));
+    }
 
     // 🔴 The roles, made true where they are read. A group edited by hand in PocketID,
     // a client's restriction lifted, a quota changed in Seafile: put back, and a

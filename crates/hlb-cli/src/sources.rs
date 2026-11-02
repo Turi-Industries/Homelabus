@@ -1,23 +1,19 @@
 //! `hlb catalog source`: the third-party catalogs read beside the official one — a
 //! directory, or a signed index served over HTTPS and kept in a cache beside the state.
 //!
-//! The network is here and nowhere below: `hlb_catalog::index` says whether what was
-//! downloaded is what the source's key signed, and never fetches anything itself.
+//! The fetching itself is `hlb_engine::sources`', which the controller's nightly pass
+//! runs too.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use hlb_catalog::{index, Catalog};
+use hlb_engine::sources::{self, address, client, signed_index, stage};
 use hlb_state::{CatalogSource, SignedSource, State};
-use hlb_types::index::{Index, FILE, SIGNATURE_FILE};
 
 use crate::{open_state, Cli, SourceCmd, ACTOR_ROLE};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-/// The most one response may weigh. An index and an app's files are text: a source
-/// serving more is broken or hostile, and is not given the disk to fill.
-const MOST_BYTES: usize = 8 << 20;
 
 /// The official catalog and the third-party sources added to it. A source that cannot
 /// be read is said and left out: the official apps never go with it.
@@ -61,132 +57,6 @@ fn cache_dir(cli: &Cli, name: &str) -> PathBuf {
         .unwrap_or(Path::new("."))
         .join("catalog-sources")
         .join(name)
-}
-
-/// Whether `location` is an address, and the refusal if it is one not to fetch from.
-/// Plain HTTP is accepted on this machine only — a mirror beside it, or a test: the
-/// signature would catch a changed file, but not a network withholding the fresh index.
-fn address(location: &str) -> Option<std::result::Result<String, String>> {
-    if !location.contains("://") {
-        return None;
-    }
-    let url = match reqwest::Url::parse(location) {
-        Ok(u) => u,
-        Err(e) => return Some(Err(format!("{location}: {e}"))),
-    };
-    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-    Some(match url.scheme() {
-        "https" => Ok(location.trim_end_matches('/').to_string()),
-        "http" if loopback => Ok(location.trim_end_matches('/').to_string()),
-        _ => Err(format!(
-            "{location}: a source is fetched over https:// (plain http only from this machine)"
-        )),
-    })
-}
-
-async fn get(client: &reqwest::Client, url: &str) -> std::result::Result<Vec<u8>, String> {
-    let mut r = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("{url}: {e}"))?;
-    if !r.status().is_success() {
-        return Err(format!("{url}: HTTP {}", r.status().as_u16()));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = r.chunk().await.map_err(|e| format!("{url}: {e}"))? {
-        body.extend_from_slice(&chunk);
-        if body.len() > MOST_BYTES {
-            return Err(format!("{url}: over {} MiB, refused", MOST_BYTES >> 20));
-        }
-    }
-    Ok(body)
-}
-
-/// The signed index served under `url`, refused unless `key` signed it for `name` and
-/// it is no older than `seen` — before a single file it names is downloaded.
-async fn signed_index(
-    client: &reqwest::Client,
-    url: &str,
-    name: &str,
-    key: &str,
-    seen: Option<u64>,
-) -> std::result::Result<(Index, Vec<u8>, String), String> {
-    let bytes = get(client, &format!("{url}/{FILE}")).await?;
-    let sig = get(client, &format!("{url}/{SIGNATURE_FILE}")).await?;
-    let sig = String::from_utf8_lossy(&sig).into_owned();
-    let idx = index::accept(&bytes, &sig, name, key, seen).map_err(|e| e.to_string())?;
-    Ok((idx, bytes, sig))
-}
-
-/// What a fetch did: the index read, and the files downloaded and kept.
-struct Staged {
-    index: Index,
-    downloaded: usize,
-    kept: usize,
-}
-
-/// Writes the index into `staged`, every file it names copied from `cache` when the
-/// cache holds it already, downloaded otherwise. Nothing here is trusted yet:
-/// `index::swap_in` checks it whole before it replaces the cache.
-async fn stage(
-    client: &reqwest::Client,
-    url: &str,
-    (idx, bytes, sig): (Index, Vec<u8>, String),
-    cache: &Path,
-    staged: &Path,
-) -> std::result::Result<Staged, String> {
-    let io = |p: &Path| {
-        let p = p.display().to_string();
-        move |e: std::io::Error| format!("{p}: {e}")
-    };
-    if staged.exists() {
-        // A fetch that stopped halfway: nothing in it was ever read.
-        std::fs::remove_dir_all(staged).map_err(io(staged))?;
-    }
-    std::fs::create_dir_all(staged).map_err(io(staged))?;
-    std::fs::write(staged.join(FILE), &bytes).map_err(io(staged))?;
-    std::fs::write(staged.join(SIGNATURE_FILE), &sig).map_err(io(staged))?;
-    // A packaging fix is a new version directory whose files are mostly the last
-    // one's: found by digest, not by path. `holds` reads each again, so the cache's
-    // index, unverified here, can only point at a file, never vouch for one.
-    let mut held = std::collections::HashMap::new();
-    if let Ok(old) = index::read(&cache.join(FILE)) {
-        for (rel, digest) in index::files(&old).unwrap_or_default() {
-            held.entry(digest).or_insert(rel);
-        }
-    }
-    let (mut downloaded, mut kept) = (0, 0);
-    for (rel, digest) in index::files(&idx).map_err(|e| e.to_string())? {
-        let to = staged.join(&rel);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(io(parent))?;
-        }
-        let from = [Some(&rel), held.get(&digest)]
-            .into_iter()
-            .flatten()
-            .find(|r| index::holds(cache, r, &digest));
-        if let Some(from) = from {
-            std::fs::copy(cache.join(from), &to).map_err(io(&to))?;
-            kept += 1;
-        } else {
-            let body = get(client, &format!("{url}/{rel}")).await?;
-            std::fs::write(&to, body).map_err(io(&to))?;
-            downloaded += 1;
-        }
-    }
-    Ok(Staged {
-        index: idx,
-        downloaded,
-        kept,
-    })
-}
-
-fn client() -> std::result::Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())
 }
 
 fn day(at: i64) -> String {
@@ -487,77 +357,30 @@ async fn add_signed(
 /// Brings a source's cache to the index it serves now. The cache is replaced only once
 /// the new one verifies whole, so a fetch that fails leaves the source as it was.
 async fn fetch(state: &State, src: &CatalogSource) -> std::result::Result<(), String> {
-    let Some(signed) = &src.signed else {
+    let Some(f) = sources::fetch(state, src, "cli", ACTOR_ROLE).await? else {
         return Ok(());
     };
-    let (name, key, url) = (&src.name, &signed.key, &signed.url);
-    let cache = PathBuf::from(&src.directory);
-    let client = client()?;
-    let fetched = signed_index(&client, url, name, key, signed.counter).await?;
-    let counter = fetched.0.counter;
-    let unchanged = Some(counter) == signed.counter
-        && index::verify(&cache, name, key).is_ok_and(|held| held.counter == counter);
-    let idx = if unchanged {
-        println!("  {name}: index {counter}, already held");
-        fetched.0
-    } else {
-        let staged = cache.with_extension("new");
-        let swapped = match stage(&client, url, fetched, &cache, &staged).await {
-            Ok(s) => index::swap_in(&staged, &cache, name, key)
-                .map(|_| s)
-                .map_err(|e| e.to_string()),
-            Err(e) => Err(e),
-        };
-        // What did not verify is not left lying beside the cache.
-        let s = swapped.inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(&staged);
-        })?;
-        state
-            .raise_catalog_source_counter(name, counter)
-            .await
-            .map_err(|e| e.to_string())?;
-        state
-            .audit(
-                "cli",
-                ACTOR_ROLE,
-                "catalog-source-fetch",
-                name,
-                "ok",
-                Some(&format!("index {counter}")),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        println!(
-            "  ✓ {name}: index {counter}, {} downloaded, {} kept",
-            hlb_api::plural(s.downloaded as u64, "file", "files"),
-            s.kept
-        );
-        s.index
-    };
-    if let Err(e) = index::current(&idx, chrono::Utc::now().timestamp()) {
+    let (name, counter) = (&src.name, f.index.counter);
+    match f.files {
+        None => println!("  {name}: index {counter}, already held"),
+        Some((downloaded, kept)) => println!(
+            "  ✓ {name}: index {counter}, {} downloaded, {kept} kept",
+            hlb_api::plural(downloaded as u64, "file", "files"),
+        ),
+    }
+    if let Err(e) = index::current(&f.index, chrono::Utc::now().timestamp()) {
         // The newest it serves is stale: its owner has not signed another.
         println!(
             "  ⚠️  {name}: {e} — nothing new installs from it until its owner signs a fresh one"
         );
     } else {
-        println!("    valid until {}", day(idx.expires));
+        println!("    valid until {}", day(f.index.expires));
     }
-    // 🔴 A revoked version keeps running until someone moves it: said where the
-    // revocation arrives, and every day after in the inbox.
-    let e = |e: hlb_state::Error| e.to_string();
-    for (app, _) in state.installed_apps().await.map_err(e)? {
-        if state.app_source(&app).await.map_err(e)?.as_deref() != Some(name.as_str()) {
-            continue;
-        }
-        let Some(version) = state.app_release(&app).await.map_err(e)?.version else {
-            continue;
-        };
-        if let Some(why) = idx.revocation(&app, &version) {
-            println!(
-                "  🔴 \"{app}\" runs {version}, which {name} revoked: {why}\n     \
-                 `hlb upgrade {app}` takes the newest version it still offers"
-            );
-        }
+    for (app, version, why) in &f.revoked {
+        println!(
+            "  🔴 \"{app}\" runs {version}, which {name} revoked: {why}\n     \
+             `hlb upgrade {app}` takes the newest version it still offers"
+        );
     }
     Ok(())
 }

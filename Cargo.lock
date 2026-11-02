@@ -1768,6 +1768,7 @@ dependencies = [
  "hlb-agent",
  "hlb-api",
  "hlb-bitwarden",
+ "hlb-catalog",
  "hlb-guide",
  "hlb-identity",
  "hlb-ingress",

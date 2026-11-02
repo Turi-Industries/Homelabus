@@ -397,9 +397,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .mail_domain
         .clone()
         .unwrap_or_else(|| "local".into());
-    // ⚠️ Loaded once at startup. An unreadable catalog must not stop the controller
-    // from starting: the rest of the API keeps all its value, and the message says
-    // what is missing.
+    // An unreadable catalog must not stop the controller from starting: the rest of
+    // the API keeps all its value, and the message says what is missing.
     let catalog = match hlb_privd::catalog::load(&cli.daemon.catalog, &state).await {
         Ok(c) => {
             tracing::info!(apps = c.len(), directory = %cli.daemon.catalog.display(), "catalog loaded");
@@ -413,6 +412,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+    let catalog = hlb_privd::catalog::SharedCatalog::new(catalog);
+    // Read again as the daemon fetches its sources: this process only reads them.
+    {
+        let (catalog, dir, state) = (catalog.clone(), cli.daemon.catalog.clone(), state.clone());
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(hlb_privd::catalog::RELOAD_SECS),
+            shutdown_rx.clone(),
+            move || {
+                let (catalog, dir, state) = (catalog.clone(), dir.clone(), state.clone());
+                async move { catalog.reload(&dir, &state).await }
+            },
+        )));
+    }
 
     let shared = Arc::new(api::AppState {
         state,
@@ -432,9 +444,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_status: cli.public_status,
         mail_domain,
         catalog_dir: cli.daemon.catalog.clone(),
-        // ⚠️ Loaded ONCE at startup, like the catalog. A theme file edited while the
-        // controller runs takes effect at the next restart — the same contract the
-        // catalog already has, rather than a second, surprising one.
+        // ⚠️ Loaded ONCE at startup. A theme file edited while the controller runs
+        // takes effect at the next restart.
         custom_themes: {
             let loaded = hlb_catalog::themes::load(&cli.themes);
             for r in &loaded.refused {

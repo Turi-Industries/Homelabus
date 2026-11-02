@@ -171,7 +171,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
     }
     // Read against the catalog loaded, the sources' last fetched indexes: a source
     // that revokes a version is heard by the next fetch.
-    if let Some(catalog) = &s.catalog {
+    if let Some(catalog) = s.catalog.get() {
         for (app, _) in s.state.installed_apps().await? {
             let source = s.state.app_source(&app).await?;
             let Some(version) = s.state.app_release(&app).await?.version else {
@@ -465,7 +465,7 @@ mod tests {
             .await
             .expect("source");
         let mut s = crate::api::tests::base_state(std::sync::Arc::new(st), true);
-        s.catalog = Some(std::sync::Arc::new(catalog));
+        s.catalog = hlb_privd::catalog::SharedCatalog::new(Some(std::sync::Arc::new(catalog)));
         let revoked = |found: &[Finding]| {
             found
                 .iter()

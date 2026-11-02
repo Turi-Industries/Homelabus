@@ -61,7 +61,7 @@ blocks new installs and upgrades from the source, never what runs.
 ```sh
 ./target/debug/hlb catalog source add community https://apps.example.org --key <public-key>           # preview: downloads, adds nothing
 ./target/debug/hlb catalog source add community https://apps.example.org --key <public-key> --apply
-./target/debug/hlb catalog source fetch community            # its next index; without a name, every source served
+./target/debug/hlb catalog source fetch community            # its next index; without a name, every source served (the controller fetches each night)
 ```
 
 ## Installing and running an app

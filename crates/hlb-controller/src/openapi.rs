@@ -532,7 +532,7 @@ mod tests {
                 std::sync::Arc::new(tokio::sync::RwLock::new(crate::demo::alerts(now as i64))),
                 std::sync::Arc::new(tokio::sync::RwLock::new(crate::demo::drifts())),
             );
-        s.catalog = Some(catalog);
+        s.catalog = hlb_privd::catalog::SharedCatalog::new(Some(catalog));
         s.themes_dir = dir.to_path_buf();
         s.custom_themes = vec![hlb_api::CustomTheme {
             name: "Maison".into(),

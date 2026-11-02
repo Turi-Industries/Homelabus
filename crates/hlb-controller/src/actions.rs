@@ -149,7 +149,7 @@ pub async fn catalog(
     _auth: crate::auth::Authorized<crate::auth::CanRead>,
     AxumState(s): AxumState<Arc<AppState>>,
 ) -> Json<Vec<hlb_api::CatalogItem>> {
-    let Some(cat) = &s.catalog else {
+    let Some(cat) = s.catalog.get() else {
         // ⚠️ An empty list would read as "catalog with no applications". A missing
         // catalog is a configuration problem, not an empty catalog — and the screen
         // must be able to say so.
@@ -241,9 +241,8 @@ pub async fn install_app(
     // The catalog is public: the web side reads what an app needs to place it.
     let manifest = s
         .catalog
-        .as_ref()
-        .and_then(|c| c.get(&app).ok())
-        .map(|e| e.manifest.clone());
+        .get()
+        .and_then(|c| c.get(&app).ok().map(|e| e.manifest.clone()));
     let answer = s
         .privd()
         .ask(hlb_api::intent::Install {

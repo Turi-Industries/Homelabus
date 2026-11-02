@@ -1169,8 +1169,12 @@ pull request to the catalog, with no `hlb` release.
   leaves no staging behind a failure. HTTPS only, plain HTTP from loopback. The cache
   sits in `catalog-sources/<name>` beside the state, deleted with the source. Tried by
   hand: a changed file, an edited index, a replayed one, another signer, a damaged
-  cache (repaired by the next fetch) — each refused, the cache untouched. Left: a
-  nightly fetch, privd reloading the catalog (read once at startup), the official key
+  cache (repaired by the next fetch) — each refused, the cache untouched.
+  ✅ Fetched every night, read again — 2026-11-02: the fetch moved to
+  `hlb_engine::sources` (the CLI and the daemon call one), the daemon fetches every
+  signed source nightly and notifies a revoked install; privd and the controller hold
+  the catalog in a `catalog::Shared` read again every 10 minutes and after a fetch, an
+  official catalog unreadable now keeping the one read before. Left: the official key
   compiled in once the owner has generated it.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
