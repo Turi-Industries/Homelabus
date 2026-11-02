@@ -5481,6 +5481,57 @@ steps:
             .is_empty());
     }
 
+    /// The guide is frozen at install like the manifest, so a catalog that changed the
+    /// guide alone is an upgrade too — or the frozen one would never move.
+    #[tokio::test]
+    async fn a_guide_changed_in_the_catalog_alone_is_upgraded_and_frozen_again() {
+        let Ok(cat) = hlb_catalog::Catalog::load("../../catalog") else {
+            return;
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let st = State::in_memory().await.expect("base");
+        let o = Arc::new(FakeOrch::default());
+        let e = state_that_can_install(st, cat, o.clone(), &dir.path().join("key"));
+        let (s, v) = post(
+            router(e.clone()),
+            "/api/apps/valkey/install?apply=true",
+            "{}",
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let frozen = |e: Arc<AppState>| async move {
+            e.state
+                .app_guide("valkey")
+                .await
+                .expect("read")
+                .expect("frozen at install")
+                .steps
+                .into_iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+        };
+        assert!(frozen(e.clone()).await.is_empty(), "the catalog's: none");
+
+        let older: hlb_types::Guide =
+            serde_yaml_ng::from_str("steps:\n  - { id: old, title: Gone since }\n").expect("guide");
+        e.state
+            .set_app_guide("valkey", Some(&older))
+            .await
+            .expect("older");
+        assert_eq!(
+            crate::actions::catalog_changes(&e, "valkey").await,
+            vec!["guide: step old removed".to_string()]
+        );
+
+        let (s, v) = post(router(e.clone()), "/api/apps/valkey/upgrade?apply=true", "").await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["applied"], true, "{v}");
+        assert!(frozen(e.clone()).await.is_empty(), "frozen again: {v}");
+        assert!(crate::actions::catalog_changes(&e, "valkey")
+            .await
+            .is_empty());
+    }
+
     /// 🔴 Found on the lab on 2026-10-18: an app sending mail needs the mail domain to
     /// name its account, and the upgrade passed none — "mail_domain is required", where
     /// the install takes the exposure's.

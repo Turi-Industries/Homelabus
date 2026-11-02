@@ -5231,7 +5231,9 @@ async fn switch_manifest(
         .find(|(n, _)| n == app)
         .map(|(_, st)| st)
         .unwrap_or_else(|| "running".to_string());
+    let frozen_guide = state.app_guide(app).await?;
     state.upsert_app(app, next, domain.as_deref()).await?;
+    state.set_app_guide(app, Some(guide)).await?;
     state
         .set_app_mail_domain(app, params.mail_domain.as_deref())
         .await?;
@@ -5241,7 +5243,16 @@ async fn switch_manifest(
     // 🔴 The frozen manifest moves with what runs: back when nothing was
     // redeployed, kept when the new spec was — and the app keeps the status,
     // so the route, it had.
-    match hlb_engine::upgrade::settle(state, app, frozen, &status, domain.as_deref()).await? {
+    let settled = hlb_engine::upgrade::settle(
+        state,
+        app,
+        frozen,
+        frozen_guide.as_ref(),
+        &status,
+        domain.as_deref(),
+    )
+    .await?;
+    match settled {
         hlb_engine::upgrade::Settled::Finished | hlb_engine::upgrade::Settled::Partial => run,
         hlb_engine::upgrade::Settled::Reverted => {
             eprintln!(
@@ -5454,10 +5465,12 @@ async fn plan_as_installed(
     app: &str,
 ) -> Result<hlb_resolver::Plan, Box<dyn std::error::Error>> {
     let frozen = state.app_manifest(app).await?;
-    let guide = Catalog::load(&cli.catalog)
-        .ok()
-        .and_then(|c| c.get(app).ok().map(|e| e.guide.clone()))
-        .unwrap_or_default();
+    let guide = hlb_engine::install::installed_guide(state, app, || {
+        Catalog::load(&cli.catalog)
+            .ok()
+            .and_then(|c| c.get(app).ok().map(|e| e.guide.clone()))
+    })
+    .await?;
     let params = InstallParams {
         domain: state.app_domain(app).await?,
         // The one its install took: the exposure's of today may be another.
@@ -6038,6 +6051,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     &state,
                     app,
                     &entry.manifest,
+                    &entry.guide,
                     domain,
                     mail_domain,
                 )
@@ -6063,7 +6077,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     ..Default::default()
                 };
                 let plan =
-                    hlb_resolver::resolve_with_guide(&basis.manifest, &entry.guide, &params)?;
+                    hlb_resolver::resolve_with_guide(&basis.manifest, &basis.guide, &params)?;
 
                 // The manifest is frozen now — and only when applying: a preview records
                 // nothing. A later catalog change will not modify this installation.
@@ -6095,8 +6109,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             continue;
                         };
                         let frozen = state.app_manifest(&name).await?;
-                        let changed =
+                        let mut changed =
                             upgrade::changes(&frozen, &upgrade::next(&frozen, &entry.manifest));
+                        changed.extend(upgrade::guide_changes(
+                            state.app_guide(&name).await?.as_ref(),
+                            &entry.guide,
+                        ));
                         let images = upgrade::image_notes(&frozen, &entry.manifest);
                         if changed.is_empty() && images.is_empty() {
                             continue;
@@ -6123,7 +6141,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let entry = c.get(app)?;
                 let frozen = state.app_manifest(app).await?;
                 let next = upgrade::next(&frozen, &entry.manifest);
-                let changed = upgrade::changes(&frozen, &next);
+                let mut changed = upgrade::changes(&frozen, &next);
+                changed.extend(upgrade::guide_changes(
+                    state.app_guide(app).await?.as_ref(),
+                    &entry.guide,
+                ));
                 // An upgrade that stopped after redeploying keeps the manifest it
                 // deployed: the catalog matches it, and its plan still has to finish.
                 let interrupted = upgrade::interrupted(&state, app).await?;
@@ -6136,7 +6158,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     println!("  · {note}");
                 }
                 if changed.is_empty() && !interrupted {
-                    println!("  its manifest matches the catalog — nothing to apply");
+                    println!("  its manifest and guide match the catalog — nothing to apply");
                     return Ok(ExitCode::SUCCESS);
                 }
                 if changed.is_empty() {
@@ -6302,12 +6324,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         continue;
                     }
 
-                    // The step's declaration comes from the catalog; its state from the
-                    // database. Both are needed to verify.
-                    let step = catalog
-                        .as_ref()
-                        .and_then(|c| c.get(app).ok())
-                        .and_then(|e| e.guide.steps.iter().find(|s| &s.id == id).cloned());
+                    // The step's declaration comes from the app's guide; its state from
+                    // the database. Both are needed to verify.
+                    let step = hlb_engine::install::installed_guide(&state, app, || {
+                        catalog
+                            .as_ref()
+                            .and_then(|c| c.get(app).ok())
+                            .map(|e| e.guide.clone())
+                    })
+                    .await?
+                    .steps
+                    .into_iter()
+                    .find(|s| &s.id == id);
 
                     let Some(step) = step else {
                         println!("  {brand} {app} · {title}  [{id}]  (declaration not found)");
@@ -6605,10 +6633,16 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let state = open_state(&cli).await?;
 
                 // If the step is verifiable, verify BEFORE accepting the attestation.
-                let step = catalog
-                    .as_ref()
-                    .and_then(|c| c.get(app).ok())
-                    .and_then(|e| e.guide.steps.iter().find(|s| s.id == id).cloned());
+                let step = hlb_engine::install::installed_guide(&state, app, || {
+                    catalog
+                        .as_ref()
+                        .and_then(|c| c.get(app).ok())
+                        .map(|e| e.guide.clone())
+                })
+                .await?
+                .steps
+                .into_iter()
+                .find(|s| s.id == id);
 
                 let mut attested = true;
                 let mut overridden = false;

@@ -5,12 +5,14 @@
 //! already recorded resumes it rather than freezing the catalog's manifest again.
 
 use hlb_state::State;
-use hlb_types::Manifest;
+use hlb_types::{Guide, Manifest};
 
 /// What an install of an app plans and freezes.
 #[derive(Debug, Clone)]
 pub struct Basis {
     pub manifest: Manifest,
+    /// The guide it plans with, frozen beside the manifest.
+    pub guide: Guide,
     pub domain: Option<String>,
     pub mail_domain: Option<String>,
     /// The app is recorded already: this run resumes it.
@@ -19,9 +21,9 @@ pub struct Basis {
 
 /// The basis of an install of `app`, read without writing.
 ///
-/// A new app takes the catalog's manifest and the domains asked for. One already
-/// recorded keeps the manifest frozen at its install — its resolved digests included —
-/// and the domains it took.
+/// A new app takes the catalog's manifest and guide and the domains asked for. One
+/// already recorded keeps the manifest and guide frozen at its install — its resolved
+/// digests included — and the domains it took.
 ///
 /// 🔴 Frozen again from the catalog, a rerun replaced what an earlier run had resolved
 /// (an image built here lost its digest, and the deployment stayed refused as
@@ -34,6 +36,7 @@ pub async fn basis(
     state: &State,
     app: &str,
     catalog: &Manifest,
+    catalog_guide: &Guide,
     domain: Option<String>,
     mail_domain: Option<String>,
 ) -> crate::Result<std::result::Result<Basis, String>> {
@@ -54,6 +57,7 @@ pub async fn basis(
         }
         return Ok(Ok(Basis {
             manifest: catalog.clone(),
+            guide: catalog_guide.clone(),
             domain,
             mail_domain,
             resumed: None,
@@ -72,10 +76,30 @@ pub async fn basis(
     }
     Ok(Ok(Basis {
         manifest: state.app_manifest(app).await?,
+        guide: installed_guide(state, app, || Some(catalog_guide.clone())).await?,
         domain: recorded,
         mail_domain: state.app_mail_domain(app).await?.or(mail_domain),
         resumed: Some(status),
     }))
+}
+
+/// The guide an app follows: the one frozen with its manifest, else — an app recorded
+/// before guides were frozen, or not recorded yet — the catalog's, which `catalog` reads.
+///
+/// 🔴 Read from today's catalog, an acknowledgement, a nightly re-check or a restore
+/// followed steps the running manifest was never deployed with, and found none once
+/// the app left the catalog.
+pub async fn installed_guide(
+    state: &State,
+    app: &str,
+    catalog: impl FnOnce() -> Option<Guide>,
+) -> crate::Result<Guide> {
+    match state.app_guide(app).await {
+        Ok(Some(frozen)) => Ok(frozen),
+        Ok(None) | Err(hlb_state::Error::UnknownApp(_)) => Ok(catalog().unwrap_or_default()),
+        // Unreadable is said, never replaced by the catalog's.
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn canonical(d: Option<String>) -> std::result::Result<Option<String>, String> {
@@ -132,6 +156,7 @@ pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()
         state
             .upsert_app(app, &basis.manifest, basis.domain.as_deref())
             .await?;
+        state.set_app_guide(app, Some(&basis.guide)).await?;
     }
     state
         .set_app_mail_domain(app, basis.mail_domain.as_deref())
@@ -175,6 +200,7 @@ mod tests {
             state,
             app,
             &manifest(app),
+            &Default::default(),
             Some(domain.into()),
             mail.map(str::to_string),
         )
@@ -236,6 +262,7 @@ mod tests {
             &state,
             "gitea",
             &manifest("gitea"),
+            &Default::default(),
             Some(" Git.Example.org ".into()),
             Some("Example.org".into()),
         )
@@ -244,6 +271,48 @@ mod tests {
         .expect("accepted");
         assert_eq!(b.domain.as_deref(), Some("git.example.org"));
         assert_eq!(b.mail_domain.as_deref(), Some("example.org"));
+    }
+
+    #[tokio::test]
+    async fn an_install_freezes_the_catalogs_guide_and_a_resume_keeps_it() {
+        let state = State::in_memory().await.expect("state");
+        let guide = |id: &str| -> Guide {
+            serde_yaml_ng::from_str(&format!("steps:\n  - {{ id: {id}, title: T }}\n"))
+                .expect("guide")
+        };
+        let ids = |g: &Guide| g.steps.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+        let first = basis(
+            &state,
+            "gitea",
+            &manifest("gitea"),
+            &guide("dns"),
+            None,
+            None,
+        )
+        .await
+        .expect("state")
+        .expect("accepted");
+        record(&state, "gitea", &first).await.expect("recorded");
+        let frozen = state
+            .app_guide("gitea")
+            .await
+            .expect("read")
+            .expect("frozen");
+        assert_eq!(ids(&frozen), ["dns"]);
+
+        // The catalog's guide changed since: a resume plans with the one installed.
+        let again = basis(
+            &state,
+            "gitea",
+            &manifest("gitea"),
+            &guide("other"),
+            None,
+            None,
+        )
+        .await
+        .expect("state")
+        .expect("resumable");
+        assert_eq!(ids(&again.guide), ["dns"]);
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use hlb_types::Manifest;
+use hlb_types::{Guide, Manifest};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
@@ -50,6 +50,13 @@ pub enum Error {
 
     #[error("unreadable stored manifest for \"{app}\": {source}")]
     StoredManifest {
+        app: String,
+        #[source]
+        source: serde_yaml_ng::Error,
+    },
+
+    #[error("unreadable stored guide for \"{app}\": {source}")]
+    StoredGuide {
         app: String,
         #[source]
         source: serde_yaml_ng::Error,
@@ -760,6 +767,45 @@ impl State {
             app: name.to_string(),
             source,
         })
+    }
+
+    /// Freezes the guide an app is installed or upgraded with, beside its manifest:
+    /// the steps acknowledged, re-checked and run after a restore are that guide's, not
+    /// today's catalog's. `None` puts back an app recorded before guides were frozen.
+    pub async fn set_app_guide(&self, name: &str, guide: Option<&Guide>) -> Result<()> {
+        let yaml = guide
+            .map(serde_yaml_ng::to_string)
+            .transpose()
+            .map_err(|source| Error::StoredGuide {
+                app: name.to_string(),
+                source,
+            })?;
+        let done = sqlx::query("UPDATE apps SET guide = ?2 WHERE name = ?1")
+            .bind(name)
+            .bind(yaml)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::UnknownApp(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// The guide frozen with the app — `None` for one recorded before guides were, whose
+    /// guide is still the catalog's.
+    pub async fn app_guide(&self, name: &str) -> Result<Option<Guide>> {
+        let row = sqlx::query("SELECT guide FROM apps WHERE name = ?1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::UnknownApp(name.to_string()))?;
+        let yaml: Option<String> = row.try_get("guide")?;
+        yaml.map(|y| serde_yaml_ng::from_str(&y))
+            .transpose()
+            .map_err(|source| Error::StoredGuide {
+                app: name.to_string(),
+                source,
+            })
     }
 
     /// The domain chosen at install time, needed to resolve the templates.
@@ -6076,6 +6122,41 @@ mod tests {
         let stored = s.app_manifest("gitea").await.expect("reread");
         assert_eq!(stored.metadata.name, "gitea");
         assert_eq!(stored.spec.image.tag, "1");
+    }
+
+    #[tokio::test]
+    async fn the_guide_is_frozen_beside_the_manifest_and_kept_by_a_digest_pin() {
+        let s = st().await;
+        s.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("upsert");
+        assert!(
+            s.app_guide("gitea").await.expect("read").is_none(),
+            "nothing frozen yet reads as the catalog's"
+        );
+
+        let guide: Guide = serde_yaml_ng::from_str(
+            r#"
+steps:
+  - id: dns
+    title: Create the DNS record
+"#,
+        )
+        .expect("guide");
+        s.set_app_guide("gitea", Some(&guide))
+            .await
+            .expect("freeze");
+        // A digest pinned later freezes the manifest again, and must not drop the guide.
+        s.set_app_digest("gitea", "sha256:abc").await.expect("pin");
+        let read = s.app_guide("gitea").await.expect("read").expect("frozen");
+        assert_eq!(read.steps, guide.steps);
+
+        s.set_app_guide("gitea", None).await.expect("put back");
+        assert!(s.app_guide("gitea").await.expect("read").is_none());
+        assert!(matches!(
+            s.set_app_guide("absent", Some(&guide)).await,
+            Err(Error::UnknownApp(_))
+        ));
     }
 
     #[tokio::test]

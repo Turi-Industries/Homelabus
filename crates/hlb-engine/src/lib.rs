@@ -334,8 +334,9 @@ pub enum Recheck {
 }
 
 /// Checks again every handled step whose guide asks for a `recheck` and was handled at
-/// least that long ago — a deleted DNS record, a router that lost its rule. `guides`
-/// gives an app's guide steps (the catalog's).
+/// least that long ago — a deleted DNS record, a router that lost its rule. The steps
+/// are the guide frozen with each app; `guides` gives the catalog's, for an app
+/// recorded before guides were frozen.
 ///
 /// A failure is tried a second time before the step is opened again: one lookup timing
 /// out in the night must not put a working app's prerequisite back in the inbox. A step
@@ -349,7 +350,13 @@ pub async fn recheck_guides(
     let verifier = guide_verifier(state, vault).await;
     let mut out = Vec::new();
     for (app, _) in state.installed_apps().await? {
-        let steps = guides(&app);
+        let steps = install::installed_guide(state, &app, || {
+            Some(hlb_types::Guide {
+                steps: guides(&app),
+            })
+        })
+        .await?
+        .steps;
         let ages = state.verified_guide_ages(&app).await?;
         let domain = state.app_domain(&app).await?.unwrap_or_default();
         let vars = [("domain", domain.as_str())];
@@ -2468,6 +2475,33 @@ spec:
     }
 
     #[tokio::test]
+    async fn the_night_rechecks_the_guide_frozen_with_the_app_not_the_catalogs() {
+        // The catalog dropped the step, or the app left it: the installed app still has
+        // the DNS record its frozen guide asked for, and it is still read.
+        let s = state().await;
+        s.add_guide("demo", "dns", "dns", true)
+            .await
+            .expect("guide");
+        assert!(s.verify_guide("demo", "dns").await.expect("verify"));
+        let frozen: hlb_types::Guide = serde_yaml_ng::from_str(
+            "steps:\n  - id: dns\n    title: x\n    phase: pre-install\n    \
+             verify: { type: dns, record: really-does-not-exist.invalid }\n    recheck: 0h\n",
+        )
+        .expect("guide");
+        s.set_app_guide("demo", Some(&frozen))
+            .await
+            .expect("frozen");
+
+        let found = recheck_guides(&s, None, |_| Vec::new())
+            .await
+            .expect("pass");
+        assert!(
+            matches!(&found[..], [(_, id, Recheck::Reopened(_))] if id == "dns"),
+            "{found:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn an_attestation_forced_against_its_check_is_not_reopened_by_it() {
         // 🔴 The state did not say how a step was handled: one attested with `--force`
         // was put back in the inbox every night its check still failed.
@@ -2551,6 +2585,7 @@ steps:
             .await
             .expect("app");
         let guide: hlb_types::Guide = serde_yaml_ng::from_str(WITH_PREREQUISITE).expect("guide");
+        s.set_app_guide("demo", Some(&guide)).await.expect("frozen");
         let first = hlb_resolver::resolve_with_guide(&installed, &guide, &Default::default())
             .expect("plan");
         s.add_guide("demo", "account", "Open an account", true)
@@ -2579,10 +2614,15 @@ steps:
         let mut catalog = manifest();
         catalog.spec.image.digest = None;
         catalog.spec.swarm.replicas = 3;
-        let basis = install::basis(&s, "demo", &catalog, None, None)
+        // And its guide lost the prerequisite.
+        let basis = install::basis(&s, "demo", &catalog, &Default::default(), None, None)
             .await
             .expect("read")
             .expect("resumable");
+        assert_eq!(
+            basis.guide.steps, guide.steps,
+            "a rerun plans from the guide frozen with the app"
+        );
         let yaml = |m: &hlb_types::Manifest| serde_yaml_ng::to_string(m).expect("yaml");
         assert_eq!(
             yaml(&basis.manifest),
@@ -2618,9 +2658,16 @@ steps:
             .expect("preview");
         assert_eq!(journal(&s).await, before);
 
-        let moved = install::basis(&s, "demo", &catalog, Some("y.example.fr".into()), None)
-            .await
-            .expect("read");
+        let moved = install::basis(
+            &s,
+            "demo",
+            &catalog,
+            &Default::default(),
+            Some("y.example.fr".into()),
+            None,
+        )
+        .await
+        .expect("read");
         assert!(moved.is_err(), "another domain is not a resume: {moved:?}");
     }
 

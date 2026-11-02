@@ -79,6 +79,13 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   manifest (its images excepted: `hlb update` moves those, after a backup) and runs the
   plan again; `deploy` updates an existing service in place. What would strand data is
   refused (`hlb_engine::upgrade::refusals`).
+- **The guide is frozen beside the manifest** (`apps.guide`, 2026-11-02). Read from
+  today's catalog, `hlb ack`, the nightly re-check and a restore's post-restore steps
+  followed a guide the running manifest was never deployed with — and none once the
+  app left the catalog. Every reader goes through `install::installed_guide`; NULL
+  (installed before) falls back to the catalog's. A guide changed alone is an upgrade
+  (`upgrade::guide_changes`), or the frozen one would never move; a reverted upgrade
+  puts the previous guide back with the manifest.
 - **🔴 A frozen manifest moves only with a plan run to its end.** `hlb upgrade` froze the
   catalog's manifest, then the plan failed (no Docker socket): the next upgrade found
   nothing to apply, and the change never reached the service. The CLI and the controller

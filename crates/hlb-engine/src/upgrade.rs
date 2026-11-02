@@ -6,7 +6,7 @@
 //! `hlb upgrade` applies the catalog's manifest — except its images, which move through
 //! `hlb update`: that path backs up first, and an image is where a migration hides.
 
-use hlb_types::{Capability, Manifest};
+use hlb_types::{Capability, Guide, Manifest};
 
 /// The manifest an upgrade installs: the catalog's, running the images installed now.
 pub fn next(frozen: &Manifest, catalog: &Manifest) -> Manifest {
@@ -70,6 +70,29 @@ fn diff(path: &str, before: &serde_json::Value, after: &serde_json::Value, out: 
         }
     }
     out.push(format!("{path}: {before} → {after}"));
+}
+
+/// What the catalog changed in the guide, one line per step. Without these, an upgrade
+/// whose manifest matched said "nothing to apply" and the frozen guide never moved.
+/// Nothing when no guide is frozen: that app follows the catalog's already.
+pub fn guide_changes(frozen: Option<&Guide>, next: &Guide) -> Vec<String> {
+    let Some(frozen) = frozen else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for step in &frozen.steps {
+        match next.steps.iter().find(|n| n.id == step.id) {
+            None => out.push(format!("guide: step {} removed", step.id)),
+            Some(n) if n != step => out.push(format!("guide: step {} changed", step.id)),
+            Some(_) => {}
+        }
+    }
+    for n in &next.steps {
+        if !frozen.steps.iter().any(|s| s.id == n.id) {
+            out.push(format!("guide: step {} added", n.id));
+        }
+    }
+    out
 }
 
 /// What the catalog changed in the images, which an upgrade leaves to `hlb update`.
@@ -318,6 +341,7 @@ pub async fn settle(
     state: &hlb_state::State,
     app: &str,
     previous: &Manifest,
+    previous_guide: Option<&Guide>,
     previous_status: &str,
     domain: Option<&str>,
 ) -> crate::Result<Settled> {
@@ -341,6 +365,7 @@ pub async fn settle(
         .any(|a| a.kind == "DeployService" && a.status == ActionStatus::Done);
     if !deployed {
         state.upsert_app(app, previous, domain).await?;
+        state.set_app_guide(app, previous_guide).await?;
     }
     state.set_app_status(app, previous_status).await?;
     Ok(if deployed {
@@ -385,6 +410,30 @@ mod tests {
             vec!["spec.swarm.replicas: 2 → 1".to_string()]
         );
         assert!(refusals(&frozen, &n).is_empty());
+    }
+
+    #[test]
+    fn a_guide_step_added_changed_or_removed_is_a_change() {
+        let guide = |yaml: &str| -> Guide { serde_yaml_ng::from_str(yaml).expect("guide") };
+        let frozen = guide(
+            "steps:\n  - { id: dns, title: Create the record }\n  - { id: old, title: Gone }\n",
+        );
+        let next = guide(
+            "steps:\n  - { id: dns, title: Create the A record }\n  - { id: new, title: New }\n",
+        );
+        assert_eq!(
+            guide_changes(Some(&frozen), &next),
+            vec![
+                "guide: step dns changed".to_string(),
+                "guide: step old removed".to_string(),
+                "guide: step new added".to_string(),
+            ]
+        );
+        assert!(guide_changes(Some(&next), &next).is_empty());
+        assert!(
+            guide_changes(None, &next).is_empty(),
+            "an app with no frozen guide reads the catalog's already"
+        );
     }
 
     #[test]
@@ -502,6 +551,17 @@ mod tests {
         assert_eq!(refusals(&bucket, &named), Vec::<String>::new());
     }
 
+    /// A guide of one step, named so a test can tell which was frozen.
+    fn guide(step: &str) -> Guide {
+        serde_yaml_ng::from_str(&format!("steps:\n  - {{ id: {step}, title: T }}\n"))
+            .expect("guide")
+    }
+
+    async fn frozen_step(s: &hlb_state::State) -> String {
+        let g = s.app_guide("vikunja").await.expect("read").expect("frozen");
+        g.steps[0].id.clone()
+    }
+
     async fn upgraded(
         statuses: &[(&str, hlb_state::ActionStatus)],
     ) -> (hlb_state::State, Manifest) {
@@ -510,6 +570,9 @@ mod tests {
         s.upsert_app("vikunja", &before, Some("tasks.example.org"))
             .await
             .expect("app");
+        s.set_app_guide("vikunja", Some(&guide("before")))
+            .await
+            .expect("guide");
         s.set_app_status("vikunja", "running")
             .await
             .expect("status");
@@ -518,6 +581,9 @@ mod tests {
         s.upsert_app("vikunja", &after, Some("tasks.example.org"))
             .await
             .expect("frozen");
+        s.set_app_guide("vikunja", Some(&guide("after")))
+            .await
+            .expect("guide");
         let records: Vec<(String, String)> = statuses
             .iter()
             .map(|(kind, _)| (kind.to_string(), format!("{kind} vikunja")))
@@ -549,9 +615,16 @@ mod tests {
         s.set_app_status("vikunja", "partial")
             .await
             .expect("status");
-        let settled = settle(&s, "vikunja", &before, "running", Some("tasks.example.org"))
-            .await
-            .expect("settle");
+        let settled = settle(
+            &s,
+            "vikunja",
+            &before,
+            Some(&guide("before")),
+            "running",
+            Some("tasks.example.org"),
+        )
+        .await
+        .expect("settle");
         assert_eq!(settled, Settled::Partial);
         assert_eq!(
             s.app_manifest("vikunja")
@@ -571,9 +644,16 @@ mod tests {
         use hlb_state::ActionStatus::*;
         let (s, before) = upgraded(&[("GenerateSecret", Failed), ("DeployService", Pending)]).await;
         s.set_app_status("vikunja", "failed").await.expect("status");
-        let settled = settle(&s, "vikunja", &before, "running", Some("tasks.example.org"))
-            .await
-            .expect("settle");
+        let settled = settle(
+            &s,
+            "vikunja",
+            &before,
+            Some(&guide("before")),
+            "running",
+            Some("tasks.example.org"),
+        )
+        .await
+        .expect("settle");
         assert_eq!(settled, Settled::Reverted);
         assert_eq!(
             s.app_manifest("vikunja")
@@ -586,6 +666,11 @@ mod tests {
         );
         assert_eq!(status(&s).await, "running", "its route must not go");
         assert_eq!(
+            frozen_step(&s).await,
+            "before",
+            "the guide goes back with it"
+        );
+        assert_eq!(
             s.app_domain("vikunja").await.expect("d").as_deref(),
             Some("tasks.example.org")
         );
@@ -596,9 +681,16 @@ mod tests {
         use hlb_state::ActionStatus::*;
         let (s, before) = upgraded(&[("DeployService", Done), ("WaitHealthy", Failed)]).await;
         s.set_app_status("vikunja", "failed").await.expect("status");
-        let settled = settle(&s, "vikunja", &before, "running", Some("tasks.example.org"))
-            .await
-            .expect("settle");
+        let settled = settle(
+            &s,
+            "vikunja",
+            &before,
+            Some(&guide("before")),
+            "running",
+            Some("tasks.example.org"),
+        )
+        .await
+        .expect("settle");
         assert_eq!(settled, Settled::Interrupted);
         assert_eq!(
             s.app_manifest("vikunja")
@@ -611,5 +703,6 @@ mod tests {
         );
         assert_eq!(status(&s).await, "running");
         assert!(interrupted(&s, "vikunja").await.expect("read"));
+        assert_eq!(frozen_step(&s).await, "after", "the guide of what runs");
     }
 }

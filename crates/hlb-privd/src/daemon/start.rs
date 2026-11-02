@@ -516,7 +516,8 @@ pub async fn start(
 
     // A guide's `recheck`: the prerequisites a person handled once — the DNS record, the
     // router — read again every night, and put back in the inbox when they stopped
-    // being true. The catalog is the guides' source, as for `hlb ack`.
+    // being true. Each app's frozen guide is read; the catalog's only for an app recorded
+    // before guides were frozen.
     {
         let st = state.clone();
         let rx = shutdown_rx.clone();

@@ -1098,6 +1098,14 @@ and what needs real hardware or a public domain to be measured.
 pull request to the catalog, with no `hlb` release.
 - The five schema gaps below come first: while no app enters without Rust, a separate
   repository receives pull requests nobody can merge without a release.
+- ✅ The guide frozen beside the manifest — 2026-11-02, the first step of the order
+  agreed that day (guide, then the `hlb` range, then sources and a signed index, then
+  the split). Six readers took today's catalog's guide for an installed app: `hlb ack`
+  and `todo --verify`, the interface's acknowledgement, the nightly re-check, the
+  post-restore steps, `plan_as_installed`. They read `apps.guide` now — the catalog's
+  only for an app installed before it — and a guide changed alone is an upgrade. The
+  source an app came from is NOT recorded yet: with one source there is nothing to
+  read it, so it comes with the sources.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

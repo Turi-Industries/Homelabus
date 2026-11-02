@@ -93,6 +93,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
         &p.state,
         &app,
         &input.manifest,
+        &input.guide,
         domain.clone(),
         mail_domain,
     )
@@ -129,7 +130,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
     };
 
     // 🔴 The REAL plan, produced by the same resolver as the command line.
-    let plan = match hlb_resolver::resolve_with_guide(&basis.manifest, &input.guide, &params) {
+    let plan = match hlb_resolver::resolve_with_guide(&basis.manifest, &basis.guide, &params) {
         Ok(p) => p,
         // Only the resolver knows which needs take a mailbox name: a list kept here
         // would miss the next one, and its error says nothing of what to do.
@@ -277,10 +278,16 @@ pub(crate) async fn catalog_changes(p: &Privd, app: &str) -> Vec<String> {
     let Ok(entry) = cat.get(app) else {
         return Vec::new();
     };
-    hlb_engine::upgrade::changes(
+    let guide = p.state.app_guide(app).await.ok().flatten();
+    let mut changes = hlb_engine::upgrade::changes(
         &frozen,
         &hlb_engine::upgrade::next(&frozen, &entry.manifest),
-    )
+    );
+    changes.extend(hlb_engine::upgrade::guide_changes(
+        guide.as_ref(),
+        &entry.guide,
+    ));
+    changes
 }
 
 /// Brings an installed app to its catalog manifest; what would strand data is refused
@@ -300,8 +307,16 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
         Err(e) => return Acted::Unplannable(e.to_string()),
     };
 
+    let frozen_guide = match p.state.app_guide(&app).await {
+        Ok(g) => g,
+        Err(e) => return Acted::Unplannable(e.to_string()),
+    };
     let next = hlb_engine::upgrade::next(&frozen, &input.manifest);
-    let changes = hlb_engine::upgrade::changes(&frozen, &next);
+    let mut changes = hlb_engine::upgrade::changes(&frozen, &next);
+    changes.extend(hlb_engine::upgrade::guide_changes(
+        frozen_guide.as_ref(),
+        &input.guide,
+    ));
     let mut blockers = hlb_engine::upgrade::refusals(&frozen, &next);
     // An upgrade that stopped after redeploying keeps the manifest it deployed: the
     // catalog matches it, and its plan still has to finish.
@@ -375,10 +390,14 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
             .unwrap_or_else(|| "running".to_string());
         // Frozen, then the whole plan again: its actions keep what exists, and a
         // deployment updates its service in place rather than being skipped as done.
-        let frozen_now = p
+        let frozen_now = match p
             .state
             .upsert_app(&app, &next, params.domain.as_deref())
-            .await;
+            .await
+        {
+            Ok(()) => p.state.set_app_guide(&app, Some(&input.guide)).await,
+            Err(e) => Err(e),
+        };
         let reset = match frozen_now {
             Ok(()) => p.state.reset_plan(&app).await,
             Err(e) => Err(e),
@@ -401,6 +420,7 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
                             &p.state,
                             &app,
                             &frozen,
+                            frozen_guide.as_ref(),
                             &status,
                             params.domain.as_deref(),
                         )
@@ -427,6 +447,7 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
             &p.state,
             &app,
             &frozen,
+            frozen_guide.as_ref(),
             &status,
             params.domain.as_deref(),
         )
@@ -518,13 +539,22 @@ pub(crate) async fn attest_guide(p: &Privd, i: AttestGuide) -> ActionResult {
         ));
     }
 
-    // The step's check, when the catalog has one: what the machine can see beats what
-    // anyone attests.
-    let check = p
-        .catalog
-        .as_ref()
-        .and_then(|c| c.get(&app).ok())
-        .and_then(|e| e.guide.steps.iter().find(|st| st.id == id).cloned());
+    // The step's check, when the app's guide has one: what the machine can see beats
+    // what anyone attests.
+    let guide = hlb_engine::install::installed_guide(&p.state, &app, || {
+        p.catalog
+            .as_ref()
+            .and_then(|c| c.get(&app).ok())
+            .map(|e| e.guide.clone())
+    })
+    .await;
+    let check = match guide {
+        Ok(g) => g.steps.into_iter().find(|st| st.id == id),
+        Err(e) => {
+            blockers.push(format!("{app}'s guide could not be read: {e}"));
+            None
+        }
+    };
     let mut observed = None;
     let mut overridden = false;
     if let (true, Some(step)) = (exists, check) {

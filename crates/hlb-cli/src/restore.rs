@@ -159,7 +159,7 @@ pub async fn run(
         );
     }
 
-    announce_after(cli, app);
+    announce_after(cli, state, app).await?;
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         // The snapshot named, in full: "the latest" may be another one by the time it
@@ -311,7 +311,7 @@ async fn bucket(
         source.destination.name
     );
     println!("  · 🔴 what was written since is LOST, and the objects added since are deleted");
-    announce_after(cli, app);
+    announce_after(cli, state, app).await?;
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         println!(
@@ -519,7 +519,7 @@ async fn database(
              {app} stays stopped and the copy taken first is named"
         ),
     }
-    announce_after(cli, app);
+    announce_after(cli, state, app).await?;
     if !r.apply {
         println!("\nPreview: nothing was changed.");
         println!(
@@ -603,24 +603,35 @@ fn finished(after: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
     })
 }
 
-/// The app's post-restore steps, from the catalog's guide — read as an install reads
-/// it, since no guide is frozen with the manifest.
-fn post_restore_guide(cli: &crate::Cli, app: &str) -> hlb_types::Guide {
-    let mut guide = hlb_catalog::Catalog::load(&cli.catalog)
-        .ok()
-        .and_then(|c| c.get(app).ok().map(|e| e.guide.clone()))
-        .unwrap_or_default();
+/// The app's post-restore steps, from the guide frozen with it — the catalog's for an
+/// app recorded before guides were frozen.
+async fn post_restore_guide(
+    cli: &crate::Cli,
+    state: &hlb_state::State,
+    app: &str,
+) -> Result<hlb_types::Guide, Box<dyn std::error::Error>> {
+    let mut guide = hlb_engine::install::installed_guide(state, app, || {
+        hlb_catalog::Catalog::load(&cli.catalog)
+            .ok()
+            .and_then(|c| c.get(app).ok().map(|e| e.guide.clone()))
+    })
+    .await?;
     guide
         .steps
         .retain(|s| s.phase == hlb_types::Phase::PostRestore);
-    guide
+    Ok(guide)
 }
 
 /// What a preview says will follow the restore.
-fn announce_after(cli: &crate::Cli, app: &str) {
-    for s in post_restore_guide(cli, app).steps {
+async fn announce_after(
+    cli: &crate::Cli,
+    state: &hlb_state::State,
+    app: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for s in post_restore_guide(cli, state, app).await?.steps {
         println!("  · then: {}", s.title);
     }
+    Ok(())
 }
 
 /// The post-restore steps, run on the app started again, and what each did. `false`
@@ -632,7 +643,7 @@ async fn after(
     app: &str,
     manifest: &hlb_types::Manifest,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let guide = post_restore_guide(cli, app);
+    let guide = post_restore_guide(cli, state, app).await?;
     if guide.steps.is_empty() {
         return Ok(true);
     }
