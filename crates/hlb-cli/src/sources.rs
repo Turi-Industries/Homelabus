@@ -542,5 +542,22 @@ async fn fetch(state: &State, src: &CatalogSource) -> std::result::Result<(), St
     } else {
         println!("    valid until {}", day(idx.expires));
     }
+    // 🔴 A revoked version keeps running until someone moves it: said where the
+    // revocation arrives, and every day after in the inbox.
+    let e = |e: hlb_state::Error| e.to_string();
+    for (app, _) in state.installed_apps().await.map_err(e)? {
+        if state.app_source(&app).await.map_err(e)?.as_deref() != Some(name.as_str()) {
+            continue;
+        }
+        let Some(version) = state.app_release(&app).await.map_err(e)?.version else {
+            continue;
+        };
+        if let Some(why) = idx.revocation(&app, &version) {
+            println!(
+                "  🔴 \"{app}\" runs {version}, which {name} revoked: {why}\n     \
+                 `hlb upgrade {app}` takes the newest version it still offers"
+            );
+        }
+    }
     Ok(())
 }

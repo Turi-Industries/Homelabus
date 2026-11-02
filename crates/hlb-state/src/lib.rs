@@ -310,6 +310,14 @@ pub struct VerificationRun {
     pub verified_at: String,
 }
 
+/// Which signed index an app's frozen manifest came in, and which version of the app it
+/// is there — both `None` for one read from a directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Release {
+    pub index: Option<u64>,
+    pub version: Option<String>,
+}
+
 /// A third-party catalog source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogSource {
@@ -827,19 +835,34 @@ impl State {
     }
 
     /// Freezes the catalog source an app is installed from — `None` the official one —
-    /// and the counter of the signed index it came in, if it came in one.
+    /// and the release of it, if it came in a signed index.
     pub async fn set_app_source(
         &self,
         name: &str,
         source: Option<&str>,
-        index: Option<u64>,
+        release: &Release,
     ) -> Result<()> {
-        let done = sqlx::query("UPDATE apps SET source = ?2, source_index = ?3 WHERE name = ?1")
+        let done = sqlx::query("UPDATE apps SET source = ?2 WHERE name = ?1")
             .bind(name)
             .bind(source)
-            .bind(index.map(|i| i as i64))
             .execute(&self.pool)
             .await?;
+        if done.rows_affected() == 0 {
+            return Err(Error::UnknownApp(name.to_string()));
+        }
+        self.set_app_release(name, release).await
+    }
+
+    /// Freezes the release an app's manifest is — moved by an upgrade with the manifest,
+    /// and back with it.
+    pub async fn set_app_release(&self, name: &str, release: &Release) -> Result<()> {
+        let done =
+            sqlx::query("UPDATE apps SET source_index = ?2, source_version = ?3 WHERE name = ?1")
+                .bind(name)
+                .bind(release.index.map(|i| i as i64))
+                .bind(release.version.as_deref())
+                .execute(&self.pool)
+                .await?;
         if done.rows_affected() == 0 {
             return Err(Error::UnknownApp(name.to_string()));
         }
@@ -856,15 +879,18 @@ impl State {
         Ok(row.try_get("source")?)
     }
 
-    /// The counter of the signed index an app was installed from, if any.
-    pub async fn app_source_index(&self, name: &str) -> Result<Option<u64>> {
-        let row = sqlx::query("SELECT source_index FROM apps WHERE name = ?1")
+    /// The release an app's frozen manifest is.
+    pub async fn app_release(&self, name: &str) -> Result<Release> {
+        let row = sqlx::query("SELECT source_index, source_version FROM apps WHERE name = ?1")
             .bind(name)
             .fetch_optional(&self.pool)
             .await?
             .ok_or_else(|| Error::UnknownApp(name.to_string()))?;
-        let i: Option<i64> = row.try_get("source_index")?;
-        Ok(i.map(|i| i as u64))
+        let index: Option<i64> = row.try_get("source_index")?;
+        Ok(Release {
+            index: index.map(|i| i as u64),
+            version: row.try_get("source_version")?,
+        })
     }
 
     /// Adds a third-party catalog source; `false` if one of that name exists already.

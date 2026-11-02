@@ -2686,7 +2686,7 @@ steps:
             "demo",
             install::Origin {
                 source: Some("community"),
-                index: None,
+                ..Default::default()
             },
             &catalog,
             &Default::default(),
@@ -2713,6 +2713,7 @@ steps:
             install::Origin {
                 source: Some("community"),
                 index: Some(7),
+                version: Some("1.0.0+abc"),
             },
             &manifest(),
             &Default::default(),
@@ -2729,7 +2730,11 @@ steps:
             s.app_source("theirs").await.expect("source").as_deref(),
             Some("community")
         );
-        assert_eq!(s.app_source_index("theirs").await.expect("index"), Some(7));
+        let frozen = hlb_state::Release {
+            index: Some(7),
+            version: Some("1.0.0+abc".into()),
+        };
+        assert_eq!(s.app_release("theirs").await.expect("release"), frozen);
         // Resumed, it keeps its source; the official app of that name is refused.
         let again = install::basis(
             &s,
@@ -2737,6 +2742,7 @@ steps:
             install::Origin {
                 source: Some("community"),
                 index: Some(7),
+                version: Some("1.0.0+abc"),
             },
             &manifest(),
             &Default::default(),
@@ -2748,9 +2754,8 @@ steps:
         .expect("resumed");
         assert_eq!(again.source.as_deref(), Some("community"));
         assert_eq!(
-            again.index,
-            Some(7),
-            "resumed, it keeps the index it came in"
+            again.release, frozen,
+            "resumed, it keeps the release it came in"
         );
         let official = install::basis(
             &s,

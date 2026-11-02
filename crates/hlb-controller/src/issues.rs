@@ -169,6 +169,22 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
             out.push((Cause::CatalogChanged, Attention::Notice, Some(app)));
         }
     }
+    // Read against the catalog loaded, the sources' last fetched indexes: a source
+    // that revokes a version is heard by the next fetch.
+    if let Some(catalog) = &s.catalog {
+        for (app, _) in s.state.installed_apps().await? {
+            let source = s.state.app_source(&app).await?;
+            let Some(version) = s.state.app_release(&app).await?.version else {
+                continue;
+            };
+            if catalog
+                .revocation(&app, source.as_deref(), &version)
+                .is_some()
+            {
+                out.push((Cause::VersionRevoked, Attention::Critical, Some(app)));
+            }
+        }
+    }
     // Still declared: a job the manifest has dropped since is not left reporting work
     // nobody asks for any more.
     for run in s.state.job_runs().await? {
@@ -390,6 +406,89 @@ mod tests {
             .iter()
             .any(|i| matches!(&i.cause, Cause::Alert { rule, .. } if rule == "backup-absent")));
         assert!(issues.len() < 30, "{} lines", issues.len());
+    }
+
+    #[tokio::test]
+    async fn a_version_its_source_revoked_is_critical_until_it_moves() {
+        use hlb_catalog::index;
+        let seed = [7u8; 32];
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs() as i64;
+        let official = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog");
+        let theirs = tempfile::tempdir().expect("source");
+        let copied = std::process::Command::new("cp")
+            .arg("-r")
+            .arg(official.join("librespeed"))
+            .arg(theirs.path())
+            .status()
+            .expect("cp")
+            .success();
+        assert!(copied);
+        let one = tempfile::tempdir().expect("one");
+        let first = index::build(theirs.path(), "community", None, one.path(), now).expect("built");
+        let version = first.apps["librespeed"][0].version.clone();
+        std::fs::write(
+            theirs.path().join(index::REVOKED_FILE),
+            format!("librespeed: [ {{ version: \"{version}\", why: \"leaks\" }} ]\n"),
+        )
+        .expect("revoked");
+        let two = tempfile::tempdir().expect("two");
+        index::build(
+            theirs.path(),
+            "community",
+            Some(one.path()),
+            two.path(),
+            now,
+        )
+        .expect("built");
+        index::sign(two.path(), &seed, None, now).expect("signed");
+        let mut catalog = hlb_catalog::Catalog::default();
+        catalog
+            .add_signed_source("community", two.path(), &index::public_key(&seed), now)
+            .expect("added");
+
+        let st = hlb_state::State::in_memory().await.expect("state");
+        let m = hlb_catalog::Catalog::load(theirs.path())
+            .expect("catalog")
+            .get("librespeed")
+            .expect("librespeed")
+            .manifest
+            .clone();
+        st.upsert_app("librespeed", &m, None).await.expect("app");
+        let installed = |v: &str| hlb_state::Release {
+            index: Some(1),
+            version: Some(v.into()),
+        };
+        st.set_app_source("librespeed", Some("community"), &installed(&version))
+            .await
+            .expect("source");
+        let mut s = crate::api::tests::base_state(std::sync::Arc::new(st), true);
+        s.catalog = Some(std::sync::Arc::new(catalog));
+        let revoked = |found: &[Finding]| {
+            found
+                .iter()
+                .find(|(c, _, a)| *c == Cause::VersionRevoked && a.as_deref() == Some("librespeed"))
+                .map(|(_, at, _)| *at)
+        };
+        let found = findings(&s, false).await.expect("findings");
+        assert_eq!(revoked(&found), Some(Attention::Critical));
+
+        // Moved to a version still offered, it is no longer said.
+        s.state
+            .set_app_release("librespeed", &installed("7.0.0"))
+            .await
+            .expect("moved");
+        let found = findings(&s, false).await.expect("findings");
+        assert_eq!(revoked(&found), None);
+        // Nor of the official app of that name, which the revocation is not about.
+        s.state
+            .set_app_source("librespeed", None, &installed(&version))
+            .await
+            .expect("official");
+        let found = findings(&s, false).await.expect("findings");
+        assert_eq!(revoked(&found), None);
     }
 
     #[tokio::test]

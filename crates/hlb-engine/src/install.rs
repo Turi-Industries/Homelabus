@@ -8,11 +8,22 @@ use hlb_state::State;
 use hlb_types::{Guide, Manifest};
 
 /// Where a catalog entry came from: its source — `None` the official catalog — and
-/// the counter of the signed index it came in, if one.
+/// the counter of the signed index it came in and its version there, if one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Origin<'a> {
     pub source: Option<&'a str>,
     pub index: Option<u64>,
+    pub version: Option<&'a str>,
+}
+
+impl Origin<'_> {
+    /// What is frozen with the install, and moved by an upgrade.
+    pub fn release(&self) -> hlb_state::Release {
+        hlb_state::Release {
+            index: self.index,
+            version: self.version.map(str::to_string),
+        }
+    }
 }
 
 /// What an install of an app plans and freezes.
@@ -20,8 +31,8 @@ pub struct Origin<'a> {
 pub struct Basis {
     /// The catalog source it is installed from, `None` for the official one.
     pub source: Option<String>,
-    /// The counter of the signed index it is installed from.
-    pub index: Option<u64>,
+    /// The signed index it is installed from, and its version there.
+    pub release: hlb_state::Release,
     pub manifest: Manifest,
     /// The guide it plans with, frozen beside the manifest.
     pub guide: Guide,
@@ -75,7 +86,7 @@ pub async fn basis(
         }
         return Ok(Ok(Basis {
             source: origin.source.map(str::to_string),
-            index: origin.index,
+            release: origin.release(),
             manifest: catalog.clone(),
             guide: catalog_guide.clone(),
             domain,
@@ -111,7 +122,7 @@ pub async fn basis(
     }
     Ok(Ok(Basis {
         source: installed_from,
-        index: state.app_source_index(app).await?,
+        release: state.app_release(app).await?,
         manifest: state.app_manifest(app).await?,
         guide: installed_guide(state, app, || Some(catalog_guide.clone())).await?,
         domain: recorded,
@@ -195,7 +206,7 @@ pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()
             .await?;
         state.set_app_guide(app, Some(&basis.guide)).await?;
         state
-            .set_app_source(app, basis.source.as_deref(), basis.index)
+            .set_app_source(app, basis.source.as_deref(), &basis.release)
             .await?;
     }
     state

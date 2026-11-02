@@ -5254,13 +5254,14 @@ fn absolute(p: &std::path::Path) -> String {
 /// Freezes `next` as `app`'s manifest and runs its plan to the end — or puts `frozen`
 /// back. `refused` is what the caller found against the move; the storage and the
 /// routes are checked here, as an install checks them. `verb` names the run in the
-/// journal; `again` is the command that runs it again.
+/// journal; `again` is the command that runs it again. `entry` is the catalog's: its
+/// guide and its release are frozen with `next`.
 #[allow(clippy::too_many_arguments)]
 async fn switch_manifest(
     cli: &Cli,
     state: &State,
     app: &str,
-    guide: &hlb_types::Guide,
+    entry: &hlb_catalog::Entry,
     frozen: &hlb_types::Manifest,
     next: &hlb_types::Manifest,
     refused: Vec<String>,
@@ -5303,6 +5304,7 @@ async fn switch_manifest(
         timezone: state.timezone().await?,
         ..Default::default()
     };
+    let guide = &entry.guide;
     let plan = hlb_resolver::resolve_with_guide(next, guide, &params)?;
     if !apply {
         println!("\nWould freeze the catalog's manifest and run its plan again,");
@@ -5323,8 +5325,18 @@ async fn switch_manifest(
         .map(|(_, st)| st)
         .unwrap_or_else(|| "running".to_string());
     let frozen_guide = state.app_guide(app).await?;
+    let frozen_release = state.app_release(app).await?;
     state.upsert_app(app, next, domain.as_deref()).await?;
     state.set_app_guide(app, Some(guide)).await?;
+    state
+        .set_app_release(
+            app,
+            &hlb_state::Release {
+                index: entry.index,
+                version: entry.version.clone(),
+            },
+        )
+        .await?;
     state
         .set_app_mail_domain(app, params.mail_domain.as_deref())
         .await?;
@@ -5339,6 +5351,7 @@ async fn switch_manifest(
         app,
         frozen,
         frozen_guide.as_ref(),
+        &frozen_release,
         &status,
         domain.as_deref(),
     )
@@ -6161,6 +6174,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     hlb_engine::install::Origin {
                         source: entry.source.as_deref(),
                         index: entry.index,
+                        version: entry.version.as_deref(),
                     },
                     &entry.manifest,
                     &entry.guide,
@@ -6290,7 +6304,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     &cli,
                     &state,
                     app,
-                    &entry.guide,
+                    entry,
                     &frozen,
                     &next,
                     refused,

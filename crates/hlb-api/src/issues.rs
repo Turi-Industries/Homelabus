@@ -36,6 +36,10 @@ pub enum Cause {
     GuidePending,
     /// The catalog has changed it since it was installed: `hlb upgrade` applies it.
     CatalogChanged,
+    /// 🔴 It runs a version its catalog source has revoked — a flaw the source found,
+    /// whose reason `hlb catalog source fetch` prints. The subjects are the apps;
+    /// `hlb upgrade` takes each to the newest version still offered.
+    VersionRevoked,
     /// A scheduled job of its manifest failed its last run — Seafile's garbage
     /// collection. The subjects are the apps; `hlb job` says what it printed.
     JobFailed,

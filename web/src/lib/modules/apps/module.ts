@@ -15,7 +15,7 @@ export const module: Module = {
 		{ path: '/plans', label: m.page_apps_plans, reads: ['/api/plans'] }
 	],
 	details: ['/apps/[name]/[[tab]]'],
-	causes: ['app_failed', 'app_partial', 'guide_blocking', 'guide_pending', 'catalog_changed', 'job_failed', 'mail_waiting'],
+	causes: ['app_failed', 'app_partial', 'guide_blocking', 'guide_pending', 'catalog_changed', 'version_revoked', 'job_failed', 'mail_waiting'],
 	search: {
 		path: '/api/apps',
 		entries: (apps) =>

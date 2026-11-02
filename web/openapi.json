@@ -1657,6 +1657,21 @@
             "type": "object"
           },
           {
+            "description": "🔴 It runs a version its catalog source has revoked — a flaw the source found,\nwhose reason `hlb catalog source fetch` prints. The subjects are the apps;\n`hlb upgrade` takes each to the newest version still offered.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "version_revoked"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "A scheduled job of its manifest failed its last run — Seafile's garbage\ncollection. The subjects are the apps; `hlb job` says what it printed.",
             "properties": {
               "kind": {

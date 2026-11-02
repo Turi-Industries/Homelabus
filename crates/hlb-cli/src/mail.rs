@@ -423,17 +423,7 @@ async fn migrate(cli: &Cli, state: &hlb_state::State, apply: bool) -> Result<Exi
     let again = "hlb mail migrate --apply";
     if !apply {
         return crate::switch_manifest(
-            cli,
-            state,
-            app,
-            &entry.guide,
-            &frozen,
-            &next,
-            refused,
-            None,
-            false,
-            "migrate",
-            again,
+            cli, state, app, entry, &frozen, &next, refused, None, false, "migrate", again,
         )
         .await;
     }
@@ -482,7 +472,7 @@ async fn migrate(cli: &Cli, state: &hlb_state::State, apply: bool) -> Result<Exi
         cli,
         state,
         app,
-        &entry.guide,
+        entry,
         &frozen,
         &next,
         Vec::new(),

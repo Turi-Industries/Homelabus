@@ -32,6 +32,8 @@ export function title(issue: Issue): string {
 			return m.cause_guide_pending(n);
 		case 'catalog_changed':
 			return m.cause_catalog_changed(n);
+		case 'version_revoked':
+			return m.cause_version_revoked(n);
 		case 'job_failed':
 			return m.cause_job_failed(n);
 		case 'mail_waiting':
@@ -156,6 +158,7 @@ export function where(issue: Issue): string {
 		case 'app_partial':
 			return one ? `/apps/${one}` : '/apps';
 		case 'catalog_changed':
+		case 'version_revoked':
 		case 'job_failed':
 		case 'assertion_broken':
 		case 'assertion_unknown':
@@ -250,6 +253,8 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_guide_pending();
 		case 'catalog_changed':
 			return m.reason_catalog_changed();
+		case 'version_revoked':
+			return m.reason_version_revoked();
 		case 'job_failed':
 			return m.reason_job_failed();
 		case 'mail_waiting':

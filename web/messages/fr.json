@@ -1400,6 +1400,22 @@
 			}
 		}
 	],
+	"cause_version_revoked": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application tourne dans une version que sa source de catalogue a retirée",
+				"countPlural=*": "{shown} applications tournent dans des versions que leur source de catalogue a retirées"
+			}
+		}
+	],
 	"cause_job_failed": [
 		{
 			"declarations": [
@@ -1964,6 +1980,7 @@
 	"reason_app_partial": "sans toutes ses répliques",
 	"reason_guide_blocking": "bloquée par une étape manuelle",
 	"reason_catalog_changed": "le catalogue l'a changée",
+	"reason_version_revoked": "tourne dans une version que sa source a retirée : hlb upgrade",
 	"reason_job_failed": "sa tâche planifiée a échoué : hlb job",
 	"reason_mail_waiting": "du courrier attend depuis plus d'une heure de partir : hlb mail queue",
 	"reason_guide_pending": "une étape manuelle attend",

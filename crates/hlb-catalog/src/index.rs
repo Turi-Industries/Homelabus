@@ -753,6 +753,16 @@ mod tests {
             .to_string();
         assert!(why.contains("revoked: leaks sessions"), "{why}");
         assert!(c.get("community/librespeed").is_ok());
+        // A house running it is told, under the name it is installed from.
+        assert_eq!(
+            c.revocation("mealie", Some("community"), &v),
+            Some("leaks sessions — upgrade")
+        );
+        assert_eq!(
+            c.revocation("mealie", None, &v),
+            None,
+            "not the official one"
+        );
     }
 
     #[test]
@@ -843,6 +853,11 @@ mod tests {
             .expect("added");
         let e = c.get("community/mealie").expect("mealie");
         assert_eq!(e.index, Some(2), "the index it came from");
+        assert_eq!(
+            e.version.as_deref(),
+            Some(first.as_str()),
+            "and its version there"
+        );
         assert!(
             e.path
                 .ends_with(format!("apps/mealie/{first}/manifest.yaml")),

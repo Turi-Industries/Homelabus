@@ -84,6 +84,9 @@ pub struct Catalog {
     /// The apps whose `metadata.hlb` leaves this `hlb` out, and why — read no further,
     /// since a field this build does not know would refuse the whole catalog.
     set_aside: BTreeMap<String, String>,
+    /// The versions each signed source withdrew, under the name the app is found by:
+    /// kept whether or not the source still offers the app, since a house may run one.
+    revoked: BTreeMap<String, Vec<hlb_types::index::Revoked>>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +96,8 @@ pub struct Entry {
     pub source: Option<String>,
     /// The counter of the signed index it came from, frozen with the install.
     pub index: Option<u64>,
+    /// Its version in that index — what a revocation names.
+    pub version: Option<String>,
     pub manifest: Manifest,
     pub path: PathBuf,
     /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
@@ -222,6 +227,7 @@ impl Catalog {
             match load_one(&path, &release, Some(app))? {
                 Loaded::Entry(mut e) => {
                     e.index = Some(idx.counter);
+                    e.version = Some(v.version.clone());
                     theirs.entries.insert(app.clone(), *e);
                 }
                 Loaded::SetAside { app, why } => {
@@ -229,6 +235,7 @@ impl Catalog {
                 }
             }
         }
+        theirs.revoked = idx.revoked;
         self.merge(source, theirs);
         Ok(())
     }
@@ -245,6 +252,9 @@ impl Catalog {
             .collect();
         for (app, why) in theirs.set_aside {
             self.set_aside.insert(format!("{prefix}{app}"), why);
+        }
+        for (app, revoked) in theirs.revoked {
+            self.revoked.insert(format!("{prefix}{app}"), revoked);
         }
         for (app, mut e) in theirs.entries {
             let key = format!("{prefix}{app}");
@@ -277,6 +287,15 @@ impl Catalog {
     /// same name.
     pub fn followed(&self, app: &str, source: Option<&str>) -> Result<&Entry> {
         self.get(&qualified(source, app))
+    }
+
+    /// Why its source revoked `version` of an installed app, if it did.
+    pub fn revocation(&self, app: &str, source: Option<&str>, version: &str) -> Option<&str> {
+        self.revoked
+            .get(&qualified(source, app))?
+            .iter()
+            .find(|r| r.version == version)
+            .map(|r| r.why.as_str())
     }
 
     pub fn get(&self, name: &str) -> Result<&Entry> {
@@ -706,6 +725,7 @@ fn load_one(path: &Path, release: &Version, name: Option<&str>) -> Result<Loaded
     Ok(Loaded::Entry(Box::new(Entry {
         source: None,
         index: None,
+        version: None,
         manifest,
         path: path.to_path_buf(),
         guide,
@@ -787,6 +807,7 @@ mod tests {
             Self {
                 source: None,
                 index: None,
+                version: None,
                 manifest,
                 path: PathBuf::new(),
                 guide: hlb_types::Guide::default(),
@@ -799,7 +820,7 @@ mod tests {
         fn of(entries: impl IntoIterator<Item = (String, Entry)>) -> Self {
             Self {
                 entries: entries.into_iter().collect(),
-                set_aside: BTreeMap::new(),
+                ..Self::default()
             }
         }
     }

@@ -342,6 +342,7 @@ pub async fn settle(
     app: &str,
     previous: &Manifest,
     previous_guide: Option<&Guide>,
+    previous_release: &hlb_state::Release,
     previous_status: &str,
     domain: Option<&str>,
 ) -> crate::Result<Settled> {
@@ -366,6 +367,8 @@ pub async fn settle(
     if !deployed {
         state.upsert_app(app, previous, domain).await?;
         state.set_app_guide(app, previous_guide).await?;
+        // The version a revocation is read against is the one that runs.
+        state.set_app_release(app, previous_release).await?;
     }
     state.set_app_status(app, previous_status).await?;
     Ok(if deployed {
@@ -576,11 +579,17 @@ mod tests {
         s.set_app_status("vikunja", "running")
             .await
             .expect("status");
+        s.set_app_release("vikunja", &release("1.0.0"))
+            .await
+            .expect("release");
         // The upgrade: the catalog's manifest frozen, its plan run.
         let after = manifest("  swarm:\n    replicas: 1\n");
         s.upsert_app("vikunja", &after, Some("tasks.example.org"))
             .await
             .expect("frozen");
+        s.set_app_release("vikunja", &release("1.1.0"))
+            .await
+            .expect("release");
         s.set_app_guide("vikunja", Some(&guide("after")))
             .await
             .expect("guide");
@@ -595,6 +604,17 @@ mod tests {
                 .expect("status");
         }
         (s, before)
+    }
+
+    fn release(version: &str) -> hlb_state::Release {
+        hlb_state::Release {
+            index: Some(1),
+            version: Some(version.into()),
+        }
+    }
+
+    async fn version(s: &hlb_state::State) -> Option<String> {
+        s.app_release("vikunja").await.expect("release").version
     }
 
     async fn status(s: &hlb_state::State) -> String {
@@ -620,6 +640,7 @@ mod tests {
             "vikunja",
             &before,
             Some(&guide("before")),
+            &release("1.0.0"),
             "running",
             Some("tasks.example.org"),
         )
@@ -649,6 +670,7 @@ mod tests {
             "vikunja",
             &before,
             Some(&guide("before")),
+            &release("1.0.0"),
             "running",
             Some("tasks.example.org"),
         )
@@ -671,6 +693,11 @@ mod tests {
             "the guide goes back with it"
         );
         assert_eq!(
+            version(&s).await.as_deref(),
+            Some("1.0.0"),
+            "and the version a revocation names"
+        );
+        assert_eq!(
             s.app_domain("vikunja").await.expect("d").as_deref(),
             Some("tasks.example.org")
         );
@@ -686,12 +713,14 @@ mod tests {
             "vikunja",
             &before,
             Some(&guide("before")),
+            &release("1.0.0"),
             "running",
             Some("tasks.example.org"),
         )
         .await
         .expect("settle");
         assert_eq!(settled, Settled::Interrupted);
+        assert_eq!(version(&s).await.as_deref(), Some("1.1.0"), "what runs");
         assert_eq!(
             s.app_manifest("vikunja")
                 .await

@@ -98,6 +98,7 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
         hlb_engine::install::Origin {
             source: input.source.as_deref(),
             index: input.index,
+            version: input.version.as_deref(),
         },
         &input.manifest,
         &input.guide,
@@ -326,6 +327,10 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
         Ok(g) => g,
         Err(e) => return Acted::Unplannable(e.to_string()),
     };
+    let frozen_release = match p.state.app_release(&app).await {
+        Ok(r) => r,
+        Err(e) => return Acted::Unplannable(e.to_string()),
+    };
     let next = hlb_engine::upgrade::next(&frozen, &input.manifest);
     let mut changes = hlb_engine::upgrade::changes(&frozen, &next);
     changes.extend(hlb_engine::upgrade::guide_changes(
@@ -413,6 +418,14 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
             Ok(()) => p.state.set_app_guide(&app, Some(&input.guide)).await,
             Err(e) => Err(e),
         };
+        let release = hlb_state::Release {
+            index: input.index,
+            version: input.version.clone(),
+        };
+        let frozen_now = match frozen_now {
+            Ok(()) => p.state.set_app_release(&app, &release).await,
+            Err(e) => Err(e),
+        };
         let reset = match frozen_now {
             Ok(()) => p.state.reset_plan(&app).await,
             Err(e) => Err(e),
@@ -436,6 +449,7 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
                             &app,
                             &frozen,
                             frozen_guide.as_ref(),
+                            &frozen_release,
                             &status,
                             params.domain.as_deref(),
                         )
@@ -463,6 +477,7 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
             &app,
             &frozen,
             frozen_guide.as_ref(),
+            &frozen_release,
             &status,
             params.domain.as_deref(),
         )
