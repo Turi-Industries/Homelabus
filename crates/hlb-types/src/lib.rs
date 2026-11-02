@@ -14,6 +14,7 @@ pub mod assertion;
 pub mod capability;
 pub mod domain;
 pub mod guide;
+pub mod index;
 pub mod manifest;
 pub mod rbac;
 pub mod release;

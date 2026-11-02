@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+mod catalog_index;
 mod devices;
 mod disk;
 mod domain;
@@ -2067,6 +2068,63 @@ enum CatalogCmd {
     /// whose apps install as `<source>/<app>`.
     #[command(subcommand)]
     Source(SourceCmd),
+    /// A source's signing key, kept on the signer's machine.
+    #[command(subcommand)]
+    Key(KeyCmd),
+    /// A source's signed index: built by CI, signed by its owner, checked by every hlb.
+    #[command(subcommand)]
+    Index(IndexCmd),
+}
+
+#[derive(Subcommand)]
+enum KeyCmd {
+    /// A new Ed25519 signing key, written encrypted under a passphrase; prints the
+    /// public key installations are given.
+    Generate {
+        file: std::path::PathBuf,
+        /// The passphrase on stdin's first line, for a script.
+        #[arg(long)]
+        passphrase_stdin: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum IndexCmd {
+    /// The index of a catalog directory, built into an empty directory with every
+    /// app version's files. The versions of `--previous` are kept, its counter risen.
+    Build {
+        catalog: std::path::PathBuf,
+        out: std::path::PathBuf,
+        #[arg(long)]
+        source: String,
+        /// The directory of the index published before this one.
+        #[arg(long)]
+        previous: Option<std::path::PathBuf>,
+    },
+    /// Sign a built index. Refused unless its counter rises above the published one's
+    /// and its expiry is ahead, and unless every file is the one it names.
+    Sign {
+        dir: std::path::PathBuf,
+        #[arg(long)]
+        key: std::path::PathBuf,
+        /// The index.json the source serves today.
+        #[arg(long)]
+        published: Option<std::path::PathBuf>,
+        /// The source has published no index yet.
+        #[arg(long)]
+        first: bool,
+        #[arg(long)]
+        passphrase_stdin: bool,
+    },
+    /// Check an index directory against a source's public key.
+    Verify {
+        dir: std::path::PathBuf,
+        #[arg(long)]
+        source: String,
+        /// The source's public key, 64 hexadecimal characters.
+        #[arg(long)]
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5618,6 +5676,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let cli = with_platform_access(cli);
 
     match &cli.command {
+        Command::Catalog(CatalogCmd::Key(cmd)) => catalog_index::key(cmd),
+        Command::Catalog(CatalogCmd::Index(cmd)) => catalog_index::run(cmd),
+
         Command::Catalog(CatalogCmd::Source(cmd)) => {
             tokio::runtime::Runtime::new()?.block_on(sources::run(&cli, cmd))
         }

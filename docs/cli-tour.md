@@ -36,6 +36,22 @@ platform service in it, or an app named after one, is set aside.
 ./target/debug/hlb catalog source remove community --apply          # what it installed keeps running
 ```
 
+A source publishes a signed index: CI builds it, its owner signs it on their own
+machine. The signature covers every file's digest, a counter that only rises and an
+expiry 30 days out, so whoever serves the source can withhold it but never forge,
+replay or freeze it.
+
+```sh
+./target/debug/hlb catalog key generate ~/catalog-signing.key       # asks a passphrase, prints the public key
+./target/debug/hlb catalog index build catalog /tmp/index --source official --previous /tmp/published
+./target/debug/hlb catalog index sign /tmp/index --key ~/catalog-signing.key --published /tmp/published/index.json
+./target/debug/hlb catalog index verify /tmp/index --source official --key <public-key>
+```
+
+`sign` refuses an index whose counter does not rise above the published one's, an
+expiry behind or past 30 days, and a file that is not the one the index names. A first
+index is signed with `--first` instead of `--published`.
+
 ## Installing and running an app
 
 ```sh

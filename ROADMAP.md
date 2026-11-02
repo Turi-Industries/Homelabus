@@ -1140,6 +1140,15 @@ pull request to the catalog, with no `hlb` release.
   `upgrade` and `update check` follow it (`Catalog::followed`). The controller and
   privd read the sources once at startup. Left for the second half: the signed index
   and its fetch, so a source can be a URL.
+- ✅ The signed index, built and checked offline — 2026-11-02 (step 3b). `hlb catalog
+  key generate` (Ed25519, the seed under an age passphrase, 0600, never overwritten);
+  `hlb catalog index build|sign|verify` (`hlb_catalog::index`, the format
+  `hlb_types::index`). Every file of an app's directory is walked and hashed, each
+  version kept under `apps/<app>/<version>/` so an older `hlb` finds the last one its
+  range accepts; a changed file under an unchanged image tag is `<tag>~hlbN`. `sign`
+  refuses a counter not above `--published`'s (or `--first`), an expiry behind or past
+  30 days, a file not the one named; `verify` a path climbing out of its directory.
+  Left: fetching an index into a source (3c), the official key compiled in.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

@@ -65,6 +65,9 @@ pub enum Error {
 
     #[error("secret \"{0}\" is not valid UTF-8")]
     NotUtf8(String),
+
+    #[error("cannot decrypt - wrong passphrase? ({0})")]
+    Passphrase(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -324,6 +327,37 @@ pub fn fill_random(buf: &mut [u8]) {
     rand::rng().fill_bytes(buf);
 }
 
+/// Encrypts `plain` under a passphrase (age's scrypt), for a key that lives on a
+/// person's machine — a source's signing key — rather than in the cluster's vault.
+pub fn seal_with_passphrase(plain: &[u8], passphrase: &str) -> Result<Vec<u8>> {
+    let encryptor =
+        age::Encryptor::with_user_passphrase(age::secrecy::SecretString::from(passphrase));
+    let mut out = Vec::new();
+    let mut writer = encryptor
+        .wrap_output(&mut out)
+        .map_err(|e| Error::Encrypt(e.to_string()))?;
+    writer
+        .write_all(plain)
+        .map_err(|e| Error::Encrypt(e.to_string()))?;
+    writer.finish().map_err(|e| Error::Encrypt(e.to_string()))?;
+    Ok(out)
+}
+
+/// What `seal_with_passphrase` encrypted.
+pub fn open_with_passphrase(ciphertext: &[u8], passphrase: &str) -> Result<Vec<u8>> {
+    let decryptor =
+        age::Decryptor::new(ciphertext).map_err(|e| Error::Passphrase(e.to_string()))?;
+    let identity = age::scrypt::Identity::new(age::secrecy::SecretString::from(passphrase));
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .map_err(|e| Error::Passphrase(e.to_string()))?;
+    let mut buf = Vec::new();
+    reader
+        .read_to_end(&mut buf)
+        .map_err(|e| Error::Passphrase(e.to_string()))?;
+    Ok(buf)
+}
+
 fn write_private(path: &Path, contents: &str) -> Result<()> {
     let body = format!(
         "# Homelabus master key - DO NOT SHARE, DO NOT COMMIT.\n\
@@ -384,6 +418,20 @@ pub fn write_private_file(path: &Path, contents: &[u8], replace: bool) -> std::i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_passphrase_sealed_key_opens_with_that_passphrase_only() {
+        let sealed = seal_with_passphrase(b"seed", "correct horse").expect("sealed");
+        assert!(!sealed.windows(4).any(|w| w == b"seed"), "stored in clear");
+        assert_eq!(
+            open_with_passphrase(&sealed, "correct horse").expect("opened"),
+            b"seed"
+        );
+        assert!(matches!(
+            open_with_passphrase(&sealed, "battery staple"),
+            Err(Error::Passphrase(_))
+        ));
+    }
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().expect("temp dir")

@@ -16,6 +16,8 @@ thiserror.workspace = true
 # Holding a manifest to the schema of the oldest `hlb` its range accepts. No network:
 # the schemas are carried, and a `$ref` outside them is an error, never a fetch.
 jsonschema = { version = "0.60", default-features = false }
+# A source's signed index. Signing and checking only — fetching it is not this crate's.
+ed25519-dalek = "3.0.0"
 
 [dev-dependencies]
 hlb-backup.workspace = true

@@ -3,6 +3,7 @@
 //! A catalog is a folder of folders, one per app, each with its `manifest.yaml`.
 //! **Adding an app means adding a folder. No recompilation.**
 
+pub mod index;
 pub mod themes;
 
 use std::collections::BTreeMap;
