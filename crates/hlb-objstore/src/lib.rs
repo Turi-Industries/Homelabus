@@ -81,6 +81,9 @@ pub enum Error {
              to get a fresh one"
     )]
     LostSecret(String),
+
+    #[error("Garage's layout cannot be given at install: {0}")]
+    Unplaceable(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -101,6 +104,12 @@ pub struct Garage {
     /// an S3 call, which the admin API does not offer.
     s3: Option<String>,
 }
+
+/// The zone a node is placed in when nobody named one.
+pub const DEFAULT_ZONE: &str = "home";
+
+/// The key Homelabus writes a bucket's lifecycle with, for the one call.
+const LIFECYCLE_KEY: &str = "homelabus-lifecycle";
 
 /// The S3 API, as the overlay names it — what the apps are handed.
 pub const S3_URL: &str = "http://garage:3900";
@@ -228,6 +237,29 @@ pub fn awaiting_assignment<'a>(
     known
         .iter()
         .filter(|n| !layout.roles.iter().any(|r| r.id == n.id))
+        .collect()
+}
+
+/// The capacity each node is placed with (`KnownNode::proposed_capacity`). A node
+/// measuring no partition is refused, never placed at a guess.
+pub fn placement(known: &[&KnownNode]) -> Result<Vec<(String, u64)>> {
+    if known.is_empty() {
+        return Err(Error::Unplaceable("Garage knows no node".into()));
+    }
+    known
+        .iter()
+        .map(|n| {
+            n.proposed_capacity()
+                .map(|c| (n.id.clone(), c))
+                .ok_or_else(|| {
+                    Error::Unplaceable(format!(
+                        "{} reports no data partition: hlb garage assign {} --zone <zone> \
+                         --capacity <bytes> --apply",
+                        n.hostname.as_deref().unwrap_or(&n.id),
+                        n.id
+                    ))
+                })
+        })
         .collect()
 }
 
@@ -465,6 +497,62 @@ impl Garage {
         Ok(())
     }
 
+    /// Has Garage expire what `days` leave in a bucket (`s3::Bucket::expire_after`),
+    /// written by a key of Homelabus's own that owns this bucket alone, made for the
+    /// call and deleted after it, whatever came of it.
+    ///
+    /// 🔴 Garage 2.5.0 takes a lifecycle from the bucket's OWNER only (2.4.1 took it
+    /// from read-write; measured, `tests/live_garage.rs`), and an app never owns its
+    /// bucket: owning it, a compromised app deletes it.
+    pub async fn expire_after(&self, bucket_id: &str, bucket: &str, days: u32) -> Result<()> {
+        let endpoint = self.s3.clone().ok_or_else(|| Error::Malformed {
+            operation: "PutBucketLifecycleConfiguration",
+            reason: "no S3 endpoint to write the bucket's expiry through".into(),
+        })?;
+        // One a crash left behind owns a bucket and nobody holds its secret: gone.
+        if let Some(left) = self.key_id(LIFECYCLE_KEY).await? {
+            self.delete_key(&left).await?;
+        }
+        let key = self.ensure_key(LIFECYCLE_KEY, None).await?;
+        let written = async {
+            self.call(
+                "AllowBucketKey",
+                reqwest::Method::POST,
+                "/v2/AllowBucketKey",
+                Some(serde_json::json!({
+                    "bucketId": bucket_id,
+                    "accessKeyId": key.access_key_id,
+                    "permissions": { "read": false, "write": false, "owner": true }
+                })),
+            )
+            .await?;
+            let at = s3::Location {
+                endpoint,
+                bucket: bucket.to_string(),
+                prefix: String::new(),
+            };
+            s3::Bucket::connect(at, &key.access_key_id, &key.secret_access_key)
+                .await?
+                .expire_after(days)
+                .await
+        }
+        .await;
+        let deleted = self.delete_key(&key.access_key_id).await;
+        written?;
+        deleted
+    }
+
+    async fn delete_key(&self, access_key_id: &str) -> Result<()> {
+        self.call(
+            "DeleteKey",
+            reqwest::Method::POST,
+            &format!("/v2/DeleteKey?id={access_key_id}"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Nodes Garage has seen on the network — joined or not, assigned or not.
     pub async fn known_nodes(&self) -> Result<Vec<KnownNode>> {
         let body = self
@@ -532,6 +620,30 @@ impl Garage {
         })
     }
 
+    /// Gives a Garage that has NO layout yet one — each node nine tenths of what is
+    /// free on its disk, in `zone` — and applies it; the version applied, or `None`
+    /// when it already had one. Until then Garage refuses every bucket "Layout not
+    /// ready", and an app's install stopped on Garage's own first run.
+    ///
+    /// ⚠️ An existing layout is never touched, a node that joined later included:
+    /// placing it moves data, and that is `hlb garage init`'s to preview.
+    pub async fn ensure_layout(&self, zone: &str) -> Result<Option<u64>> {
+        let layout = self.layout().await?;
+        if !layout.roles.is_empty() {
+            return Ok(None);
+        }
+        let known = self.known_nodes().await?;
+        let plan = placement(&awaiting_assignment(&known, &layout))?;
+        let mut staged = layout;
+        for (id, capacity) in &plan {
+            staged = self.assign_layout(id, zone, *capacity).await?;
+        }
+        let version = staged.next_version();
+        self.apply_layout(version).await?;
+        tracing::info!(version, nodes = plan.len(), "Garage given its first layout");
+        Ok(Some(version))
+    }
+
     /// Applies the staged layout, redistributing data across the cluster.
     ///
     /// 🔴 `version` must be the exact one just staged — the same discipline as
@@ -552,6 +664,21 @@ impl Garage {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_layout_is_given_only_where_every_node_measured_its_disk() {
+        let node = |id: &str, part: &str| -> super::KnownNode {
+            serde_json::from_str(&format!(r#"{{"id":"{id}"{part}}}"#)).expect("parsable")
+        };
+        let a = node("a", r#","dataPartition":{"available":1000,"total":2000}"#);
+        let b = node("b", "");
+        assert_eq!(
+            super::placement(&[&a]).expect("placed"),
+            vec![("a".into(), 900)]
+        );
+        assert!(super::placement(&[&a, &b]).is_err(), "b guessed");
+        assert!(super::placement(&[]).is_err(), "no node, no layout");
+    }
 
     #[test]
     fn a_node_is_offered_nine_tenths_of_what_is_free_on_its_disk() {

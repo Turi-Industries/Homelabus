@@ -208,7 +208,8 @@ impl fmt::Display for Action {
                 write!(
                     f,
                     "create bucket {bucket} with isolated key {key_name} \
-                     (secret {secret_name})"
+                     (secret {secret_name}) — Garage given its layout first if it has \
+                     none"
                 )?;
                 match expire_after_days {
                     Some(d) => write!(f, ", its objects deleted after {d} days"),

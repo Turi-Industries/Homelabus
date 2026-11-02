@@ -1361,6 +1361,9 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                     None => None,
                 };
 
+                // A Garage installed in this very plan has no layout, and refuses
+                // every bucket until it has one.
+                garage.ensure_layout(hlb_objstore::DEFAULT_ZONE).await?;
                 let id = garage.ensure_bucket(bucket).await?;
                 let key = garage.ensure_key(key_name, known.as_deref()).await?;
 
@@ -1392,22 +1395,10 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
 
                 garage.allow(&id, &key.access_key_id).await?;
 
-                // Written with the app's own key, which Garage lets set its bucket's
-                // lifecycle, and read back before the step is done.
-                if let (Some(days), Some(endpoint)) = (expire_after_days, garage.s3_endpoint()) {
-                    let at = hlb_objstore::s3::Location {
-                        endpoint: endpoint.to_string(),
-                        bucket: bucket.clone(),
-                        prefix: String::new(),
-                    };
-                    hlb_objstore::s3::Bucket::connect(
-                        at,
-                        &key.access_key_id,
-                        &key.secret_access_key,
-                    )
-                    .await?
-                    .expire_after(*days)
-                    .await?;
+                // Written by a key of Homelabus's own, owner for the one call: Garage
+                // 2.5.0 refuses it to the app's, which never owns its bucket.
+                if let Some(days) = expire_after_days {
+                    garage.expire_after(&id, bucket, *days).await?;
                 }
                 Ok(Step::Done)
             }

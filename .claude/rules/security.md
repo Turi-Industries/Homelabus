@@ -156,10 +156,12 @@ the outside, which is the whole problem.
   earlier. A rotation is an ORDERED PROCEDURE.
 - **An app never owns its S3 bucket.** `read` + `write`, never `owner`: as owner, a
   compromised app could delete its own bucket — erasing what the backups protected.
-  ⚠️ Not owning it does not keep it from EXPIRING it: Garage 2.4.1 takes a lifecycle
-  rule from a read-write key (measured, `hlb-objstore/tests/live_garage.rs`) — no more
-  than deleting each object, which writing allows, but a bucket's backup is what
-  answers either, never the grant.
+  🔴 Garage 2.5.0 takes a lifecycle rule from the OWNER only — 2.4.1 took it from
+  read-write, and Fluxer's install failed 403 on the first fresh Garage after the pin
+  moved (`hlb-objstore/tests/live_garage.rs`, both measured). `Garage::expire_after`
+  writes it with a key of Homelabus's own, owner of that bucket alone, deleted after
+  the call whatever came of it. An app deleting each object is no less possible:
+  a bucket's backup answers that, never the grant.
 - **Garage NEVER returns a secret key twice.** `CreateKey` gives it once; `GetKeyInfo`
   returns null afterwards. Idempotency therefore cannot rest on "does the key exist?" —
   the vault is authoritative, or a resumed run starts without a secret and the app fails

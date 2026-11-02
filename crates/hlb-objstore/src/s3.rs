@@ -133,9 +133,8 @@ impl Bucket {
     /// unfinished as long — then reads the rule back, since a store that ignored part of
     /// it would answer 200 all the same. The bucket's whole lifecycle is this one rule.
     ///
-    /// ⚠️ Garage 2.4.1 takes it from a key with read and write and no ownership
-    /// (measured): `owner: false` does not keep an app from expiring its own bucket —
-    /// nothing more than deleting each object, which writing already allows.
+    /// ⚠️ The key must OWN the bucket on Garage 2.5.0 (2.4.1 took read-write, measured
+    /// on both): an app's is refused, and `Garage::expire_after` writes it instead.
     pub async fn expire_after(&self, days: u32) -> Result<()> {
         let rule = format!(
             "<LifecycleConfiguration><Rule><ID>{LIFECYCLE_RULE}</ID><Status>Enabled</Status>\

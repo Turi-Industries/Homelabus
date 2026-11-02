@@ -1262,7 +1262,7 @@ enum GarageCmd {
     /// space free on its data disk — and apply it. Until a node has one, Garage stores
     /// nothing at all. Preview by default.
     Init {
-        #[arg(long, default_value = "home")]
+        #[arg(long, default_value = hlb_objstore::DEFAULT_ZONE)]
         zone: String,
         #[arg(long)]
         apply: bool,
@@ -10744,20 +10744,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("✓ every node already has a place in the layout.");
                             return Ok(ExitCode::SUCCESS);
                         }
-                        let mut plan = Vec::new();
-                        for n in &waiting {
-                            match n.proposed_capacity() {
-                                Some(c) => plan.push((n.id.clone(), c)),
-                                None => {
-                                    eprintln!(
-                                        "🔴 {} reports no data partition: assign it by hand",
-                                        n.hostname.as_deref().unwrap_or(&n.id)
-                                    );
-                                    eprintln!("   hlb garage assign {} --zone {zone} --capacity <bytes> --apply", n.id);
-                                    return Ok(ExitCode::FAILURE);
-                                }
+                        let plan = match hlb_objstore::placement(&waiting) {
+                            Ok(plan) => plan,
+                            Err(e) => {
+                                eprintln!("🔴 {e}");
+                                return Ok(ExitCode::FAILURE);
                             }
-                        }
+                        };
                         for (id, c) in &plan {
                             println!("  {}  zone={zone}  {} GB", &id[..16.min(id.len())], c / 1_000_000_000);
                         }

@@ -188,6 +188,11 @@ docker node update --label-add tier=heavy $(docker node ls -q)
 
 - **Garage answers a staged layout with the CURRENT version.** The one to commit is the
   next (`ClusterLayout::next_version`).
+- **A fresh Garage stores nothing, and its first app's install stopped on it.** No
+  layout, every bucket refused "Layout not ready" — Garage installed by the same plan
+  as Fluxer always is. The bucket step gives an EMPTY layout the one `hlb garage init`
+  would (`Garage::ensure_layout`, a node measuring no disk refused); a layout that
+  exists is never touched, since placing a node moves data.
 
 Garage goes multi-node through the layout, never through `replicas` — additional nodes
 join the cluster as their own services sharing the RPC secret:
