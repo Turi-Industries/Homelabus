@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: grafana
+  hlb: ">=0.4.0"
   displayName: Grafana
   category: platform
   homepage: https://grafana.com

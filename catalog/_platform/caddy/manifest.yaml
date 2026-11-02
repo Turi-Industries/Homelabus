@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: caddy
+  hlb: ">=0.4.0"
   displayName: Caddy
   category: platform
   homepage: https://caddyserver.com

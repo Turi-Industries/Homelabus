@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: stalwart
+  hlb: ">=0.4.0"
   displayName: Stalwart Mail
   category: platform
   homepage: https://stalw.art

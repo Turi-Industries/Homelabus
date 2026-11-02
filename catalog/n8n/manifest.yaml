@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: n8n
+  hlb: ">=0.4.0"
   displayName: n8n
   category: automation
   homepage: https://n8n.io

@@ -32,6 +32,12 @@ pub enum Kind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Metadata {
     pub name: String,
+    /// The `hlb` versions this manifest runs on, a semver range: `">=0.4.0"`. Required
+    /// by the catalog, optional when read: a manifest frozen before it has none. An
+    /// `hlb` outside it sets the app aside, where it would otherwise refuse the whole
+    /// catalog over one field it does not know (`hlb_types::release`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hlb: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

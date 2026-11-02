@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: pocket-id
+  hlb: ">=0.4.0"
   displayName: Pocket ID
   category: platform
   homepage: https://pocket-id.org

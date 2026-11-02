@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: oauth2-proxy
+  hlb: ">=0.4.0"
   displayName: OAuth2 Proxy
   category: platform
   homepage: https://oauth2-proxy.github.io/oauth2-proxy/

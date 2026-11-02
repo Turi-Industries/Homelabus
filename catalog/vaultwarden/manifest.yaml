@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: vaultwarden
+  hlb: ">=0.4.0"
   displayName: Vaultwarden
   category: security
   homepage: https://github.com/dani-garcia/vaultwarden

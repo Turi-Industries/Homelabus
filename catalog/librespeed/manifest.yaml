@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: librespeed
+  hlb: ">=0.4.0"
   displayName: LibreSpeed
   category: network
   homepage: https://github.com/librespeed/speedtest

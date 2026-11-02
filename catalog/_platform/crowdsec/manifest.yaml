@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: crowdsec
+  hlb: ">=0.4.0"
   displayName: CrowdSec
   category: platform
   homepage: https://crowdsec.net

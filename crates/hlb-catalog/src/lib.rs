@@ -8,6 +8,7 @@ pub mod themes;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use hlb_types::release::Version;
 use hlb_types::Manifest;
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +39,10 @@ pub enum Error {
 
     #[error("app \"{0}\" is not in the catalog")]
     UnknownApp(String),
+
+    /// In the catalog, for another `hlb`: its range leaves this one out.
+    #[error("{why}")]
+    SetAside { app: String, why: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -45,6 +50,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Default, Clone)]
 pub struct Catalog {
     entries: BTreeMap<String, Entry>,
+    /// The apps whose `metadata.hlb` leaves this `hlb` out, and why — read no further,
+    /// since a field this build does not know would refuse the whole catalog.
+    set_aside: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +62,9 @@ pub struct Entry {
     /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
     /// has none; that is not an error.
     pub guide: hlb_types::Guide,
+    /// The manifest and the guide as written, for the schema of an older release:
+    /// parsed and written again, they would carry every default this build adds.
+    written: (serde_json::Value, serde_json::Value),
 }
 
 impl Catalog {
@@ -62,20 +73,36 @@ impl Catalog {
     /// Folders starting with `_` (such as `_platform`) are walked but are not apps
     /// themselves: they group, they do not declare.
     pub fn load(root: impl AsRef<Path>) -> Result<Self> {
+        Self::load_as(root, &hlb_types::release::running())
+    }
+
+    /// The catalog as `release` reads it: an app whose range leaves it out is set aside.
+    pub fn load_as(root: impl AsRef<Path>, release: &Version) -> Result<Self> {
         let root = root.as_ref();
         if !root.is_dir() {
             return Err(Error::NotFound(root.to_path_buf()));
         }
 
-        let mut entries = BTreeMap::new();
-        collect(root, &mut entries)?;
-        Ok(Self { entries })
+        let mut catalog = Self::default();
+        collect(root, release, &mut catalog)?;
+        Ok(catalog)
     }
 
     pub fn get(&self, name: &str) -> Result<&Entry> {
+        if let Some(why) = self.set_aside.get(name) {
+            return Err(Error::SetAside {
+                app: name.to_string(),
+                why: why.clone(),
+            });
+        }
         self.entries
             .get(name)
             .ok_or_else(|| Error::UnknownApp(name.to_string()))
+    }
+
+    /// The apps in the catalog for another `hlb`, and why each is left out.
+    pub fn set_aside(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.set_aside.iter().map(|(n, w)| (n.as_str(), w.as_str()))
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -101,22 +128,30 @@ impl Catalog {
     /// Validates every manifest and returns **all** the errors, not just the first:
     /// when repairing a catalog you want the whole list.
     pub fn validate_all(&self) -> Vec<(String, hlb_types::Error)> {
+        // A catalog is validated by the `hlb` meant to run all of it.
         let mut errs: Vec<_> = self
-            .entries
+            .set_aside
             .iter()
-            .filter_map(|(name, e)| {
-                hlb_types::validate_with_guide(&e.manifest, &e.guide)
-                    .and_then(|()| hlb_types::validate_guide(&e.manifest, &e.guide))
-                    // 🔴 What the catalog holds to beyond any manifest. Written in phase 7
-                    // and called by nothing but its own tests until 2026-10-19: the
-                    // digest it was said to require was never required.
-                    .and_then(|()| hlb_types::validate_catalog_images(&e.manifest))
-                    .and_then(|()| hlb_types::validate_catalog_memory(&e.manifest))
-                    .and_then(|()| catalog_rules(e))
-                    .err()
-                    .map(|err| (name.clone(), err))
-            })
+            .map(|(name, why)| (name.clone(), hlb_types::Error::Validation(why.clone())))
             .collect();
+        let release = hlb_types::release::running();
+        errs.extend(self.entries.iter().filter_map(|(name, e)| {
+            release_rules(e, &release)
+                .err()
+                .map(|err| (name.clone(), err))
+        }));
+        errs.extend(self.entries.iter().filter_map(|(name, e)| {
+            hlb_types::validate_with_guide(&e.manifest, &e.guide)
+                .and_then(|()| hlb_types::validate_guide(&e.manifest, &e.guide))
+                // 🔴 What the catalog holds to beyond any manifest. Written in phase 7
+                // and called by nothing but its own tests until 2026-10-19: the
+                // digest it was said to require was never required.
+                .and_then(|()| hlb_types::validate_catalog_images(&e.manifest))
+                .and_then(|()| hlb_types::validate_catalog_memory(&e.manifest))
+                .and_then(|()| catalog_rules(e))
+                .err()
+                .map(|err| (name.clone(), err))
+        }));
         errs.extend(self.shared_claims());
         errs.extend(self.connection_budgets());
         errs
@@ -344,7 +379,7 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
     Ok(())
 }
 
-fn collect(dir: &Path, out: &mut BTreeMap<String, Entry>) -> Result<()> {
+fn collect(dir: &Path, release: &Version, out: &mut Catalog) -> Result<()> {
     let rd = std::fs::read_dir(dir).map_err(|source| Error::Io {
         path: dir.to_path_buf(),
         source,
@@ -358,23 +393,64 @@ fn collect(dir: &Path, out: &mut BTreeMap<String, Entry>) -> Result<()> {
         let path = entry.path();
 
         if path.is_dir() {
-            collect(&path, out)?;
+            collect(&path, release, out)?;
             continue;
         }
 
         if path.file_name().is_some_and(|f| f == "manifest.yaml") {
-            let e = load_one(&path)?;
-            out.insert(e.manifest.metadata.name.clone(), e);
+            match load_one(&path, release)? {
+                Loaded::Entry(e) => {
+                    out.entries.insert(e.manifest.metadata.name.clone(), *e);
+                }
+                Loaded::SetAside { app, why } => {
+                    out.set_aside.insert(app, why);
+                }
+            }
         }
     }
     Ok(())
 }
 
-fn load_one(path: &Path) -> Result<Entry> {
+enum Loaded {
+    Entry(Box<Entry>),
+    SetAside { app: String, why: String },
+}
+
+/// The `hlb` range a manifest declares, read before anything else in it: a manifest
+/// for a newer `hlb` may hold fields this one would refuse.
+fn declared_range(raw: &str) -> Option<String> {
+    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(raw).ok()?;
+    doc.get("metadata")?
+        .get("hlb")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn load_one(path: &Path, release: &Version) -> Result<Loaded> {
     let raw = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
+    // The folder names the app, whatever the manifest it holds can be read to say.
+    let dir = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if let Some(range) = declared_range(&raw) {
+        let why = match hlb_types::release::accepts(&range, release) {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "\"{dir}\" needs hlb {range}, and this one is {release} — update hlb to \
+                 install it"
+            )),
+            Err(e) => Some(format!("\"{dir}\": {e}")),
+        };
+        if let Some(why) = why {
+            return Ok(Loaded::SetAside { app: dir, why });
+        }
+    }
 
     let manifest: Manifest = serde_yaml_ng::from_str(&raw).map_err(|e| Error::Parse {
         path: path.to_path_buf(),
@@ -383,12 +459,6 @@ fn load_one(path: &Path) -> Result<Entry> {
 
     // The folder name is authoritative. Without this, two apps declaring the same
     // `metadata.name` would silently overwrite each other.
-    let dir = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-
     if dir != manifest.metadata.name {
         return Err(Error::NameMismatch {
             path: path.to_path_buf(),
@@ -399,29 +469,117 @@ fn load_one(path: &Path) -> Result<Entry> {
 
     // The guide lives next to the manifest. Absent means no declared step.
     let guide_path = path.with_file_name("guide.yaml");
-    let guide = if guide_path.exists() {
-        let raw = std::fs::read_to_string(&guide_path).map_err(|source| Error::Io {
+    let guide_raw = if guide_path.exists() {
+        std::fs::read_to_string(&guide_path).map_err(|source| Error::Io {
             path: guide_path.clone(),
             source,
-        })?;
-        serde_yaml_ng::from_str(&raw).map_err(|e| Error::Parse {
-            path: guide_path,
-            source: hlb_types::Error::Parse(e),
         })?
     } else {
-        hlb_types::Guide::default()
+        "{}".to_string()
     };
+    let guide = serde_yaml_ng::from_str(&guide_raw).map_err(|e| Error::Parse {
+        path: guide_path.clone(),
+        source: hlb_types::Error::Parse(e),
+    })?;
+    // Read as JSON once each parses: YAML the types accept converts.
+    let as_json = |text: &str, path: &Path| {
+        serde_yaml_ng::from_str::<serde_json::Value>(text).map_err(|e| Error::Parse {
+            path: path.to_path_buf(),
+            source: hlb_types::Error::Parse(e),
+        })
+    };
+    let written = (as_json(&raw, path)?, as_json(&guide_raw, &guide_path)?);
 
-    Ok(Entry {
+    Ok(Loaded::Entry(Box::new(Entry {
         manifest,
         path: path.to_path_buf(),
         guide,
-    })
+        written,
+    })))
+}
+
+/// The `hlb` range a catalog app must declare, and what its floor could read.
+///
+/// 🔴 A range is a promise to every older `hlb` it names, and nothing else checks it:
+/// one too low makes that `hlb` refuse the manifest, and a catalog published apart from
+/// `hlb` reaches it. Held to the schema the floor committed when it was released.
+fn release_rules(e: &Entry, release: &Version) -> hlb_types::Result<()> {
+    let name = &e.manifest.metadata.name;
+    let refuse = |why: String| Err(hlb_types::Error::Validation(format!("{name}: {why}")));
+    let Some(range) = &e.manifest.metadata.hlb else {
+        return refuse(format!(
+            "`metadata.hlb` is required in the catalog: the hlb versions the app runs on, \
+             \">={}.{}.0\" for what this one reads",
+            release.major, release.minor
+        ));
+    };
+    let floor = match hlb_types::release::floor(range) {
+        Ok(f) => f,
+        Err(e) => return refuse(e),
+    };
+    // This build parsed it: its own release reads it.
+    if &floor >= release {
+        return Ok(());
+    }
+    let Some(schema) = hlb_types::release::release_schema(&floor) else {
+        let known: Vec<&str> = hlb_types::release::RELEASE_SCHEMAS
+            .iter()
+            .map(|(v, _)| *v)
+            .collect();
+        return refuse(format!(
+            "`metadata.hlb` {range} starts at {floor}, which is no release whose schema this hlb \
+             carries ({}) — the floor names one of them, or {release}",
+            known.join(", ")
+        ));
+    };
+    for (part, written) in [("manifest", &e.written.0), ("guide", &e.written.1)] {
+        let refused = jsonschema::validator_for(&schema[part])
+            .map_err(|err| format!("{floor}'s {part} schema is unreadable: {err}"))
+            .and_then(|v| match v.iter_errors(written).next() {
+                Some(err) => Err(format!(
+                    "`metadata.hlb` {range}: {floor} cannot read its {part} — at {}: {err}; raise the \
+                     floor to the release that first reads it",
+                    err.instance_path()
+                )),
+                None => Ok(()),
+            });
+        if let Err(why) = refused {
+            return refuse(why);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Entry {
+        /// An app built in a test, its range this build's own unless it says one.
+        fn of_yaml(yaml: &str) -> Self {
+            let mut manifest: Manifest = serde_yaml_ng::from_str(yaml).expect("manifest");
+            manifest
+                .metadata
+                .hlb
+                .get_or_insert_with(|| ">=0.4.0".into());
+            let written = serde_json::to_value(&manifest).expect("json");
+            Self {
+                manifest,
+                path: PathBuf::new(),
+                guide: hlb_types::Guide::default(),
+                written: (written, serde_json::json!({})),
+            }
+        }
+    }
+
+    impl Catalog {
+        fn of(entries: impl IntoIterator<Item = (String, Entry)>) -> Self {
+            Self {
+                entries: entries.into_iter().collect(),
+                set_aside: BTreeMap::new(),
+            }
+        }
+    }
 
     fn repo_catalog() -> PathBuf {
         // CARGO_MANIFEST_DIR = crates/hlb-catalog
@@ -464,19 +622,11 @@ mod tests {
                  access: {{ claims: {{ app_role: {{ byLevel: {{ user: user }} }} }} }}\n",
                 d = "0".repeat(64)
             );
-            Entry {
-                manifest: serde_yaml_ng::from_str(&y).expect("manifest"),
-                path: PathBuf::new(),
-                guide: hlb_types::Guide::default(),
-            }
+            Entry::of_yaml(&y)
         };
-        let one = Catalog {
-            entries: [("a".to_string(), app("a"))].into(),
-        };
+        let one = Catalog::of([("a".to_string(), app("a"))]);
         assert!(one.validate_all().is_empty(), "{:?}", one.validate_all());
-        let two = Catalog {
-            entries: [("a".to_string(), app("a")), ("b".to_string(), app("b"))].into(),
-        };
+        let two = Catalog::of([("a".to_string(), app("a")), ("b".to_string(), app("b"))]);
         let errs = two.validate_all();
         assert!(
             errs.iter().any(|(_, e)| e.to_string().contains("a's too")),
@@ -496,21 +646,11 @@ mod tests {
                  - {{ kind: storage, name: media, path: /media, owner: b, backup: false }}\n  \
                  downloads:\n{download}"
             );
-            Catalog {
-                entries: [(
-                    "a".to_string(),
-                    Entry {
-                        manifest: serde_yaml_ng::from_str(&y).expect("manifest"),
-                        path: PathBuf::new(),
-                        guide: hlb_types::Guide::default(),
-                    },
-                )]
-                .into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([("a".to_string(), Entry::of_yaml(&y))])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         let one = |url: &str, sha: &str, storage: &str, into: &str, unzip: bool| {
             format!(
@@ -611,11 +751,7 @@ mod tests {
 
     #[test]
     fn the_catalog_refuses_an_image_without_its_digest_and_a_service_without_memory() {
-        let entry = |y: &str| Entry {
-            manifest: serde_yaml_ng::from_str(y).expect("manifest"),
-            path: PathBuf::new(),
-            guide: hlb_types::Guide::default(),
-        };
+        let entry = |y: &str| Entry::of_yaml(y);
         let d = "0".repeat(64);
         let whole = format!(
             "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: a }}\nspec:\n  \
@@ -623,13 +759,11 @@ mod tests {
              swarm: {{ memory: {{ reserve: 64M, limit: 128M }} }}\n"
         );
         let refused = |y: &str| {
-            Catalog {
-                entries: [("a".to_string(), entry(y))].into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([("a".to_string(), entry(y))])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         assert_eq!(refused(&whole), Vec::<String>::new());
         let unpinned = whole.replace(&format!(", digest: \"sha256:{d}\""), "");
@@ -673,13 +807,11 @@ mod tests {
         );
         let mut entry = c.get("librespeed").expect("librespeed").clone();
         let refused = |e: &Entry| {
-            Catalog {
-                entries: [(e.manifest.metadata.name.clone(), e.clone())].into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([(e.manifest.metadata.name.clone(), e.clone())])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         assert_eq!(refused(&entry), Vec::<String>::new());
         for wrong in ["{{ zone }}", "{{ secret.admin-password }}"] {
@@ -727,13 +859,11 @@ mod tests {
 
         let mut immich = c.get("immich").expect("immich").clone();
         let refused = |e: &Entry| {
-            Catalog {
-                entries: [("immich".to_string(), e.clone())].into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([("immich".to_string(), e.clone())])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         assert_eq!(refused(&immich), Vec::<String>::new());
         let step = immich
@@ -756,13 +886,11 @@ mod tests {
         let c = Catalog::load(repo_catalog()).expect("catalog should load");
         let base = c.get("fluxer").expect("fluxer").clone();
         let refused = |e: &Entry| {
-            Catalog {
-                entries: [("fluxer".to_string(), e.clone())].into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([("fluxer".to_string(), e.clone())])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         assert_eq!(refused(&base), Vec::<String>::new());
 
@@ -808,13 +936,11 @@ mod tests {
         let c = Catalog::load(repo_catalog()).expect("catalog should load");
         let base = c.get("valkey").expect("valkey").clone();
         let refused = |e: &Entry| {
-            Catalog {
-                entries: [("valkey".to_string(), e.clone())].into(),
-            }
-            .validate_all()
-            .into_iter()
-            .map(|(_, e)| e.to_string())
-            .collect::<Vec<_>>()
+            Catalog::of([("valkey".to_string(), e.clone())])
+                .validate_all()
+                .into_iter()
+                .map(|(_, e)| e.to_string())
+                .collect::<Vec<_>>()
         };
         assert_eq!(refused(&base), Vec::<String>::new());
 
@@ -869,6 +995,85 @@ mod tests {
         );
     }
 
+    /// A copy of the repository's catalog, one manifest's range rewritten.
+    fn with_range(app: &str, range: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let copy = |from: &Path, to: &Path| {
+            std::process::Command::new("cp")
+                .arg("-r")
+                .arg(from)
+                .arg(to)
+                .status()
+                .expect("cp")
+        };
+        assert!(copy(&repo_catalog(), dir.path()).success());
+        let path = dir.path().join("catalog").join(app).join("manifest.yaml");
+        let text = std::fs::read_to_string(&path).expect("manifest");
+        let text = text.replace("hlb: \">=0.4.0\"", &format!("hlb: \"{range}\""));
+        std::fs::write(&path, text).expect("written");
+        dir
+    }
+
+    #[test]
+    fn an_app_for_a_newer_hlb_is_set_aside_and_the_rest_still_load() {
+        // 🔴 One manifest this `hlb` cannot read refused the whole catalog: every
+        // install, every nightly re-check — for an app nobody here had asked for.
+        let dir = with_range("jellyfin", ">=9.0.0");
+        // And a field no release knows yet, which this build would refuse.
+        let path = dir.path().join("catalog/jellyfin/manifest.yaml");
+        let text = std::fs::read_to_string(&path).expect("manifest") + "futureField: true\n";
+        std::fs::write(&path, text).expect("written");
+
+        let c = Catalog::load(dir.path().join("catalog")).expect("the catalog still loads");
+        assert!(c.get("gitea").is_ok());
+        let err = c.get("jellyfin").expect_err("set aside").to_string();
+        assert!(
+            err.contains(">=9.0.0") && err.contains("update hlb"),
+            "{err}"
+        );
+        assert_eq!(c.set_aside().count(), 1);
+        assert!(!c.names().any(|n| n == "jellyfin"));
+        // Validated by this hlb, the catalog is not one it can run.
+        assert!(c
+            .validate_all()
+            .iter()
+            .any(|(n, e)| n == "jellyfin" && e.to_string().contains("update hlb")));
+
+        // The release it names reads it.
+        let later = Version::new(9, 1, 0);
+        let c = Catalog::load_as(dir.path().join("catalog"), &later);
+        assert!(
+            c.is_err(),
+            "9.1 reads it, and this build's types refuse the new field"
+        );
+    }
+
+    #[test]
+    fn a_range_is_held_to_the_schema_of_the_release_it_starts_at() {
+        // `metadata.hlb` is itself unknown to 0.3.0: no manifest can start there.
+        let dir = with_range("gitea", ">=0.3.0");
+        let c = Catalog::load(dir.path().join("catalog")).expect("load");
+        let errs: Vec<String> = c
+            .validate_all()
+            .into_iter()
+            .filter(|(n, _)| n == "gitea")
+            .map(|(_, e)| e.to_string())
+            .collect();
+        assert!(
+            errs.len() == 1 && errs[0].contains("0.3.0 cannot read its manifest"),
+            "{errs:?}"
+        );
+
+        let dir = with_range("gitea", ">=0.2.0");
+        let c = Catalog::load(dir.path().join("catalog")).expect("load");
+        let errs = c.validate_all();
+        assert!(
+            errs.iter()
+                .any(|(n, e)| n == "gitea" && e.to_string().contains("no release whose schema")),
+            "{errs:?}"
+        );
+    }
+
     #[test]
     fn the_ingress_runs_the_image_this_release_builds() {
         // `hlb-caddy` is built from this repository's Dockerfile and published under
@@ -884,7 +1089,18 @@ mod tests {
             "{}",
             m.spec.image.repo
         );
-        assert_eq!(m.spec.image.tag, env!("CARGO_PKG_VERSION"));
+        // At a release, its own build; between releases (`0.4.0-dev`) no image is built,
+        // and the catalog keeps the last release's until the next one moves it.
+        let version = Version::parse(env!("CARGO_PKG_VERSION")).expect("version");
+        if version.pre.is_empty() {
+            assert_eq!(m.spec.image.tag, env!("CARGO_PKG_VERSION"));
+        } else {
+            let tag = Version::parse(&m.spec.image.tag).expect("a release's tag");
+            assert!(
+                tag.pre.is_empty() && tag < hlb_types::release::running(),
+                "{tag}: a published release before {version}"
+            );
+        }
         assert_eq!(
             m.spec.swarm.node_label.as_deref(),
             Some(hlb_types::manifest::INGRESS_NODE_LABEL),

@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: vikunja
+  hlb: ">=0.4.0"
   displayName: Vikunja
   category: productivity
   homepage: https://vikunja.io

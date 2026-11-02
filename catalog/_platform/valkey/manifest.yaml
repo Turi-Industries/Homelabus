@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: valkey
+  hlb: ">=0.4.0"
   displayName: Valkey
   category: platform
 spec:

@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: anubis
+  hlb: ">=0.4.0"
   displayName: Anubis
   category: platform
   homepage: https://anubis.techaro.lol

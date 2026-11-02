@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: termix
+  hlb: ">=0.4.0"
   displayName: Termix
   category: security
   homepage: https://github.com/LukeGus/Termix

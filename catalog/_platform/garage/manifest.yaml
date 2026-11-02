@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: garage
+  hlb: ">=0.4.0"
   displayName: Garage
   category: platform
   homepage: https://garagehq.deuxfleurs.fr

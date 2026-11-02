@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: seafile
+  hlb: ">=0.4.0"
   displayName: Seafile
   category: files
   homepage: https://www.seafile.com

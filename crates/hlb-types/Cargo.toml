@@ -17,6 +17,8 @@ bcrypt = { version = "0.19", default-features = false, features = ["std"] }
 # The tz database, so `Europe/Pariss` is refused when it is set rather than at
 # Seafile's first start, which reads it once.
 chrono-tz = "0.10"
+# An app's `metadata.hlb`, the range of `hlb` versions it runs on.
+semver = "1"
 # The key-pair forms of a generated secret, derived from the stored value so a pair's
 # halves never disagree: P-256 for Web Push (VAPID), RSA for ActivityPub's signatures.
 # Generation only — no signature, no decryption is ever made here.

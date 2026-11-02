@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: fluxer
+  hlb: ">=0.4.0"
   displayName: Fluxer
   category: communication
   homepage: https://fluxer.app

@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: mariadb
+  hlb: ">=0.4.0"
   displayName: MariaDB
   category: platform
   homepage: https://mariadb.org

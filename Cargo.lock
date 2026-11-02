@@ -1546,7 +1546,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-agent"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "axum",
  "clap",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-api"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-types",
  "hlb-users",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-backup"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "hlb-updater",
@@ -1591,7 +1591,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-backup-run"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "futures",
@@ -1614,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-bitwarden"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "aes",
  "argon2",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-bootstrap"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-catalog"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-api",
  "hlb-backup",
@@ -1662,6 +1662,7 @@ dependencies = [
  "hlb-resolver",
  "hlb-types",
  "hlb-updater",
+ "jsonschema",
  "reqwest",
  "serde_json",
  "serde_yaml_ng",
@@ -1672,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-cli"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "chrono",
  "clap",
@@ -1711,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-controller"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "axum",
@@ -1758,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-engine"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1793,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-gitops"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "git2",
  "hlb-types",
@@ -1805,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-guide"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "hlb-agent",
@@ -1825,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-identity"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-types",
  "reqwest",
@@ -1839,7 +1840,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-ingress"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-types",
  "regex",
@@ -1852,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-mail"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-agent",
  "hlb-users",
@@ -1867,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-mesh"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "rand 0.10.3",
  "serde",
@@ -1879,7 +1880,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-metrics"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-notify",
  "serde",
@@ -1891,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-notify"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1904,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-objstore"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hmac 0.13.0",
  "reqwest",
@@ -1918,7 +1919,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-orchestrator"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "bollard",
@@ -1933,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-platform"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "sqlx",
  "thiserror 2.0.21",
@@ -1943,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-privd"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "axum",
@@ -1982,7 +1983,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-registry"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "chrono",
  "hlb-types",
@@ -1996,7 +1997,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-resolver"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-types",
  "serde_yaml_ng",
@@ -2006,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-secrets"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "age",
  "bech32",
@@ -2022,7 +2023,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-selfupdate"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "ed25519-dalek",
  "hlb-types",
@@ -2034,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-state"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-api",
  "hlb-types",
@@ -2051,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-termix"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -2067,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-types"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "bcrypt",
  "chrono-tz",
@@ -2076,6 +2077,7 @@ dependencies = [
  "regex",
  "rsa",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2084,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-updater"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2101,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "hlb-users"
-version = "0.3.0"
+version = "0.4.0-dev"
 dependencies = [
  "hlb-types",
  "serde",

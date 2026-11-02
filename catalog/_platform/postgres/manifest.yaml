@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: postgres
+  hlb: ">=0.4.0"
   displayName: PostgreSQL
   category: platform
 spec:

@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: gitea
+  hlb: ">=0.4.0"
   displayName: Gitea
   category: development
   homepage: https://about.gitea.com

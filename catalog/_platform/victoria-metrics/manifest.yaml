@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: victoria-metrics
+  hlb: ">=0.4.0"
   displayName: VictoriaMetrics
   category: platform
   homepage: https://victoriametrics.com

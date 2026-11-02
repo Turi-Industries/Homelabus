@@ -1106,6 +1106,12 @@ pull request to the catalog, with no `hlb` release.
   only for an app installed before it — and a guide changed alone is an upgrade. The
   source an app came from is NOT recorded yet: with one source there is nothing to
   read it, so it comes with the sources.
+- ✅ The `hlb` range per app — 2026-11-02 (step 2). `metadata.hlb: ">=0.4.0"`, required
+  by the catalog, optional on read; the workspace carries the next release as
+  `0.4.0-dev` (owner's choice that day, over a schema level). An app outside the range
+  is set aside instead of refusing the whole catalog, and `catalog validate` holds a
+  range to the schema its floor's release committed (`crates/hlb-types/schemas/`).
+  Every app starts at 0.4.0: the field itself is unknown to 0.3.0.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

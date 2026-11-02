@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: immich
+  hlb: ">=0.4.0"
   displayName: Immich
   category: media
   homepage: https://immich.app

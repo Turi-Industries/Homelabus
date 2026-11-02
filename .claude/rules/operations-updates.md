@@ -33,11 +33,22 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   than what runs is no move (`hlb_updater::check`), and the same build under another
   name is none either.
 
-- **A release moves three files, not one.** The workspace's `version` in `Cargo.toml`,
-  the catalog's `hlb-caddy` tag (`the_ingress_runs_the_image_this_release_builds`) and
+- **A release moves four files, not one, and the next commit moves the version on.**
+  The workspace's `version` in `Cargo.toml` (`0.4.0-dev` → `0.4.0`), the catalog's
+  `hlb-caddy` tag (`the_ingress_runs_the_image_this_release_builds`),
   `web/openapi.json` (`HLB_UPDATE_OPENAPI=1 cargo test -p hlb-controller --lib
-  the_committed_document_is_the_generated_one`). Run the WHOLE suite before tagging:
-  releases are immutable, and 0.2.1 took two red CI runs to find the last two.
+  the_committed_document_is_the_generated_one`) and the schema it reads
+  (`HLB_UPDATE_SCHEMA=1 cargo test -p hlb-types --test release_schema`, into
+  `crates/hlb-types/schemas/`). Run the WHOLE suite before tagging: releases are
+  immutable, and 0.2.1 took two red CI runs to find the last two. Then `0.5.0-dev`
+  (and the OpenAPI document again) at once: a manifest using what was added since says
+  `hlb: ">=0.5.0"`, and a workspace still saying `0.4.0` would set it aside itself.
+- **An app's `metadata.hlb` is held to its floor's schema** (2026-11-02). An `hlb`
+  outside the range sets the app aside (`Catalog::get` says which `hlb` it needs) —
+  before, one manifest using a field it did not know refused the whole catalog. A
+  floor below the running release is checked against that release's committed schema,
+  manifest and guide: `metadata.hlb` itself is unknown to 0.3.0, so no app starts
+  there.
 
 ## Digests
 

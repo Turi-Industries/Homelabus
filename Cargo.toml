@@ -35,7 +35,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+# Between releases, the NEXT one as a pre-release: an app's `metadata.hlb` names the
+# release that first reads what it uses, and the repository's `hlb` must run it.
+version = "0.4.0-dev"
 edition = "2021"
 # Measured 2026-10-27: sqlx 0.9 declares 1.94 (every other dependency 1.88 or less), and
 # the workspace checks clean on 1.94.0 with all targets. A CI job checks it, because a

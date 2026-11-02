@@ -2,6 +2,7 @@ apiVersion: hlb/v1
 kind: App
 metadata:
   name: mealie
+  hlb: ">=0.4.0"
   displayName: Mealie
   category: home
   homepage: https://mealie.io
