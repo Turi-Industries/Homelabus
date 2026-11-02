@@ -1233,8 +1233,11 @@ pull request to the catalog, with no `hlb` release.
   entered is carried, the newer run kept), signed with the index and held to its
   counter, so a mirror cannot pair today's index with older results. A fetch keeps it
   only verified and says why one was left out; the catalog screen has a Proven column
-  and the install window the run, step by step. Left: `scripts/quality.sh` rehearsed on
-  a fresh VM, `quality.yml`, 0.4.1 released and mirrored.
+  and the install window the run, step by step. The catalog's `scripts/quality.sh`
+  rehearsed whole on a fresh Debian 12 VM with Mealie (published version, a guide
+  change as the update, volume and database restored: every step passed), with the
+  `Quality` workflow and the Index's gathering. Left: 0.4.1 released and mirrored, so
+  hosted runners can run it.
 - ✅ Before installing, the preview shows what the app receives — 2026-11-02.
   `Manifest::grants` names what the manifest opened past the closed defaults: exposure
   to the internet (now or after its guide), paths open to anyone, ports published on
