@@ -3,6 +3,34 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.1] — 2026-11-02
+
+What the catalog's CI proves of each app now reaches the houses: installed on a fresh
+house, updated from the version published, backed up, restored, removed. The results
+ride beside the official index in `quality-v1.json`, signed with it and tied to its
+counter, and the catalog screen shows them — *proven, maintained for N months*. The
+index itself keeps the format 0.4.0 reads.
+
+**Upgrading from 0.4.0:**
+
+- No migration: 0.4.0 and 0.4.1 open the same state.
+- `hlb assert` exits 2 when an assertion could not be read (an app just started),
+  where it exited 0: a script that waited on its exit code waits for a real answer.
+
+### Added
+
+- Publish what CI proved of each app beside the index, signed with it
+- `hlb catalog export <dir>`: the catalog this `hlb` carries, written out
+
+### Fixed
+
+- Retry labelling a node whose version moved while it settled
+
+### Changed
+
+- Exit 2 on an assertion nobody could read
+- Freeze the index's format as 0.4.0 reads it
+
 ## [0.4.0] — 2026-11-02
 
 The apps leave this repository for their own, `homelabus-catalog`: an app now enters

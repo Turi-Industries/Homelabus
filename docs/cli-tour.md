@@ -290,8 +290,8 @@ sudo ./target/debug/hlb cluster init --endpoint 192.168.1.10 --apply
 ./target/debug/hlb mesh sync --apply         # a node that missed a peer
 ./target/debug/hlb mesh remove old-node      # a machine gone; refused while it is in the Swarm
 printf '%s' '<user>:<token>' | ./target/debug/hlb secret-set registry-ghcr.io --purpose registry
-./target/debug/hlb fleet agent --image ghcr.io/turi-industries/hlb-agent:0.4.0 --apply
-./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.4.0 --apply
+./target/debug/hlb fleet agent --image ghcr.io/turi-industries/hlb-agent:0.4.1 --apply
+./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.4.1 --apply
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the
