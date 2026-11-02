@@ -3,6 +3,21 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.2] — 2026-11-02
+
+The first run of the catalog's CI on fresh houses found two installs that stopped on
+Garage: an app's bucket expiry is now written by a key of Homelabus's own, owner of
+that bucket for the one call, and a Garage installed in the same plan as its first app
+is given its layout instead of refusing every bucket.
+
+**Upgrading from 0.4.1:**
+
+- No migration: 0.4.1 and 0.4.2 open the same state.
+
+### Fixed
+
+- Write a bucket's expiry as its owner, and give a fresh Garage its layout
+
 ## [0.4.1] — 2026-11-02
 
 What the catalog's CI proves of each app now reaches the houses: installed on a fresh
