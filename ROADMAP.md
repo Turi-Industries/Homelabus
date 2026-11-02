@@ -1180,7 +1180,7 @@ pull request to the catalog, with no `hlb` release.
   signed source nightly and notifies a revoked install; privd and the controller hold
   the catalog in a `catalog::Shared` read again every 10 minutes and after a fetch, an
   official catalog unreadable now keeping the one read before.
-  🟡 The official source — 2026-11-02: `hlb_catalog::OFFICIAL` (reserved),
+  ✅ The official source — 2026-11-02: `hlb_catalog::OFFICIAL` (reserved),
   `OFFICIAL_URL`, `OFFICIAL_KEY` (`None` until the owner generates it);
   `Catalog::add_official` lays the official index over the carried catalog — its apps
   under bare names, the platform kept, an app with no version for this `hlb` kept as
@@ -1206,7 +1206,8 @@ pull request to the catalog, with no `hlb` release.
   catalog stays in `hlb` and the image as the fallback the official index lays over.
   An icon is read beside its entry's manifest, wherever the catalog read it from.
   0.4.0 released with the key and mirrored (`hlb-v0.4.0` in the catalog's releases):
-  its Validate and Index runs pass. Left: the first index signed and on Pages.
+  its Validate and Index runs pass. Index 1 signed by the owner and served by Pages the
+  same day; a 0.4.0 `hlb catalog source fetch` takes it, 13 apps, held to the key.
 - Three levels of source — official (its key built into `hlb`), community (any URL,
   trusted explicitly per app or per source), local (a directory). An app carries its
   source's name, so `community/foo` never shadows `foo`; a third-party source may
