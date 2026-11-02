@@ -76,7 +76,8 @@ pub const OFFICIAL_URL: &str = "https://turi-industries.github.io/homelabus-cata
 /// The official catalog's public key (`hlb catalog key generate`, its owner's).
 /// `None` until there is one: the catalog this `hlb` carries is then the only official
 /// one, and nothing official is fetched.
-pub const OFFICIAL_KEY: Option<&str> = None;
+pub const OFFICIAL_KEY: Option<&str> =
+    Some("a8ca95b9966503c7fd9faebcb67e5d91a133678e408962efb67e917cca03271f");
 
 /// Between a third-party source's name and its app's.
 pub const SEPARATOR: char = '/';

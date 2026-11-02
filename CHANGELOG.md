@@ -3,6 +3,99 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.0] — 2026-11-02
+
+The apps leave this repository for their own, `homelabus-catalog`: an app now enters
+by a pull request there and reaches the houses through a signed index, fetched every
+night over HTTPS, with no release of `hlb`. Each manifest says the `hlb` range it runs
+on, an installed app keeps the guide it was deployed with, and a version can be revoked
+in the index and named on the house running it. Third-party sources sit beside the
+official one. PostgreSQL and MariaDB are copied by their own tools while they run, and
+Stalwart is stopped for its copy; a restore runs the steps that follow it. Jellyfin
+moves to 12.4 behind PocketID, a phone gets a password of its own for mail, calendars
+and contacts, the family's sealed kit is mailed to each relative, and the house's
+domain has a screen.
+
+**Upgrading from 0.3.0:**
+
+- Migrations 0049 to 0054 run at the first start: 0.3.0 cannot open the state after.
+- The controller reaches `turi-industries.github.io` over HTTPS every night for the
+  official index. Without it, the catalog `hlb` carries is the one read.
+- PostgreSQL and MariaDB now declare a copy by `pg_basebackup` and `mariadb-backup`,
+  and PostgreSQL's server takes an access file allowing replication: `hlb update apply
+  postgres`, or its nightly copy fails rather than being taken live.
+- Stalwart is stopped for its nightly copy: about five seconds without SMTP.
+- Each app's database role is limited to twice its declared connections at its next
+  deployment: an app past its budget is refused its own connections.
+- Jellyfin moves to 12.4 (`hlb update apply jellyfin`, rehearsed on a 10.11.11 volume);
+  its sign-in goes through PocketID and its passwords close to linked accounts, the
+  recovery `admin` excepted.
+- Garage's metadata is no longer backed up: a lost Garage is reinstalled, and each
+  bucket restored from its own archive.
+
+### Added
+
+- Run what follows a restore after the restore, and judge it by its end
+
+### Fixed
+
+- Stop a volume's services for its copy when it says copy: stopped
+- Close Jellyfin's passwords to accounts linked to PocketID
+
+### Changed
+
+- Measure what syncing people and nodes into an app needs: no crate it would spare
+- Say that restic on a read-only repository needs --no-lock
+- Measure what a live volume copy restores: Stalwart's does not, three SQLite go unflagged
+- Snapshot SQLite found in any backed-up volume, flagged or not
+- Hold services stopped for a restore away from reconciliation
+- Measure Stalwart stopped for its copy: five seconds without SMTP
+- Declare a data directory copied by its engine's own tool, refused until built
+- Record the owner's calls: Vaultwarden and Termix keep their Rust, replaceable; Jellyfin's accounts in phase 3
+- Back up Garage's metadata no more: it indexes blocks nobody backs up
+- Copy PostgreSQL's data directory with pg_basebackup while it runs
+- Keep a job run's file secrets within Swarm's 64 characters
+- Copy MariaDB's data directory with mariadb-backup while it runs
+- Record MariaDB's hot copy proven on the lab
+- Say when Garage lost an app's buckets or key, and how to bring them back
+- Paint a refused drift red when what it leaves alone is broken
+- Measure the rest of gap 5: cadence, upgrade and restore steps, NATS, pools
+- Hold every app to a connection budget on its shared server
+- Ready Fluxer's thread index before the full search refresh
+- Make, list and revoke a device's password in Stalwart
+- Ask the privileged side for a person's devices and their passwords
+- Let a person give each device its own password, from Me or the CLI
+- Record Stalwart's app-password trap with the mail rules
+- Revoke a device by the mailbox address its list shows
+- Record calendars and contacts from Stalwart as proven on the lab
+- Mail the family's sealed kit to each relative at every seal
+- Hand a relative's bounced kit to postmaster@, not to noreply@
+- Show each machine's protection level on the nodes screens
+- Make the domain's advice values, ready for its screen
+- Show the house's domain on its own screen
+- Read the registry over WHOIS where the TLD has no RDAP
+- Judge a CAA validationmethods against the challenges each account takes
+- Verify Vaultwarden, Bulwark and Anubis against their release workflows
+- Move Jellyfin to 12.4, rehearsed on a 10.11.11 volume
+- Plan Jellyfin's sign-in through PocketID, as measured
+- Fetch a manifest's downloads into its volume before the app starts
+- Set Jellyfin's PocketID provider through a signed-in guide step
+- Keep each Jellyfin account enabled while its person holds a role let in
+- Record Jellyfin's PocketID sign-in as the lab ran it
+- Freeze an app's guide beside its manifest
+- Declare the hlb range each app runs on, held to its floor's schema
+- Read third-party catalog sources beside the official one
+- Build, sign and verify a catalog source's index offline
+- Read signed catalog sources from their cache
+- Fetch a signed catalog source over HTTPS into its cache
+- Say what an app receives before it installs, and how critical it is
+- Revoke an app version inside the signed index
+- Name a revoked version on the house that runs it
+- Fetch the signed sources every night and read the catalog again
+- Lay the official signed index over the carried catalog
+- Write the official source from what hlb carries, and fetch it with the others
+- Move the apps to homelabus-catalog, mounted back as a submodule
+
 ## [0.3.0] — 2026-10-31
 
 A machine taken away boots to nothing readable: disks bound to their TPM and the
