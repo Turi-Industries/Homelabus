@@ -310,6 +310,24 @@ pub struct VerificationRun {
     pub verified_at: String,
 }
 
+/// A third-party catalog source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogSource {
+    pub name: String,
+    /// Where its apps are read: the directory given, or a fetched source's cache.
+    pub directory: String,
+    /// A fetched source's: where its signed index is served, and the key it is held to.
+    pub signed: Option<SignedSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedSource {
+    pub url: String,
+    pub key: String,
+    /// The highest index counter read from it, `None` before the first fetch.
+    pub counter: Option<u64>,
+}
+
 /// An audit log entry, as read back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRecord {
@@ -808,11 +826,18 @@ impl State {
             })
     }
 
-    /// Freezes the catalog source an app is installed from; `None` is the official one.
-    pub async fn set_app_source(&self, name: &str, source: Option<&str>) -> Result<()> {
-        let done = sqlx::query("UPDATE apps SET source = ?2 WHERE name = ?1")
+    /// Freezes the catalog source an app is installed from — `None` the official one —
+    /// and the counter of the signed index it came in, if it came in one.
+    pub async fn set_app_source(
+        &self,
+        name: &str,
+        source: Option<&str>,
+        index: Option<u64>,
+    ) -> Result<()> {
+        let done = sqlx::query("UPDATE apps SET source = ?2, source_index = ?3 WHERE name = ?1")
             .bind(name)
             .bind(source)
+            .bind(index.map(|i| i as i64))
             .execute(&self.pool)
             .await?;
         if done.rows_affected() == 0 {
@@ -831,27 +856,74 @@ impl State {
         Ok(row.try_get("source")?)
     }
 
+    /// The counter of the signed index an app was installed from, if any.
+    pub async fn app_source_index(&self, name: &str) -> Result<Option<u64>> {
+        let row = sqlx::query("SELECT source_index FROM apps WHERE name = ?1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::UnknownApp(name.to_string()))?;
+        let i: Option<i64> = row.try_get("source_index")?;
+        Ok(i.map(|i| i as u64))
+    }
+
     /// Adds a third-party catalog source; `false` if one of that name exists already.
-    pub async fn add_catalog_source(&self, name: &str, directory: &str) -> Result<bool> {
+    pub async fn add_catalog_source(&self, source: &CatalogSource) -> Result<bool> {
+        let (url, key) = source
+            .signed
+            .as_ref()
+            .map(|s| (s.url.as_str(), s.key.as_str()))
+            .unzip();
         let done = sqlx::query(
-            "INSERT INTO catalog_sources (name, directory) VALUES (?1, ?2)
+            "INSERT INTO catalog_sources (name, directory, url, key) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(name) DO NOTHING",
         )
-        .bind(name)
-        .bind(directory)
+        .bind(&source.name)
+        .bind(&source.directory)
+        .bind(url)
+        .bind(key)
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected() == 1)
     }
 
-    /// The third-party catalog sources, `(name, directory)`, by name.
-    pub async fn catalog_sources(&self) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query("SELECT name, directory FROM catalog_sources ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
+    /// The third-party catalog sources, by name.
+    pub async fn catalog_sources(&self) -> Result<Vec<CatalogSource>> {
+        let rows = sqlx::query(
+            "SELECT name, directory, url, key, counter FROM catalog_sources ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
-            .map(|r| Ok((r.try_get("name")?, r.try_get("directory")?)))
+            .map(|r| {
+                let url: Option<String> = r.try_get("url")?;
+                let key: Option<String> = r.try_get("key")?;
+                let counter: Option<i64> = r.try_get("counter")?;
+                Ok(CatalogSource {
+                    name: r.try_get("name")?,
+                    directory: r.try_get("directory")?,
+                    signed: url.zip(key).map(|(url, key)| SignedSource {
+                        url,
+                        key,
+                        counter: counter.map(|c| c as u64),
+                    }),
+                })
+            })
             .collect()
+    }
+
+    /// Records the counter of the index just read from a source. Only ever up: a lower
+    /// one changes nothing — `false` — since accepting it is how a replay would land.
+    pub async fn raise_catalog_source_counter(&self, name: &str, counter: u64) -> Result<bool> {
+        let done = sqlx::query(
+            "UPDATE catalog_sources SET counter = ?2
+             WHERE name = ?1 AND (counter IS NULL OR counter <= ?2)",
+        )
+        .bind(name)
+        .bind(counter as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
     }
 
     /// Removes a catalog source; `false` if there was none of that name. The apps
@@ -5159,6 +5231,37 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_source_counter_only_ever_rises() {
+        let s = State::in_memory().await.expect("state");
+        let source = CatalogSource {
+            name: "community".into(),
+            directory: "/var/lib/homelabus/catalog/community".into(),
+            signed: Some(SignedSource {
+                url: "https://example.org/catalog".into(),
+                key: "00".repeat(32),
+                counter: None,
+            }),
+        };
+        assert!(s.add_catalog_source(&source).await.expect("added"));
+        assert!(!s.add_catalog_source(&source).await.expect("twice"));
+        assert!(s
+            .raise_catalog_source_counter("community", 4)
+            .await
+            .expect("up"));
+        assert!(s
+            .raise_catalog_source_counter("community", 4)
+            .await
+            .expect("same"));
+        // 🔴 Accepted, a replayed index would set the bar back for the next one.
+        assert!(!s
+            .raise_catalog_source_counter("community", 3)
+            .await
+            .expect("down"));
+        let read = s.catalog_sources().await.expect("read");
+        assert_eq!(read[0].signed.as_ref().and_then(|s| s.counter), Some(4));
+    }
 
     fn manifest(name: &str) -> Manifest {
         let y = format!(

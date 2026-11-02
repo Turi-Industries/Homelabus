@@ -91,6 +91,8 @@ pub struct Entry {
     /// The source it came from; `None` for the official catalog, whose apps keep their
     /// bare names. A third-party app is `<source>/<app>`, so it never shadows one.
     pub source: Option<String>,
+    /// The counter of the signed index it came from, frozen with the install.
+    pub index: Option<u64>,
     pub manifest: Manifest,
     pub path: PathBuf,
     /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
@@ -151,6 +153,75 @@ impl Catalog {
             return Err(Error::SourceTaken(source.to_string()));
         }
         let theirs = Self::load(root)?;
+        self.merge(source, theirs);
+        Ok(())
+    }
+
+    /// Adds a source whose directory holds a signed index (`index::verify`): for each
+    /// app, the newest version this `hlb`'s range accepts.
+    ///
+    /// 🔴 An expired index sets every app of the source aside: nothing new is installed
+    /// or upgraded from it. What runs is not touched — an installed app redeploys from
+    /// its frozen manifest — and an upgrade waits for a fresh index.
+    pub fn add_signed_source(
+        &mut self,
+        source: &str,
+        dir: impl AsRef<Path>,
+        key: &str,
+        now: i64,
+    ) -> std::result::Result<(), index::Error> {
+        let dir = dir.as_ref();
+        if !is_source_name(source) {
+            return Err(Error::SourceName(source.to_string()).into());
+        }
+        let idx = index::verify(dir, source, key)?;
+        let release = hlb_types::release::running();
+        let mut theirs = Self::default();
+        let expired = index::current(&idx, now).err();
+        for (app, versions) in &idx.apps {
+            if let Some(e) = &expired {
+                theirs.set_aside.insert(
+                    app.clone(),
+                    format!(
+                        "the index of \"{source}\" is out of date ({e}) — nothing new is \
+                         installed from it until a fresh index is fetched"
+                    ),
+                );
+                continue;
+            }
+            let Some(v) = idx.newest_for(app, &release) else {
+                let ranges: Vec<&str> = versions.iter().map(|v| v.hlb.as_str()).collect();
+                theirs.set_aside.insert(
+                    app.clone(),
+                    format!(
+                        "\"{app}\" has no version for hlb {release} (theirs need {}) — update hlb \
+                         to install it",
+                        ranges.join(", ")
+                    ),
+                );
+                continue;
+            };
+            let path = dir
+                .join(hlb_types::index::version_dir(app, &v.version))
+                .join("manifest.yaml");
+            match load_one(&path, &release, Some(app))? {
+                Loaded::Entry(mut e) => {
+                    e.index = Some(idx.counter);
+                    theirs.entries.insert(app.clone(), *e);
+                }
+                Loaded::SetAside { app, why } => {
+                    theirs.set_aside.insert(app, why);
+                }
+            }
+        }
+        self.merge(source, theirs);
+        Ok(())
+    }
+
+    /// A third-party source's apps, under `<source>/<app>`, held to what such a source
+    /// may hold.
+    fn merge(&mut self, source: &str, theirs: Self) {
+        let prefix = format!("{source}{SEPARATOR}");
         let platform: Vec<String> = self
             .entries
             .values()
@@ -185,7 +256,6 @@ impl Catalog {
                 }
             }
         }
-        Ok(())
     }
 
     /// The entry an installed app follows: its own source's, never another's of the
@@ -504,7 +574,7 @@ fn collect(dir: &Path, release: &Version, out: &mut Catalog) -> Result<()> {
         }
 
         if path.file_name().is_some_and(|f| f == "manifest.yaml") {
-            match load_one(&path, release)? {
+            match load_one(&path, release, None)? {
                 Loaded::Entry(e) => {
                     out.entries.insert(e.manifest.metadata.name.clone(), *e);
                 }
@@ -532,17 +602,20 @@ fn declared_range(raw: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn load_one(path: &Path, release: &Version) -> Result<Loaded> {
+/// `name` is the app's when the folder is not named after it — a signed index keeps
+/// each version in a folder of its own.
+fn load_one(path: &Path, release: &Version, name: Option<&str>) -> Result<Loaded> {
     let raw = std::fs::read_to_string(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
     // The folder names the app, whatever the manifest it holds can be read to say.
-    let dir = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let dir = name.map(str::to_string).unwrap_or_else(|| {
+        path.parent()
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
 
     if let Some(range) = declared_range(&raw) {
         let why = match hlb_types::release::accepts(&range, release) {
@@ -598,6 +671,7 @@ fn load_one(path: &Path, release: &Version) -> Result<Loaded> {
 
     Ok(Loaded::Entry(Box::new(Entry {
         source: None,
+        index: None,
         manifest,
         path: path.to_path_buf(),
         guide,
@@ -672,6 +746,7 @@ mod tests {
             let written = serde_json::to_value(&manifest).expect("json");
             Self {
                 source: None,
+                index: None,
                 manifest,
                 path: PathBuf::new(),
                 guide: hlb_types::Guide::default(),

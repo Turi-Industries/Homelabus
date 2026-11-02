@@ -54,3 +54,14 @@ pub struct AppVersion {
     /// Every image it runs, pinned: its own and its companions'.
     pub images: Vec<String>,
 }
+
+impl Index {
+    /// The version of `app` this `hlb` installs: the newest its range accepts.
+    pub fn newest_for(&self, app: &str, release: &crate::release::Version) -> Option<&AppVersion> {
+        self.apps
+            .get(app)?
+            .iter()
+            .rev()
+            .find(|v| crate::release::accepts(&v.hlb, release).unwrap_or(false))
+    }
+}

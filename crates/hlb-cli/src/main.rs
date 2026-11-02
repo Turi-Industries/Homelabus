@@ -6150,7 +6150,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let basis = match hlb_engine::install::basis(
                     &state,
                     app,
-                    entry.source.as_deref(),
+                    hlb_engine::install::Origin {
+                        source: entry.source.as_deref(),
+                        index: entry.index,
+                    },
                     &entry.manifest,
                     &entry.guide,
                     domain,

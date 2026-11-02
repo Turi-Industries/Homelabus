@@ -32,6 +32,12 @@ pub enum Error {
     Catalog(#[from] crate::Error),
 
     #[error(
+        "🔴 the index served is number {counter}, older than the {seen} already read: a \
+         replay, refused"
+    )]
+    Replayed { seen: u64, counter: u64 },
+
+    #[error(
         "\"{app}\" cannot be read by the hlb building the index ({why}) — build with the newest"
     )]
     Unreadable { app: String, why: String },
@@ -225,7 +231,6 @@ pub fn public_key(seed: &[u8; 32]) -> String {
 /// signed. Expiry is not judged here: an expired index still says what the apps
 /// installed from it are — `current` says whether anything new may come from it.
 pub fn verify(dir: &Path, source: &str, key: &str) -> Result<Index> {
-    let key = parse_key(key)?;
     let path = dir.join(index::FILE);
     let bytes = std::fs::read(&path).map_err(|e| Error::Io {
         path: path.clone(),
@@ -236,19 +241,91 @@ pub fn verify(dir: &Path, source: &str, key: &str) -> Result<Index> {
         path: sig_path,
         source: e,
     })?;
+    let idx = signed(&bytes, &sig, source, key, &path)?;
+    check_files(&idx, dir)?;
+    Ok(idx)
+}
+
+/// A freshly downloaded index, before any file it names is fetched: signed by `key`
+/// for `source`, and never older than `seen`, the highest counter already read — a
+/// mirror serving an older index is replaying it.
+pub fn accept(
+    bytes: &[u8],
+    sig: &str,
+    source: &str,
+    key: &str,
+    seen: Option<u64>,
+) -> Result<Index> {
+    let idx = signed(bytes, sig, source, key, Path::new(index::FILE))?;
+    if let Some(seen) = seen.filter(|s| idx.counter < *s) {
+        return Err(Error::Replayed {
+            seen,
+            counter: idx.counter,
+        });
+    }
+    Ok(idx)
+}
+
+fn signed(bytes: &[u8], sig: &str, source: &str, key: &str, path: &Path) -> Result<Index> {
+    let key = parse_key(key)?;
     let sig = unhex(sig.trim())
         .and_then(|b| <[u8; 64]>::try_from(b).ok())
         .map(|b| Signature::from_bytes(&b))
         .ok_or(Error::BadSignature)?;
-    key.verify(&bytes, &sig).map_err(|_| Error::BadSignature)?;
-    let idx = parse(&bytes, &path)?;
+    key.verify(bytes, &sig).map_err(|_| Error::BadSignature)?;
+    let idx = parse(bytes, path)?;
     if idx.source != source {
         return Err(Error::WrongSource {
             expected: source.to_string(),
             found: idx.source,
         });
     }
-    check_files(&idx, dir)?;
+    Ok(idx)
+}
+
+/// Every file an index names, `(path under its directory, SHA-256)` — each held inside
+/// it, for a fetch to download.
+pub fn files(idx: &Index) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for (app, versions) in &idx.apps {
+        for v in versions {
+            let base = index::version_dir(app, &v.version);
+            for (rel, digest) in &v.files {
+                let path = format!("{base}/{rel}");
+                if contained(Path::new(""), &base, rel).is_none() {
+                    return Err(Error::PathEscapes { path });
+                }
+                out.push((path, digest.clone()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Whether `dir` holds `rel` with that digest already: a fetch downloads what moved.
+pub fn holds(dir: &Path, rel: &str, digest: &str) -> bool {
+    std::fs::read(dir.join(rel)).is_ok_and(|b| hlb_types::token::sha256_hex(&b) == digest)
+}
+
+/// Puts `staged` in the place of `cache` once it verifies whole, so a fetch that
+/// stopped halfway, or a file that arrived changed, leaves the source as it was.
+pub fn swap_in(staged: &Path, cache: &Path, source: &str, key: &str) -> Result<Index> {
+    let idx = verify(staged, source, key)?;
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| Error::Io { path, source }
+    };
+    let old = cache.with_extension("old");
+    if old.exists() {
+        std::fs::remove_dir_all(&old).map_err(io(&old))?;
+    }
+    if cache.exists() {
+        std::fs::rename(cache, &old).map_err(io(cache))?;
+    }
+    std::fs::rename(staged, cache).map_err(io(staged))?;
+    if old.exists() {
+        std::fs::remove_dir_all(&old).map_err(io(&old))?;
+    }
     Ok(idx)
 }
 
@@ -629,5 +706,115 @@ mod tests {
                 "{app}/{version}/{file} read"
             );
         }
+    }
+
+    #[test]
+    fn a_signed_source_offers_the_newest_version_this_hlb_runs() {
+        let cat = catalog();
+        let (one, _) = built(cat.path(), None);
+        let guide = cat.path().join("mealie/guide.yaml");
+        let text = std::fs::read_to_string(&guide).expect("guide");
+        std::fs::write(&guide, format!("{text}\n# for a later hlb\n")).expect("fixed");
+        let (two, _) = built(cat.path(), Some(one.path()));
+        // Its second packaging is for an hlb to come.
+        let path = two.path().join(index::FILE);
+        let mut idx = read(&path).expect("index");
+        let later = idx.apps.get_mut("mealie").expect("mealie");
+        later[1].hlb = ">=9.0.0".into();
+        let first = later[0].version.clone();
+        std::fs::write(&path, serde_json::to_string_pretty(&idx).expect("json")).expect("written");
+        sign(two.path(), &SEED, None, NOW).expect("signed");
+        let key = public_key(&SEED);
+
+        let mut c = Catalog::default();
+        c.add_signed_source("community", two.path(), &key, NOW)
+            .expect("added");
+        let e = c.get("community/mealie").expect("mealie");
+        assert_eq!(e.index, Some(2), "the index it came from");
+        assert!(
+            e.path
+                .ends_with(format!("apps/mealie/{first}/manifest.yaml")),
+            "{}",
+            e.path.display()
+        );
+        assert!(!e.guide.steps.is_empty());
+
+        // 🔴 Expired, nothing new comes from it — and it says how to fetch a fresh one.
+        let mut c = Catalog::default();
+        c.add_signed_source("community", two.path(), &key, NOW + index::VALIDITY_SECS)
+            .expect("added");
+        let why = c
+            .get("community/mealie")
+            .expect_err("set aside")
+            .to_string();
+        assert!(why.contains("out of date") && why.contains("fresh index"), "{why}");
+        assert!(c.is_empty());
+
+        // Another key: the source is not read at all.
+        let mut c = Catalog::default();
+        assert!(c
+            .add_signed_source("community", two.path(), &public_key(&[9; 32]), NOW)
+            .is_err());
+    }
+
+    #[test]
+    fn a_fetch_refuses_a_replay_and_keeps_the_cache_until_a_whole_index_verifies() {
+        let cat = catalog();
+        let (one, _) = built(cat.path(), None);
+        sign(one.path(), &SEED, None, NOW).expect("signed");
+        let key = public_key(&SEED);
+        let bytes = std::fs::read(one.path().join(index::FILE)).expect("index");
+        let sig = std::fs::read_to_string(one.path().join(index::SIGNATURE_FILE)).expect("sig");
+
+        assert!(accept(&bytes, &sig, "community", &key, None).is_ok());
+        assert!(
+            accept(&bytes, &sig, "community", &key, Some(1)).is_ok(),
+            "the same one"
+        );
+        assert!(matches!(
+            accept(&bytes, &sig, "community", &key, Some(2)),
+            Err(Error::Replayed {
+                seen: 2,
+                counter: 1
+            })
+        ));
+        let idx = accept(&bytes, &sig, "community", &key, None).expect("accepted");
+        let wanted = files(&idx).expect("files");
+        assert!(
+            wanted.iter().all(|(p, d)| holds(one.path(), p, d)),
+            "every file is where the index says"
+        );
+
+        // A staged copy with one file changed in transit leaves the cache as it was.
+        let root = tempfile::tempdir().expect("root");
+        let cache = root.path().join("community");
+        let copy = |to: &Path| {
+            assert!(std::process::Command::new("cp")
+                .arg("-r")
+                .arg(one.path())
+                .arg(to)
+                .status()
+                .expect("cp")
+                .success());
+        };
+        copy(&cache);
+        let staged = root.path().join("community.new");
+        copy(&staged);
+        let (rel, _) = &wanted[0];
+        std::fs::write(staged.join(rel), b"changed").expect("changed");
+        assert!(matches!(
+            swap_in(&staged, &cache, "community", &key),
+            Err(Error::FileChanged { .. })
+        ));
+        assert!(
+            verify(&cache, "community", &key).is_ok(),
+            "the cache is untouched"
+        );
+
+        std::fs::remove_dir_all(&staged).expect("cleared");
+        copy(&staged);
+        swap_in(&staged, &cache, "community", &key).expect("swapped");
+        assert!(!staged.exists() && !cache.with_extension("old").exists());
+        assert!(verify(&cache, "community", &key).is_ok());
     }
 }

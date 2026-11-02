@@ -17,8 +17,19 @@ pub async fn load(dir: &std::path::Path, state: &State) -> hlb_catalog::Result<C
             Vec::new()
         }
     };
-    for (name, directory) in sources {
-        match c.add_source(&name, &directory) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    for src in sources {
+        let (name, directory) = (&src.name, &src.directory);
+        // A fetched source is held to its key again, each time it is read.
+        let added = match &src.signed {
+            Some(signed) => c
+                .add_signed_source(name, directory, &signed.key, now)
+                .map_err(|e| e.to_string()),
+            None => c.add_source(name, directory).map_err(|e| e.to_string()),
+        };
+        match added {
             Ok(()) => tracing::info!(source = %name, %directory, "catalog source loaded"),
             Err(e) => tracing::warn!(source = %name, %directory, "catalog source left out: {e}"),
         }

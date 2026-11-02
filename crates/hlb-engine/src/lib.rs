@@ -2615,10 +2615,18 @@ steps:
         catalog.spec.image.digest = None;
         catalog.spec.swarm.replicas = 3;
         // And its guide lost the prerequisite.
-        let basis = install::basis(&s, "demo", None, &catalog, &Default::default(), None, None)
-            .await
-            .expect("read")
-            .expect("resumable");
+        let basis = install::basis(
+            &s,
+            "demo",
+            install::Origin::default(),
+            &catalog,
+            &Default::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("read")
+        .expect("resumable");
         assert_eq!(
             basis.guide.steps, guide.steps,
             "a rerun plans from the guide frozen with the app"
@@ -2661,7 +2669,7 @@ steps:
         let moved = install::basis(
             &s,
             "demo",
-            None,
+            install::Origin::default(),
             &catalog,
             &Default::default(),
             Some("y.example.fr".into()),
@@ -2676,7 +2684,10 @@ steps:
         let theirs = install::basis(
             &s,
             "demo",
-            Some("community"),
+            install::Origin {
+                source: Some("community"),
+                index: None,
+            },
             &catalog,
             &Default::default(),
             None,
@@ -2699,7 +2710,10 @@ steps:
         let basis = install::basis(
             &s,
             "theirs",
-            Some("community"),
+            install::Origin {
+                source: Some("community"),
+                index: Some(7),
+            },
             &manifest(),
             &Default::default(),
             None,
@@ -2715,11 +2729,15 @@ steps:
             s.app_source("theirs").await.expect("source").as_deref(),
             Some("community")
         );
+        assert_eq!(s.app_source_index("theirs").await.expect("index"), Some(7));
         // Resumed, it keeps its source; the official app of that name is refused.
         let again = install::basis(
             &s,
             "theirs",
-            Some("community"),
+            install::Origin {
+                source: Some("community"),
+                index: Some(7),
+            },
             &manifest(),
             &Default::default(),
             None,
@@ -2729,10 +2747,15 @@ steps:
         .expect("read")
         .expect("resumed");
         assert_eq!(again.source.as_deref(), Some("community"));
+        assert_eq!(
+            again.index,
+            Some(7),
+            "resumed, it keeps the index it came in"
+        );
         let official = install::basis(
             &s,
             "theirs",
-            None,
+            install::Origin::default(),
             &manifest(),
             &Default::default(),
             None,

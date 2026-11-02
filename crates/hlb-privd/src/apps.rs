@@ -95,7 +95,10 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
     let basis = match hlb_engine::install::basis(
         &p.state,
         &app,
-        input.source.as_deref(),
+        hlb_engine::install::Origin {
+            source: input.source.as_deref(),
+            index: input.index,
+        },
         &input.manifest,
         &input.guide,
         domain.clone(),

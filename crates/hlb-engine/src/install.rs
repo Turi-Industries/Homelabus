@@ -7,11 +7,21 @@
 use hlb_state::State;
 use hlb_types::{Guide, Manifest};
 
+/// Where a catalog entry came from: its source — `None` the official catalog — and
+/// the counter of the signed index it came in, if one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Origin<'a> {
+    pub source: Option<&'a str>,
+    pub index: Option<u64>,
+}
+
 /// What an install of an app plans and freezes.
 #[derive(Debug, Clone)]
 pub struct Basis {
     /// The catalog source it is installed from, `None` for the official one.
     pub source: Option<String>,
+    /// The counter of the signed index it is installed from.
+    pub index: Option<u64>,
     pub manifest: Manifest,
     /// The guide it plans with, frozen beside the manifest.
     pub guide: Guide,
@@ -38,11 +48,11 @@ pub struct Basis {
 ///
 /// 🔴 `community/foo` installs as `foo` — its service, volumes and databases keep the
 /// bare name — so it never sits beside an official `foo`: the second would take over
-/// the first's volumes and database. `source` is the catalog entry's.
+/// the first's volumes and database. `origin` is the catalog entry's.
 pub async fn basis(
     state: &State,
     app: &str,
-    source: Option<&str>,
+    origin: Origin<'_>,
     catalog: &Manifest,
     catalog_guide: &Guide,
     domain: Option<String>,
@@ -64,7 +74,8 @@ pub async fn basis(
             }
         }
         return Ok(Ok(Basis {
-            source: source.map(str::to_string),
+            source: origin.source.map(str::to_string),
+            index: origin.index,
             manifest: catalog.clone(),
             guide: catalog_guide.clone(),
             domain,
@@ -72,6 +83,7 @@ pub async fn basis(
             resumed: None,
         }));
     };
+    let source = origin.source;
     let installed_from = state.app_source(app).await?;
     if installed_from.as_deref() != source {
         let from = |s: Option<&str>| match s {
@@ -99,6 +111,7 @@ pub async fn basis(
     }
     Ok(Ok(Basis {
         source: installed_from,
+        index: state.app_source_index(app).await?,
         manifest: state.app_manifest(app).await?,
         guide: installed_guide(state, app, || Some(catalog_guide.clone())).await?,
         domain: recorded,
@@ -181,7 +194,9 @@ pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()
             .upsert_app(app, &basis.manifest, basis.domain.as_deref())
             .await?;
         state.set_app_guide(app, Some(&basis.guide)).await?;
-        state.set_app_source(app, basis.source.as_deref()).await?;
+        state
+            .set_app_source(app, basis.source.as_deref(), basis.index)
+            .await?;
     }
     state
         .set_app_mail_domain(app, basis.mail_domain.as_deref())
@@ -224,7 +239,7 @@ mod tests {
         basis(
             state,
             app,
-            None,
+            Origin::default(),
             &manifest(app),
             &Default::default(),
             Some(domain.into()),
@@ -287,7 +302,7 @@ mod tests {
         let b = basis(
             &state,
             "gitea",
-            None,
+            Origin::default(),
             &manifest("gitea"),
             &Default::default(),
             Some(" Git.Example.org ".into()),
@@ -311,7 +326,7 @@ mod tests {
         let first = basis(
             &state,
             "gitea",
-            None,
+            Origin::default(),
             &manifest("gitea"),
             &guide("dns"),
             None,
@@ -332,7 +347,7 @@ mod tests {
         let again = basis(
             &state,
             "gitea",
-            None,
+            Origin::default(),
             &manifest("gitea"),
             &guide("other"),
             None,

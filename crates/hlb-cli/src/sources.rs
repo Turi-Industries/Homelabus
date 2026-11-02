@@ -13,12 +13,32 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// be read is said and left out: the official apps never go with it.
 pub async fn catalog_with_sources(cli: &Cli, state: &State) -> Result<Catalog> {
     let mut c = Catalog::load(&cli.catalog)?;
-    for (name, dir) in state.catalog_sources().await? {
-        if let Err(e) = c.add_source(&name, &dir) {
-            eprintln!("⚠️  catalog source \"{name}\" ({dir}) left out: {e}");
+    for src in state.catalog_sources().await? {
+        if let Err(e) = add(&mut c, &src) {
+            eprintln!(
+                "⚠️  catalog source \"{}\" ({}) left out: {e}",
+                src.name, src.directory
+            );
         }
     }
     Ok(c)
+}
+
+/// One source into `c` — a fetched one held to its key again each time it is read.
+fn add(c: &mut Catalog, src: &hlb_state::CatalogSource) -> std::result::Result<(), String> {
+    match &src.signed {
+        Some(signed) => c
+            .add_signed_source(
+                &src.name,
+                &src.directory,
+                &signed.key,
+                chrono::Utc::now().timestamp(),
+            )
+            .map_err(|e| e.to_string()),
+        None => c
+            .add_source(&src.name, &src.directory)
+            .map_err(|e| e.to_string()),
+    }
 }
 
 pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
@@ -29,9 +49,10 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
             if sources.is_empty() {
                 println!("No source beside the official catalog.");
             }
-            for (name, dir) in sources {
+            for src in sources {
+                let (name, dir) = (&src.name, &src.directory);
                 let mut c = Catalog::default();
-                match c.add_source(&name, &dir) {
+                match add(&mut c, &src) {
                     Ok(()) => println!(
                         "  {name:<14} {dir}  ({}, {} set aside)",
                         hlb_api::plural(c.len() as u64, "app", "apps"),
@@ -67,7 +88,7 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
                 .catalog_sources()
                 .await?
                 .iter()
-                .any(|(n, _)| n == name)
+                .any(|s| &s.name == name)
             {
                 eprintln!("🔴 source \"{name}\" is added already — `hlb catalog source remove {name} --apply` first");
                 return Ok(ExitCode::FAILURE);
@@ -83,7 +104,13 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
                 println!("\nPreview: nothing added. Run again with --apply.");
                 return Ok(ExitCode::SUCCESS);
             }
-            state.add_catalog_source(name, &dir).await?;
+            state
+                .add_catalog_source(&hlb_state::CatalogSource {
+                    name: name.clone(),
+                    directory: dir.clone(),
+                    signed: None,
+                })
+                .await?;
             state
                 .audit(
                     "cli",
@@ -103,7 +130,7 @@ pub async fn run(cli: &Cli, cmd: &SourceCmd) -> Result<ExitCode> {
                 .catalog_sources()
                 .await?
                 .iter()
-                .any(|(n, _)| n == name)
+                .any(|s| &s.name == name)
             {
                 eprintln!("🔴 no source \"{name}\"");
                 return Ok(ExitCode::FAILURE);
