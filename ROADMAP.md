@@ -1189,7 +1189,8 @@ pull request to the catalog, with no `hlb` release.
   (`State::set_carried_source`: address and key from the binary, the counter kept) before
   every fetch — the daemon's first tick at start, `hlb catalog source fetch` — and a
   revoked official install (no source recorded) is named. `hlb catalog source
-  add|remove official` refused. Left: the key itself, the owner's.
+  add|remove official` refused. The owner's key generated 2026-11-02 and compiled into
+  0.4.0 (`official.pub` in the catalog).
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.
@@ -1204,9 +1205,8 @@ pull request to the catalog, with no `hlb` release.
   signed `--first`, verified, built again over it and signed as index 2. The carried
   catalog stays in `hlb` and the image as the fallback the official index lays over.
   An icon is read beside its entry's manifest, wherever the catalog read it from.
-  Left: the owner's key (`hlb catalog key generate`, then `official.pub` there and
-  `OFFICIAL_KEY` here), a release carrying `--apps`, mirrored (`scripts/mirror-hlb.sh`),
-  before its CI passes.
+  0.4.0 released with the key and mirrored (`hlb-v0.4.0` in the catalog's releases):
+  its Validate and Index runs pass. Left: the first index signed and on Pages.
 - Three levels of source — official (its key built into `hlb`), community (any URL,
   trusted explicitly per app or per source), local (a directory). An app carries its
   source's name, so `community/foo` never shadows `foo`; a third-party source may
