@@ -747,7 +747,10 @@ mod tests {
             .get("community/mealie")
             .expect_err("set aside")
             .to_string();
-        assert!(why.contains("out of date") && why.contains("fresh index"), "{why}");
+        assert!(
+            why.contains("out of date") && why.contains("`hlb catalog source fetch community`"),
+            "{why}"
+        );
         assert!(c.is_empty());
 
         // Another key: the source is not read at all.

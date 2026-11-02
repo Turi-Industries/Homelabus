@@ -184,7 +184,8 @@ impl Catalog {
                     app.clone(),
                     format!(
                         "the index of \"{source}\" is out of date ({e}) — nothing new is \
-                         installed from it until a fresh index is fetched"
+                         installed from it until `hlb catalog source fetch {source}` \
+                         brings a fresh one"
                     ),
                 );
                 continue;

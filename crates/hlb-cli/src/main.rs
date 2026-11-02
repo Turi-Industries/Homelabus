@@ -2131,14 +2131,22 @@ enum IndexCmd {
 enum SourceCmd {
     /// The sources added, and what each holds.
     List,
-    /// Read a directory of apps beside the official catalog. Preview by default.
+    /// Read a directory of apps beside the official catalog, or a signed index served
+    /// over HTTPS. Preview by default.
     Add {
         /// Lower-case letters, digits and dashes: what its apps' names start with.
         name: String,
-        directory: std::path::PathBuf,
+        /// A directory, or the https:// address its index.json is served under.
+        location: String,
+        /// The public key an address's index is signed with: 64 hexadecimal characters.
+        #[arg(long)]
+        key: Option<String>,
         #[arg(long)]
         apply: bool,
     },
+    /// Download the signed index of one source, or of every source served over HTTPS,
+    /// and the files it names that moved.
+    Fetch { name: Option<String> },
     /// Stop reading a source; the apps installed from it keep running.
     Remove {
         name: String,

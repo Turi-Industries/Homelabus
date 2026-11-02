@@ -1149,14 +1149,22 @@ pull request to the catalog, with no `hlb` release.
   refuses a counter not above `--published`'s (or `--first`), an expiry behind or past
   30 days, a file not the one named; `verify` a path climbing out of its directory.
   Left: fetching an index into a source (3c), the official key compiled in.
-- 🟡 Signed sources read — 2026-11-02 (step 3c, first part). A source with a URL and a
+- ✅ Signed sources read and fetched — 2026-11-02 (step 3c). A source with a URL and a
   key (migration 0053) is read from its cache by `Catalog::add_signed_source`: held to
   its key again at every read, each app the newest version this `hlb`'s range accepts,
   every app set aside once the index expires. `index::accept` refuses a counter below
   the highest seen, `State::raise_catalog_source_counter` only ever rises, `swap_in`
   replaces the cache only by an index that verifies whole; an install freezes the
-  index counter it came in (`apps.source_index`, `install::Origin`). Left: the
-  `hlb catalog source add <url> --key` and `fetch` verbs that download into the cache.
+  index counter it came in (`apps.source_index`, `install::Origin`). `hlb catalog
+  source add <name> <url> --key` downloads and reads it even in preview; `fetch [name]`
+  checks the signature and the counter before any file, copies what the cache holds by
+  digest (a `~hlbN` fix downloads only what moved), refuses over 8 MiB a response, and
+  leaves no staging behind a failure. HTTPS only, plain HTTP from loopback. The cache
+  sits in `catalog-sources/<name>` beside the state, deleted with the source. Tried by
+  hand: a changed file, an edited index, a replayed one, another signer, a damaged
+  cache (repaired by the next fetch) — each refused, the cache untouched. Left: a
+  nightly fetch, privd reloading the catalog (read once at startup), the official key
+  compiled in once the owner has generated it.
 - `homelabus-catalog`, one repository, a directory per app; platform services and
   `hlb-types` stay here, where the resolver points. The catalog leaves the controller's
   image (`/usr/share/hlb/catalog`), so a new app version stops requiring a release.

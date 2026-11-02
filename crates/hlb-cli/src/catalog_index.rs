@@ -77,10 +77,11 @@ pub fn run(cmd: &IndexCmd) -> Result<ExitCode> {
             let idx = index::build(catalog, source, previous.as_deref(), out, now())?;
             let versions: usize = idx.apps.values().map(Vec::len).sum();
             println!(
-                "✓ index {} of \"{source}\" built in {}: {}, {versions} versions, expiring {}",
+                "✓ index {} of \"{source}\" built in {}: {}, {}, expiring {}",
                 idx.counter,
                 out.display(),
                 hlb_api::plural(idx.apps.len() as u64, "app", "apps"),
+                hlb_api::plural(versions as u64, "version", "versions"),
                 expiry(idx.expires)
             );
             println!(

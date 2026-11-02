@@ -52,6 +52,18 @@ replay or freeze it.
 expiry behind or past 30 days, and a file that is not the one the index names. A first
 index is signed with `--first` instead of `--published`.
 
+Served over HTTPS, a source is added with its owner's public key and kept in a cache
+beside the state. Every fetch checks the signature before downloading anything, refuses
+an index older than the one already read, and replaces the cache only once every file
+verifies — a fetch that fails leaves the source as it was. An index past its expiry
+blocks new installs and upgrades from the source, never what runs.
+
+```sh
+./target/debug/hlb catalog source add community https://apps.example.org --key <public-key>           # preview: downloads, adds nothing
+./target/debug/hlb catalog source add community https://apps.example.org --key <public-key> --apply
+./target/debug/hlb catalog source fetch community            # its next index; without a name, every source served
+```
+
 ## Installing and running an app
 
 ```sh
