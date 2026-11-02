@@ -2336,6 +2336,83 @@ pub struct CatalogItem {
     /// Whether `/api/catalog/{name}/icon` has an image to serve. Most apps do; the
     /// rest get a monogram rather than a request answered 404.
     pub icon: bool,
+    /// What its source's CI proved of it; `null` when the source publishes no signed
+    /// results — never "untested" made to look like "failed".
+    #[serde(default)]
+    pub quality: Option<CatalogQuality>,
+}
+
+/// An app's results in its source's signed quality file (`hlb_types::quality`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct CatalogQuality {
+    /// The day it entered the catalog, `YYYY-MM-DD`.
+    pub since: String,
+    /// Whole months since then — counted here, so every screen says the same.
+    pub maintained_months: u32,
+    /// The newest run of its cycle; `null` until one ran.
+    pub last: Option<QualityRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct QualityRun {
+    /// The app's version it installed: the run says nothing of another.
+    pub version: String,
+    pub hlb: String,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    pub install: QualityOutcome,
+    /// From the version published before; `not_run` for an app that had none.
+    pub update: QualityOutcome,
+    pub backup: QualityOutcome,
+    pub restore: QualityOutcome,
+    pub uninstall: QualityOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityOutcome {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+impl CatalogQuality {
+    /// As the catalog card reads it, on `today` (`YYYY-MM-DD`).
+    pub fn of(q: &hlb_types::quality::AppQuality, today: &str) -> Self {
+        use hlb_types::quality::Outcome as O;
+        let outcome = |o: O| match o {
+            O::Passed => QualityOutcome::Passed,
+            O::Failed => QualityOutcome::Failed,
+            O::NotRun => QualityOutcome::NotRun,
+        };
+        Self {
+            since: q.since.clone(),
+            maintained_months: months_between(&q.since, today),
+            last: q.last.as_ref().map(|r| QualityRun {
+                version: r.version.clone(),
+                hlb: r.hlb.clone(),
+                date: r.date.clone(),
+                install: outcome(r.install),
+                update: outcome(r.update),
+                backup: outcome(r.backup),
+                restore: outcome(r.restore),
+                uninstall: outcome(r.uninstall),
+            }),
+        }
+    }
+}
+
+/// Whole months from one `YYYY-MM-DD` to another; 0 for a day unreadable or ahead.
+fn months_between(from: &str, to: &str) -> u32 {
+    let parse = |s: &str| -> Option<(i64, i64, i64)> {
+        let mut p = s.splitn(3, '-').map(|n| n.parse::<i64>().ok());
+        Some((p.next()??, p.next()??, p.next()??))
+    };
+    let (Some((y1, m1, d1)), Some((y2, m2, d2))) = (parse(from), parse(to)) else {
+        return 0;
+    };
+    let months = (y2 * 12 + m2) - (y1 * 12 + m1) - i64::from(d2 < d1);
+    u32::try_from(months).unwrap_or(0)
 }
 
 judged! {
@@ -3528,6 +3605,20 @@ pub fn humanise(secs: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn maintained_months_are_whole_months_and_never_negative() {
+        assert_eq!(super::months_between("2026-11-02", "2026-11-30"), 0);
+        assert_eq!(super::months_between("2026-11-02", "2026-12-01"), 0);
+        assert_eq!(super::months_between("2026-11-02", "2026-12-02"), 1);
+        assert_eq!(super::months_between("2026-11-30", "2028-01-01"), 13);
+        assert_eq!(
+            super::months_between("2026-11-02", "2026-10-01"),
+            0,
+            "ahead"
+        );
+        assert_eq!(super::months_between("someday", "2026-10-01"), 0);
+    }
     #[test]
     fn no_shared_string_uses_the_parenthesised_plural() {
         // 🔴 Seen on screen: "1 service(s) whose replicas ALL share...". The test that

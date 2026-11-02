@@ -9,6 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hlb_types::index::{self, AppVersion, Index};
+use hlb_types::quality::{self, AppQuality, Quality, Run};
 
 use crate::Catalog;
 
@@ -94,6 +95,28 @@ pub enum Error {
 
     #[error("🔴 {path}: a path in the index leaves its directory")]
     PathEscapes { path: String },
+
+    #[error(
+        "{file} was built with index {quality}, not this one ({counter}): build both again \
+         together"
+    )]
+    QualityStale {
+        file: &'static str,
+        quality: u64,
+        counter: u64,
+    },
+
+    #[error("{file} names \"{app}\", which the index does not hold")]
+    QualityUnknownApp { file: String, app: String },
+
+    #[error(
+        "🔴 the signature of {} does not match: changed, or signed with another key",
+        quality::FILE
+    )]
+    QualityBadSignature,
+
+    #[error("{path}: \"{date}\" is not a day written YYYY-MM-DD")]
+    BadDate { path: PathBuf, date: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -279,12 +302,198 @@ pub fn sign(dir: &Path, seed: &[u8; 32], published: Option<&Index>, now: i64) ->
         return Err(Error::TooLong { ahead });
     }
     check_files(&idx, dir)?;
-    let sig = SigningKey::from_bytes(seed).sign(&bytes);
+    let key = SigningKey::from_bytes(seed);
+    // Checked before either is signed: a quality file refused after the index is
+    // signed would leave a signed index whose results nobody can read.
+    let results = match std::fs::read(dir.join(quality::FILE)) {
+        Ok(q) => {
+            let path = dir.join(quality::FILE);
+            let parsed = serde_json::from_slice(&q).map_err(|source| Error::Json {
+                path: path.clone(),
+                source,
+            })?;
+            held_to(&parsed, &idx)?;
+            Some(q)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(Error::Io {
+                path: dir.join(quality::FILE),
+                source,
+            })
+        }
+    };
+    let sig = key.sign(&bytes);
     write(
         &dir.join(index::SIGNATURE_FILE),
         format!("{}\n", hex(&sig.to_bytes())).as_bytes(),
     )?;
+    if let Some(q) = results {
+        let sig = key.sign(&q);
+        write(
+            &dir.join(quality::SIGNATURE_FILE),
+            format!("{}\n", hex(&sig.to_bytes())).as_bytes(),
+        )?;
+    }
     Ok(idx)
+}
+
+/// Whether a quality file belongs to `idx`: the same source, the same counter, and
+/// only apps the index holds.
+fn held_to(q: &Quality, idx: &Index) -> Result<()> {
+    if q.source != idx.source {
+        return Err(Error::WrongSource {
+            expected: idx.source.clone(),
+            found: q.source.clone(),
+        });
+    }
+    if q.index != idx.counter {
+        return Err(Error::QualityStale {
+            file: quality::FILE,
+            quality: q.index,
+            counter: idx.counter,
+        });
+    }
+    if let Some(app) = q.apps.keys().find(|a| !idx.apps.contains_key(*a)) {
+        return Err(Error::QualityUnknownApp {
+            file: quality::FILE.to_string(),
+            app: app.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// The quality file in `dir`, if `key` signed it beside `idx` — `None` when the source
+/// publishes none.
+pub fn quality(dir: &Path, idx: &Index, key: &str) -> Result<Option<Quality>> {
+    let path = dir.join(quality::FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(Error::Io { path, source }),
+    };
+    let sig_path = dir.join(quality::SIGNATURE_FILE);
+    let sig = std::fs::read_to_string(&sig_path).map_err(|source| Error::Io {
+        path: sig_path,
+        source,
+    })?;
+    accept_quality(&bytes, &sig, idx, key).map(Some)
+}
+
+/// A freshly downloaded quality file, held to the index accepted with it.
+pub fn accept_quality(bytes: &[u8], sig: &str, idx: &Index, key: &str) -> Result<Quality> {
+    let key = parse_key(key)?;
+    let sig = unhex(sig.trim())
+        .and_then(|b| <[u8; 64]>::try_from(b).ok())
+        .map(|b| Signature::from_bytes(&b))
+        .ok_or(Error::QualityBadSignature)?;
+    key.verify(bytes, &sig)
+        .map_err(|_| Error::QualityBadSignature)?;
+    let q: Quality = serde_json::from_slice(bytes).map_err(|source| Error::Json {
+        path: PathBuf::from(quality::FILE),
+        source,
+    })?;
+    held_to(&q, idx)?;
+    Ok(q)
+}
+
+/// Writes `quality-v1.json` beside the index `idx` built in `out`: each app's run from
+/// `runs` (`<app>.json`, what the source's CI left), the previous index's file's for
+/// the rest, and the day each app entered the catalog carried from it — `today` for an
+/// app new to it. `None`, and no file, when neither says anything.
+pub fn build_quality(
+    idx: &Index,
+    runs: Option<&Path>,
+    previous: Option<&Path>,
+    out: &Path,
+    today: &str,
+) -> Result<Option<Quality>> {
+    let before: Option<Quality> = match previous.map(|p| p.join(quality::FILE)) {
+        Some(path) if path.exists() => {
+            let bytes = std::fs::read(&path).map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+            Some(serde_json::from_slice(&bytes).map_err(|source| Error::Json { path, source })?)
+        }
+        _ => None,
+    };
+    let mut fresh: BTreeMap<String, Run> = BTreeMap::new();
+    if let Some(dir) = runs {
+        let io = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| Error::Io { path, source }
+        };
+        for entry in std::fs::read_dir(dir).map_err(io(dir))? {
+            let path = entry.map_err(io(dir))?.path();
+            let Some(app) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            // A run for an app the index lost would be published for nothing; one
+            // misnamed would never reach its app.
+            if !idx.apps.contains_key(app) {
+                return Err(Error::QualityUnknownApp {
+                    file: path.display().to_string(),
+                    app: app.to_string(),
+                });
+            }
+            let bytes = std::fs::read(&path).map_err(io(&path))?;
+            let run: Run = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                path: path.clone(),
+                source,
+            })?;
+            if !is_day(&run.date) {
+                return Err(Error::BadDate {
+                    path,
+                    date: run.date,
+                });
+            }
+            fresh.insert(app.to_string(), run);
+        }
+    }
+    if before.is_none() && fresh.is_empty() {
+        return Ok(None);
+    }
+    let mut apps = BTreeMap::new();
+    for app in idx.apps.keys() {
+        let old = before.as_ref().and_then(|b| b.apps.get(app));
+        // The newer of the two by its day: a run gathered again from an older CI pass
+        // never takes the place of one published since.
+        let last = match (fresh.remove(app), old.and_then(|o| o.last.clone())) {
+            (Some(new), Some(old)) if old.date > new.date => Some(old),
+            (Some(new), _) => Some(new),
+            (None, old) => old,
+        };
+        let since = old.map_or_else(|| today.to_string(), |o| o.since.clone());
+        apps.insert(app.clone(), AppQuality { since, last });
+    }
+    let q = Quality {
+        source: idx.source.clone(),
+        index: idx.counter,
+        apps,
+    };
+    let path = out.join(quality::FILE);
+    let mut text = serde_json::to_string_pretty(&q).map_err(|source| Error::Json {
+        path: path.clone(),
+        source,
+    })?;
+    text.push('\n');
+    write(&path, text.as_bytes())?;
+    Ok(Some(q))
+}
+
+/// `YYYY-MM-DD`, compared as text: the order of the days.
+fn is_day(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            _ => c.is_ascii_digit(),
+        })
 }
 
 /// The public key a seed signs for, as a source is given it.
@@ -376,6 +585,7 @@ pub fn holds(dir: &Path, rel: &str, digest: &str) -> bool {
 /// stopped halfway, or a file that arrived changed, leaves the source as it was.
 pub fn swap_in(staged: &Path, cache: &Path, source: &str, key: &str) -> Result<Index> {
     let idx = verify(staged, source, key)?;
+    quality(staged, &idx, key)?;
     let io = |path: &Path| {
         let path = path.to_path_buf();
         move |source| Error::Io { path, source }
@@ -990,5 +1200,154 @@ mod tests {
         swap_in(&staged, &cache, "community", &key).expect("swapped");
         assert!(!staged.exists() && !cache.with_extension("old").exists());
         assert!(verify(&cache, "community", &key).is_ok());
+    }
+
+    fn run(version: &str, date: &str, restore: quality::Outcome) -> Run {
+        use quality::Outcome::{NotRun, Passed};
+        Run {
+            version: version.to_string(),
+            hlb: "0.4.1".to_string(),
+            date: date.to_string(),
+            install: Passed,
+            update: NotRun,
+            backup: Passed,
+            restore,
+            uninstall: Passed,
+        }
+    }
+
+    fn runs(list: &[(&str, &Run)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("runs");
+        for (app, r) in list {
+            let text = serde_json::to_string(r).expect("json");
+            std::fs::write(dir.path().join(quality::run_file(app)), text).expect("run");
+        }
+        dir
+    }
+
+    #[test]
+    fn the_quality_file_is_signed_with_its_index_and_read_only_beside_it() {
+        use quality::Outcome::{Failed, Passed};
+        let cat = catalog();
+        let (out, idx) = built(cat.path(), None);
+        let version = idx.apps["mealie"][0].version.clone();
+        let ran = runs(&[("mealie", &run(&version, "2026-11-02", Passed))]);
+        let q = build_quality(&idx, Some(ran.path()), None, out.path(), "2026-11-02")
+            .expect("built")
+            .expect("a file");
+        assert_eq!(q.index, idx.counter);
+        assert_eq!(q.apps["librespeed"].last, None, "every app, run or not");
+        assert_eq!(q.apps["librespeed"].since, "2026-11-02");
+
+        sign(out.path(), &SEED, None, NOW).expect("signed");
+        let key = public_key(&SEED);
+        assert_eq!(quality(out.path(), &idx, &key).expect("verified"), Some(q));
+        let mut c = Catalog::default();
+        c.add_signed_source("community", out.path(), &key, NOW)
+            .expect("added");
+        let e = c.get("community/mealie").expect("mealie");
+        let last = e.quality.as_ref().and_then(|q| q.last.as_ref());
+        assert_eq!(
+            last.map(|r| r.restore),
+            Some(Passed),
+            "carried by the entry"
+        );
+
+        // Changed after it was signed: refused, and the app reads as untested.
+        let path = out.path().join(quality::FILE);
+        let text = std::fs::read_to_string(&path).expect("quality");
+        std::fs::write(&path, text.replacen("\"passed\"", "\"failed\"", 1)).expect("written");
+        assert!(matches!(
+            quality(out.path(), &idx, &key),
+            Err(Error::QualityBadSignature)
+        ));
+        let mut c = Catalog::default();
+        c.add_signed_source("community", out.path(), &key, NOW)
+            .expect("the index still reads");
+        assert!(c.get("community/mealie").expect("mealie").quality.is_none());
+
+        // 🔴 Today's index beside the file of the one before: an app that broke since
+        // would still read as restoring.
+        let (two, idx2) = built(cat.path(), Some(out.path()));
+        let mut stale = q_of(out.path());
+        stale.index = idx.counter;
+        std::fs::write(
+            two.path().join(quality::FILE),
+            serde_json::to_string(&stale).expect("json"),
+        )
+        .expect("written");
+        assert!(matches!(
+            sign(two.path(), &SEED, Some(&idx), NOW),
+            Err(Error::QualityStale {
+                quality: 1,
+                counter: 2,
+                ..
+            })
+        ));
+        assert!(
+            !two.path().join(index::SIGNATURE_FILE).exists(),
+            "neither is signed"
+        );
+        assert_eq!(idx2.counter, 2);
+
+        // A run named for an app the index does not hold is refused at the build.
+        let stray = runs(&[("immich", &run("v2", "2026-11-02", Failed))]);
+        assert!(matches!(
+            build_quality(&idx2, Some(stray.path()), None, two.path(), "2026-11-02"),
+            Err(Error::QualityUnknownApp { .. })
+        ));
+    }
+
+    fn q_of(dir: &Path) -> Quality {
+        serde_json::from_slice(&std::fs::read(dir.join(quality::FILE)).expect("quality"))
+            .expect("json")
+    }
+
+    #[test]
+    fn a_rebuild_carries_the_day_an_app_entered_and_its_newest_run() {
+        use quality::Outcome::{Failed, Passed};
+        let cat = catalog();
+        let (one, idx) = built(cat.path(), None);
+        let old = run("1", "2026-11-09", Passed);
+        let ran = runs(&[("mealie", &old)]);
+        build_quality(&idx, Some(ran.path()), None, one.path(), "2026-11-01").expect("built");
+
+        // Nothing ran since: the file is carried, its index risen.
+        let (two, idx2) = built(cat.path(), Some(one.path()));
+        let q = build_quality(&idx2, None, Some(one.path()), two.path(), "2026-12-01")
+            .expect("built")
+            .expect("carried");
+        assert_eq!(q.index, 2);
+        assert_eq!(q.apps["mealie"].since, "2026-11-01", "the day it entered");
+        assert_eq!(q.apps["mealie"].last.as_ref(), Some(&old));
+
+        // A run gathered again from an older pass never replaces a newer one.
+        let older = runs(&[("mealie", &run("1", "2026-11-05", Failed))]);
+        let (three, idx3) = built(cat.path(), Some(two.path()));
+        let q = build_quality(
+            &idx3,
+            Some(older.path()),
+            Some(two.path()),
+            three.path(),
+            "x",
+        )
+        .expect("built")
+        .expect("a file");
+        assert_eq!(q.apps["mealie"].last.as_ref(), Some(&old));
+
+        // Without a previous file or a run, there is no file at all.
+        let (four, idx4) = built(cat.path(), None);
+        assert_eq!(
+            build_quality(&idx4, None, None, four.path(), "2026-11-01").expect("built"),
+            None
+        );
+        assert!(!four.path().join(quality::FILE).exists());
+
+        // A day not written as one would be compared as text all the same.
+        let bad = runs(&[("mealie", &run("1", "9/11/2026", Passed))]);
+        assert!(matches!(
+            build_quality(&idx4, Some(bad.path()), None, four.path(), "2026-11-01"),
+            Err(Error::BadDate { .. })
+        ));
     }
 }

@@ -1325,6 +1325,9 @@ pub async fn start(
                         match r {
                             Ok(f) => {
                                 tracing::info!(source = %name, index = f.index.counter, "catalog source fetched");
+                                if let Some(e) = &f.quality_refused {
+                                    tracing::warn!(source = %name, "quality file left out: {e}");
+                                }
                                 revoked.extend(f.revoked.into_iter().map(|(app, version, why)| {
                                     format!("{app} {version} ({name}): {why}")
                                 }));

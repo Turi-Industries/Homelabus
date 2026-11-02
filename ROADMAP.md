@@ -1227,6 +1227,14 @@ pull request to the catalog, with no `hlb` release.
 - Quality levels computed by CI, never declared: install, update from the published
   version, back up, restore, prove, uninstall — on each pull request and weekly; shown
   as *installs, updates, restores, maintained for N months*.
+  🟡 The results — 2026-11-02: `quality-v1.json` beside the index (`hlb_types::quality`,
+  its format frozen with the index's, which 0.4.0 reads `deny_unknown_fields`), built by
+  `hlb catalog index build --quality <runs>` over the previous file (the day each app
+  entered is carried, the newer run kept), signed with the index and held to its
+  counter, so a mirror cannot pair today's index with older results. A fetch keeps it
+  only verified and says why one was left out; the catalog screen has a Proven column
+  and the install window the run, step by step. Left: `scripts/quality.sh` rehearsed on
+  a fresh VM, `quality.yml`, 0.4.1 released and mirrored.
 - ✅ Before installing, the preview shows what the app receives — 2026-11-02.
   `Manifest::grants` names what the manifest opened past the closed defaults: exposure
   to the internet (now or after its guide), paths open to anyone, ports published on

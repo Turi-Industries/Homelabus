@@ -36,11 +36,24 @@ pub fn address(location: &str) -> Option<std::result::Result<String, String>> {
 }
 
 async fn get(client: &reqwest::Client, url: &str) -> std::result::Result<Vec<u8>, String> {
+    get_if_served(client, url)
+        .await?
+        .ok_or_else(|| format!("{url}: HTTP 404"))
+}
+
+/// A file a source may not publish: `None` when it answers 404.
+async fn get_if_served(
+    client: &reqwest::Client,
+    url: &str,
+) -> std::result::Result<Option<Vec<u8>>, String> {
     let mut r = client
         .get(url)
         .send()
         .await
         .map_err(|e| format!("{url}: {e}"))?;
+    if r.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
     if !r.status().is_success() {
         return Err(format!("{url}: HTTP {}", r.status().as_u16()));
     }
@@ -51,7 +64,31 @@ async fn get(client: &reqwest::Client, url: &str) -> std::result::Result<Vec<u8>
             return Err(format!("{url}: over {} MiB, refused", MOST_BYTES >> 20));
         }
     }
-    Ok(body)
+    Ok(Some(body))
+}
+
+/// The source's quality file, staged beside its index if `key` signed it for that
+/// index: `Ok(false)` when it publishes none. 🔴 One that does not verify is LEFT OUT
+/// and the fetch goes on — it only says what CI proved, and a mirror able to withhold
+/// it could withhold the index — but the refusal is said, never swallowed.
+async fn stage_quality(
+    client: &reqwest::Client,
+    url: &str,
+    idx: &Index,
+    key: &str,
+    staged: &Path,
+) -> std::result::Result<bool, String> {
+    use hlb_types::quality;
+    let Some(bytes) = get_if_served(client, &format!("{url}/{}", quality::FILE)).await? else {
+        return Ok(false);
+    };
+    let sig = get(client, &format!("{url}/{}", quality::SIGNATURE_FILE)).await?;
+    let sig = String::from_utf8_lossy(&sig).into_owned();
+    index::accept_quality(&bytes, &sig, idx, key).map_err(|e| e.to_string())?;
+    let io = |e: std::io::Error| format!("{}: {e}", staged.display());
+    std::fs::write(staged.join(quality::FILE), &bytes).map_err(io)?;
+    std::fs::write(staged.join(quality::SIGNATURE_FILE), &sig).map_err(io)?;
+    Ok(true)
 }
 
 /// The signed index served under `url`, refused unless `key` signed it for `name` and
@@ -75,6 +112,8 @@ pub struct Staged {
     pub index: Index,
     pub downloaded: usize,
     pub kept: usize,
+    /// Whether a quality file came with it, or why the one served was left out.
+    pub quality: std::result::Result<bool, String>,
 }
 
 /// Writes the index into `staged`, every file it names copied from `cache` when the
@@ -83,6 +122,7 @@ pub struct Staged {
 pub async fn stage(
     client: &reqwest::Client,
     url: &str,
+    key: &str,
     (idx, bytes, sig): (Index, Vec<u8>, String),
     cache: &Path,
     staged: &Path,
@@ -126,10 +166,12 @@ pub async fn stage(
             downloaded += 1;
         }
     }
+    let quality = stage_quality(client, url, &idx, key, staged).await;
     Ok(Staged {
         index: idx,
         downloaded,
         kept,
+        quality,
     })
 }
 
@@ -147,6 +189,8 @@ pub struct Fetched {
     /// The files downloaded and kept from the cache; `None` when the index served is
     /// the one held already.
     pub files: Option<(usize, usize)>,
+    /// Why the quality file served beside a new index was left out, if it was.
+    pub quality_refused: Option<String>,
     /// The apps installed from this source that run a version it revoked:
     /// `(app, version, why)`.
     pub revoked: Vec<(String, String, String)>,
@@ -172,11 +216,11 @@ pub async fn fetch(
     let unchanged = Some(counter) == signed.counter
         && index::verify(&cache, name, key).is_ok_and(|held| held.counter == counter);
     let e = |e: hlb_state::Error| e.to_string();
-    let (idx, files) = if unchanged {
-        (fetched.0, None)
+    let (idx, files, quality_refused) = if unchanged {
+        (fetched.0, None, None)
     } else {
         let staged = cache.with_extension("new");
-        let swapped = match stage(&client, url, fetched, &cache, &staged).await {
+        let swapped = match stage(&client, url, key, fetched, &cache, &staged).await {
             Ok(s) => index::swap_in(&staged, &cache, name, key)
                 .map(|_| s)
                 .map_err(|e| e.to_string()),
@@ -201,7 +245,7 @@ pub async fn fetch(
             )
             .await
             .map_err(e)?;
-        (s.index, Some((s.downloaded, s.kept)))
+        (s.index, Some((s.downloaded, s.kept)), s.quality.err())
     };
     // 🔴 A revoked version keeps running until someone moves it: said where the
     // revocation arrives, and every day after in the inbox.
@@ -224,6 +268,7 @@ pub async fn fetch(
     Ok(Some(Fetched {
         index: idx,
         files,
+        quality_refused,
         revoked,
     }))
 }
@@ -555,5 +600,76 @@ mod tests {
             .expect("nothing")
             .is_empty());
         assert!(bare.catalog_sources().await.expect("read").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_fetch_keeps_the_quality_file_only_when_it_verifies_and_says_why_not() {
+        use hlb_types::quality::{self, Outcome::Passed, Run};
+        let cat = catalog();
+        let served = tempfile::tempdir().expect("served");
+        let idx = index::build(cat.path(), "community", None, served.path(), now()).expect("built");
+        let runs = tempfile::tempdir().expect("runs");
+        let run = Run {
+            version: idx.apps["librespeed"][0].version.clone(),
+            hlb: "0.4.1".into(),
+            date: "2026-11-02".into(),
+            install: Passed,
+            update: Passed,
+            backup: Passed,
+            restore: Passed,
+            uninstall: Passed,
+        };
+        std::fs::write(
+            runs.path().join(quality::run_file("librespeed")),
+            serde_json::to_string(&run).expect("json"),
+        )
+        .expect("run");
+        index::build_quality(&idx, Some(runs.path()), None, served.path(), "2026-11-02")
+            .expect("quality");
+        index::sign(served.path(), &SEED, None, now()).expect("signed");
+        let url = serve(served.path().to_path_buf()).await;
+        let key = index::public_key(&SEED);
+
+        let home = tempfile::tempdir().expect("home");
+        let state = State::in_memory().await.expect("state");
+        // Two caches of one source: each fetch starts from nothing.
+        let src = |cache: &str| CatalogSource {
+            name: "community".into(),
+            directory: home.path().join(cache).display().to_string(),
+            signed: Some(hlb_state::SignedSource {
+                url: url.clone(),
+                key: key.clone(),
+                counter: None,
+            }),
+        };
+        let f = fetch(&state, &src("one"), "test", hlb_types::Role::Admin)
+            .await
+            .expect("fetched")
+            .expect("signed");
+        assert_eq!(f.quality_refused, None);
+        let mut c = hlb_catalog::Catalog::default();
+        c.add_signed_source("community", &src("one").directory, &key, now())
+            .expect("the cache reads");
+        let e = c.get("community/librespeed").expect("librespeed");
+        assert_eq!(e.quality.as_ref().and_then(|q| q.last.as_ref()), Some(&run));
+
+        // Served changed: the index still comes, without it — and the fetch says so.
+        let path = served.path().join(quality::FILE);
+        let text = std::fs::read_to_string(&path).expect("quality");
+        std::fs::write(&path, text.replace("2026-11-02", "2026-11-03")).expect("written");
+        let f = fetch(&state, &src("other"), "test", hlb_types::Role::Admin)
+            .await
+            .expect("fetched")
+            .expect("signed");
+        assert!(f.quality_refused.is_some(), "the refusal is said");
+        assert!(!home.path().join("other").join(quality::FILE).exists());
+        let mut c = hlb_catalog::Catalog::default();
+        c.add_signed_source("community", home.path().join("other"), &key, now())
+            .expect("the cache reads");
+        assert!(c
+            .get("community/librespeed")
+            .expect("app")
+            .quality
+            .is_none());
     }
 }

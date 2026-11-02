@@ -32,6 +32,8 @@ hlb-bitwarden.workspace = true
 hlb-state.workspace = true
 hlb-privd.workspace = true
 hlb-engine.workspace = true
+# The day a catalog card counts an app's maintained months from.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 hlb-ingress.workspace = true
 hlb-resolver.workspace = true
 hlb-catalog.workspace = true

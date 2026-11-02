@@ -17,6 +17,7 @@ mod grants;
 pub mod guide;
 pub mod index;
 pub mod manifest;
+pub mod quality;
 pub mod rbac;
 pub mod release;
 pub mod swarm;

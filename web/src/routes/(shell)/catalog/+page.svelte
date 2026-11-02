@@ -10,7 +10,8 @@
 	import Modal from '#lib/ui/Modal.svelte';
 	import Table from '#lib/ui/Table.svelte';
 	import { input, primary } from '#lib/ui/styles.ts';
-	import { need } from '#lib/words.ts';
+	import { day } from '#lib/format.ts';
+	import { maintained, need, qualityOutcome, qualityRun } from '#lib/words.ts';
 
 	type Item = Schemas['CatalogItem'];
 	const catalog = read('/api/catalog');
@@ -25,6 +26,8 @@
 		// The manual steps are counted in the row and listed when installing: a sentence in
 		// every row made the lines as tall as their longest prerequisite.
 		{ id: 'before', label: m.catalog_column_before, value: (i) => i.prerequisites.length, numeric: true, wide: true, cell: before },
+		// Sorted by what was proven: a failed step below an app never run, below one whole.
+		{ id: 'proven', label: m.catalog_column_proven, value: provenRank, wide: true, cell: proven },
 		{ id: 'state', label: m.catalog_column_state, value: (i) => (i.installed ? 1 : 0), cell: state }
 	];
 
@@ -38,6 +41,18 @@
 				test: (i, v) => i.category === v
 			}
 		];
+	}
+
+	/** The first step of its last run that failed, if one did. */
+	function failed(i: Item): string | undefined {
+		const run = i.quality?.last;
+		return run ? qualityRun(run).find(([, , o]) => o === 'failed')?.[1] : undefined;
+	}
+
+	function provenRank(i: Item): number | null {
+		if (!i.quality) return null;
+		if (!i.quality.last) return 1;
+		return failed(i) === undefined ? 2 : 0;
 	}
 
 	function open(item: Item) {
@@ -65,6 +80,24 @@
 	{#if i.prerequisites.length > 0}{m.catalog_manual_steps({ count: i.prerequisites.length })}{/if}
 {/snippet}
 
+<!-- Nothing at all for a source publishing no results: "not proven yet" would claim it
+     was asked. -->
+{#snippet proven(i: Item)}
+	{#if i.quality}
+		{@const step = failed(i)}
+		<span class="text-sm whitespace-nowrap">
+			{#if !i.quality.last}
+				<span class="text-muted-text">{m.catalog_proven_none()}</span>
+			{:else if step !== undefined}
+				<span class="text-critical">{m.catalog_proven_failed({ step })}</span>
+			{:else}
+				{m.catalog_proven_whole()}
+			{/if}
+			<span class="text-muted-text">· {maintained(i.quality)}</span>
+		</span>
+	{/if}
+{/snippet}
+
 {#snippet state(i: Item)}
 	{#if i.installed}
 		<a href="/apps/{i.name}" class="text-sm whitespace-nowrap text-muted-text hover:text-accent hover:underline">{m.catalog_installed()}</a>
@@ -89,6 +122,27 @@
 						{#each item.capabilities as c, i (i)}<li>{need(c)}</li>{/each}
 					</ul>
 				</div>
+				{#if item.quality}
+					<div class="min-w-0">
+						<h3 class="mb-1 text-xs font-medium text-muted-text">
+							{#if item.quality.last}
+								{m.catalog_proven_title({ date: day(item.quality.last.date), version: item.quality.last.version, hlb: item.quality.last.hlb })}
+							{:else}
+								{m.catalog_proven_none()}
+							{/if}
+							· {maintained(item.quality)}
+						</h3>
+						{#if item.quality.last}
+							<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
+								{#each qualityRun(item.quality.last) as [s, name, outcome] (s)}
+									<dt>{name}</dt>
+									<dd class={outcome === 'failed' ? 'text-critical' : outcome === 'not_run' ? 'text-muted-text' : ''}>{qualityOutcome(outcome)}</dd>
+								{/each}
+							</dl>
+						{/if}
+						<p class="mt-1 text-xs text-muted-text">{m.catalog_proven_explained()}</p>
+					</div>
+				{/if}
 				{#if item.prerequisites.length > 0}
 					<div class="min-w-0">
 						<h3 class="mb-1 text-xs font-medium text-muted-text">{m.catalog_before_installing({ count: item.prerequisites.length })}</h3>

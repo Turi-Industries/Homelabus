@@ -375,3 +375,42 @@ export function domainAdvice(a: Schemas['DomainAdvice']): string {
 	const _: never = a;
 	return _;
 }
+
+type QualityRun = Schemas['QualityRun'];
+/** The steps of a run: every field the server judges, found by its type. */
+export type QualityStep = { [K in keyof QualityRun]: QualityRun[K] extends Schemas['QualityOutcome'] ? K : never }[keyof QualityRun];
+
+/**
+ * Each step of an app's proven cycle, in the order it runs. A `Record` over the steps:
+ * one the server adds is a missing key here, and the build stops.
+ */
+const qualitySteps: Record<QualityStep, () => string> = {
+	install: m.catalog_step_install,
+	update: m.catalog_step_update,
+	backup: m.catalog_step_backup,
+	restore: m.catalog_step_restore,
+	uninstall: m.catalog_step_uninstall
+};
+
+export function qualityOutcome(o: Schemas['QualityOutcome']): string {
+	switch (o) {
+		case 'passed':
+			return m.catalog_outcome_passed();
+		case 'failed':
+			return m.catalog_outcome_failed();
+		case 'not_run':
+			return m.catalog_outcome_not_run();
+	}
+	const _: never = o;
+	return _;
+}
+
+/** A run's steps as they read: `[step, its name, its outcome]`. */
+export function qualityRun(run: QualityRun): [QualityStep, string, Schemas['QualityOutcome']][] {
+	return (Object.keys(qualitySteps) as QualityStep[]).map((s) => [s, qualitySteps[s](), run[s]]);
+}
+
+/** How long an app has been maintained in its catalog. */
+export function maintained(q: Schemas['CatalogQuality']): string {
+	return q.maintained_months === 0 ? m.catalog_maintained_new() : m.catalog_maintained({ count: q.maintained_months });
+}

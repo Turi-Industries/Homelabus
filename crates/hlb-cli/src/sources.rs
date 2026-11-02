@@ -309,7 +309,7 @@ async fn add_signed(
     let staged = cache.with_extension("new");
     let client = client()?;
     let fetched = match signed_index(&client, url, name, key, None).await {
-        Ok(f) => stage(&client, url, f, &cache, &staged).await,
+        Ok(f) => stage(&client, url, key, f, &cache, &staged).await,
         Err(e) => Err(e),
     };
     let staged_ok = match fetched {
@@ -332,6 +332,9 @@ async fn add_signed(
         idx.counter,
         day(idx.expires)
     );
+    if let Err(e) = &staged_ok.quality {
+        println!("  ⚠️  its quality file is left out: {e}");
+    }
     show(&c, name);
     if !apply {
         std::fs::remove_dir_all(&staged)?;
@@ -384,6 +387,9 @@ async fn fetch(state: &State, src: &CatalogSource) -> std::result::Result<(), St
             "  ✓ {name}: index {counter}, {} downloaded, {kept} kept",
             hlb_api::plural(downloaded as u64, "file", "files"),
         ),
+    }
+    if let Some(e) = &f.quality_refused {
+        println!("  ⚠️  {name}: its quality file is left out: {e}");
     }
     if let Err(e) = index::current(&f.index, chrono::Utc::now().timestamp()) {
         // The newest it serves is stale: its owner has not signed another.

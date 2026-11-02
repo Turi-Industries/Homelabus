@@ -164,11 +164,21 @@ pub async fn catalog(
         installed.push(hlb_catalog::qualified(source.as_deref(), &n));
     }
 
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let mut out: Vec<hlb_api::CatalogItem> = cat
         .entries()
         .map(|e| {
             let m = &e.manifest;
             hlb_api::CatalogItem {
+                quality: e
+                    .quality
+                    .clone()
+                    .or_else(|| {
+                        s.demo
+                            .then(|| crate::demo::catalog_quality(&e.name()))
+                            .flatten()
+                    })
+                    .map(|q| hlb_api::CatalogQuality::of(&q, &today)),
                 installed: installed.contains(&e.name()),
                 // The icons served are the official catalog's.
                 icon: e.source.is_none()

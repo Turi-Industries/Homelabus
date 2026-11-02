@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "AppQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "last": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Run"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest run of its cycle; `None` until one ran."
+        },
+        "since": {
+          "description": "The day the app entered the catalog (`YYYY-MM-DD`): how long it has been\nmaintained there.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since"
+      ],
+      "type": "object"
+    },
+    "Outcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "passed",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "notRun",
+          "description": "Not reached — a step before it failed — or nothing to run.",
+          "type": "string"
+        }
+      ]
+    },
+    "Run": {
+      "additionalProperties": false,
+      "description": "One run of an app's cycle on a fresh single-node house.",
+      "properties": {
+        "backup": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "date": {
+          "description": "`YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "hlb": {
+          "description": "The `hlb` that ran it.",
+          "type": "string"
+        },
+        "install": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "restore": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "uninstall": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "update": {
+          "$ref": "#/$defs/Outcome",
+          "description": "From the version published before; `notRun` for an app that had none."
+        },
+        "version": {
+          "description": "The app's version the run installed — what it says nothing beyond.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "hlb",
+        "date",
+        "install",
+        "update",
+        "backup",
+        "restore",
+        "uninstall"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apps": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AppQuality"
+      },
+      "type": "object"
+    },
+    "index": {
+      "description": "The counter of the index it was built with. 🔴 Held equal to it when read: a\nmirror could otherwise serve today's index beside an older file saying an app\nthat broke since still restores.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "description": "The source it is for, as the index's.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source",
+    "index",
+    "apps"
+  ],
+  "title": "Quality",
+  "type": "object"
+}

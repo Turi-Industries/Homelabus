@@ -120,6 +120,9 @@ pub struct Entry {
     pub index: Option<u64>,
     /// Its version in that index — what a revocation names.
     pub version: Option<String>,
+    /// What its source's CI proved of it, when the source publishes a signed quality
+    /// file beside the index; `None` for a carried or unsigned catalog.
+    pub quality: Option<hlb_types::quality::AppQuality>,
     pub manifest: Manifest,
     pub path: PathBuf,
     /// The neighbouring `guide.yaml`, if there is one. An app without a guide simply
@@ -235,7 +238,7 @@ impl Catalog {
         }
         let idx = index::verify(dir, source, key)?;
         let mut theirs = match index::current(&idx, now) {
-            Ok(()) => Self::from_index(&idx, dir)?.0,
+            Ok(()) => Self::from_index(&idx, dir, key)?.0,
             Err(e) => Self {
                 set_aside: idx
                     .apps
@@ -275,7 +278,7 @@ impl Catalog {
         let idx = index::verify(dir, OFFICIAL, key)?;
         self.revoked.extend(idx.revoked.clone());
         index::current(&idx, now)?;
-        let (theirs, withdrawn) = Self::from_index(&idx, dir)?;
+        let (theirs, withdrawn) = Self::from_index(&idx, dir, key)?;
         let platform = |c: &Self, app: &str| {
             c.entries
                 .get(app)
@@ -305,8 +308,16 @@ impl Catalog {
     fn from_index(
         idx: &hlb_types::index::Index,
         dir: &Path,
+        key: &str,
     ) -> std::result::Result<(Self, std::collections::BTreeSet<String>), index::Error> {
         let release = hlb_types::release::running();
+        // A fetch keeps only a quality file that verifies; one that no longer does was
+        // changed on this disk since, and says nothing — the apps install without it.
+        let mut quality = index::quality(dir, idx, key)
+            .ok()
+            .flatten()
+            .map(|q| q.apps)
+            .unwrap_or_default();
         let mut theirs = Self::default();
         let mut withdrawn = std::collections::BTreeSet::new();
         for (app, versions) in &idx.apps {
@@ -344,6 +355,7 @@ impl Catalog {
                 Loaded::Entry(mut e) => {
                     e.index = Some(idx.counter);
                     e.version = Some(v.version.clone());
+                    e.quality = quality.remove(app);
                     theirs.entries.insert(app.clone(), *e);
                 }
                 Loaded::SetAside { app, why } => {
@@ -840,6 +852,7 @@ fn load_one(path: &Path, release: &Version, name: Option<&str>) -> Result<Loaded
         source: None,
         index: None,
         version: None,
+        quality: None,
         manifest,
         path: path.to_path_buf(),
         guide,
@@ -922,6 +935,7 @@ mod tests {
                 source: None,
                 index: None,
                 version: None,
+                quality: None,
                 manifest,
                 path: PathBuf::new(),
                 guide: hlb_types::Guide::default(),

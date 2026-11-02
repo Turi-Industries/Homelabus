@@ -73,6 +73,7 @@ pub fn run(cmd: &IndexCmd) -> Result<ExitCode> {
             out,
             source,
             previous,
+            quality,
         } => {
             let idx = index::build(catalog, source, previous.as_deref(), out, now())?;
             let versions: usize = idx.apps.values().map(Vec::len).sum();
@@ -84,6 +85,17 @@ pub fn run(cmd: &IndexCmd) -> Result<ExitCode> {
                 hlb_api::plural(versions as u64, "version", "versions"),
                 expiry(idx.expires)
             );
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            if let Some(q) =
+                index::build_quality(&idx, quality.as_deref(), previous.as_deref(), out, &today)?
+            {
+                let ran = q.apps.values().filter(|a| a.last.is_some()).count();
+                println!(
+                    "  {}: {ran} of {} with a run",
+                    hlb_types::quality::FILE,
+                    hlb_api::plural(q.apps.len() as u64, "app", "apps"),
+                );
+            }
             println!(
                 "  Not signed: `hlb catalog index sign {} --key <file>`.",
                 out.display()
@@ -120,6 +132,9 @@ pub fn run(cmd: &IndexCmd) -> Result<ExitCode> {
                 index::public_key(&seed),
                 expiry(idx.expires)
             );
+            if dir.join(hlb_types::quality::FILE).exists() {
+                println!("  {} signed with it", hlb_types::quality::FILE);
+            }
             Ok(ExitCode::SUCCESS)
         }
 
@@ -131,6 +146,14 @@ pub fn run(cmd: &IndexCmd) -> Result<ExitCode> {
                 idx.counter,
                 hlb_api::plural(idx.apps.len() as u64, "app", "apps"),
             );
+            if let Some(q) = index::quality(dir, &idx, key)? {
+                let ran = q.apps.values().filter(|a| a.last.is_some()).count();
+                println!(
+                    "✓ {} signed beside it: {ran} of {} with a run",
+                    hlb_types::quality::FILE,
+                    hlb_api::plural(q.apps.len() as u64, "app", "apps"),
+                );
+            }
             match index::current(&idx, now()) {
                 Ok(()) => println!("  current until {}", expiry(idx.expires)),
                 Err(e) => {

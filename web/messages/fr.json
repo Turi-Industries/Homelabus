@@ -2255,5 +2255,35 @@
 	"domain_account_by": "Validé par {methods}",
 	"domain_account_by_wildcard": "{methods} pour son joker",
 	"domain_pin_wildcard": "{who}, son joker",
-	"domain_statuses_unshown": "non affichés par le registre"
+	"domain_statuses_unshown": "non affichés par le registre",
+	"catalog_column_proven": "Éprouvée",
+	"catalog_proven_whole": "✓ éprouvée",
+	"catalog_proven_failed": "✗ {step} en échec",
+	"catalog_proven_none": "pas encore éprouvée",
+	"catalog_proven_title": "Éprouvée le {date}, version {version}, hlb {hlb}",
+	"catalog_proven_explained": "Le catalogue l'installe sur une maison neuve, la met à jour depuis la version publiée, la sauvegarde, la restaure et la désinstalle. Le résultat est signé avec l'index.",
+	"catalog_maintained": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "maintenue depuis {count} mois",
+				"countPlural=*": "maintenue depuis {count} mois"
+			}
+		}
+	],
+	"catalog_maintained_new": "entrée ce mois-ci",
+	"catalog_step_install": "installation",
+	"catalog_step_update": "mise à jour",
+	"catalog_step_backup": "sauvegarde",
+	"catalog_step_restore": "restauration",
+	"catalog_step_uninstall": "désinstallation",
+	"catalog_outcome_passed": "réussie",
+	"catalog_outcome_failed": "en échec",
+	"catalog_outcome_not_run": "pas lancée"
 }

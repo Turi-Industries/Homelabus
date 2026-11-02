@@ -125,4 +125,9 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   in a file of its own beside the index (`quality-v1.json`), which an older `hlb` never
   asks for; changing the index itself is a new file name, served beside the old one
   while releases reading it run. `hlb-types/tests/index_format.rs` holds the format
-  0.4.0 reads.
+  0.4.0 reads, and every file in `formats/` (`quality-v1.json`'s too).
+- **🔴 The quality file is held to the index's counter.** Signed alone, a mirror could
+  serve today's index beside last month's results — an app that broke since still
+  "restores". `index::sign` signs both at once and refuses a file built with another
+  index; a fetch drops one that does not verify and SAYS so (`quality_refused`): it only
+  informs, so the index still comes.

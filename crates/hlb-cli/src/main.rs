@@ -2109,6 +2109,10 @@ enum IndexCmd {
         /// The directory of the index published before this one.
         #[arg(long)]
         previous: Option<std::path::PathBuf>,
+        /// The runs CI left, one `<app>.json` each, gathered into `quality-v1.json`
+        /// over the previous index's.
+        #[arg(long)]
+        quality: Option<std::path::PathBuf>,
     },
     /// Sign a built index. Refused unless its counter rises above the published one's
     /// and its expiry is ahead, and unless every file is the one it names.

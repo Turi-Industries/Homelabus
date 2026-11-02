@@ -26,6 +26,34 @@ use crate::agents::AgentStatus;
 
 pub use hlb_privd::demo::{Scale, ADMIN, LARGE_MACHINES};
 
+/// What the official catalog's CI would have proved of a few apps — the carried
+/// catalog has no quality file, and the cases worth seeing are an app proven whole,
+/// one whose restore fails, and one new enough to have nothing to update from.
+pub fn catalog_quality(app: &str) -> Option<hlb_types::quality::AppQuality> {
+    use hlb_types::quality::{AppQuality, Outcome::*, Run};
+    let run = |version: &str, update, restore| Run {
+        version: version.to_string(),
+        hlb: "0.4.1".to_string(),
+        date: "2026-10-26".to_string(),
+        install: Passed,
+        update,
+        backup: Passed,
+        restore,
+        uninstall: if restore == Failed { NotRun } else { Passed },
+    };
+    let (since, last) = match app {
+        "mealie" => ("2026-03-14", Some(run("v3.3.2", Passed, Passed))),
+        "vikunja" => ("2025-12-02", Some(run("v1.0.0", Passed, Failed))),
+        "librespeed" => ("2026-10-20", Some(run("6.3.1-alpine", NotRun, Passed))),
+        "termix" => ("2026-10-30", None),
+        _ => return None,
+    };
+    Some(AppQuality {
+        since: since.to_string(),
+        last,
+    })
+}
+
 /// The machines at a scale.
 pub fn nodes_at(now: u64, scale: Scale) -> BTreeMap<String, AgentStatus> {
     let mut m = nodes(now);

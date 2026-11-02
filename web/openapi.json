@@ -1559,6 +1559,17 @@
             },
             "type": "array"
           },
+          "quality": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQuality",
+                "description": "What its source's CI proved of it; `null` when the source publishes no signed\nresults — never \"untested\" made to look like \"failed\"."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "requests_domain": {
             "description": "Does it need a domain?\n\nDecided here rather than guessed by the interface: an app with no ingress has\nnothing to expose, and asking for a domain would collect an unused value.",
             "type": "boolean"
@@ -1574,7 +1585,40 @@
           "installed",
           "name",
           "prerequisites",
+          "quality",
           "requests_domain"
+        ],
+        "type": "object"
+      },
+      "CatalogQuality": {
+        "description": "An app's results in its source's signed quality file (`hlb_types::quality`).",
+        "properties": {
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QualityRun",
+                "description": "The newest run of its cycle; `null` until one ran."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maintained_months": {
+            "description": "Whole months since then — counted here, so every screen says the same.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since": {
+            "description": "The day it entered the catalog, `YYYY-MM-DD`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "last",
+          "maintained_months",
+          "since"
         ],
         "type": "object"
       },
@@ -5824,6 +5868,56 @@
           "D"
         ],
         "type": "string"
+      },
+      "QualityOutcome": {
+        "enum": [
+          "passed",
+          "failed",
+          "not_run"
+        ],
+        "type": "string"
+      },
+      "QualityRun": {
+        "properties": {
+          "backup": {
+            "$ref": "#/components/schemas/QualityOutcome"
+          },
+          "date": {
+            "description": "`YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "hlb": {
+            "type": "string"
+          },
+          "install": {
+            "$ref": "#/components/schemas/QualityOutcome"
+          },
+          "restore": {
+            "$ref": "#/components/schemas/QualityOutcome"
+          },
+          "uninstall": {
+            "$ref": "#/components/schemas/QualityOutcome"
+          },
+          "update": {
+            "$ref": "#/components/schemas/QualityOutcome",
+            "description": "From the version published before; `not_run` for an app that had none."
+          },
+          "version": {
+            "description": "The app's version it installed: the run says nothing of another.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backup",
+          "date",
+          "hlb",
+          "install",
+          "restore",
+          "uninstall",
+          "update",
+          "version"
+        ],
+        "type": "object"
       },
       "Quorum": {
         "description": "What becomes of quorum after the failure.",

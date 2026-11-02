@@ -2251,5 +2251,35 @@
 	"domain_account_by": "Validated by {methods}",
 	"domain_account_by_wildcard": "{methods} for its wildcard",
 	"domain_pin_wildcard": "{who}, its wildcard",
-	"domain_statuses_unshown": "not shown by the registry"
+	"domain_statuses_unshown": "not shown by the registry",
+	"catalog_column_proven": "Proven",
+	"catalog_proven_whole": "✓ proven",
+	"catalog_proven_failed": "✗ {step} fails",
+	"catalog_proven_none": "not proven yet",
+	"catalog_proven_title": "Proven on {date}, version {version}, hlb {hlb}",
+	"catalog_proven_explained": "The catalog installs it on a fresh house, updates it from the published version, backs it up, restores it and removes it. The result is signed with the index.",
+	"catalog_maintained": [
+		{
+			"declarations": [
+				"input count",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "maintained for {count} month",
+				"countPlural=*": "maintained for {count} months"
+			}
+		}
+	],
+	"catalog_maintained_new": "new this month",
+	"catalog_step_install": "install",
+	"catalog_step_update": "update",
+	"catalog_step_backup": "backup",
+	"catalog_step_restore": "restore",
+	"catalog_step_uninstall": "removal",
+	"catalog_outcome_passed": "passed",
+	"catalog_outcome_failed": "failed",
+	"catalog_outcome_not_run": "not run"
 }
