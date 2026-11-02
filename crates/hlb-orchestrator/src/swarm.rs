@@ -1580,21 +1580,34 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn label_node(&self, node: &str, key: &str, value: &str) -> Result<()> {
-        let n = self.docker.inspect_node(node).await?;
-        let version = n
-            .version
-            .and_then(|v| v.index)
-            .ok_or_else(|| Error::Unexpected("node with no version".into()))?;
+        // 🔴 A node that just made or joined the Swarm moves its own version while it
+        // settles: the first `cluster init` on a bare VM failed "update out of sequence"
+        // labelling it. The update is read again from the new version, a few times.
+        let mut attempt = 0;
+        loop {
+            let n = self.docker.inspect_node(node).await?;
+            let version = n
+                .version
+                .and_then(|v| v.index)
+                .ok_or_else(|| Error::Unexpected("node with no version".into()))?;
 
-        let mut spec = n.spec.unwrap_or_default();
-        let mut labels = spec.labels.unwrap_or_default();
-        labels.insert(key.to_string(), value.to_string());
-        spec.labels = Some(labels);
+            let mut spec = n.spec.unwrap_or_default();
+            let mut labels = spec.labels.unwrap_or_default();
+            labels.insert(key.to_string(), value.to_string());
+            spec.labels = Some(labels);
 
-        let opts = UpdateNodeOptionsBuilder::default()
-            .version(version as i64)
-            .build();
-        self.docker.update_node(node, spec, opts).await?;
+            let opts = UpdateNodeOptionsBuilder::default()
+                .version(version as i64)
+                .build();
+            match self.docker.update_node(node, spec, opts).await {
+                Ok(()) => break,
+                Err(e) if out_of_sequence(&e) && attempt < 5 => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
 
         tracing::info!(node, key, value, "label set");
         Ok(())
@@ -1927,8 +1940,32 @@ impl Orchestrator for SwarmOrchestrator {
     }
 }
 
+/// Swarm refusing an update written against a version that has moved since it was read.
+fn out_of_sequence(e: &bollard::errors::Error) -> bool {
+    matches!(
+        e,
+        bollard::errors::Error::DockerResponseServerError { message, .. }
+            if message.contains("update out of sequence")
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stale_version_is_told_from_other_refusals() {
+        // The words the first `cluster init` on a bare VM met, 2026-11-02.
+        let stale = bollard::errors::Error::DockerResponseServerError {
+            status_code: 500,
+            message: "rpc error: code = Unknown desc = update out of sequence".into(),
+        };
+        assert!(super::out_of_sequence(&stale));
+        let other = bollard::errors::Error::DockerResponseServerError {
+            status_code: 500,
+            message: "rpc error: code = Unknown desc = node not found".into(),
+        };
+        assert!(!super::out_of_sequence(&other));
+    }
+
     #[test]
     fn a_job_run_s_file_secret_fits_swarm_s_name_limit() {
         let run = job_name("hlb-copy-immich-machine-learning-cache-and-more");
