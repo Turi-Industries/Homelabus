@@ -5,6 +5,8 @@ paths:
   - "crates/hlb-registry/**/*.rs"
   - "crates/hlb-gitops/**/*.rs"
   - "crates/hlb-engine/src/{upgrade,prune}.rs"
+  - "crates/hlb-{types,catalog}/src/index.rs"
+  - "crates/hlb-engine/src/sources.rs"
 ---
 
 # Operations: images, updates and upgrades
@@ -114,3 +116,13 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   container uses goes, whatever its origin: the lab's `hlb-runner:bookworm`, built on
   deb1 and run only with `--rm`, was gone the next day — one that cannot be pulled again
   is kept by a container, or rebuilt.
+
+## The catalog's signed index
+
+- **🔴 The index's format is frozen for every release already out.** `index.json` is
+  read `deny_unknown_fields`: one field added makes every house running 0.4.0 refuse
+  the whole official catalog, at its next fetch. Something new a source publishes goes
+  in a file of its own beside the index (`quality-v1.json`), which an older `hlb` never
+  asks for; changing the index itself is a new file name, served beside the old one
+  while releases reading it run. `hlb-types/tests/index_format.rs` holds the format
+  0.4.0 reads.

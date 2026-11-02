@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "AppVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Each file of the version, by its path under `version_dir`, and its SHA-256.",
+          "type": "object"
+        },
+        "hlb": {
+          "description": "The `hlb` range its manifest declares (`metadata.hlb`).",
+          "type": "string"
+        },
+        "images": {
+          "description": "Every image it runs, pinned: its own and its companions'.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "The image's tag, `~hlbN` after it for the Nth packaging of that tag: a fix to\nthe manifest or the guide alone is an update too.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "hlb",
+        "files",
+        "images"
+      ],
+      "type": "object"
+    },
+    "Revoked": {
+      "additionalProperties": false,
+      "description": "A version withdrawn from a source, and why.",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "why": {
+          "description": "Said to whoever runs it: what is wrong, and what to do.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "why"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apps": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/AppVersion"
+        },
+        "type": "array"
+      },
+      "description": "Each app's versions, oldest first.",
+      "type": "object"
+    },
+    "counter": {
+      "description": "Rises with every index signed: lower than the highest one seen is a replay.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "expires": {
+      "description": "Unix seconds. Past it, nothing new is installed from the source; what runs\nkeeps running.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "revoked": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/Revoked"
+        },
+        "type": "array"
+      },
+      "description": "The versions withdrawn, by app: never installed or upgraded to again, and named\non every house running one. Signed with the rest, so a mirror cannot hide a\nrevocation longer than it can hide the index — and never taken back: a version\nrevoked by mistake is followed by a new one.",
+      "type": "object"
+    },
+    "source": {
+      "description": "The source this index is for: an index signed for another one is refused, even\nunder the same key.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source",
+    "counter",
+    "expires",
+    "apps"
+  ],
+  "title": "Index",
+  "type": "object"
+}
