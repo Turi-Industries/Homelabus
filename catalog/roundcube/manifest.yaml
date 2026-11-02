@@ -3,6 +3,7 @@ kind: App
 metadata:
   name: roundcube
   hlb: ">=0.4.0"
+  criticality: normal
   displayName: Roundcube
   category: mail
   homepage: https://roundcube.net

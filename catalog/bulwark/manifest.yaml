@@ -3,6 +3,7 @@ kind: App
 metadata:
   name: bulwark
   hlb: ">=0.4.0"
+  criticality: normal
   displayName: Bulwark
   category: mail
   homepage: https://bulwarkmail.org

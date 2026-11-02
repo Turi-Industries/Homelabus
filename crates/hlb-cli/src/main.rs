@@ -6196,6 +6196,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 if *apply {
                     hlb_engine::install::record(&state, app, &basis).await?;
                 }
+                let grants = basis.manifest.grants(basis.domain.as_deref());
+                if !*apply && !grants.is_empty() {
+                    println!("What \"{app}\" receives beyond its own container:");
+                    for g in grants {
+                        println!("  ⚠️  {g}");
+                    }
+                    println!();
+                }
 
                 execute_plan(&cli, &state, app, &plan, &storage, *apply, "install").await
             })

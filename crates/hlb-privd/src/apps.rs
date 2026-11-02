@@ -240,7 +240,13 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
         steps,
         cli_command: command,
         blockers: blocking,
-        warnings: Vec::new(),
+        // Read before applying, as the command line prints it above the plan.
+        warnings: basis
+            .manifest
+            .grants(basis.domain.as_deref())
+            .into_iter()
+            .map(|g| format!("it receives: {g}"))
+            .collect(),
         confirmation_required: None,
     })
 }

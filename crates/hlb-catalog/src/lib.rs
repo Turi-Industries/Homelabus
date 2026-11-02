@@ -446,6 +446,25 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
     let m = &e.manifest;
     let name = &m.metadata.name;
     let refuse = |why: String| Err(hlb_types::Error::Validation(format!("{name}: {why}")));
+    // Optional on read for a frozen manifest, which reads as `normal`; in the catalog an
+    // app says it, since the backup pass orders by it and the lifeboat will choose by it.
+    match (m.kind, m.metadata.criticality) {
+        (hlb_types::Kind::App, None) => {
+            return refuse(
+                "`metadata.criticality` is required in the catalog: vital, important or \
+                 normal — what the household loses while it is down"
+                    .into(),
+            )
+        }
+        (hlb_types::Kind::PlatformService, Some(_)) => {
+            return refuse(
+                "a platform service declares no `metadata.criticality`: it matters as much \
+                 as the apps requiring it"
+                    .into(),
+            )
+        }
+        (hlb_types::Kind::App, Some(_)) | (hlb_types::Kind::PlatformService, None) => {}
+    }
     for c in &m.spec.requires {
         // 🔴 Created with `CREATE EXTENSION`, which only PostgreSQL has: declared on
         // MariaDB, the install failed at the step, after the app was recorded.
@@ -744,6 +763,12 @@ mod tests {
                 .metadata
                 .hlb
                 .get_or_insert_with(|| ">=0.4.0".into());
+            if manifest.kind == hlb_types::Kind::App {
+                manifest
+                    .metadata
+                    .criticality
+                    .get_or_insert(hlb_types::Criticality::Normal);
+            }
             let written = serde_json::to_value(&manifest).expect("json");
             Self {
                 source: None,
@@ -770,6 +795,40 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("catalog")
+    }
+
+    #[test]
+    fn an_app_says_how_critical_it_is_and_a_platform_service_does_not() {
+        let refusal = |kind: &str, criticality: Option<hlb_types::Criticality>| {
+            let y = format!(
+                "apiVersion: hlb/v1\nkind: {kind}\nmetadata: {{ name: a }}\nspec:\n  \
+                 image: {{ repo: a/a, tag: \"1\" }}\n"
+            );
+            let mut e = Entry::of_yaml(&y);
+            e.manifest.metadata.criticality = criticality;
+            catalog_rules(&e).err().map(|e| e.to_string())
+        };
+        let vital = Some(hlb_types::Criticality::Vital);
+        assert_eq!(refusal("App", vital), None);
+        assert!(
+            refusal("App", None).is_some_and(|w| w.contains("`metadata.criticality` is required"))
+        );
+        assert!(refusal("PlatformService", vital).is_some_and(|w| w.contains("declares no")));
+        assert_eq!(refusal("PlatformService", None), None);
+        // Through `validate_all`, where `catalog validate` reads it.
+        let mut e = Entry::of_yaml(&format!(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: a }}\nspec:\n  \
+             image: {{ repo: a/a, tag: \"1\", digest: \"sha256:{}\" }}\n  \
+             swarm: {{ memory: {{ reserve: 64M, limit: 128M }} }}\n",
+            "0".repeat(64)
+        ));
+        e.manifest.metadata.criticality = None;
+        let errs = Catalog::of([("a".to_string(), e)]).validate_all();
+        assert!(
+            errs.iter()
+                .any(|(_, e)| e.to_string().contains("`metadata.criticality`")),
+            "{errs:?}"
+        );
     }
 
     #[test]

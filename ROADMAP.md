@@ -245,6 +245,13 @@ exported — Homelabus never bills.
 - **One `foo` installed at a time**: `community/foo` installs as `foo` — service,
   volumes and databases keep the bare name — and is refused at preview while `foo` from
   another source is installed, and the other way round. They never sit side by side.
+- **The rest of phase 3, decided the same afternoon**: `Turi-Industries/homelabus-catalog`
+  is created **public** — pull requests from anyone are the gate. The official index is
+  served by **GitHub Pages** from it: CI builds it on merge, the owner signs it on their
+  own machine, a script publishes the signed result. **Revocation lives inside the
+  signed index** — a `revoked` list, so it needs no second key and a mirror cannot hide
+  it past the index's 30 days. **Quality levels run on GitHub's hosted runners**, a
+  single-node Swarm each — no runner of the owner's exposed to a stranger's pull request.
 
 #### The phases
 
@@ -1180,10 +1187,21 @@ pull request to the catalog, with no `hlb` release.
 - Quality levels computed by CI, never declared: install, update from the published
   version, back up, restore, prove, uninstall — on each pull request and weekly; shown
   as *installs, updates, restores, maintained for N months*.
-- Before installing, the preview shows what the app receives: host network, Docker
-  socket, public exposure, a mail admin token.
-- An app's criticality (vital, important, normal) in the manifest, optional on read —
-  the lifeboat's input.
+- ✅ Before installing, the preview shows what the app receives — 2026-11-02.
+  `Manifest::grants` names what the manifest opened past the closed defaults: exposure
+  to the internet (now or after its guide), paths open to anyone, ports published on
+  the node, capabilities kept or given back, setuid, a writable root, a webmail's use
+  of each person's mailbox password, a compose runtime — the app's and each
+  companion's, `SecuritySpec` destructured whole so a new field must be answered.
+  `hlb install` prints it above the plan; privd puts it in the preview's warnings, which
+  the interface shows. The host network, Docker's socket, `privileged`, devices and a
+  mail administrator's token have no field: no manifest can ask for them.
+- ✅ An app's criticality — 2026-11-02. `metadata.criticality: vital | important |
+  normal`, required of an app by the catalog, refused on a platform service, optional
+  on read (`normal`). Read today by the backup pass, which serves vital apps first
+  (`Pass::most_critical_first`); the lifeboat's input in phase 4. Set by Claude, to
+  confirm: Vaultwarden vital; Immich, Seafile, Gitea, Fluxer, Termix important; the
+  rest normal.
 - Proving ground for goal 4: **which apps is the owner's decision, taken when this phase
   starts** (2026-10-30) — the list below was proposed while planning, never decided, and
   no app is added from it meanwhile. Decided 2026-10-31: calendars and contacts from

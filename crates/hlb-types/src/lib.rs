@@ -13,6 +13,7 @@ pub mod access;
 pub mod assertion;
 pub mod capability;
 pub mod domain;
+mod grants;
 pub mod guide;
 pub mod index;
 pub mod manifest;
@@ -34,8 +35,8 @@ pub use capability::{
     CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier, VolumeCopy,
 };
 pub use manifest::{
-    ApiVersion, AuthRoute, Companion, CompanionVolume, ExposePolicy, Healthcheck, Image,
-    ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, Process,
+    ApiVersion, AuthRoute, Companion, CompanionVolume, Criticality, ExposePolicy, Healthcheck,
+    Image, ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, Process,
     RecoveryLogin, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, Tmpfs, Ulimit, UpdateChannel,
     UpdatePolicy,
 };

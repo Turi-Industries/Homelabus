@@ -38,12 +38,41 @@ pub struct Metadata {
     /// catalog over one field it does not know (`hlb_types::release`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hlb: Option<String>,
+    /// How much the household loses while the app is down. Required of an app by the
+    /// catalog, optional when read: a manifest frozen before it reads as `normal`. A
+    /// platform service has none — it matters as much as what requires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criticality: Option<Criticality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+}
+
+/// Ordered most critical first: a backup pass serves a `vital` app before the rest, so
+/// one cut short has saved what matters most.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Criticality {
+    /// Needed to get back in to everything else, or reachable while the house is down:
+    /// passwords, sign-in.
+    Vital,
+    /// Missed within the day: files, photos, mail, the household's chat.
+    Important,
+    /// Waits for the repair.
+    #[default]
+    Normal,
+}
+
+impl Manifest {
+    /// What the app declares, or `normal` for a manifest frozen before the field.
+    pub fn criticality(&self) -> Criticality {
+        self.metadata.criticality.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

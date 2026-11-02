@@ -3,6 +3,7 @@ kind: App
 metadata:
   name: immich
   hlb: ">=0.4.0"
+  criticality: important
   displayName: Immich
   category: media
   homepage: https://immich.app

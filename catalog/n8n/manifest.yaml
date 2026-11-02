@@ -3,6 +3,7 @@ kind: App
 metadata:
   name: n8n
   hlb: ">=0.4.0"
+  criticality: normal
   displayName: n8n
   category: automation
   homepage: https://n8n.io

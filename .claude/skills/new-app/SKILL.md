@@ -41,6 +41,10 @@ reaching the host have no field: they are a decision (§4).
 Write `catalog/<name>/manifest.yaml` (the folder name IS `metadata.name`) and, when
 the app needs steps after it starts, `guide.yaml`. Needs, never addresses: `requires`
 plus tokens (`{{ db.url }}`, `{{ oidc.client_id }}`, `{{ secret.<name> }}`).
+`metadata` says `hlb: ">=<the release that first reads it>"` and `criticality:` —
+`vital` (getting back in: passwords), `important` (missed within the day: files,
+photos, chat) or `normal`; the backup pass serves the vital apps first. Which an app
+is, is the owner's call: ask when unsure.
 
 ## 3. Prove it, cheapest first
 

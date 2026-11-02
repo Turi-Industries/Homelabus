@@ -627,6 +627,27 @@ pub struct Summary {
 }
 
 impl Pass<'_> {
+    /// The installed apps, `vital` first, then by name: a pass cut short — a full disk,
+    /// a crash — has saved what the household needs most. A manifest that cannot be
+    /// read sorts as `normal` rather than stop the pass; its own steps say why.
+    async fn most_critical_first(&self) -> Result<Vec<(String, String)>> {
+        let mut apps = Vec::new();
+        for (app, status) in self.state.installed_apps().await? {
+            let c = self
+                .state
+                .app_manifest(&app)
+                .await
+                .map(|m| m.criticality())
+                .unwrap_or_default();
+            apps.push((c, app, status));
+        }
+        apps.sort();
+        Ok(apps
+            .into_iter()
+            .map(|(_, app, status)| (app, status))
+            .collect())
+    }
+
     /// Runs the pass. A failure on one item or one destination never stops the
     /// others: an unreachable off-site that aborted the loop would also skip the local
     /// copy — both copies lost for one failure. Nor does a credential the vault cannot
@@ -654,7 +675,7 @@ impl Pass<'_> {
         // Where each app's volumes went in this pass: its SQLite databases follow them
         // there, so a restore of those volumes finds the same pass's databases.
         let mut reached: BTreeMap<String, Vec<Destination>> = BTreeMap::new();
-        for (app, status) in self.state.installed_apps().await? {
+        for (app, status) in self.most_critical_first().await? {
             if status == "failed" || !self.includes(&app) {
                 continue;
             }
@@ -773,7 +794,7 @@ impl Pass<'_> {
         // Every bucket of an app in one outcome per destination, as its volumes: one
         // recorded per bucket, the one that succeeded would make the app fresh while
         // the other went unread.
-        for (app, status) in self.state.installed_apps().await? {
+        for (app, status) in self.most_critical_first().await? {
             if status == "failed" || !self.includes(&app) {
                 continue;
             }
@@ -1423,6 +1444,35 @@ mod tests {
             classes: vec![Class::Critical, Class::Bulky],
             credentials_secret: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_pass_serves_the_vital_apps_first() {
+        let state = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        for (app, criticality) in [
+            ("aa", "criticality: normal, "),
+            ("mm", ""),
+            ("vv", "criticality: important, "),
+            ("zz", "criticality: vital, "),
+        ] {
+            let yaml = format!(
+                "apiVersion: hlb/v1\nkind: App\nmetadata: {{ {criticality}name: {app} }}\n\
+                 spec:\n  image: {{ repo: a/b, tag: \"1\" }}\n"
+            );
+            let m = serde_yaml_ng::from_str(&yaml).expect("manifest");
+            state.upsert_app(app, &m, None).await.expect("installed");
+        }
+        let p = pass(&state, &vault, Path::new("/unused"));
+        let order: Vec<String> = p
+            .most_critical_first()
+            .await
+            .expect("read")
+            .into_iter()
+            .map(|(a, _)| a)
+            .collect();
+        // A manifest frozen before the field reads as `normal`, after the others by name.
+        assert_eq!(order, ["zz", "vv", "aa", "mm"]);
     }
 
     #[tokio::test]

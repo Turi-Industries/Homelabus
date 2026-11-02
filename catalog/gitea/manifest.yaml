@@ -3,6 +3,7 @@ kind: App
 metadata:
   name: gitea
   hlb: ">=0.4.0"
+  criticality: important
   displayName: Gitea
   category: development
   homepage: https://about.gitea.com
