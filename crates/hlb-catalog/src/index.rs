@@ -766,6 +766,50 @@ mod tests {
     }
 
     #[test]
+    fn the_official_index_replaces_the_carried_apps_and_keeps_the_platform() {
+        let cat = catalog();
+        let out = tempfile::tempdir().expect("out");
+        let idx = build(cat.path(), crate::OFFICIAL, None, out.path(), NOW).expect("built");
+        sign(out.path(), &SEED, None, NOW).expect("signed");
+        let key = public_key(&SEED);
+        let carried = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog");
+
+        let mut c = Catalog::load(&carried).expect("carried");
+        let before = c.len();
+        c.add_signed_source(crate::OFFICIAL, out.path(), &key, NOW)
+            .expect("added");
+        let e = c.get("mealie").expect("a bare name");
+        assert_eq!((e.source.as_deref(), e.index), (None, Some(1)));
+        assert_eq!(e.version.as_ref(), Some(&idx.apps["mealie"][0].version));
+        assert_eq!(
+            c.len(),
+            before,
+            "nothing gained or lost: the carried rest stays"
+        );
+        assert!(
+            c.get("postgres").is_ok_and(|p| p.index.is_none()),
+            "the platform is hlb's"
+        );
+
+        // Expired: the carried copy stays, and saying so is the error.
+        let mut c = Catalog::load(&carried).expect("carried");
+        assert!(c
+            .add_official(out.path(), &key, NOW + index::VALIDITY_SECS)
+            .is_err());
+        assert_eq!(c.get("mealie").expect("carried").index, None);
+
+        // Another signer is refused, and the name is no third party's.
+        let mut c = Catalog::load(&carried).expect("carried");
+        assert!(c
+            .add_official(out.path(), &public_key(&[1; 32]), NOW)
+            .is_err());
+        assert!(matches!(
+            c.add_source(crate::OFFICIAL, cat.path()),
+            Err(crate::Error::Reserved)
+        ));
+    }
+
+    #[test]
     fn a_build_never_mixes_with_what_a_directory_holds() {
         let cat = catalog();
         let out = tempfile::tempdir().expect("out");

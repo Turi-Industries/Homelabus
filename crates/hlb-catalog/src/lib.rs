@@ -53,9 +53,24 @@ pub enum Error {
 
     #[error("source \"{0}\" is added already")]
     SourceTaken(String),
+
+    #[error("\"{OFFICIAL}\" is the official catalog's name: a source takes another")]
+    Reserved,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// The official catalog's source name — reserved: its apps keep their bare names, and
+/// no third-party source may take it.
+pub const OFFICIAL: &str = "official";
+
+/// Where the official catalog's signed index is served.
+pub const OFFICIAL_URL: &str = "https://turi-industries.github.io/homelabus-catalog";
+
+/// The official catalog's public key (`hlb catalog key generate`, its owner's).
+/// `None` until there is one: the catalog this `hlb` carries is then the only official
+/// one, and nothing official is fetched.
+pub const OFFICIAL_KEY: Option<&str> = None;
 
 /// Between a third-party source's name and its app's.
 pub const SEPARATOR: char = '/';
@@ -145,6 +160,9 @@ impl Catalog {
     /// database every app's credentials go to. So a platform service, or an app named
     /// like one of the official catalog's, is set aside here.
     pub fn add_source(&mut self, source: &str, root: impl AsRef<Path>) -> Result<()> {
+        if source == OFFICIAL {
+            return Err(Error::Reserved);
+        }
         if !is_source_name(source) {
             return Err(Error::SourceName(source.to_string()));
         }
@@ -163,7 +181,8 @@ impl Catalog {
     }
 
     /// Adds a source whose directory holds a signed index (`index::verify`): for each
-    /// app, the newest version this `hlb`'s range accepts.
+    /// app, the newest version this `hlb`'s range accepts. [`OFFICIAL`]'s is
+    /// [`Catalog::add_official`].
     ///
     /// 🔴 An expired index sets every app of the source aside: nothing new is installed
     /// or upgraded from it. What runs is not touched — an installed app redeploys from
@@ -176,25 +195,89 @@ impl Catalog {
         now: i64,
     ) -> std::result::Result<(), index::Error> {
         let dir = dir.as_ref();
+        if source == OFFICIAL {
+            return self.add_official(dir, key, now);
+        }
         if !is_source_name(source) {
             return Err(Error::SourceName(source.to_string()).into());
         }
         let idx = index::verify(dir, source, key)?;
-        let release = hlb_types::release::running();
-        let mut theirs = Self::default();
-        let expired = index::current(&idx, now).err();
-        for (app, versions) in &idx.apps {
-            if let Some(e) = &expired {
-                theirs.set_aside.insert(
-                    app.clone(),
-                    format!(
-                        "the index of \"{source}\" is out of date ({e}) — nothing new is \
-                         installed from it until `hlb catalog source fetch {source}` \
-                         brings a fresh one"
-                    ),
-                );
+        let mut theirs = match index::current(&idx, now) {
+            Ok(()) => Self::from_index(&idx, dir)?.0,
+            Err(e) => Self {
+                set_aside: idx
+                    .apps
+                    .keys()
+                    .map(|app| {
+                        let why = format!(
+                            "the index of \"{source}\" is out of date ({e}) — nothing new is \
+                             installed from it until `hlb catalog source fetch {source}` \
+                             brings a fresh one"
+                        );
+                        (app.clone(), why)
+                    })
+                    .collect(),
+                ..Self::default()
+            },
+        };
+        theirs.revoked = idx.revoked;
+        self.merge(source, theirs);
+        Ok(())
+    }
+
+    /// The official catalog's signed index, over the catalog this `hlb` carries: each
+    /// app it holds is the newest version this `hlb` runs, under its bare name, and the
+    /// platform services stay the carried ones — they move with `hlb`, never apart.
+    ///
+    /// An app the index has no version of for this `hlb` keeps the carried copy, which
+    /// this `hlb` was released with; one whose every such version is revoked is set
+    /// aside. 🔴 An expired index changes no app — the carried catalog stays, as before
+    /// any fetch — but its revocations are kept, and the expiry is the `Err`.
+    pub fn add_official(
+        &mut self,
+        dir: impl AsRef<Path>,
+        key: &str,
+        now: i64,
+    ) -> std::result::Result<(), index::Error> {
+        let dir = dir.as_ref();
+        let idx = index::verify(dir, OFFICIAL, key)?;
+        self.revoked.extend(idx.revoked.clone());
+        index::current(&idx, now)?;
+        let (theirs, withdrawn) = Self::from_index(&idx, dir)?;
+        let platform = |c: &Self, app: &str| {
+            c.entries
+                .get(app)
+                .is_some_and(|e| e.manifest.kind == hlb_types::Kind::PlatformService)
+        };
+        for (app, e) in theirs.entries {
+            if platform(self, &app) || e.manifest.kind == hlb_types::Kind::PlatformService {
                 continue;
             }
+            self.set_aside.remove(&app);
+            self.entries.insert(app, e);
+        }
+        for (app, why) in theirs.set_aside {
+            if platform(self, &app) {
+                continue;
+            }
+            if withdrawn.contains(&app) || !self.entries.contains_key(&app) {
+                self.entries.remove(&app);
+                self.set_aside.insert(app, why);
+            }
+        }
+        Ok(())
+    }
+
+    /// Each app of `idx` at the newest version this `hlb` runs, read from `dir`; and
+    /// the apps set aside because every such version is revoked.
+    fn from_index(
+        idx: &hlb_types::index::Index,
+        dir: &Path,
+    ) -> std::result::Result<(Self, std::collections::BTreeSet<String>), index::Error> {
+        let release = hlb_types::release::running();
+        let mut theirs = Self::default();
+        let mut withdrawn = std::collections::BTreeSet::new();
+        for (app, versions) in &idx.apps {
             let Some(v) = idx.newest_for(app, &release) else {
                 // Its range accepts this hlb and the source withdrew it: the why is
                 // the source's, and says what to do.
@@ -208,6 +291,7 @@ impl Catalog {
                         app.clone(),
                         format!("every version of \"{app}\" this hlb runs is revoked: {why}"),
                     );
+                    withdrawn.insert(app.clone());
                     continue;
                 }
                 let ranges: Vec<&str> = versions.iter().map(|v| v.hlb.as_str()).collect();
@@ -235,9 +319,7 @@ impl Catalog {
                 }
             }
         }
-        theirs.revoked = idx.revoked;
-        self.merge(source, theirs);
-        Ok(())
+        Ok((theirs, withdrawn))
     }
 
     /// A third-party source's apps, under `<source>/<app>`, held to what such a source
