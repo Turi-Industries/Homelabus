@@ -20,6 +20,7 @@ preview" in [`.claude/rules/interface-api.md`](../.claude/rules/interface-api.md
 ```sh
 ./target/debug/hlb catalog validate
 ./target/debug/hlb catalog validate --apps ../homelabus-catalog    # the catalog repository's apps over this hlb's platform
+./target/debug/hlb catalog export /tmp/carried                      # the catalog this hlb carries, platform included, into a new directory
 ./target/debug/hlb order
 ./target/debug/hlb plan gitea --domain git.example.org
 ```
@@ -140,7 +141,7 @@ account after a few refusals, so the nightly pass keeps the refusal. Read it now
 record it:
 
 ```sh
-./target/debug/hlb assert                    # every installed app; exits 1 on a door open
+./target/debug/hlb assert                    # every installed app; exits 1 on a door open, 2 on one not read
 ./target/debug/hlb assert vaultwarden
 ```
 

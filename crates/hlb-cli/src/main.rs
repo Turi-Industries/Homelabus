@@ -2080,6 +2080,9 @@ enum CatalogCmd {
     /// A source's signed index: built by CI, signed by its owner, checked by every hlb.
     #[command(subcommand)]
     Index(IndexCmd),
+    /// Writes the catalog this hlb carries into a new directory: its platform is what
+    /// the catalog repository's apps run over, which nothing else hands out.
+    Export { dir: std::path::PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -5704,6 +5707,31 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
     match &cli.command {
         Command::Catalog(CatalogCmd::Key(cmd)) => catalog_index::key(cmd),
+        Command::Catalog(CatalogCmd::Export { dir }) => {
+            // Written into nothing that exists: a directory holding a catalog already
+            // would come out as a mix of two, read as one.
+            if dir.exists() {
+                eprintln!(
+                    "🔴 {} exists — the catalog is written into a new directory",
+                    dir.display()
+                );
+                return Ok(ExitCode::FAILURE);
+            }
+            for (rel, content) in carried_catalog::FILES {
+                let path = dir.join(rel);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, content)?;
+            }
+            println!(
+                "✓ the catalog of hlb {} written to {} ({} files)",
+                env!("CARGO_PKG_VERSION"),
+                dir.display(),
+                carried_catalog::FILES.len()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Catalog(CatalogCmd::Index(cmd)) => catalog_index::run(cmd),
 
         Command::Catalog(CatalogCmd::Source(cmd)) => {
@@ -6547,7 +6575,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 // The recovery sign-ins sign in with the vault's passwords: without it,
                 // they are not looked at, and said so.
                 let vault = open_vault(&cli).ok();
-                let mut broken = 0;
+                let (mut broken, mut unread) = (0, 0);
                 for name in apps {
                     let m = state.app_manifest(&name).await?;
                     if hlb_guide::assertions::declared(&m).is_empty() {
@@ -6582,7 +6610,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 broken += 1;
                                 "🔴"
                             }
-                            hlb_api::assertions::Verdict::Unknown => "?",
+                            hlb_api::assertions::Verdict::Unknown => {
+                                unread += 1;
+                                "?"
+                            }
                         };
                         println!("  {mark} {}  ({})", r.holds, r.observed);
                         if let Some(fix) = &r.fix {
@@ -6597,6 +6628,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         hlb_api::plural(broken, "assertion", "assertions")
                     );
                     ExitCode::FAILURE
+                } else if unread > 0 {
+                    // A door nobody could look at is not a closed one: a script waiting
+                    // for an app to come back reads this exit, not the marks.
+                    eprintln!(
+                        "\n? {} not read.",
+                        hlb_api::plural(unread, "assertion", "assertions")
+                    );
+                    ExitCode::from(2)
                 } else {
                     ExitCode::SUCCESS
                 })
