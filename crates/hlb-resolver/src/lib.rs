@@ -464,7 +464,6 @@ pub fn resolve_with_guide(
             host,
             service: app.clone(),
             port: ing.port,
-            chain: ing.chain.clone(),
             public: ing.expose == ExposePolicy::Public,
         });
     }
@@ -1633,6 +1632,27 @@ steps:
             .actions
             .iter()
             .any(|a| matches!(a, Action::ConfigureIngress { public: false, .. })));
+    }
+
+    /// Every route goes through the one Caddy, chain or none: a preview calling a public
+    /// route "direct" tells whoever reads it that the bouncer and the limits are off it.
+    #[test]
+    fn a_route_s_preview_says_the_same_with_a_chain_or_without() {
+        let route = |chain: &str| {
+            let m = manifest(&format!(
+                "  ingress:\n    - host: git.example.fr\n      port: 3000\n{chain}      \
+                 expose: public\n"
+            ));
+            let p = resolve(&m, &InstallParams::default()).expect("plan");
+            p.actions
+                .iter()
+                .find(|a| matches!(a, Action::ConfigureIngress { .. }))
+                .expect("a route")
+                .to_string()
+        };
+        let without = route("");
+        assert_eq!(without, "route git.example.fr → gitea:3000 (public)");
+        assert_eq!(route("      chain: [caddy-front, caddy-back]\n"), without);
     }
 
     #[test]

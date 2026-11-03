@@ -146,7 +146,6 @@ pub enum Action {
         host: String,
         service: String,
         port: u16,
-        chain: Vec<String>,
         /// No public exposure before the guide is validated.
         public: bool,
     },
@@ -397,16 +396,10 @@ impl fmt::Display for Action {
                 host,
                 service,
                 port,
-                chain,
                 public,
             } => write!(
                 f,
-                "route {host} → {service}:{port} through {} ({})",
-                if chain.is_empty() {
-                    "direct".to_string()
-                } else {
-                    chain.join(" → ")
-                },
+                "route {host} → {service}:{port} ({})",
                 if *public { "public" } else { "VPN only" }
             ),
             Self::PendingGuideStep {
