@@ -67,14 +67,12 @@ fn caddy_validate(caddyfile: &str, label: &str) {
 
 fn routes() -> Vec<Route> {
     vec![
-        // Gitea: no Anubis (it would break `git clone`), public.
+        // Gitea: public.
         Route {
             host: "git.example.fr".into(),
             service: "gitea".into(),
             port: 3000,
-            through_anubis: false,
             public: true,
-            sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -91,14 +89,12 @@ fn routes() -> Vec<Route> {
             ],
             open_paths: Vec::new(),
         },
-        // Vikunja: behind Anubis, with the OIDC callback excluded.
+        // Vikunja: public.
         Route {
             host: "tasks.example.fr".into(),
             service: "vikunja".into(),
             port: 3456,
-            through_anubis: true,
             public: true,
-            sso_paths: vec!["/auth/openid/pocketid".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -110,9 +106,7 @@ fn routes() -> Vec<Route> {
             host: "vault.example.fr".into(),
             service: "vaultwarden".into(),
             port: 80,
-            through_anubis: false,
             public: false,
-            sso_paths: vec!["/identity/connect/oidc-signin".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -124,9 +118,7 @@ fn routes() -> Vec<Route> {
             host: "old.example.fr".into(),
             service: "old-app".into(),
             port: 80,
-            through_anubis: false,
             public: false,
-            sso_paths: Vec::new(),
             needs_forward_auth: true,
             allowed_groups: vec!["hlb-family".into(), "hlb-admin".into()],
             paths: Vec::new(),
@@ -139,23 +131,19 @@ fn routes() -> Vec<Route> {
             host: "closed.example.fr".into(),
             service: "n8n".into(),
             port: 5678,
-            through_anubis: false,
             public: true,
-            sso_paths: Vec::new(),
             needs_forward_auth: true,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
             auth_routes: Vec::new(),
             open_paths: Vec::new(),
         },
-        // A path a companion answers, on a private route and behind Anubis.
+        // A path a companion answers, on a private route.
         Route {
             host: "files.example.fr".into(),
             service: "seafile".into(),
             port: 80,
-            through_anubis: false,
             public: false,
-            sso_paths: vec!["/oauth/callback/".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: vec![CompanionPath::stripped(
@@ -169,9 +157,7 @@ fn routes() -> Vec<Route> {
             host: "ws.example.fr".into(),
             service: "chat".into(),
             port: 80,
-            through_anubis: true,
             public: true,
-            sso_paths: Vec::new(),
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: vec![
@@ -191,7 +177,7 @@ fn routes() -> Vec<Route> {
     ]
 }
 
-/// Everything at once: bouncer, portal, private routes, Anubis.
+/// Everything at once: bouncer, portal, private routes.
 fn full(tls: Tls) -> Config {
     Config {
         crowdsec: Some(CrowdSec {
@@ -200,7 +186,6 @@ fn full(tls: Tls) -> Config {
         }),
         forward_auth: Some(ForwardAuth::default()),
         tls,
-        ..Config::default()
     }
 }
 

@@ -1634,25 +1634,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn anubis_sends_back_to_the_listener_caddy_opens_for_it() {
-        // One target for every app behind it: Caddy's return listener. Moved on one
-        // side only, every visitor who passed the challenge would meet a closed port.
-        let c = Catalog::load(repo_catalog()).expect("catalog should load");
-        let m = &c.get("anubis").expect("anubis in the catalog").manifest;
-        assert_eq!(
-            m.spec.env.get("TARGET").map(String::as_str),
-            Some(
-                format!(
-                    "http://{}:{}",
-                    hlb_types::manifest::INGRESS_SERVICE,
-                    hlb_ingress::caddyfile::ANUBIS_RETURN_PORT
-                )
-                .as_str()
-            )
-        );
-    }
-
     /// Fluxer's four pools are what it declares: the role's limit is set from the
     /// declaration, and a companion whose pool grew past it is refused its connections.
     #[test]

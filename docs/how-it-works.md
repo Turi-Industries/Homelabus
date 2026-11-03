@@ -239,7 +239,7 @@ its machine-learning companion), Seafile CE (three databases, one role), Bulwark
 Roundcube, and Fluxer (a Discord-like chat: thirteen services, four buckets, its calls
 straight to the ingress's node).
 
-**Platform** — PostgreSQL, MariaDB, Valkey, PocketID, Stalwart, Caddy, Anubis, CrowdSec,
+**Platform** — PostgreSQL, MariaDB, Valkey, PocketID, Stalwart, Caddy, CrowdSec,
 oauth2-proxy, ntfy, VictoriaMetrics, Grafana, Garage.
 
 Two webmails is deliberate: Bulwark speaks JMAP natively to Stalwart, and Roundcube is

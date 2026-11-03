@@ -439,7 +439,7 @@ the outside, which is the whole problem.
   `-e K` with the value in the client's environment (`hlb_backup::docker_env`), and a
   Swarm job gets files, never variables; `hlb-types/tests/argv.rs` refuses another `-e`.
 - **A path opened to anyone is the manifest's, said there** (`ingress[].openPaths`):
-  past the portal, the private ranges and Anubis — never the bouncer. `forward_auth`
+  past the portal and the private ranges — never the bouncer. `forward_auth`
   takes a matcher excluding those paths, since Caddy orders it before every `handle`;
   the private ranges' 403 excludes them too. Only n8n's production webhooks
   (`/webhook/*`); the editor's `/webhook-test/*` stays behind the portal. ⚠️ `path`

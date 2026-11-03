@@ -30,7 +30,7 @@ impl Manifest {
             }
             if !i.open_paths.is_empty() {
                 out.push(format!(
-                    "{} on {host} reached by anyone: no portal, no private range, no Anubis",
+                    "{} on {host} reached by anyone: no portal, no private range",
                     i.open_paths.join(", ")
                 ));
             }

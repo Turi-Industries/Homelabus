@@ -39,14 +39,6 @@ impl DependencyGraph {
             let name = m.metadata.name.clone();
             let entry = deps.entry(name.clone()).or_default();
 
-            // A route through Anubis needs Anubis up: the one link of a chain that is a
-            // service of its own.
-            for ing in &m.spec.ingress {
-                if ing.chain.iter().any(|l| l == "anubis") && name != "anubis" {
-                    entry.insert("anubis".to_string());
-                }
-            }
-
             // Another app's volume needs that app deployed first: it creates the volume
             // and decides where it lives.
             for cap in &m.spec.requires {
@@ -229,24 +221,6 @@ mod tests {
         assert!(
             matches!(&err, GraphError::MissingDependency { dependent, missing }
                 if dependent == "gitea" && missing == "postgres"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn a_route_through_anubis_needs_anubis_in_the_catalog() {
-        // Nothing in the catalog deploys Anubis: a chain naming it would publish the
-        // app behind a proof-of-work nobody answers — a 502 for everyone.
-        let app = m(
-            "vikunja",
-            "  ingress:\n    - host: t.example.fr\n      port: 3456\n      \
-             chain: [caddy-front, anubis, caddy-back]\n",
-        );
-        let err = DependencyGraph::from_manifests(&[app])
-            .deployment_order()
-            .unwrap_err();
-        assert!(
-            matches!(&err, GraphError::MissingDependency { missing, .. } if missing == "anubis"),
             "{err}"
         );
     }

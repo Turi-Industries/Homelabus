@@ -27,10 +27,11 @@ async fn every_declared_signer_signed_its_pinned_image() {
         );
     }
     // Measured 2026-10-30: Vikunja, Stalwart and Fluxer's Meilisearch; 2026-11-01:
-    // Vaultwarden, Bulwark and Anubis, by their SLSA provenance alone. Fewer means the
-    // walk lost some, not that publishers stopped signing.
+    // Vaultwarden and Bulwark, by their SLSA provenance alone (Anubis too, until it
+    // left the catalog). Fewer means the walk lost some, not that publishers stopped
+    // signing.
     assert!(
-        signed.len() >= 6,
+        signed.len() >= 5,
         "only {} signed images found",
         signed.len()
     );

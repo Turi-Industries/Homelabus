@@ -77,7 +77,7 @@ and **LibreSpeed** (a speed test).
 Beneath them, Homelabus runs the services they share and installs each one only when
 an app needs it: PostgreSQL, MariaDB, Valkey, PocketID (sign-in), Stalwart (mail),
 Caddy (addresses and certificates), Garage (storage), CrowdSec, ntfy (notifications),
-VictoriaMetrics and Grafana (monitoring), oauth2-proxy and Anubis.
+VictoriaMetrics and Grafana (monitoring), and oauth2-proxy.
 
 ## Try it
 

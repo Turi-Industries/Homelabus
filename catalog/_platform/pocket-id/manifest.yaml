@@ -20,7 +20,7 @@ spec:
   ingress:
     - host: "{{ domain }}"
       port: 1411
-      chain: [caddy-front, caddy-back]   # no Anubis: it would break the OIDC callbacks
+      chain: [caddy-front, caddy-back]
       # 🔴 Its first visitor creates the administrator (`/setup`): public at once, that
       # visitor could be a scanner. Reachable from private addresses until the
       # recovery codes and the second passkey are handled, public after — invitations

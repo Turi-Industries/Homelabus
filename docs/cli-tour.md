@@ -499,14 +499,11 @@ never reaches it:
 ./target/debug/hlb config exposure --node deb2 --apply   # Caddy moves, CrowdSec with it
 ```
 
-Two platform services sit in front of the apps when installed after Caddy: CrowdSec
-reads Caddy's access log and bans through its bouncer, whose key is generated at
-install; Anubis puts a proof-of-work in front of an app whose manifest names it in its
-`chain`:
+CrowdSec sits in front of the apps when installed after Caddy: it reads Caddy's access
+log and bans through its bouncer, whose key is generated at install:
 
 ```sh
 ./target/debug/hlb install crowdsec --apply
-./target/debug/hlb install anubis --apply
 ```
 
 The interface is published at `hlb.<domain>` (`--interface` for another) once `hlb

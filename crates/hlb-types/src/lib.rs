@@ -160,8 +160,8 @@ fn declared_and_read(m: &Manifest, used: &[Token]) -> Result<()> {
                 "mail-account with `aliases: true` — nothing makes or limits an app's aliases",
             );
         }
-        // Read for `native` only: elsewhere they would open paths past Anubis for a
-        // sign-in nobody makes there.
+        // Read for `native` only, which registers them with PocketID: elsewhere they
+        // would be a declaration nobody reads.
         if let Capability::Sso {
             mode,
             redirect_paths,
@@ -756,8 +756,8 @@ pub fn validate_with_guide(m: &Manifest, g: &Guide) -> Result<()> {
         }
     }
 
-    // A typo in a chain changes nothing visible: `anubls` would publish the app with
-    // no proof-of-work in front of it, the declaration read by nobody.
+    // A link nothing serves is a declaration read by nobody: `anubis`, gone, would
+    // publish the app without the challenge its manifest asks for.
     for ing in &m.spec.ingress {
         if let Some(bad) = ing
             .chain
@@ -2918,6 +2918,16 @@ spec:
         );
         let err = validate(&manifest(&y)).unwrap_err().to_string();
         assert!(err.contains("\"anubls\""), "{err}");
+    }
+
+    #[test]
+    fn a_chain_through_anubis_is_refused_now_that_nothing_serves_it() {
+        let y = format!(
+            "{BASE}  ingress:\n    - host: a.example.fr\n      port: 80\n      \
+             chain: [caddy-front, anubis, caddy-back]\n"
+        );
+        let err = validate(&manifest(&y)).unwrap_err().to_string();
+        assert!(err.contains("\"anubis\""), "{err}");
     }
 
     #[test]

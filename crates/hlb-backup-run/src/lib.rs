@@ -686,8 +686,8 @@ impl Pass<'_> {
                 .into_iter()
                 .map(|(n, _)| n)
                 .collect();
-            // Nothing to back up is not a failure: Valkey, LibreSpeed and Anubis read
-            // "no known volume" on every pass, and counted as failed backups.
+            // Nothing to back up is not a failure: Valkey and LibreSpeed read "no known
+            // volume" on every pass, and counted as failed backups.
             if volumes.is_empty() {
                 continue;
             }

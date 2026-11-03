@@ -3060,7 +3060,7 @@ impl State {
     /// makes it true. Left as it was, the app would stay "partial" forever over a route
     /// that answers.
     ///
-    /// Only for `among`: the apps it is true of. A route withheld (an Anubis gone) or
+    /// Only for `among`: the apps it is true of. A route withheld (its chain gone from hlb) or
     /// left out (a failed install) was not published, and marked done with the others
     /// it would never have been asked for again.
     pub async fn complete_unimplemented(
@@ -6597,7 +6597,7 @@ steps:
 
     #[tokio::test]
     async fn a_route_is_completed_only_for_the_apps_it_was_published_for() {
-        // 🔴 A route withheld — its Anubis gone — or left out with a failed install was
+        // 🔴 A route withheld — its chain gone from hlb — or left out with a failed install was
         // marked done with the others, and never asked for again.
         let s = st().await;
         for app in ["gitea", "vikunja"] {

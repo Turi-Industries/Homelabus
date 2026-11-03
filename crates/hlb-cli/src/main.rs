@@ -5288,8 +5288,8 @@ async fn switch_manifest(
         nfs_server: cli.nfs_server.clone(),
         nfs_export: cli.nfs_export.clone(),
     };
-    // What an install refuses, an upgrade refuses too: a route through an
-    // Anubis nobody installed, another app's volume with that app gone.
+    // What an install refuses, an upgrade refuses too: another app's volume with
+    // that app gone.
     let ingress = match SwarmOrchestrator::connect().await {
         Ok(orch) => hlb_engine::ingress::app_blockers(&orch, next).await,
         Err(_) => Vec::new(),

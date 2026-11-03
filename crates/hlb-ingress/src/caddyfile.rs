@@ -26,12 +26,8 @@ pub struct Route {
     /// The Swarm service name, resolved by the overlay's internal DNS.
     pub service: String,
     pub port: u16,
-    /// Goes through Anubis? Derived from `chain` in the manifest.
-    pub through_anubis: bool,
     /// `false` = reachable from private addresses only.
     pub public: bool,
-    /// This app's OIDC callback paths, to be excluded from Anubis.
-    pub sso_paths: Vec<String>,
     /// Does the app need the portal? True for `proxy-header` and `proxy-only`, false
     /// for `native` (it speaks OIDC itself) and `none`.
     pub needs_forward_auth: bool,
@@ -45,7 +41,7 @@ pub struct Route {
     pub paths: Vec<CompanionPath>,
     /// Where the app checks a secret, from its manifest.
     pub auth_routes: Vec<hlb_types::AuthRoute>,
-    /// Paths anyone reaches — past the portal, the private ranges and Anubis.
+    /// Paths anyone reaches — past the portal and the private ranges.
     pub open_paths: Vec<String>,
 }
 
@@ -76,9 +72,7 @@ impl Route {
             host: host.into(),
             service: service.into(),
             port,
-            through_anubis: false,
             public: false,
-            sso_paths: Vec::new(),
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -87,21 +81,6 @@ impl Route {
         }
     }
 }
-
-/// Paths Anubis must **never** intercept.
-///
-/// A proof-of-work challenge in front of an OAuth callback breaks sign-in: the redirect
-/// from the identity provider is an automatic navigation, not a user action, and some
-/// agents will never solve the challenge.
-pub const ANUBIS_ALWAYS_BYPASS: &[&str] = &[
-    "/.well-known/*",
-    "/oauth2/*",
-    "/login/oauth/*",
-    "/identity/connect/*",
-];
-
-/// Where Caddy takes back what Anubis let through: the `anubis` manifest's `TARGET`.
-pub const ANUBIS_RETURN_PORT: u16 = 8080;
 
 /// The ranges treated as "internal" for non-public routes.
 /// Paths no app of the catalog serves and every scanner asks for: answered here, never
@@ -310,8 +289,6 @@ pub fn wildcard_covers(base_domain: &str, host: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The Anubis service's host:port on the overlay.
-    pub anubis_upstream: String,
     /// CrowdSec bouncer. `None` means no reputation filtering.
     pub crowdsec: Option<CrowdSec>,
     /// The authentication portal. `None` = no forward-auth.
@@ -322,7 +299,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            anubis_upstream: "anubis:8923".into(),
             crowdsec: None,
             forward_auth: None,
             tls: Tls::Internal { own_root: false },
@@ -536,26 +512,6 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
         let _ = writeln!(out, "}}\n");
     }
 
-    // Anubis forwards what it lets through to ONE target, keeping the Host: this
-    // listener, which routes by it. Plain HTTP on the overlay — TLS, the bouncer and
-    // the portal already ran on the way in.
-    let through: Vec<&Route> = routes.iter().filter(|r| r.through_anubis).collect();
-    if !through.is_empty() {
-        let _ = writeln!(out, "# What Anubis let through, back to its application.");
-        let _ = writeln!(out, "http://:{ANUBIS_RETURN_PORT} {{");
-        for r in through {
-            let m = sanitize(&r.host);
-            let _ = writeln!(out, "\t@back_{m} host {}", r.host);
-            let _ = writeln!(out, "\thandle @back_{m} {{");
-            let _ = writeln!(out, "\t\treverse_proxy {}:{}", r.service, r.port);
-            let _ = writeln!(out, "\t}}");
-        }
-        let _ = writeln!(out, "\thandle {{");
-        let _ = writeln!(out, "\t\trespond \"no application at this address\" 404");
-        let _ = writeln!(out, "\t}}");
-        let _ = writeln!(out, "}}\n");
-    }
-
     out
 }
 
@@ -599,8 +555,8 @@ fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str) {
     let m = sanitize(&r.host);
     let upstream = format!("{}:{}", r.service, r.port);
 
-    // 🔴 Before everything else: an already-known attacker must consume neither
-    // Anubis' proof-of-work nor a round trip to the service.
+    // 🔴 Before everything else: an already-known attacker must not cost a round trip
+    // to the service.
     if cfg.crowdsec.is_some() {
         let _ = writeln!(out, "{indent}crowdsec");
     }
@@ -687,8 +643,7 @@ fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str) {
     }
 
     // 🔴 `handle` runs before `respond` in Caddy's directive order: the private
-    // ranges' 403 above would not reach a path, so it is said again inside. Before
-    // Anubis too, whose challenge a websocket cannot solve.
+    // ranges' 403 above would not reach a path, so it is said again inside.
     for (i, p) in r.paths.iter().enumerate() {
         let (prefix, to) = (&p.prefix, &p.upstream);
         let _ = writeln!(
@@ -708,31 +663,7 @@ fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str) {
         let _ = writeln!(out, "{indent}}}");
     }
 
-    if r.through_anubis {
-        // Authentication paths bypass Anubis, or the OIDC flow breaks.
-        let mut bypass: Vec<String> = ANUBIS_ALWAYS_BYPASS.iter().map(|s| s.to_string()).collect();
-        for p in &r.sso_paths {
-            let p = p.trim_end_matches('*').trim_end_matches('/');
-            if !p.is_empty() {
-                bypass.push(format!("{p}*"));
-            }
-        }
-        // A service calling a webhook solves no proof-of-work.
-        bypass.extend(r.open_paths.iter().cloned());
-        bypass.sort();
-        bypass.dedup();
-
-        let _ = writeln!(out, "\n{indent}# Anubis would break the OIDC callbacks.");
-        let _ = writeln!(out, "{indent}@auth_{m} path {}", bypass.join(" "));
-        let _ = writeln!(out, "{indent}reverse_proxy @auth_{m} {upstream}");
-        // Anubis binds its pass to the client's address, read from X-Real-IP: without
-        // it every visitor would share the one address Caddy has on the overlay.
-        let _ = writeln!(out, "\n{indent}reverse_proxy {} {{", cfg.anubis_upstream);
-        let _ = writeln!(out, "{indent}\theader_up X-Real-IP {{remote_host}}");
-        let _ = writeln!(out, "{indent}}}");
-    } else {
-        let _ = writeln!(out, "\n{indent}reverse_proxy {upstream}");
-    }
+    let _ = writeln!(out, "\n{indent}reverse_proxy {upstream}");
 }
 
 const FORCED_REFUSAL: &str = "\"A write sent by another site is refused.\"";
@@ -887,9 +818,7 @@ mod tests {
             host: "git.example.fr".into(),
             service: "gitea".into(),
             port: 3000,
-            through_anubis: false,
             public: true,
-            sso_paths: vec!["/user/oauth2/PocketID/callback".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -903,9 +832,7 @@ mod tests {
             host: "tasks.example.fr".into(),
             service: "vikunja".into(),
             port: 3456,
-            through_anubis: true,
             public: true,
-            sso_paths: vec!["/auth/openid/pocketid".into()],
             needs_forward_auth: false,
             allowed_groups: Vec::new(),
             paths: Vec::new(),
@@ -962,59 +889,6 @@ mod tests {
     }
 
     #[test]
-    fn anubis_is_only_applied_where_declared() {
-        let out = render(&[gitea(), vikunja()], &Config::default());
-        // Gitea has no Anubis: a proof-of-work would break `git clone`.
-        assert!(!block(&out, "git.example.fr").contains("anubis"));
-        assert!(block(&out, "tasks.example.fr").contains("anubis:8923"));
-    }
-
-    #[test]
-    fn oidc_callbacks_bypass_anubis() {
-        // Without this, SSO sign-in breaks in a way that is very hard to diagnose.
-        let out = render(&[vikunja()], &Config::default());
-
-        assert!(out.contains("/.well-known/*"));
-        assert!(out.contains("/oauth2/*"));
-        // The path the app declares is added to the exclusions.
-        assert!(
-            out.contains("/auth/openid/pocketid*"),
-            "the app's redirectPath must bypass Anubis:\n{out}"
-        );
-        assert!(out.contains("reverse_proxy @auth_tasks_example_fr vikunja:3456"));
-    }
-
-    #[test]
-    fn what_anubis_lets_through_comes_back_to_its_application() {
-        let out = render(&[gitea(), vikunja()], &Config::default());
-        let back = out
-            .split("http://:8080 {")
-            .nth(1)
-            .expect("the return listener");
-        assert!(
-            back.contains("@back_tasks_example_fr host tasks.example.fr"),
-            "{back}"
-        );
-        assert!(back.contains("reverse_proxy vikunja:3456"), "{back}");
-        assert!(
-            !back.contains("gitea"),
-            "only what goes through Anubis: {back}"
-        );
-        assert!(out.contains("header_up X-Real-IP {remote_host}"), "{out}");
-    }
-
-    #[test]
-    fn without_anubis_there_is_no_return_listener() {
-        assert!(!render(&[gitea()], &Config::default()).contains(":8080"));
-    }
-
-    #[test]
-    fn a_route_without_anubis_has_no_bypass_block() {
-        let out = render(&[gitea()], &Config::default());
-        assert!(!out.contains("@auth"), "pointless without Anubis:\n{out}");
-    }
-
-    #[test]
     fn private_routes_reject_external_traffic() {
         let mut r = gitea();
         r.public = false;
@@ -1055,7 +929,6 @@ mod tests {
     fn a_companion_s_path_keeps_the_route_s_private_ranges() {
         let mut r = gitea();
         r.public = false;
-        r.through_anubis = true;
         r.paths = vec![CompanionPath::stripped(
             "/notification",
             "gitea-notify:8083",
@@ -1076,8 +949,6 @@ mod tests {
             "{block}"
         );
         assert!(block.contains("reverse_proxy gitea-notify:8083"), "{block}");
-        // Before Anubis: a websocket solves no challenge.
-        assert!(out.find("@path0").unwrap_or(usize::MAX) < out.find("anubis:").unwrap_or(0));
     }
 
     #[test]
@@ -1340,17 +1211,6 @@ mod tests {
         assert!(!out.contains("crowdsec"), "{out}");
         assert!(!out.contains("order "), "{out}");
         assert!(!out.contains("log {"), "nothing reads it: {out}");
-    }
-
-    #[test]
-    fn crowdsec_and_anubis_coexist() {
-        // The two answer different threats: known reputation on one side, anonymous
-        // automation on the other. Neither replaces the other.
-        let out = render(&[vikunja()], &with_crowdsec());
-        assert!(out.contains("crowdsec"));
-        assert!(out.contains("anubis:8923"));
-        // And OIDC callbacks always bypass Anubis.
-        assert!(out.contains("/auth/openid/pocketid*"), "{out}");
     }
 
     fn with_portal() -> Config {

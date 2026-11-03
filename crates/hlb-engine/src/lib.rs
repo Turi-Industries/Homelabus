@@ -1662,8 +1662,8 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // delete the other apps' routes.
                 match ingress::publish(self.orchestrator, self.state, self.vault).await? {
                     // Done when THIS app's route is among those published: one withheld
-                    // — through an Anubis that is gone — is not served, and the next
-                    // publication completes it when it is.
+                    // — its chain naming a link gone from hlb — is not served, and the
+                    // publication after `hlb upgrade` completes it.
                     ingress::Published::Done { routes, restarted } => {
                         tracing::info!(routes = routes.len(), restarted, "routes published");
                         if routes.iter().any(|r| r.service == app) {
@@ -4594,24 +4594,31 @@ spec:
     }
 
     #[tokio::test]
-    async fn a_route_through_an_absent_anubis_is_withheld_not_published_as_a_502() {
+    async fn a_frozen_route_through_anubis_is_withheld_not_published_unprotected() {
+        // The catalog refuses `anubis` now, so only a manifest frozen by an older
+        // hlb can name it: published, the route would lack the challenge it asks for.
         let o = Fake::default();
-        o.absent.lock().unwrap().push("anubis".into());
         let s = State::in_memory().await.unwrap();
         exposed(&s).await;
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(PUBLIC).unwrap();
+        s.upsert_app("demo", &m, Some("demo.example.fr"))
+            .await
+            .unwrap();
+        ingress::publish(&o, &s, None).await.unwrap();
+        let served = written(&o).pop().unwrap();
+        assert!(served.contains("demo.example.fr"), "{served}");
+
         let through = PUBLIC.replace(
             "      expose: public",
-            "      chain: [anubis]\n      expose: public",
+            "      chain: [caddy-front, anubis, caddy-back]\n      expose: public",
         );
-        let out = install(&o, &s, &through, Some("demo.example.fr")).await;
-        assert!(
-            !written(&o)[0].contains("demo.example.fr"),
-            "{}",
-            written(&o)[0]
-        );
-        // Not served, so not done: the publication that serves it completes it.
-        assert_eq!(out.unimplemented, 1, "{out:?}");
-        assert_eq!(app_status(&s, "demo").await.as_deref(), Some("partial"));
+        let frozen: hlb_types::Manifest = serde_yaml_ng::from_str(&through).unwrap();
+        s.upsert_app("demo", &frozen, Some("demo.example.fr"))
+            .await
+            .unwrap();
+        ingress::publish(&o, &s, None).await.unwrap();
+        let withheld = written(&o).pop().unwrap();
+        assert!(!withheld.contains("demo.example.fr"), "{withheld}");
     }
 
     #[tokio::test]

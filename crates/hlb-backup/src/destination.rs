@@ -246,7 +246,7 @@ pub struct Coverage {
 impl Coverage {
     /// Does the app hold anything to back up?
     ///
-    /// 🔴 Valkey, LibreSpeed and Anubis keep nothing: counted, each was "never backed
+    /// 🔴 Valkey and LibreSpeed keep nothing: counted, each was "never backed
     /// up" forever — a critical alert, and the inbox line, nobody could ever clear, and
     /// a rule already firing for them never notified the real loss that came later.
     pub fn needs_backup(&self) -> bool {

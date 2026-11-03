@@ -2359,6 +2359,38 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 - IMAP ACLs (which Stalwart implements) would allow seeing several mailboxes under ONE
   connection instead of configuring three.
 - **The catalog**: 11 apps and 13 platform services today.
+- **Bots and crawlers, done properly — later, and carefully** (owner, 2026-11-03).
+  **Anubis is removed** (owner, the same day): it protected nothing — no chain of the
+  catalog named it — and where it went was the catalog's choice, never the house's. The
+  catalog refuses a chain naming it; a manifest frozen by an older `hlb` keeps that
+  route withheld until `hlb upgrade`, and a house that installed it takes it out with
+  `hlb remove anubis`. Swapping the challenger for a logo (go-away, Cerberus, a fork,
+  Caddy serving other images over Anubis's) was judged too dangerous by the owner — it
+  works around the problem instead of solving it. What a return must answer, read in
+  Anubis v1.28.2's source the same day:
+  - 🔴 Our `DIFFICULTY: "4"` was read by nobody: the built-in policy's thresholds set
+    their own (a browser gets 2), and `DIFFICULTY` only fills a `CHALLENGE` rule
+    without a `challenge:` block (TecharoHQ/anubis#1431).
+  - The built-in policy challenges only a User-Agent matching `Mozilla|Opera`; any
+    other passes, an empty one is denied. So most "No Anubis" comments are a guess:
+    git, DAVx⁵, Immich's and Jellyfin's native clients would pass; the Bitwarden
+    extension, Electron apps and webview TV apps would be challenged. Measure each
+    before deciding, and declare what must never be challenged by path, not by app.
+  - `ANUBIS_ALWAYS_BYPASS` was a hand-maintained list of some apps' paths; they
+    belong in their manifests, generated into a `POLICY_FNAME` file.
+  - The store is in memory, so one replica; subrequest mode answers DENY with 200
+    under the built-in policy (a pass for `forward_auth`) and reads a client-sent
+    `X-Original-Uri` (the shape of GHSA-6wcg-mqvh-fcvg).
+  - Phase 4: with the VPS relaying TCP, `{remote_host}` becomes the relay — the pass
+    is bound to `X-Real-IP`, so PROXY protocol first.
+  - A scraper's native solver outruns a browser's proof-of-work by an order of
+    magnitude (`eternal-flame-AD/pow-buster`): a challenge raises the cost, it is not
+    a wall. What else belongs beside it — rate limits, CrowdSec's scenarios, tarpits —
+    is part of the question.
+  - Left by the removal: `ingress[].chain` now names the one Caddy twice and changes
+    nothing — a declaration nobody reads. It goes with a catalog pull request (every
+    app writes it), and so do the apps' "No Anubis" comments in `homelabus-catalog`,
+    Vikunja's naming `hlb install anubis`.
 
 ### Ruled out, and not coming back
 

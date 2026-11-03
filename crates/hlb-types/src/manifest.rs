@@ -426,9 +426,10 @@ pub const INGRESS_SERVICE: &str = "caddy";
 /// ONE machine, and Caddy must be the thing listening there.
 pub const INGRESS_NODE_LABEL: &str = "hlb.ingress";
 
-/// The links an ingress `chain` may name. `anubis` is a service of its own — the
-/// graph orders it before the app, and a catalog without it is refused.
-pub const CHAIN_LINKS: &[&str] = &["caddy-front", "anubis", "caddy-back"];
+/// The links an ingress `chain` may name. Both are the one `caddy` service: no link
+/// changes the route. `anubis` was one, and is gone — a catalog naming it is refused,
+/// and a frozen manifest's route through it withheld (`hlb_engine::ingress`).
+pub const CHAIN_LINKS: &[&str] = &["caddy-front", "caddy-back"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -436,8 +437,8 @@ pub struct Ingress {
     /// Domain template, resolved at install time.
     pub host: String,
     pub port: u16,
-    /// The ingress chain: caddy-front → anubis → caddy-back. Only `anubis` changes the
-    /// route; the two Caddy links name the one `caddy` service.
+    /// The ingress chain: caddy-front → caddy-back, the two links naming the one
+    /// `caddy` service.
     #[serde(default)]
     pub chain: Vec<String>,
     #[serde(default)]
@@ -451,8 +452,8 @@ pub struct Ingress {
     /// what the app answers a wrong secret with is what CrowdSec bans on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auth_routes: Vec<AuthRoute>,
-    /// 🔴 Paths of this host reached by ANYONE: past the portal, the private ranges and
-    /// Anubis — n8n's production webhooks, which a service outside calls with no
+    /// 🔴 Paths of this host reached by ANYONE: past the portal and the private ranges
+    /// — n8n's production webhooks, which a service outside calls with no
     /// session. The bouncer and the scanners' cut still stand. Exact paths, or a prefix
     /// ending in `*`; never the whole host.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -480,8 +481,7 @@ pub struct AuthRoute {
 ///
 /// Written on the APP's route, never on the companion: whoever reads the route sees
 /// what it publishes, and a companion still has no way to publish itself. The path
-/// takes the route's whole chain — the bouncer, the private ranges, the portal —
-/// except Anubis, whose challenge a websocket cannot solve.
+/// takes the route's whole chain — the bouncer, the private ranges, the portal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PathRoute {
@@ -1184,7 +1184,7 @@ spec:
   ingress:
     - host: "{{ domain }}"
       port: 3456
-      chain: [caddy-front, anubis, caddy-back]
+      chain: [caddy-front, caddy-back]
 "#;
 
     #[test]

@@ -47,8 +47,9 @@ some mistakes loudly; the others are a 502, or a door left open.
   CrowdSec address: a role change passed none and took the bouncer off every route. The
   address is the state's (`hlb crowdsec enroll --url`).
 - **A route frozen before a rule changed still deploys.** Vikunja's chain named an
-  Anubis the catalog never deployed: its route was a 502. Validation refuses it now, and
-  a frozen manifest's route through an absent Anubis is withheld, with `hlb upgrade`
+  Anubis the catalog never deployed: its route was a 502. Anubis is gone since: the
+  catalog refuses a chain naming it, and a frozen manifest's route through it is
+  withheld — published, it would lack the challenge it asks for — with `hlb upgrade`
   named.
 
 ## Checking the exposure

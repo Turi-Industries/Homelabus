@@ -87,7 +87,25 @@ pub async fn routes<O: Orchestrator + ?Sized>(
             continue;
         }
         // The FROZEN manifest, not today's catalog: the deployed state is what counts.
-        let m = state.app_manifest(&name).await?;
+        let mut m = state.app_manifest(&name).await?;
+        // A route through a link this hlb no longer serves — `anubis`, removed — would
+        // be published without the challenge its manifest asks for. Withheld, and
+        // said: the catalog's manifest reaches it through `hlb upgrade`.
+        m.spec.ingress.retain(|ing| {
+            let gone = ing
+                .chain
+                .iter()
+                .find(|l| !hlb_types::manifest::CHAIN_LINKS.contains(&l.as_str()));
+            if let Some(link) = gone {
+                tracing::warn!(
+                    app = %name,
+                    host = %ing.host,
+                    "its chain names \"{link}\", which this hlb does not serve: NOT \
+                     published — hlb upgrade {name}"
+                );
+            }
+            gone.is_none()
+        });
         let domain = state.app_domain(&name).await?;
         // The route only opens once the blocking actions are handled.
         let cleared = state.unverified_blocking(&name).await? == 0;
@@ -102,28 +120,6 @@ pub async fn routes<O: Orchestrator + ?Sized>(
                     r
                 }),
         );
-    }
-    // A manifest frozen before validation refused Anubis without an Anubis: its route
-    // would be a 502 for everyone, published as if it served. Withheld, and said — the
-    // catalog's manifest reaches it through `hlb upgrade`.
-    if routes.iter().any(|r| r.through_anubis)
-        && matches!(
-            orch.status("anubis").await,
-            Err(hlb_orchestrator::Error::NotFound(_))
-        )
-    {
-        routes.retain(|r| {
-            if r.through_anubis {
-                tracing::warn!(
-                    app = %r.service,
-                    host = %r.host,
-                    "its route goes through Anubis, which is not installed: NOT published \
-                     — hlb upgrade {}",
-                    r.service
-                );
-            }
-            !r.through_anubis
-        });
     }
     // Public: invitations are opened from outside, and the interface has its own
     // sign-in. A route to a controller that does not run would be a 502 announced as
@@ -460,26 +456,13 @@ async fn settle<O: Orchestrator + ?Sized>(orch: &O) -> crate::Result<()> {
     )))
 }
 
-/// What an app needs from others, said before it is installed: through an Anubis
-/// nobody installed its route would be withheld, and with another app's volume it
-/// would be placed nowhere.
+/// What an app needs from others, said before it is installed: with another app's
+/// volume it would be placed nowhere.
 pub async fn app_blockers<O: Orchestrator + ?Sized>(
     orch: &O,
     m: &hlb_types::Manifest,
 ) -> Vec<String> {
-    let through = m
-        .spec
-        .ingress
-        .iter()
-        .any(|i| i.chain.iter().any(|l| l == "anubis"));
     let mut out = Vec::new();
-    if through && is_absent(orch, "anubis").await {
-        out.push(format!(
-            "{} goes through Anubis, which is not installed: hlb install anubis --apply \
-             first",
-            m.metadata.name
-        ));
-    }
     // Another app's volume exists once that app runs, on its node: before, the service
     // would be placed nowhere, and the install would time out saying "no suitable node".
     for c in &m.spec.requires {

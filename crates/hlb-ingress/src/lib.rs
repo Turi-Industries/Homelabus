@@ -11,8 +11,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Extracts the routes from a manifest, resolving the domain template.
 ///
-/// Whether traffic goes through Anubis, and which OIDC paths to exclude, are derived
-/// from the manifest: nothing has to be restated on the ingress side.
+/// Whether the portal stands in front is derived from the manifest: nothing has to be
+/// restated on the ingress side.
 ///
 /// `guides_cleared` says whether the app's blocking manual actions have been handled.
 /// That is what gives `expose: after-guide` its meaning: the route stays internal
@@ -22,22 +22,6 @@ pub fn routes_from_manifest(
     domain: Option<&str>,
     guides_cleared: bool,
 ) -> Vec<Route> {
-    let sso_paths: Vec<String> = m
-        .spec
-        .requires
-        .iter()
-        .filter_map(|c| match c {
-            // 🔴 An app's own callbacks, which only `native` has: past Anubis whatever
-            // the mode, a `none` app's paths were open to every bot.
-            hlb_types::Capability::Sso {
-                mode: hlb_types::SsoMode::Native,
-                redirect_paths,
-            } => Some(redirect_paths.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-
     // 🔴 `proxy-header` and `proxy-only` have NO notion of identity of their own:
     // without a portal in front, the app is simply open to everyone. `native` speaks
     // OIDC itself and needs none; `none` is a deliberate exclusion.
@@ -64,13 +48,11 @@ pub fn routes_from_manifest(
                 host,
                 service: m.metadata.name.clone(),
                 port: ing.port,
-                through_anubis: ing.chain.iter().any(|c| c == "anubis"),
                 public: match ing.expose {
                     ExposePolicy::Public => true,
                     ExposePolicy::AfterGuide => guides_cleared,
                     ExposePolicy::Private => false,
                 },
-                sso_paths: sso_paths.clone(),
                 needs_forward_auth: needs_portal,
                 // Filled from the roles the app allows (`hlb_engine::ingress`): closed
                 // until then.
