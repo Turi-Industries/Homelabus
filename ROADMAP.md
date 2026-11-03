@@ -1127,6 +1127,14 @@ and what needs real hardware or a public domain to be measured.
 
 **3. An app without Rust, then the catalog on its own.** Gate: an app enters through a
 pull request to the catalog, with no `hlb` release.
+✅ Passed 2026-11-03 on `v0.4.2`: catalog PR #2 changed Termix's volume from a SQLite
+snapshot to a copy made stopped. Merged, proven by Quality on main, built into index 2
+(Termix `26.10.5~hlb2`), signed by the owner and served by Pages. The lab installed
+Termix from index 1. An unchanged official 0.4.2 binary fetched index 2, and `hlb upgrade
+termix` previewed exactly that change (`copy: stopped`, `sqlite: false`), then applied
+it: the service healthy, `hlb assert termix` four of four, the upgrade preview empty. The
+next `hlb backup run --app termix` scaled Termix to 0, copied it to nas and rest, and
+started it again four seconds later (Swarm's events).
 - The five schema gaps below come first: while no app enters without Rust, a separate
   repository receives pull requests nobody can merge without a release.
 - ✅ The guide frozen beside the manifest — 2026-11-02, the first step of the order
