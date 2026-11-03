@@ -727,12 +727,17 @@ mod tests {
         ] {
             assert!(sheet.contains(needed), "{needed} missing from:\n{sheet}");
         }
-        // Typed back from the sheet's own lines, it is the same share.
+        // Typed back from the sheet's own lines, it is the same share. The block under
+        // its header, not "indented and without `hlb`": the groups are random letters,
+        // and a row drawing "hlb" was dropped, failing one run in a few hundred.
         let typed: String = sheet
             .lines()
-            .filter(|l| l.starts_with("   ") && !l.contains("hlb"))
+            .skip_while(|l| !l.starts_with("The share —"))
+            .skip(2)
+            .take_while(|l| !l.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
+        assert!(!typed.is_empty(), "no share block in:\n{sheet}");
         let read = hlb_secrets::split::Share::read(&typed, 1).expect("read back");
         assert_eq!(&read, share);
         for l in sheet.lines() {
