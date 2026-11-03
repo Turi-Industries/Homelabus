@@ -52,11 +52,7 @@ fn add(c: &mut Catalog, src: &CatalogSource) -> std::result::Result<(), String> 
 /// official catalog, and a source's cache would be read as an app of it.
 fn cache_dir(cli: &Cli, name: &str) -> PathBuf {
     let state = std::path::absolute(&cli.state).unwrap_or_else(|_| cli.state.clone());
-    state
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("catalog-sources")
-        .join(name)
+    hlb_state::source_cache(state.parent().unwrap_or(Path::new(".")), name)
 }
 
 fn day(at: i64) -> String {

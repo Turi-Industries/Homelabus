@@ -1286,14 +1286,13 @@ pub async fn start(
         // Beside the state, where `hlb catalog source fetch` keeps it too: the first
         // tick runs at start, so a house that never fetched reads the official index
         // from its first minute.
-        let official = hlb_engine::sources::Official::carried(
+        let official = hlb_engine::sources::Official::carried(hlb_state::source_cache(
             std::path::absolute(&cfg.state)
                 .unwrap_or_else(|_| cfg.state.clone())
                 .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .join("catalog-sources")
-                .join(hlb_catalog::OFFICIAL),
-        );
+                .unwrap_or(std::path::Path::new(".")),
+            hlb_catalog::OFFICIAL,
+        ));
         tasks.push(tokio::spawn(schedule::every(
             Duration::from_secs(86_400),
             shutdown_rx.clone(),

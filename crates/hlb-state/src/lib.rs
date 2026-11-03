@@ -9,7 +9,7 @@
 //! This database is not irreplaceable: it can be rebuilt from the Git repository and
 //! from the Swarm itself.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use hlb_types::{Guide, Manifest};
@@ -318,6 +318,19 @@ pub struct Release {
     pub version: Option<String>,
 }
 
+/// Where a fetched source's cache is kept, given the directory holding the state.
+pub fn source_cache(state_dir: &Path, name: &str) -> PathBuf {
+    state_dir.join("catalog-sources").join(name)
+}
+
+/// The directory holding the database at `path`, made absolute without resolving
+/// links: the mount a reader came through is the one its paths must go through.
+fn home(path: &Path) -> Option<PathBuf> {
+    std::path::absolute(path)
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
 /// A third-party catalog source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogSource {
@@ -586,6 +599,10 @@ pub struct State {
     /// An in-memory database's second connection, never used: SQLite frees a shared
     /// in-memory database when its LAST connection closes.
     _keeper: Option<SqlitePool>,
+    /// The directory holding the database, as THIS process sees it: the web side mounts
+    /// it elsewhere than the CLI and privd, so a path one of them stores leads the other
+    /// nowhere. `None` in memory.
+    home: Option<PathBuf>,
 }
 
 /// `(mailbox, local, expires_at, active, hint, note)`, as `user_aliases` holds it.
@@ -671,7 +688,9 @@ impl State {
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .foreign_keys(true);
 
-        Self::from_options(opts).await
+        let mut state = Self::from_options(opts).await?;
+        state.home = home(path.as_ref());
+        Ok(state)
     }
 
     /// Opens the database at `path` for reading only — the web side's, while the daemon
@@ -710,6 +729,7 @@ impl State {
         Ok(Self {
             pool,
             _keeper: None,
+            home: home(path.as_ref()),
         })
     }
 
@@ -748,6 +768,7 @@ impl State {
         Ok(Self {
             pool,
             _keeper: None,
+            home: None,
         })
     }
 
@@ -950,14 +971,22 @@ impl State {
                 let url: Option<String> = r.try_get("url")?;
                 let key: Option<String> = r.try_get("key")?;
                 let counter: Option<i64> = r.try_get("counter")?;
+                let name: String = r.try_get("name")?;
+                let signed = url.zip(key).map(|(url, key)| SignedSource {
+                    url,
+                    key,
+                    counter: counter.map(|c| c as u64),
+                });
+                // A fetched source's cache is always beside the state, so it is derived
+                // here rather than read: the stored path is the writer's view of it.
+                let directory = match (&signed, &self.home) {
+                    (Some(_), Some(home)) => source_cache(home, &name).display().to_string(),
+                    _ => r.try_get("directory")?,
+                };
                 Ok(CatalogSource {
-                    name: r.try_get("name")?,
-                    directory: r.try_get("directory")?,
-                    signed: url.zip(key).map(|(url, key)| SignedSource {
-                        url,
-                        key,
-                        counter: counter.map(|c| c as u64),
-                    }),
+                    name,
+                    directory,
+                    signed,
                 })
             })
             .collect()
@@ -5344,6 +5373,59 @@ mod tests {
             (signed.url.as_str(), signed.counter),
             ("https://b.example/catalog", Some(7))
         );
+    }
+
+    /// The web side mounts the state's directory at `/state`, where the CLI and privd
+    /// see `/var/lib/homelabus`: a cache path one of them wrote led the other nowhere,
+    /// and the interface showed the carried catalog in place of the signed index.
+    #[tokio::test]
+    async fn a_fetched_source_is_read_where_the_reader_sees_the_state() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let writer = root.path().join("var-lib-homelabus");
+        std::fs::create_dir(&writer).expect("writer's directory");
+        let w = State::open(writer.join("hlb.db")).await.expect("written");
+        w.add_catalog_source(&CatalogSource {
+            name: "community".into(),
+            directory: source_cache(&writer, "community").display().to_string(),
+            signed: Some(SignedSource {
+                url: "https://example.org/catalog".into(),
+                key: "00".repeat(32),
+                counter: None,
+            }),
+        })
+        .await
+        .expect("added");
+        w.add_catalog_source(&CatalogSource {
+            name: "mine".into(),
+            directory: "/srv/my-apps".into(),
+            signed: None,
+        })
+        .await
+        .expect("added");
+        drop(w);
+
+        let mounted = root.path().join("state");
+        std::os::unix::fs::symlink(&writer, &mounted).expect("the other mount");
+        let r = State::open_read_only(mounted.join("hlb.db"))
+            .await
+            .expect("read");
+        let read = r.catalog_sources().await.expect("sources");
+        let dir = |n: &str| {
+            read.iter()
+                .find(|s| s.name == n)
+                .map(|s| s.directory.clone())
+                .expect("source")
+        };
+        assert_eq!(
+            dir("community"),
+            mounted
+                .join("catalog-sources")
+                .join("community")
+                .display()
+                .to_string()
+        );
+        // A directory someone added is theirs: nothing to derive it from.
+        assert_eq!(dir("mine"), "/srv/my-apps");
     }
 
     fn manifest(name: &str) -> Manifest {
