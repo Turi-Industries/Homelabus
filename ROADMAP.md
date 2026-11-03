@@ -2372,8 +2372,8 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     their own (a browser gets 2), and `DIFFICULTY` only fills a `CHALLENGE` rule
     without a `challenge:` block (TecharoHQ/anubis#1431).
   - The built-in policy challenges only a User-Agent matching `Mozilla|Opera`; any
-    other passes, an empty one is denied. So most "No Anubis" comments are a guess:
-    git, DAVx⁵, Immich's and Jellyfin's native clients would pass; the Bitwarden
+    other passes, an empty one is denied. So most of the apps' proof-of-work comments
+    ("No Anubis" until the removal) are a guess: git, DAVx⁵, Immich's and Jellyfin's native clients would pass; the Bitwarden
     extension, Electron apps and webview TV apps would be challenged. Measure each
     before deciding, and declare what must never be challenged by path, not by app.
   - `ANUBIS_ALWAYS_BYPASS` was a hand-maintained list of some apps' paths; they
@@ -2387,10 +2387,10 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     magnitude (`eternal-flame-AD/pow-buster`): a challenge raises the cost, it is not
     a wall. What else belongs beside it — rate limits, CrowdSec's scenarios, tarpits —
     is part of the question.
-  - Left by the removal: `ingress[].chain` now names the one Caddy twice and changes
-    nothing — a declaration nobody reads. It goes with a catalog pull request (every
-    app writes it), and so do the apps' "No Anubis" comments in `homelabus-catalog`,
-    Vikunja's naming `hlb install anubis`.
+  - Left by the removal: `ingress[].chain` is gone from the apps (catalog #3) and from
+    the plan, but the schema still reads it, because a frozen manifest carries it and
+    `deny_unknown_fields` would refuse that manifest. It leaves the schema once no
+    house can hold one, and until then a link nothing serves stays refused.
 
 ### Ruled out, and not coming back
 
