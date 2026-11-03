@@ -3,6 +3,33 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.3] — 2026-11-03
+
+Anubis is gone from Homelabus. Its built-in policy ignored the difficulty set for it
+and challenged browser User-Agents only, so it protected less than it appeared to;
+bot protection will come back when it can be done properly. The interface shows the
+signed index again where the web side reads the state under another path, and a
+backup waits for a repository's lock instead of failing on it.
+
+**Upgrading from 0.4.2:**
+
+- No migration: 0.4.2 and 0.4.3 open the same state.
+- If Anubis is installed, remove it: `hlb remove anubis --confirm anubis --apply`.
+- A route whose frozen manifest names `anubis` in its chain is no longer published,
+  rather than published without the challenge it asks for: `hlb upgrade <app>` brings
+  it back. The catalog now refuses a chain naming it.
+- Each app's route is published once more at its next apply. Nothing restarts.
+
+### Fixed
+
+- Stop calling a route without a chain "direct" in a preview
+- Read a fetched source's cache where the reader sees the state
+- Wait for a repository's lock rather than fail the backup
+
+### Removed
+
+- Remove Anubis
+
 ## [0.4.2] — 2026-11-02
 
 The first run of the catalog's CI on fresh houses found two installs that stopped on
