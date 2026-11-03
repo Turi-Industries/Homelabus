@@ -122,6 +122,18 @@ impl Snapshot {
 /// Default identity of the snapshots. Stable by construction.
 pub const DEFAULT_HOST: &str = "homelabus";
 
+/// How long a command waits for another's lock on the repository before failing. The
+/// daemon's loops share destinations: a backup starting during the upkeep's prune
+/// failed at once without it. Not for ever: a read-only mount retries its lock
+/// endlessly, and a wait with no end is a pass that never reports.
+pub const LOCK_WAIT: &str = "10m";
+
+/// `args` waiting [`LOCK_WAIT`] for a lock held by another command.
+fn waiting(mut args: Vec<String>) -> Vec<String> {
+    args.extend(["--retry-lock".to_string(), LOCK_WAIT.to_string()]);
+    args
+}
+
 /// A restic repository, with its location and its password.
 pub struct Repository<R: Runner> {
     runner: R,
@@ -190,11 +202,12 @@ impl<R: Runner> Repository<R> {
     }
 
     async fn exec(&self, args: &[&str]) -> Result<Output> {
-        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let command = args.join(" ");
+        let args = waiting(args.iter().map(|s| s.to_string()).collect());
         let out = self.runner.run(&args, &self.env()).await?;
         if !out.ok() {
             return Err(Error::Restic {
-                command: args.join(" "),
+                command,
                 stderr: out.stderr.trim().to_string(),
             });
         }
@@ -265,7 +278,10 @@ impl<R: Runner> Repository<R> {
         for t in tags {
             args.extend(["--tag".to_string(), t.to_string()]);
         }
-        let out = self.runner.run_from(&args, &self.env(), input).await?;
+        let out = self
+            .runner
+            .run_from(&waiting(args), &self.env(), input)
+            .await?;
         if !out.ok() {
             return Err(Error::Restic {
                 command: "backup --stdin".into(),
@@ -286,7 +302,10 @@ impl<R: Runner> Repository<R> {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let o = self.runner.run_into(&args, &self.env(), out).await?;
+        let o = self
+            .runner
+            .run_into(&waiting(args), &self.env(), out)
+            .await?;
         if !o.ok() {
             return Err(Error::Restic {
                 command: format!("dump {snapshot} {path}"),
@@ -475,6 +494,22 @@ mod tests {
                 o[0].clone()
             })
         }
+        async fn run_from(
+            &self,
+            args: &[String],
+            env: &[(String, String)],
+            _: &mut (dyn tokio::io::AsyncRead + Send + Unpin),
+        ) -> Result<Output> {
+            self.run(args, env).await
+        }
+        async fn run_into(
+            &self,
+            args: &[String],
+            env: &[(String, String)],
+            _: &mut (dyn tokio::io::AsyncWrite + Send + Unpin),
+        ) -> Result<Output> {
+            self.run(args, env).await
+        }
     }
 
     fn repo(f: Fake) -> Repository<Fake> {
@@ -501,6 +536,40 @@ mod tests {
             .any(|(k, v)| k == "RESTIC_PASSWORD" && v == "test-password"));
     }
 
+    /// 🔴 Two loops of one daemon reach a repository at once: the lab's start ran the
+    /// upkeep's exclusive lock and a pre-update backup four seconds apart, and the
+    /// backup failed on "repository is already locked" instead of waiting.
+    #[tokio::test]
+    async fn every_command_waits_for_a_lock_rather_than_failing() {
+        let r = repo(Fake::ok(
+            r#"{"message_type":"summary","snapshot_id":"abc"}"#,
+        ));
+        r.backup("/donnees/app-data", &["app:a"])
+            .await
+            .expect("backup");
+        let _ = r.snapshots(None).await;
+        r.check().await.expect("check");
+        r.forget_snapshot("abc").await.expect("forget");
+        r.restore_path("abc", "/donnees/app-data")
+            .await
+            .expect("restore");
+        r.backup_stdin("dump.sql", &[], &mut tokio::io::empty())
+            .await
+            .expect("stdin");
+        r.dump("abc", "/dump.sql", &mut tokio::io::sink())
+            .await
+            .expect("dump");
+        let calls = r.runner.calls.lock().expect("mutex");
+        assert_eq!(calls.len(), 7);
+        for c in calls.iter() {
+            assert!(
+                c.windows(2)
+                    .any(|w| w[0] == "--retry-lock" && w[1] == LOCK_WAIT),
+                "no lock wait: {c:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_restore_in_place_takes_one_path_and_deletes_what_came_since() {
         let r = repo(Fake::ok(""));
@@ -515,7 +584,9 @@ mod tests {
                 "3de83a48:/donnees/app-data",
                 "--target",
                 "/donnees/app-data",
-                "--delete"
+                "--delete",
+                "--retry-lock",
+                LOCK_WAIT
             ]
         );
     }
@@ -659,7 +730,9 @@ mod tests {
                 "restore",
                 "3de83a48:/donnees/app-data/data",
                 "--target",
-                "/donnees/app-data/data"
+                "/donnees/app-data/data",
+                "--retry-lock",
+                LOCK_WAIT
             ]
         );
     }

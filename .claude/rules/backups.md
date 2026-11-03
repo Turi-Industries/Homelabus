@@ -52,6 +52,10 @@ during an outage.
 - **restic reading a repository mounted read-only waits for ever.** It retries its
   lock every minute (`read-only file system`) and never fails: a drill reading a
   destination by hand passes `--no-lock`.
+- **A locked repository fails a backup at once.** The daemon's loops share
+  destinations: at privd's start the upkeep's prune held `nas` exclusively and a backup
+  four seconds later exited 11, "already locked". Every command `Repository` runs waits
+  `LOCK_WAIT` (`--retry-lock`), measured on 0.19.1 against a prune held 25 s.
 - **🔴 An engine's store copied live restores nothing, and restic says nothing.**
   restic 0.19.1 reads a directory in name order, so RocksDB's `MANIFEST-*` comes after
   its `000*.sst`: a flush between the two left a copy naming an SST it never took, and
