@@ -3,6 +3,52 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.5] — 2026-11-04
+
+The daemon now reads every app's backups back each week: volumes, database dumps restored
+into a disposable server, SQLite snapshots and buckets, all counted and none started. A
+service a backup's copy stopped comes back at the count it ran with, whoever started it
+again, where a daemon replaced during a copy could leave Termix or Stalwart at 0. Restoring
+a bucket no longer reports a failure after writing every object back. An app whose services
+are not installed is refused at preview, naming the command that installs each.
+
+**Upgrading from 0.4.4:**
+
+- Migrations 0055 and 0056 run at the first start: 0.4.4 cannot open the state after.
+- Do not replace the daemon during a backup pass. A copy a 0.4.4 daemon leaves unfinished
+  recorded no count, so 0.4.5 does not start that service: once its hold ends, within a
+  day, `hlb reconcile --apply` does.
+- The daemon reads one app an hour and needs room to do it. Unasked, it refuses a reading
+  that would not leave a tenth of the disk free, a dump past 1 GiB, and an S3 destination
+  past 5 GiB: those stay yours, with `hlb backup verify`.
+- The daemon asks the registries daily for updates, ten minutes or more after a start, and
+  applies nothing. A pass over the lab's 12 apps spent 26 of Docker Hub's 100 anonymous
+  manifest reads an hour.
+- A preview refusing an app it used to list means applying it would have failed: install
+  what it names first.
+
+### Added
+
+- Restore each dump into a disposable server when reading an app's backups back
+
+### Fixed
+
+- Refuse an app at preview while a service it needs is not installed
+
+### Changed
+
+- Time a bare machine to its first app, and read the result in the scorecard
+- Give the path a bare machine really takes, and record what it cost
+- Read every app's volumes back each week, and refuse what would not fit
+- Read SQLite snapshots and buckets back with the rest of an app's backups
+- Count the apps read back in the scorecard
+- Record the lab's backups read back, and what a reading leaves to do
+- Record when each update was first seen, and how long it took to apply
+- Give back what a backup's copy stopped, whoever started it again
+- Count how long updates take in the scorecard
+- Record how long the lab's updates took
+- Hold bech32 on the version age uses
+
 ## [0.4.4] — 2026-11-04
 
 Removing an app now says everything it leaves behind, and forgetting its secrets
