@@ -32,6 +32,7 @@ pub struct ReconcileLoop<O: Orchestrator> {
     reconciled: Option<LastReconciled>,
     /// Garage, whose buckets and keys each pass checks the apps' against.
     store: Option<Arc<hlb_objstore::Garage>>,
+    portal: Option<Arc<hlb_identity::PocketId>>,
     vault: Option<Arc<hlb_secrets::Vault>>,
 }
 
@@ -54,6 +55,7 @@ impl<O: Orchestrator> ReconcileLoop<O> {
             drifts: None,
             reconciled: None,
             store: None,
+            portal: None,
             vault: None,
         }
     }
@@ -66,6 +68,12 @@ impl<O: Orchestrator> ReconcileLoop<O> {
     ) -> Self {
         self.store = Some(store);
         self.vault = vault;
+        self
+    }
+
+    /// Check what the portal's client accepts on every pass.
+    pub fn with_portal(mut self, portal: Arc<hlb_identity::PocketId>) -> Self {
+        self.portal = Some(portal);
         self
     }
 
@@ -92,6 +100,9 @@ impl<O: Orchestrator> ReconcileLoop<O> {
         let mut reconciler = Reconciler::new(&*self.orchestrator, &self.state);
         if let Some(g) = &self.store {
             reconciler = reconciler.with_store(&**g, self.vault.as_deref());
+        }
+        if let Some(pid) = &self.portal {
+            reconciler = reconciler.with_portal(&**pid);
         }
         match reconciler.reconcile(self.apply).await {
             Ok(report) => {

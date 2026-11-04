@@ -1041,3 +1041,118 @@ async fn garage_is_not_asked_when_no_running_app_holds_a_bucket() {
         .unwrap();
     assert!(report.is_clean(), "{:?}", report.drifts);
 }
+
+struct Portal(Result<Option<Vec<String>>, String>);
+
+#[async_trait]
+impl hlb_engine::PortalClient for Portal {
+    async fn callbacks(&self) -> Result<Option<Vec<String>>, String> {
+        self.0.clone()
+    }
+}
+
+fn accepting(urls: &[&str]) -> Portal {
+    Portal(Ok(Some(urls.iter().map(|u| u.to_string()).collect())))
+}
+
+async fn state_behind_portal() -> State {
+    let s = State::in_memory().await.unwrap();
+    let portal: hlb_types::Manifest = serde_yaml_ng::from_str(
+        r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: oauth2-proxy }
+spec:
+  image: { repo: a/portal, tag: "1" }
+  requires:
+    - { kind: sso, mode: native, redirectPaths: ["/oauth2/callback"] }
+"#,
+    )
+    .unwrap();
+    let wiki: hlb_types::Manifest = serde_yaml_ng::from_str(
+        r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: wiki }
+spec:
+  image: { repo: a/wiki, tag: "1" }
+  requires:
+    - { kind: sso, mode: proxy-only }
+"#,
+    )
+    .unwrap();
+    s.upsert_app("oauth2-proxy", &portal, Some("auth.example.test"))
+        .await
+        .unwrap();
+    s.upsert_app("wiki", &wiki, Some("wiki.example.test"))
+        .await
+        .unwrap();
+    s
+}
+
+const AUTH: &str = "https://auth.example.test/oauth2/callback";
+const WIKI: &str = "https://wiki.example.test/oauth2/callback";
+const OLD: &str = "https://old.example.test/oauth2/callback";
+
+#[tokio::test]
+async fn a_callback_no_installed_app_has_is_reported_and_left_alone() {
+    let s = state_behind_portal().await;
+    let o = Fake::with(Vec::new());
+    let portal = accepting(&[AUTH, WIKI, OLD]);
+    let report = Reconciler::new(&o, &s)
+        .with_portal(&portal)
+        .reconcile(true)
+        .await
+        .unwrap();
+    let orphans: Vec<&Drift> = report
+        .drifts
+        .iter()
+        .filter(|d| matches!(d, Drift::OrphanCallback { .. }))
+        .collect();
+    assert_eq!(
+        orphans,
+        vec![&Drift::OrphanCallback { url: OLD.into() }],
+        "the portal's own and the app's are claimed"
+    );
+    assert!(!orphans[0].is_correctable());
+    assert_eq!(
+        orphans[0].fix().as_deref(),
+        Some("hlb portal drop-callback https://old.example.test/oauth2/callback --apply")
+    );
+    assert!(report
+        .corrected
+        .iter()
+        .all(|d| !matches!(d, Drift::OrphanCallback { .. })));
+}
+
+#[tokio::test]
+async fn no_portal_installed_or_answering_reports_no_callback() {
+    let orphans = |report: hlb_engine::Report| {
+        report
+            .drifts
+            .iter()
+            .filter(|d| matches!(d, Drift::OrphanCallback { .. }))
+            .count()
+    };
+    let o = Fake::with(Vec::new());
+
+    // A client of that name with no portal installed is not the portal's.
+    let empty = State::in_memory().await.unwrap();
+    let portal = accepting(&[OLD]);
+    let report = Reconciler::new(&o, &empty)
+        .with_portal(&portal)
+        .reconcile(false)
+        .await
+        .unwrap();
+    assert_eq!(orphans(report), 0);
+
+    let s = state_behind_portal().await;
+    for silent in [Portal(Err("refused".into())), Portal(Ok(None))] {
+        let report = Reconciler::new(&o, &s)
+            .with_portal(&silent)
+            .reconcile(false)
+            .await
+            .unwrap();
+        assert_eq!(orphans(report), 0);
+    }
+}

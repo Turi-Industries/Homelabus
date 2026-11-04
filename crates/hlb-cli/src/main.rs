@@ -407,6 +407,10 @@ enum Command {
     #[command(subcommand)]
     Garage(GarageCmd),
 
+    /// The portal's OIDC client, which every app behind the portal signs in through.
+    #[command(subcommand)]
+    Portal(PortalCmd),
+
     Secrets,
 
     /// 🔴 Re-encrypt every secret under a NEW master key.
@@ -1267,6 +1271,17 @@ enum StorageCmd {
         /// The network allowed to mount, e.g. `10.0.0.0/24`.
         #[arg(long)]
         network: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PortalCmd {
+    /// Stop the portal accepting a return to this URL. An installed app's is refused;
+    /// a reinstall adds its own back. Preview by default.
+    DropCallback {
+        url: String,
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -6751,9 +6766,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     _ => None,
                 };
                 let vault = open_vault(&cli).ok();
+                let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
+                    (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(
+                        relay::reach(u, &cli.platform_network),
+                        k,
+                    )),
+                    _ => None,
+                };
                 let mut reconciler = Reconciler::new(&orch, &state);
                 if let Some(g) = &garage {
                     reconciler = reconciler.with_store(g, vault.as_ref());
+                }
+                if let Some(pid) = &identity {
+                    reconciler = reconciler.with_portal(pid);
                 }
                 let report = reconciler.reconcile(*apply).await?;
                 if garage.is_none() {
@@ -9784,8 +9809,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 for name in &secrets {
                     println!("  · {name}");
                 }
+                let apps: Vec<String> = state
+                    .installed_apps()
+                    .await?
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
                 for leftover in &leftovers {
-                    println!("  · {}", leftover.said(app));
+                    println!("  · {}", leftover.said(app, &apps));
                 }
                 if !secrets.is_empty() {
                     println!(
@@ -10883,6 +10914,64 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
                 }
+            })
+        }
+
+        Command::Portal(PortalCmd::DropCallback { url, apply }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = open_state(&cli).await?;
+                if hlb_engine::claimed_callbacks(&state).await?.contains(url) {
+                    eprintln!("🔴 An installed app is served at {url}: it stays.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                }
+                println!("{url} is taken off the portal's OIDC client");
+                if !*apply {
+                    println!("\nPreview: nothing was done.");
+                    println!("  hlb portal drop-callback {url} --apply");
+                    return Ok(ExitCode::SUCCESS);
+                }
+                let (Some(u), Some(k)) = (&cli.pocketid_url, &cli.pocketid_key) else {
+                    eprintln!(
+                        "🔴 No PocketID given here (HLB_POCKETID_URL, HLB_POCKETID_KEY): nothing \
+                         was done."
+                    );
+                    return Ok(ExitCode::FAILURE);
+                };
+                let pid = hlb_identity::PocketId::new(relay::reach(u, &cli.platform_network), k);
+                let dropped = pid
+                    .drop_callback(hlb_types::capability::PORTAL_SERVICE, url)
+                    .await?;
+                let (outcome, done) = match dropped {
+                    hlb_identity::CallbackDrop::Dropped => ("ok", true),
+                    hlb_identity::CallbackDrop::NotThere => ("absent", true),
+                    hlb_identity::CallbackDrop::OnlyOne => ("refused", false),
+                };
+                state
+                    .audit(
+                        "cli",
+                        ACTOR_ROLE,
+                        "portal-callback-drop",
+                        url,
+                        outcome,
+                        None,
+                    )
+                    .await?;
+                match dropped {
+                    hlb_identity::CallbackDrop::Dropped => println!("✓ taken off"),
+                    hlb_identity::CallbackDrop::NotThere => {
+                        println!("· the portal's client did not accept it")
+                    }
+                    hlb_identity::CallbackDrop::OnlyOne => eprintln!(
+                        "🔴 It is the client's only callback, and it stays: an older PocketID gives \
+                         a client with none to whoever asks first."
+                    ),
+                }
+                Ok(if done {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                })
             })
         }
 

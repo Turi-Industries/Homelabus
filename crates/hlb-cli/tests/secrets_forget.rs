@@ -90,7 +90,7 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     assert!(text(&preview).contains("anubis-signing-key"));
     assert!(text(&preview).contains("Preview"));
     assert!(
-        text(&preview).contains("the OIDC client \"anubis\" is deleted from PocketID"),
+        text(&preview).contains("PocketID is not installed"),
         "{}",
         text(&preview)
     );
@@ -103,17 +103,20 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     assert!(!wrong.status.success(), "{}", text(&wrong));
     assert!(vault(dir).contains("anubis-signing-key"));
 
-    // No PocketID given: its client is still there, so what opens it stays, and the run
-    // says it did not finish. Forgotten here, a reinstall would stop on that client.
+    // PocketID is not installed: nothing to ask, and what opened its client goes.
     let done = hlb(
         dir,
         &["secrets-forget", "anubis", "--confirm", "anubis", "--apply"],
     );
-    assert!(!done.status.success(), "{}", text(&done));
-    assert!(text(&done).contains("no PocketID given"), "{}", text(&done));
+    assert!(done.status.success(), "{}", text(&done));
+    assert!(
+        text(&done).contains("If its volume comes back"),
+        "{}",
+        text(&done)
+    );
     let left = vault(dir);
     assert!(!left.contains("anubis-signing-key"), "{left}");
-    assert!(left.contains("anubis-oidc-secret"), "{left}");
+    assert!(!left.contains("anubis-oidc-secret"), "{left}");
     assert!(left.contains("restic-repo-password"), "{left}");
     assert!(left.contains("cluster-ca"), "{left}");
 
@@ -169,22 +172,26 @@ fn an_installed_app_s_secrets_stay_whatever_its_past() {
     assert!(text(&hlb(dir, &["secrets"])).contains("gitea-db-password"));
 }
 
-#[test]
-fn a_removed_app_s_callback_is_named_with_no_secret_left_and_stays_until_it_goes() {
-    let house = tempfile::tempdir().expect("house");
-    let dir = house.path();
-    assert!(hlb(dir, &["emergency", "kit"]).status.success());
-
-    let (rt, state) = state_of(dir);
+/// With PocketID installed and out of reach, a run must keep what it could not finish.
+fn behind_an_installed_pocket_id(rt: &tokio::runtime::Runtime, state: &hlb_state::State) {
     rt.block_on(async {
-        let manifest = serde_json::from_str(
-            r#"{"apiVersion":"hlb/v1","kind":"App","metadata":{"name":"wiki"},
-                "spec":{"image":{"repo":"a/b","tag":"1"},
-                        "requires":[{"kind":"sso","mode":"proxy-only"}]}}"#,
-        )
-        .expect("manifest");
+        let manifest = |name: &str, requires: &str| {
+            serde_json::from_str::<hlb_types::Manifest>(&format!(
+                r#"{{"apiVersion":"hlb/v1","kind":"App","metadata":{{"name":"{name}"}},
+                    "spec":{{"image":{{"repo":"a/b","tag":"1"}},"requires":[{requires}]}}}}"#
+            ))
+            .expect("manifest")
+        };
         state
-            .upsert_app("wiki", &manifest, Some("wiki.example.test"))
+            .upsert_app("pocket-id", &manifest("pocket-id", ""), None)
+            .await
+            .expect("app");
+        state
+            .upsert_app(
+                "wiki",
+                &manifest("wiki", r#"{"kind":"sso","mode":"proxy-only"}"#),
+                Some("wiki.example.test"),
+            )
             .await
             .expect("app");
         state.forget_app("wiki").await.expect("forgotten");
@@ -200,20 +207,79 @@ fn a_removed_app_s_callback_is_named_with_no_secret_left_and_stays_until_it_goes
             .await
             .expect("audit");
     });
+}
+
+#[test]
+fn what_an_installed_service_still_holds_keeps_its_secrets_and_its_domain() {
+    let house = tempfile::tempdir().expect("house");
+    let dir = house.path();
+    assert!(hlb(dir, &["emergency", "kit"]).status.success());
+    deposit(dir, "wiki-oidc-secret");
+    deposit(dir, "wiki-signing-key");
+    let (rt, state) = state_of(dir);
+    behind_an_installed_pocket_id(&rt, &state);
 
     let url = "https://wiki.example.test/oauth2/callback";
     let preview = hlb(dir, &["secrets-forget", "wiki"]);
     assert!(preview.status.success(), "{}", text(&preview));
     assert!(text(&preview).contains(url), "{}", text(&preview));
+    assert!(
+        text(&preview).contains("is deleted from PocketID"),
+        "{}",
+        text(&preview)
+    );
 
+    // No PocketID given: forgotten here, a reinstall would stop on that client.
     let done = hlb(
         dir,
         &["secrets-forget", "wiki", "--confirm", "wiki", "--apply"],
     );
     assert!(!done.status.success(), "{}", text(&done));
+    assert!(text(&done).contains("no PocketID given"), "{}", text(&done));
+    let left = text(&hlb(dir, &["secrets"]));
+    assert!(!left.contains("wiki-signing-key"), "{left}");
+    assert!(left.contains("wiki-oidc-secret"), "{left}");
     assert_eq!(
         rt.block_on(state.removed_domains("wiki")).expect("domains"),
         vec!["wiki.example.test".to_string()],
         "kept for the run that finishes it"
+    );
+}
+
+#[test]
+fn a_callback_goes_by_preview_and_never_an_installed_app_s() {
+    let house = tempfile::tempdir().expect("house");
+    let dir = house.path();
+    assert!(hlb(dir, &["emergency", "kit"]).status.success());
+    let (rt, state) = state_of(dir);
+    rt.block_on(async {
+        let manifest: hlb_types::Manifest = serde_json::from_str(
+            r#"{"apiVersion":"hlb/v1","kind":"App","metadata":{"name":"wiki"},
+                "spec":{"image":{"repo":"a/b","tag":"1"},
+                        "requires":[{"kind":"sso","mode":"proxy-only"}]}}"#,
+        )
+        .expect("manifest");
+        state
+            .upsert_app("wiki", &manifest, Some("wiki.example.test"))
+            .await
+            .expect("app");
+    });
+
+    let served = "https://wiki.example.test/oauth2/callback";
+    let refused = hlb(dir, &["portal", "drop-callback", served, "--apply"]);
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(text(&refused).contains("it stays"), "{}", text(&refused));
+
+    let old = "https://old.example.test/oauth2/callback";
+    let preview = hlb(dir, &["portal", "drop-callback", old]);
+    assert!(preview.status.success(), "{}", text(&preview));
+    assert!(text(&preview).contains("Preview"), "{}", text(&preview));
+
+    let out_of_reach = hlb(dir, &["portal", "drop-callback", old, "--apply"]);
+    assert!(!out_of_reach.status.success(), "{}", text(&out_of_reach));
+    assert!(
+        text(&out_of_reach).contains("nothing was done"),
+        "{}",
+        text(&out_of_reach)
     );
 }

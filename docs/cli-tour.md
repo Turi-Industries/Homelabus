@@ -76,6 +76,7 @@ blocks new installs and upgrades from the source, never what runs.
 ./target/debug/hlb stop gitea                # 0 replicas, everything else kept
 ./target/debug/hlb remove gitea --confirm gitea --apply
 ./target/debug/hlb secrets-forget gitea --confirm gitea --apply   # what the removal left in the vault, and what those secrets open
+./target/debug/hlb portal drop-callback https://old.example.org/oauth2/callback --apply   # one no installed app has: `hlb reconcile` names them
 ```
 
 `scale ... 0` is refused on purpose: scaling to zero is a shutdown, not a resize, and

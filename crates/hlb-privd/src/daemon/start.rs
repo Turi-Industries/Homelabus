@@ -393,6 +393,9 @@ pub async fn start(
                 hlb_secrets::Vault::open(&cfg.master_key).ok().map(Arc::new),
             );
         }
+        if let (Some(url), Some(key)) = (&cfg.pocketid_url, &cfg.pocketid_key) {
+            rl = rl.with_portal(Arc::new(hlb_identity::PocketId::new(url, key)));
+        }
         let rl = Arc::new(rl);
         let rx = shutdown_rx.clone();
         let mirror = cfg.git_mirror.clone();

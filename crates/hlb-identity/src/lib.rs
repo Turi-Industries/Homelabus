@@ -441,8 +441,9 @@ impl PocketId {
 
     /// Has the client named `name` stop accepting `url`, keeping every other field and
     /// URL: the portal's client carries one per app behind it, and an update replaces
-    /// what it is sent. Its last URL stays: an empty list is not left for PocketID to
-    /// interpret, on the client every app behind the portal signs in with.
+    /// what it is sent. 🔴 Its last URL stays: PocketID 2.0 saves the first callback asked
+    /// of a client with none (`addCallbackURLToClient`), so whoever asks next chooses
+    /// where sign-ins return. 2.18 refuses instead, and a pinned PocketID stays older.
     pub async fn drop_callback(&self, name: &str, url: &str) -> Result<CallbackDrop> {
         let Some(found) = self.find_by_name(name).await? else {
             return Ok(CallbackDrop::NotThere);

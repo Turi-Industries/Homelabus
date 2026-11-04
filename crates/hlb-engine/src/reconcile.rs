@@ -87,6 +87,10 @@ pub enum Drift {
     /// Garage did not answer: whether the apps' buckets are there is not known — never
     /// read as "they are".
     StorageUnread { why: String },
+
+    /// The portal's OIDC client accepts a return to a URL no installed app is served at:
+    /// an app removed before its domain was kept, or moved, or added by hand.
+    OrphanCallback { url: String },
 }
 
 impl Drift {
@@ -110,6 +114,7 @@ impl Drift {
                 }
                 Some(fix)
             }
+            Self::OrphanCallback { url } => Some(format!("hlb portal drop-callback {url} --apply")),
             Self::ServiceMissing { .. }
             | Self::ReplicasDiverged { .. }
             | Self::ImageDiverged { .. }
@@ -160,6 +165,10 @@ impl Drift {
                 "nothing is known of the apps' buckets until Garage answers: nothing \
                  is done on a guess",
             ),
+            Self::OrphanCallback { .. } => Some(
+                "a callback added by hand reads the same as one left behind, and only a \
+                 person knows which this is",
+            ),
         }
     }
 
@@ -187,6 +196,7 @@ impl Drift {
             Self::ReplicasDiverged { .. }
             | Self::ImageDiverged { .. }
             | Self::OrphanService { .. }
+            | Self::OrphanCallback { .. }
             | Self::Converging { .. }
             | Self::Held { .. } => Harmless,
         }
@@ -202,6 +212,7 @@ impl Drift {
             | Self::StorageLost { app, .. } => app,
             Self::OrphanService { name } => name,
             Self::StorageUnread { .. } => "garage",
+            Self::OrphanCallback { .. } => hlb_types::capability::PORTAL_SERVICE,
         }
     }
 }
@@ -262,6 +273,11 @@ impl std::fmt::Display for Drift {
             Self::StorageUnread { why } => {
                 write!(f, "garage: the apps' buckets could not be read — {why}")
             }
+            Self::OrphanCallback { url } => write!(
+                f,
+                "{}: accepts a return to {url}, where no installed app is served",
+                hlb_types::capability::PORTAL_SERVICE
+            ),
         }
     }
 }
@@ -383,6 +399,66 @@ pub fn app_buckets(app: &str, manifest: &hlb_types::Manifest) -> Vec<AppBucket> 
         .collect()
 }
 
+/// What the portal's OIDC client accepts, `None` with no such client — PocketID, or a
+/// test's.
+#[async_trait::async_trait]
+pub trait PortalClient: Send + Sync {
+    async fn callbacks(&self) -> std::result::Result<Option<Vec<String>>, String>;
+}
+
+#[async_trait::async_trait]
+impl PortalClient for hlb_identity::PocketId {
+    async fn callbacks(&self) -> std::result::Result<Option<Vec<String>>, String> {
+        self.find_by_name(hlb_types::capability::PORTAL_SERVICE)
+            .await
+            .map(|client| client.map(|c| c.callback_urls))
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The callbacks an app has on the portal's client, as the resolver makes them.
+fn portal_callbacks_of(app: &str, domain: &str, manifest: &hlb_types::Manifest) -> Vec<String> {
+    let mut urls = Vec::new();
+    for need in &manifest.spec.requires {
+        if let hlb_types::Capability::Sso {
+            mode,
+            redirect_paths,
+        } = need
+        {
+            match mode {
+                hlb_types::SsoMode::None => {}
+                // Its own client only for the portal itself; another app's is its own.
+                hlb_types::SsoMode::Native => {
+                    if app == hlb_types::capability::PORTAL_SERVICE {
+                        urls.extend(
+                            redirect_paths
+                                .iter()
+                                .map(|p| format!("https://{domain}{p}")),
+                        );
+                    }
+                }
+                hlb_types::SsoMode::ProxyOnly | hlb_types::SsoMode::ProxyHeader => {
+                    urls.push(format!("https://{domain}{}", hlb_resolver::PORTAL_CALLBACK));
+                }
+            }
+        }
+    }
+    urls
+}
+
+/// Every callback an installed app has on the portal's client, whatever its status: a
+/// failed install is still its app's.
+pub async fn claimed_callbacks(state: &State) -> Result<BTreeSet<String>> {
+    let mut claimed = BTreeSet::new();
+    for (app, _) in state.installed_apps().await? {
+        if let Some(domain) = state.app_domain(&app).await? {
+            let manifest = state.app_manifest(&app).await?;
+            claimed.extend(portal_callbacks_of(&app, &domain, &manifest));
+        }
+    }
+    Ok(claimed)
+}
+
 pub struct Reconciler<'a, O: Orchestrator> {
     orchestrator: &'a O,
     state: &'a State,
@@ -391,6 +467,8 @@ pub struct Reconciler<'a, O: Orchestrator> {
     store: Option<&'a dyn StoreInventory>,
     /// To compare Garage's key with the one the app signs with.
     vault: Option<&'a hlb_secrets::Vault>,
+    /// Without it the portal's callbacks are not looked at.
+    portal: Option<&'a dyn PortalClient>,
 }
 
 impl<'a, O: Orchestrator> Reconciler<'a, O> {
@@ -400,7 +478,48 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             state,
             store: None,
             vault: None,
+            portal: None,
         }
+    }
+
+    /// Checks what the portal's client accepts against what the apps are served at.
+    pub fn with_portal(mut self, portal: &'a dyn PortalClient) -> Self {
+        self.portal = Some(portal);
+        self
+    }
+
+    /// A callback no installed app has. Reported only: PocketID is another service's
+    /// outage to report, so silence here says nothing about what it accepts.
+    async fn portal_drifts(
+        &self,
+        apps: &[(String, String)],
+        drifts: &mut Vec<Drift>,
+    ) -> Result<()> {
+        let Some(portal) = self.portal else {
+            return Ok(());
+        };
+        if !apps
+            .iter()
+            .any(|(name, _)| name == hlb_types::capability::PORTAL_SERVICE)
+        {
+            return Ok(());
+        }
+        let accepted = match portal.callbacks().await {
+            Ok(Some(urls)) => urls,
+            Ok(None) => return Ok(()),
+            Err(why) => {
+                tracing::warn!("the portal's callbacks could not be read: {why}");
+                return Ok(());
+            }
+        };
+        let claimed = claimed_callbacks(self.state).await?;
+        drifts.extend(
+            accepted
+                .into_iter()
+                .filter(|url| !claimed.contains(url))
+                .map(|url| Drift::OrphanCallback { url }),
+        );
+        Ok(())
     }
 
     /// Checks every app's buckets and key against what the store holds.
@@ -539,6 +658,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         }
 
         self.storage_drifts(&storage, &mut drifts).await?;
+        self.portal_drifts(&apps, &mut drifts).await?;
 
         // A managed service the state does not know about.
         for svc in &observed {
@@ -602,7 +722,8 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             | Drift::Converging { .. }
             | Drift::Held { .. }
             | Drift::StorageLost { .. }
-            | Drift::StorageUnread { .. } => Ok(()),
+            | Drift::StorageUnread { .. }
+            | Drift::OrphanCallback { .. } => Ok(()),
         }
     }
 }
@@ -649,6 +770,9 @@ mod tests {
             },
             Drift::StorageUnread {
                 why: "connection refused".into(),
+            },
+            Drift::OrphanCallback {
+                url: "https://old.example.test/oauth2/callback".into(),
             },
         ];
 

@@ -53,8 +53,13 @@ monitoring, updates and routes have their own `operations-*.md`.
   that is also the mail account. Each is proved the app's before it goes — the client's and
   the key's id against the vault's, the account by its password and no owner, since an
   address is handed out again. `forget_app` keeps the domain of an app behind the portal
-  (`removed-domains:<app>`): nothing else remembers the callback's URL. The portal's last
-  callback stays.
+  (`removed-domains:<app>`): nothing else remembers the callback's URL. 🔴 The portal's
+  last callback stays: PocketID 2.0 saves the first callback asked of a client with none,
+  2.18 refuses (read from the sources), and a pinned one stays older. A service no longer
+  installed is not asked: the vault keeps its access, so a client was built, timed out,
+  and the secret stayed for ever. Reconciliation reports a callback no installed app has
+  (`Drift::OrphanCallback`, an app removed before its domain was kept, or moved) and
+  leaves it: one added by hand reads the same. `hlb portal drop-callback` takes it off.
 - **A scheduled job runs in its app's own container** (`spec.jobs`, `hlb_engine::jobs`),
   looked at hourly and run when due; a failed run is tried again a day later, kept as
   failed until one succeeds, in the inbox (`job_failed`) and notified. An app whose plan

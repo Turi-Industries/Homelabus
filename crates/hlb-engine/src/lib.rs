@@ -35,7 +35,7 @@ pub mod termix;
 pub mod trust;
 pub mod upgrade;
 
-pub use reconcile::{AppBucket, Drift, Reconciler, Report};
+pub use reconcile::{claimed_callbacks, AppBucket, Drift, PortalClient, Reconciler, Report};
 
 use hlb_identity::PocketId;
 use hlb_mail::Stalwart;

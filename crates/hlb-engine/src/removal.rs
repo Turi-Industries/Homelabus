@@ -164,8 +164,25 @@ impl Leftover {
         }
     }
 
-    /// What the preview says will go.
-    pub fn said(&self, app: &str) -> String {
+    /// The platform service holding it, by its name in the catalog, and as said.
+    pub fn service(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::OidcClient | Self::PortalCallback { url: _ } => ("pocket-id", "PocketID"),
+            Self::GarageKey => ("garage", "Garage"),
+            Self::SmtpAccount => ("stalwart", "Stalwart"),
+        }
+    }
+
+    /// What the preview says becomes of it, given the apps installed.
+    pub fn said(&self, app: &str, installed: &[String]) -> String {
+        let (service, shown) = self.service();
+        if !installed.iter().any(|name| name == service) {
+            return format!(
+                "{shown} is not installed: nothing is asked of it, and {} stays wherever its \
+                 volume is",
+                self.named(app)
+            );
+        }
         match self {
             Self::OidcClient => format!("the OIDC client \"{app}\" is deleted from PocketID"),
             Self::GarageKey => {
@@ -298,6 +315,18 @@ pub async fn take(
     vault: &Vault,
     services: Services<'_>,
 ) -> crate::Result<Taken> {
+    // 🔴 The vault keeps a removed service's access, so a client is built all the same
+    // and only times out. A secret then stayed for ever, for a service nobody will start.
+    // Its volume coming back brings the refusal a reinstall gives: said, and safe.
+    let (service, shown) = leftover.service();
+    let installed = state.installed_apps().await?;
+    if !installed.iter().any(|(name, _)| name == service) {
+        return Ok(Taken::Gone(format!(
+            "{shown} is not installed: nothing asked of it. If its volume comes back, delete {} \
+             there",
+            leftover.named(app)
+        )));
+    }
     let not_given =
         |service: &str, vars: &str| Taken::Stays(format!("no {service} given here ({vars})"));
     let asked = |service: &str, e: &dyn std::fmt::Display| Taken::Stays(format!("{service}: {e}"));
@@ -722,5 +751,34 @@ mod tests {
             taken,
             super::Taken::Stays("gitea@example.test is lena's mailbox now".into())
         );
+    }
+
+    #[test]
+    fn every_service_named_is_one_the_catalog_has() {
+        for leftover in [
+            Leftover::OidcClient,
+            Leftover::GarageKey,
+            Leftover::SmtpAccount,
+            Leftover::PortalCallback { url: "x".into() },
+        ] {
+            let (service, _) = leftover.service();
+            let manifest = format!(
+                "{}/../../catalog/_platform/{service}/manifest.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            assert!(std::path::Path::new(&manifest).exists(), "{manifest}");
+        }
+    }
+
+    /// A preview read as "it will be deleted" would be wrong, with nothing to ask.
+    #[test]
+    fn a_preview_says_when_the_service_is_not_there_to_ask() {
+        let installed = strings(&["pocket-id"]);
+        assert!(Leftover::OidcClient
+            .said("gitea", &installed)
+            .contains("is deleted from PocketID"));
+        assert!(Leftover::GarageKey
+            .said("gitea", &installed)
+            .starts_with("Garage is not installed"));
     }
 }
