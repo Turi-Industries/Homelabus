@@ -145,7 +145,10 @@ row "4 no Rust" "apps that reached an installed house through a catalog pull req
 row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"
 
 # 6. Up to date ----------------------------------------------------------------------
-row "6 up to date" "days from a security fix's release to its application" "UNMEASURED — probe: the updater's first-seen date against its applied date; the controller never calls \`hlb-updater\`" "a patch within 7 days, an exploited CVE at the next window"
+# Every update and not a fix's: which is one needs the CVE data of phase 5. And nothing
+# applies by itself yet, so it says how long a person took.
+lag=$(measured updates-lag)
+row "6 up to date" "days from an update first seen to applied, on the lab: EVERY update, a security fix is told apart by phase 5, and a person applies them" "${lag:-UNMEASURED — probe: \`scripts/drills/updates.sh\`}" "a patch within 7 days, an exploited CVE at the next window"
 
 # 7. Simple --------------------------------------------------------------------------
 # No Minimal profile exists before the installer of phase 6: until then the figure is
