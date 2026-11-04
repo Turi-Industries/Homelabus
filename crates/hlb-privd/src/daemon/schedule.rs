@@ -253,6 +253,32 @@ impl Heartbeat {
     }
 }
 
+/// [`every`], its first pass only once `delay` has gone by: for a task that costs something
+/// each time, which a daemon restarting in a loop would otherwise run at each start.
+pub async fn every_after<F, Fut>(
+    delay: Duration,
+    interval: Duration,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut f: F,
+) where
+    F: FnMut() -> Fut + Send,
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + delay, interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => f().await,
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Runs a periodic task until shutdown.
 ///
 /// The first pass happens immediately: at startup you want to know the cluster's state

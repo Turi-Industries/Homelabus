@@ -103,6 +103,7 @@ by the controller, success included:
 
 ```sh
 ./target/debug/hlb update check              # what each installed app could move to, and when
+./target/debug/hlb update lag                # from first seen to applied, and what still waits
 ./target/debug/hlb update apply gitea        # backup, then the switch Swarm rolls back on failure
 ./target/debug/hlb update apply gitea --before-maturity   # an urgent fix; audited
 ```

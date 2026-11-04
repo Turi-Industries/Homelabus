@@ -921,8 +921,10 @@ enum PitrCmd {
 
 #[derive(Subcommand)]
 enum UpdateCmd {
-    /// Query the registries. Read-only.
+    /// Query the registries. Applies nothing; records when each image was first seen.
     Check,
+    /// How long updates took from first seen to applied, and what is still waiting.
+    Lag,
     /// Apply an app's update.
     Apply {
         app: String,
@@ -11143,6 +11145,16 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let registry = hlb_registry::RegistryClient::new();
                 let now = chrono::Local::now().naive_local();
 
+                if matches!(cmd, UpdateCmd::Lag) {
+                    print!(
+                        "{}",
+                        update_lag_report(
+                            &state.update_lags(chrono::Utc::now().timestamp()).await?
+                        )
+                    );
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
                 // `Scan` depends on no candidate: handle it before querying the
                 // registries, which costs time and bandwidth.
                 if let UpdateCmd::Scan {
@@ -11184,6 +11196,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
                 let at = chrono::Utc::now().timestamp();
                 let checked = hlb_updater::check(&state, &registry, &now, at, &catalog).await?;
+                hlb_updater::note_seen(&state, &checked, at).await?;
                 for (app, why) in &checked.unreadable {
                     eprintln!("✗ {app}: its registry could not be read — {why}");
                 }
@@ -11196,6 +11209,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 match cmd {
                     // Handled above.
                     UpdateCmd::Scan { .. } => unreachable!(),
+                    UpdateCmd::Lag => unreachable!(),
                     UpdateCmd::Check => {
                         if candidates.is_empty() && checked.unreadable.is_empty() {
                             if !checked.held.is_empty() {
@@ -12626,6 +12640,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 }
 
+/// `hlb update lag`. Its last line is read by `scripts/drills/updates.sh`: keep its shape.
+fn update_lag_report(lags: &hlb_state::UpdateLags) -> String {
+    let days = |seconds: i64| seconds / 86_400;
+    let mut out = String::new();
+    for (title, list) in [("Applied", &lags.applied), ("Waiting", &lags.waiting)] {
+        if !list.is_empty() {
+            out.push_str(&format!("{title}:\n"));
+        }
+        for l in list {
+            let short = l.digest.strip_prefix("sha256:").unwrap_or(&l.digest);
+            let short = &short[..12.min(short.len())];
+            out.push_str(&format!("  {:<14} {short}  {} d\n", l.app, days(l.seconds)));
+        }
+    }
+    let slowest = lags.applied.iter().map(|l| l.seconds).max().unwrap_or(0);
+    let oldest = lags.waiting.iter().map(|l| l.seconds).max().unwrap_or(0);
+    out.push_str(&format!(
+        "{} applied, the slowest in {} d; {} waiting, the oldest for {} d\n",
+        lags.applied.len(),
+        days(slowest),
+        lags.waiting.len(),
+        days(oldest)
+    ));
+    out
+}
+
 /// `hlb backup status`'s column. 🔴 The age counts successes only: an app whose reading has
 /// just failed would still say "2 d", beside a green summary.
 fn verified_column(age: Option<i64>, last_failed: bool) -> String {
@@ -12639,6 +12679,31 @@ fn verified_column(age: Option<i64>, last_failed: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lag_report_ends_on_the_line_a_drill_reads() {
+        let lag = |app: &str, days: i64| hlb_state::UpdateLag {
+            app: app.into(),
+            digest: "sha256:0123456789abcdef".into(),
+            seconds: days * 86_400,
+        };
+        let report = update_lag_report(&hlb_state::UpdateLags {
+            applied: vec![lag("gitea", 4), lag("immich", 1)],
+            waiting: vec![lag("n8n", 2)],
+        });
+        assert!(
+            report.contains("gitea          0123456789ab  4 d"),
+            "{report}"
+        );
+        assert_eq!(
+            report.lines().last(),
+            Some("2 applied, the slowest in 4 d; 1 waiting, the oldest for 2 d")
+        );
+        assert_eq!(
+            update_lag_report(&hlb_state::UpdateLags::default()),
+            "0 applied, the slowest in 0 d; 0 waiting, the oldest for 0 d\n"
+        );
+    }
 
     #[test]
     fn a_reading_that_failed_after_a_success_does_not_read_as_verified() {
