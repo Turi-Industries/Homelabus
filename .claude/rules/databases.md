@@ -77,6 +77,9 @@ cleanly and is missing data.
 - **A failing WAL `archive_command` does not lose journals, it keeps them.** `pg_wal`
   grows until the disk is full. Archiving to a broken destination is more dangerous than
   not archiving.
+- **A sign-in tried inside the server's container proves nothing.** The official image
+  trusts `127.0.0.1`: `psql -h 127.0.0.1` answered a wrong password with its rows
+  (2026-11-04). Try it from another container on the overlay, and try a wrong one too.
 - **A pooled connection dies at a quarter of an hour of silence** — Swarm's VIP, not
   the server (`operations-swarm.md`); MariaDB's too ("Lost connection to server during
   query" after 17 minutes, measured). Both servers send keepalives from their

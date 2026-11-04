@@ -117,7 +117,7 @@ impl MariadbProvisioner {
         Ok(done.rows_affected())
     }
 
-    /// Creates the database and its isolated user.
+    /// Creates the database and its isolated user, and gives the user this password.
     ///
     /// Returns `true` when something was created.
     pub async fn provision(&self, database: &str, user: &str, password: &str) -> Result<bool> {
@@ -149,6 +149,10 @@ impl MariadbProvisioner {
                 .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
             created = true;
             tracing::info!(user, "user created");
+        } else {
+            // A user outlives its app's removal, and the vault may hold a new password
+            // by the reinstall: the app would be refused with its data one sign-in away.
+            self.set_password(user, password).await?;
         }
 
         // 🔴 The scope: `database.*` and NEVER `*.*`. That is the whole isolation.

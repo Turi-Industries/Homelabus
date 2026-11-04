@@ -115,6 +115,31 @@ async fn provision_is_idempotent() {
     drop_all(&p, &["hlbtest_idem"]).await;
 }
 
+/// A role outlives its app's removal, and `hlb secrets-forget` draws the next install a
+/// new password: kept as it was, the app was refused on a password nothing had changed
+/// on its side, with its data one sign-in away.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]
+async fn a_role_found_again_takes_the_password_it_is_given() {
+    let p = provisioner().await;
+    drop_all(&p, &["hlbtest_again"]).await;
+
+    assert!(p
+        .provision("hlbtest_again", "hlbtest_again", "before")
+        .await
+        .expect("first install"));
+    assert!(
+        !p.provision("hlbtest_again", "hlbtest_again", "after")
+            .await
+            .expect("reinstall"),
+        "the database is kept, not made again"
+    );
+    assert!(can_connect("hlbtest_again", "hlbtest_again", "after").await);
+    assert!(!can_connect("hlbtest_again", "hlbtest_again", "before").await);
+
+    drop_all(&p, &["hlbtest_again"]).await;
+}
+
 /// 🔴 THE security test: isolation between applications.
 #[tokio::test]
 #[ignore = "needs a PostgreSQL (see HLB_TEST_PG)"]

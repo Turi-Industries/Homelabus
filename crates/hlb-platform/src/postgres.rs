@@ -46,7 +46,8 @@ impl PostgresProvisioner {
         with_database(&self.admin_url, database)
     }
 
-    /// Creates the role and its database if absent, and cuts public access.
+    /// Creates the role and its database if absent, gives the role this password, and
+    /// cuts public access.
     ///
     /// Returns `true` when something was created, `false` when all was already there.
     pub async fn provision(&self, database: &str, role: &str, password: &str) -> Result<bool> {
@@ -70,6 +71,10 @@ impl PostgresProvisioner {
                 .map_err(|e| Error::Sql(redact(&e.to_string(), password)))?;
             created = true;
             tracing::info!(role, "role created");
+        } else {
+            // A role outlives its app's removal, and the vault may hold a new password
+            // by the reinstall: the app would be refused with its data one sign-in away.
+            self.set_password(role, password).await?;
         }
 
         let [create, access @ ..] = database_statements(database, role)?;

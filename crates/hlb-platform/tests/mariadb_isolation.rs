@@ -161,6 +161,46 @@ async fn provisioning_is_idempotent() {
     clean_up(&["idemtest"], &["idemtest"]).await;
 }
 
+/// A user outlives its app's removal, and `hlb secrets-forget` draws the next install a
+/// new password: kept as it was, the app was refused with its data one sign-in away.
+#[tokio::test]
+#[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
+async fn a_user_found_again_takes_the_password_it_is_given() {
+    clean_up(&["againtest"], &["againtest"]).await;
+    let p = provisioner().await;
+
+    assert!(p
+        .provision("againtest", "againtest", "before")
+        .await
+        .expect("first install"));
+    assert!(
+        !p.provision("againtest", "againtest", "after")
+            .await
+            .expect("reinstall"),
+        "the database is kept, not made again"
+    );
+
+    let url = admin_url();
+    let host = url.split('@').nth(1).expect("host");
+    let signs_in = |password: &str| {
+        let url = format!(
+            "mysql://againtest:{password}@{}",
+            host.replace("/mysql", "/againtest")
+        );
+        async move {
+            sqlx::mysql::MySqlPoolOptions::new()
+                .max_connections(1)
+                .connect(&url)
+                .await
+                .is_ok()
+        }
+    };
+    assert!(signs_in("after").await);
+    assert!(!signs_in("before").await);
+
+    clean_up(&["againtest"], &["againtest"]).await;
+}
+
 #[tokio::test]
 #[ignore = "needs a MariaDB (see HLB_TEST_MYSQL)"]
 async fn password_rotation_works() {
