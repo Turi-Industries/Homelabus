@@ -574,6 +574,84 @@ async fn removing_a_service_takes_its_file_secrets() {
     );
 }
 
+/// A changed file is a new secret, and they piled up: 26 versions under the lab's
+/// `fluxer-api`. Going too far is the worse failure: Swarm deletes what a `PreviousSpec`
+/// mounts without a word, and the update policy then rolls back onto nothing.
+#[tokio::test]
+#[ignore = "needs an active Docker Swarm"]
+async fn a_service_keeps_the_versions_a_rollback_needs_and_no_older() {
+    let o = orch().await;
+    let n = name("versions");
+    cleanup(&o, &n).await;
+    let here = local_node(&o).await;
+    let file = "/etc/one.toml";
+    let mine = format!("{n}-file-");
+
+    for content in ["one", "two", "three"] {
+        o.deploy(&sleeper(&n).constraint(&here).file(file, content))
+            .await
+            .expect("a new version of the file");
+        o.wait_healthy(&n, 60).await.expect("running");
+    }
+    assert_eq!(
+        secrets_named(&mine).len(),
+        2,
+        "the current and the previous"
+    );
+
+    let rollback = std::process::Command::new("docker")
+        .args(["service", "rollback", "--quiet", &n])
+        .output()
+        .expect("docker service rollback");
+    // It returns once converged; `wait_healthy` reads a rollback as a failed update.
+    assert!(rollback.status.success(), "{rollback:?}");
+    let container = std::process::Command::new("docker")
+        .args(["ps", "-q", "--filter"])
+        .arg(format!("label=com.docker.swarm.service.name={n}"))
+        .output()
+        .expect("docker ps");
+    let container = String::from_utf8_lossy(&container.stdout);
+    let read = std::process::Command::new("docker")
+        .args(["exec", container.trim(), "cat", file])
+        .output()
+        .expect("docker exec");
+    assert_eq!(String::from_utf8_lossy(&read.stdout), "two", "{read:?}");
+
+    // Left by a Homelabus from before: it goes at the next look, a new version or not.
+    let leftover = format!("{mine}000000000000");
+    let mut made = std::process::Command::new("docker")
+        .args([
+            "secret",
+            "create",
+            "--label",
+            "hlb.managed=true",
+            &leftover,
+            "-",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("docker secret create");
+    // Docker refuses an empty secret.
+    std::io::Write::write_all(made.stdin.as_mut().expect("stdin"), b"old").expect("write");
+    drop(made.stdin.take());
+    assert!(made.wait().expect("ends").success());
+    let same = [(file.to_string(), "two".to_string())];
+    assert!(
+        !o.reconfigure(&n, &same, &[]).await.expect("reconfigure"),
+        "nothing to change"
+    );
+    assert!(!secrets_named(&mine).contains(&leftover));
+    assert_eq!(secrets_named(&mine).len(), 2);
+
+    let next = [(file.to_string(), "four".to_string())];
+    assert!(o.reconfigure(&n, &next, &[]).await.expect("reconfigure"));
+    assert_eq!(secrets_named(&mine).len(), 2, "two and four");
+
+    cleanup(&o, &n).await;
+    assert_eq!(secrets_named(&mine), Vec::<String>::new());
+}
+
 fn secrets_named(prefix: &str) -> Vec<String> {
     let out = std::process::Command::new("docker")
         .args(["secret", "ls", "--format", "{{.Name}}"])

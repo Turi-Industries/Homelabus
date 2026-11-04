@@ -97,6 +97,27 @@ fn is_file_secret_of(service: &str, secret: &str) -> bool {
             })
 }
 
+/// The secrets a service's spec mounts.
+fn spec_secrets(spec: &bollard::models::ServiceSpec) -> Vec<String> {
+    spec.task_template
+        .as_ref()
+        .and_then(|t| t.container_spec.as_ref())
+        .and_then(|c| c.secrets.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.secret_name.clone())
+        .collect()
+}
+
+/// Of the secrets listed, the versions of this service's files no spec it holds names.
+fn stale_file_secrets(service: &str, listed: &[String], held: &[String]) -> Vec<String> {
+    listed
+        .iter()
+        .filter(|name| is_file_secret_of(service, name) && !held.contains(name))
+        .cloned()
+        .collect()
+}
+
 /// An RFC 3339 timestamp as Docker returns them, in Unix seconds.
 ///
 /// Parsed by hand: `chrono` is present but for other reasons, and a Docker date always
@@ -248,7 +269,7 @@ impl SwarmOrchestrator {
             let Some(spec) = svc.spec else {
                 continue;
             };
-            let Some(service) = spec.name else {
+            let Some(service) = spec.name.clone() else {
                 continue;
             };
             if !is_run_of(&service, name) {
@@ -268,15 +289,7 @@ impl SwarmOrchestrator {
             if ended && self.docker.delete_service(&service).await.is_ok() {
                 // Read from its spec: a long run's secret names no longer say whose they
                 // are. A run cut short never reached its own cleanup.
-                let secrets: Vec<String> = spec
-                    .task_template
-                    .and_then(|t| t.container_spec)
-                    .and_then(|c| c.secrets)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|f| f.secret_name)
-                    .collect();
-                self.forget_run_secrets(&secrets).await;
+                self.forget_run_secrets(&spec_secrets(&spec)).await;
             }
         }
     }
@@ -351,24 +364,53 @@ impl SwarmOrchestrator {
         Ok(out)
     }
 
-    /// Deletes the secrets a removed service's files rode on, every version of them.
-    async fn remove_file_secrets(&self, service: &str) -> Result<()> {
+    /// The names of the secrets Homelabus made.
+    async fn managed_secrets(&self) -> Result<Vec<String>> {
         let mut filters = HashMap::new();
         filters.insert("label".to_string(), vec![format!("{MANAGED_LABEL}=true")]);
         let opts = ListSecretsOptionsBuilder::default()
             .filters(&filters)
             .build();
-        for secret in self.docker.list_secrets(Some(opts)).await? {
-            let Some(name) = secret
-                .spec
-                .and_then(|s| s.name)
-                .filter(|n| is_file_secret_of(service, n))
-            else {
-                continue;
-            };
-            self.delete_secret_patiently(&name).await?;
+        Ok(self
+            .docker
+            .list_secrets(Some(opts))
+            .await?
+            .into_iter()
+            .filter_map(|s| s.spec.and_then(|s| s.name))
+            .collect())
+    }
+
+    /// Deletes the secrets a removed service's files rode on, every version of them.
+    async fn remove_file_secrets(&self, service: &str) -> Result<()> {
+        for name in self.managed_secrets().await? {
+            if is_file_secret_of(service, &name) {
+                self.delete_secret_patiently(&name).await?;
+            }
         }
         Ok(())
+    }
+
+    /// Deletes the versions of a service's files it can no longer come back to. They
+    /// piled up with every change: 26 for the lab's `fluxer-api`, each a key it once
+    /// held. What is deployed does not depend on this, so a failure is only said.
+    ///
+    /// 🔴 The previous spec's stay. Swarm refuses to delete what a spec mounts and
+    /// deletes what a `PreviousSpec` mounts without a word (measured 2026-11-04), and
+    /// the update policy rolls back to it.
+    async fn prune_file_secrets(&self, service: &str) {
+        let pruned = async {
+            let current = self.inspect(service).await?;
+            let mut held = current.spec.as_ref().map(spec_secrets).unwrap_or_default();
+            held.extend(Self::previous_spec_secrets(service).await?);
+            let listed = self.managed_secrets().await?;
+            for name in stale_file_secrets(service, &listed, &held) {
+                self.docker.delete_secret(&name).await?;
+            }
+            Ok::<_, Error>(())
+        };
+        if let Err(e) = pruned.await {
+            tracing::warn!(service, error = %e, "an old version of its files could not be deleted");
+        }
     }
 
     /// Deletes a secret, waiting while a stopping task's container still holds it.
@@ -978,6 +1020,32 @@ impl SwarmOrchestrator {
             })
     }
 
+    /// The secrets a service's previous spec mounts, as `docker service inspect` prints
+    /// them: bollard's `Service` has no `PreviousSpec`, and reading none would delete
+    /// what a rollback needs. An unreadable answer is an error, for the same reason.
+    async fn previous_spec_secrets(name: &str) -> Result<Vec<String>> {
+        let out = tokio::process::Command::new("docker")
+            .args([
+                "service",
+                "inspect",
+                "--format",
+                "{{json .PreviousSpec}}",
+                name,
+            ])
+            .output()
+            .await
+            .map_err(|e| Error::Unexpected(format!("docker service inspect: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Unexpected(format!(
+                "docker service inspect: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let previous: Option<bollard::models::ServiceSpec> = serde_json::from_slice(&out.stdout)
+            .map_err(|e| Error::Unexpected(format!("docker service inspect: {e}")))?;
+        Ok(previous.as_ref().map(spec_secrets).unwrap_or_default())
+    }
+
     /// A service's probe, as `docker service inspect` prints it.
     async fn probe_of(name: &str) -> Result<Option<bollard::models::HealthConfig>> {
         let out = tokio::process::Command::new("docker")
@@ -1154,7 +1222,7 @@ impl Orchestrator for SwarmOrchestrator {
         // An existing service is updated in place, under its update policy: rerunning
         // an install, or applying a catalog change, must change the running service —
         // creating it again was refused by Swarm, and skipping it left it as it was.
-        match self.inspect(&spec.name).await {
+        let id = match self.inspect(&spec.name).await {
             Ok(current) => {
                 let id = current.id.clone().unwrap_or_default();
                 let version = current
@@ -1178,7 +1246,9 @@ impl Orchestrator for SwarmOrchestrator {
                     .ok_or_else(|| Error::Unexpected("creation returned no id".into()))
             }
             Err(e) => Err(e),
-        }
+        }?;
+        self.prune_file_secrets(&spec.name).await;
+        Ok(id)
     }
 
     async fn update_image(&self, name: &str, image: &str) -> Result<()> {
@@ -1358,6 +1428,8 @@ impl Orchestrator for SwarmOrchestrator {
             }
         }
         if !changed {
+            // Also here: a pile left by an older Homelabus goes without a new version.
+            self.prune_file_secrets(name).await;
             return Ok(false);
         }
 
@@ -1376,6 +1448,7 @@ impl Orchestrator for SwarmOrchestrator {
         self.docker
             .update_service(name, spec, opts, self.credentials_for(&image))
             .await?;
+        self.prune_file_secrets(name).await;
         Ok(true)
     }
 
@@ -2087,6 +2160,24 @@ mod tests {
         let long = "x".repeat(FILE_SECRET_ROOM + 1);
         let cut = file_secret_name(&long, "/etc/foo.toml", "x");
         assert!(!super::is_file_secret_of(&long, &cut), "{cut}");
+    }
+
+    #[test]
+    fn only_a_service_s_own_versions_no_spec_holds_are_stale() {
+        let version = |content: &str| file_secret_name("foo", "/etc/foo.toml", content);
+        let (old, previous, current) = (version("1"), version("2"), version("3"));
+        let neighbour = file_secret_name("foo-bar", "/etc/foo.toml", "1");
+        let listed = [
+            old.clone(),
+            previous.clone(),
+            current.clone(),
+            neighbour,
+            "restic-repo-password".to_string(),
+        ];
+        assert_eq!(
+            stale_file_secrets("foo", &listed, &[current, previous]),
+            vec![old]
+        );
     }
 
     #[test]

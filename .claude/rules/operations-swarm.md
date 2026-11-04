@@ -92,6 +92,11 @@ Most of these fail behind a healthy task.
   down. `inspect_whole` reads it again through the CLI; `swarm_spike.rs` holds it.
 - **A Swarm secret is immutable.** Configuration files ride on secrets (bollard 0.19 has
   no configs), named after a hash of their content, so a new version is a new secret.
+  🔴 Each stayed: 26 under the lab's `fluxer-api`, a key in every one that held one.
+  `prune_file_secrets` deletes them at each deployment and reconfiguration, but for the
+  spec's and the `PreviousSpec`'s: Swarm refuses to delete what a spec mounts and deletes
+  what a `PreviousSpec` mounts without a word (measured 2026-11-04), which is what the
+  update policy rolls back to.
 - **🔴 A job's secret outlives a run nobody finished.** A job carries credentials as
   files and deletes them at its end. A process killed mid-run never gets there; the next
   run cleared the service and left the secrets, and nothing said so: sixteen on the lab,
