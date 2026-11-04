@@ -1156,3 +1156,108 @@ async fn no_portal_installed_or_answering_reports_no_callback() {
         assert_eq!(orphans(report), 0);
     }
 }
+
+const NEEDS_POSTGRES_AND_SIGN_IN: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: notes }
+spec:
+  image: { repo: example/notes, tag: "1", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: postgres
+    - kind: sso
+      mode: native
+      redirectPaths: ["/callback"]
+"#;
+
+fn service(name: &str) -> ServiceStatus {
+    ServiceStatus {
+        name: name.into(),
+        id: format!("{name}-id"),
+        desired_replicas: 1,
+        running_replicas: 1,
+        image: "example/any:1".into(),
+        update_state: None,
+    }
+}
+
+#[tokio::test]
+async fn an_app_is_refused_while_a_service_it_needs_is_not_installed() {
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(NEEDS_POSTGRES_AND_SIGN_IN).unwrap();
+    let s = State::in_memory().await.unwrap();
+
+    let refused = hlb_engine::ingress::app_blockers(&Fake::default(), &s, &m).await;
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert!(
+        refused[0].contains("hlb install pocket-id --apply"),
+        "{refused:?}"
+    );
+    assert!(
+        refused[1].contains("hlb install postgres --apply"),
+        "{refused:?}"
+    );
+
+    let only_postgres = Fake::with(vec![service("postgres")]);
+    let refused = hlb_engine::ingress::app_blockers(&only_postgres, &s, &m).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].contains("pocket-id"), "{refused:?}");
+
+    let both = Fake::with(vec![service("postgres"), service("pocket-id")]);
+    assert_eq!(
+        hlb_engine::ingress::app_blockers(&both, &s, &m).await,
+        Vec::<String>::new()
+    );
+}
+
+// A failover removes the old primary's service, and the promoted standby answers to its
+// name as an alias: a house that moved its database must go on installing apps.
+#[tokio::test]
+async fn a_running_service_recorded_without_its_swarm_service_still_counts() {
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(NEEDS_POSTGRES_AND_SIGN_IN).unwrap();
+    let s = State::in_memory().await.unwrap();
+    let postgres: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
+    s.upsert_app("postgres", &postgres, None).await.unwrap();
+    s.set_app_status("postgres", "running").await.unwrap();
+
+    let refused =
+        hlb_engine::ingress::app_blockers(&Fake::with(vec![service("pocket-id")]), &s, &m).await;
+    assert_eq!(refused, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_service_that_failed_to_install_does_not_count() {
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(NEEDS_POSTGRES_AND_SIGN_IN).unwrap();
+    let s = State::in_memory().await.unwrap();
+    let postgres: hlb_types::Manifest = serde_yaml_ng::from_str(MANIFEST).unwrap();
+    s.upsert_app("postgres", &postgres, None).await.unwrap();
+    s.set_app_status("postgres", "failed").await.unwrap();
+
+    let refused =
+        hlb_engine::ingress::app_blockers(&Fake::with(vec![service("pocket-id")]), &s, &m).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0].contains("postgres"), "{refused:?}");
+}
+
+// An app is never asked to be installed before itself.
+#[tokio::test]
+async fn a_service_is_not_refused_for_needing_itself() {
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+        r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: postgres }
+spec:
+  image: { repo: example/postgres, tag: "17", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: postgres
+"#,
+    )
+    .unwrap();
+    let s = State::in_memory().await.unwrap();
+    assert_eq!(
+        hlb_engine::ingress::app_blockers(&Fake::default(), &s, &m).await,
+        Vec::<String>::new()
+    );
+}

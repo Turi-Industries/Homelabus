@@ -84,7 +84,8 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
 
     // The ingress refuses what would leave it unplaced, or serving names nobody chose.
     if let Some(o) = &p.orchestrator {
-        blockers.extend(hlb_engine::ingress::app_blockers(o.as_ref(), &input.manifest).await);
+        blockers
+            .extend(hlb_engine::ingress::app_blockers(o.as_ref(), &p.state, &input.manifest).await);
         if input.manifest.metadata.name == hlb_types::manifest::INGRESS_SERVICE {
             blockers.extend(hlb_engine::ingress::blockers(o.as_ref(), &p.state).await);
         }
@@ -351,7 +352,7 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
     }
     // What an install refuses, an upgrade refuses too.
     if let Some(o) = &p.orchestrator {
-        blockers.extend(hlb_engine::ingress::app_blockers(o.as_ref(), &next).await);
+        blockers.extend(hlb_engine::ingress::app_blockers(o.as_ref(), &p.state, &next).await);
     }
 
     // The mail domain the install took, or an app sending mail cannot name its account.

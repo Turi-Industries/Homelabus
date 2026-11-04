@@ -92,7 +92,7 @@ hlb cluster init --endpoint 192.168.1.10 --apply         # Docker, Swarm, the st
 hlb config exposure --domain home.lan --internal --node "$(hostname)" --apply
 hlb install caddy --apply                                # addresses and certificates
 
-# What Vikunja needs. Installing an app does not install these for you yet.
+# What Vikunja needs: its preview refuses until they run, and names each one
 hlb install postgres --apply
 hlb install stalwart --apply
 hlb install pocket-id --apply
