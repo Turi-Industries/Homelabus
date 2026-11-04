@@ -10,7 +10,7 @@ spec:
   # Built from this repository's Dockerfile (`--target caddy`): the DNS modules a
   # wildcard certificate needs and the CrowdSec bouncer are compiled in. A standard
   # image refuses to start on either directive.
-  image: { repo: ghcr.io/turi-industries/hlb-caddy, tag: "0.4.3", builtHere: true }
+  image: { repo: ghcr.io/turi-industries/hlb-caddy, tag: "0.4.4", builtHere: true }
   requires:
     # The certificates and the ACME account. Backed up: lost, every certificate is
     # requested again at once, and a few lost volumes in a week exhaust the quota.

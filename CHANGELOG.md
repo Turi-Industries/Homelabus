@@ -3,6 +3,35 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.4] — 2026-11-04
+
+Removing an app now says everything it leaves behind, and forgetting its secrets
+takes what only they opened. Removing a service takes the Swarm secrets its files rode
+on, and a service keeps the versions of them a rollback needs and no older. A role
+found again takes the password it is given, where a reinstall after `hlb secrets-forget`
+left the app refused by its own database.
+
+**Upgrading from 0.4.3:**
+
+- No migration: 0.4.3 and 0.4.4 open the same state.
+- `hlb secrets-forget` now deletes the app's OIDC client, Garage key, SMTP account and
+  portal callback before its secrets. A service installed and out of reach keeps what it
+  holds, and running it again finishes. The database, the bucket and a mail account stay.
+- Old versions of a service's Swarm secrets go at its next deployment or reconfiguration.
+- `hlb reconcile` reports a portal callback no installed app has, such as one left by an
+  app removed before this release: `hlb portal drop-callback <url> --apply` takes it off.
+
+### Changed
+
+- Take the catalog without the ingress chain
+- Take an app's Swarm secrets with it, and say what stays
+- Delete a job's secrets when its run was cut or refused
+- Keep the versions of a service's secrets a rollback needs, and no older
+- Give a role found again the password it is given
+- Say what a removal leaves in other services
+- Delete what a removed app's secrets open when they are forgotten
+- Report a callback no installed app has, and stop waiting on a removed service
+
 ## [0.4.3] — 2026-11-03
 
 Anubis is gone from Homelabus. Its built-in policy ignored the difficulty set for it
