@@ -27,6 +27,19 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 row() { printf '| %s | %s | %s | %s |\n' "$1" "$2" "$3" "$4"; }
 
+# The newest figure a drill wrote to docs/measures.tsv, with the release it was measured
+# on, and saying so when a newer release has come since: a figure that stops being
+# measured must not go on reading as today's. Prints nothing for a measure with no row.
+measured() {
+    awk -F'\t' -v m="$1" -v latest="${tag#v}" '
+        $3 == m { value = $4; hlb = $2; date = $1 }
+        END {
+            if (value == "") exit
+            printf "%s (hlb %s, %s)", value, hlb, date
+            if (latest != "" && hlb != latest) printf " — STALE, the newest release is %s", latest
+        }' docs/measures.tsv 2>/dev/null
+}
+
 echo "Scorecard of $(git rev-parse --short HEAD), $(date +%F)"
 echo
 echo '| Goal | Measure | Now | Target |'
@@ -44,13 +57,23 @@ else
     binary="$tag: no release"
 fi
 row "1 deploy" "\`hlb\` downloadable for the newest tag, without a Rust toolchain" "$binary" "a static binary per architecture, checksummed and signed"
-row "1 deploy" "minutes from a bare machine to the first app" "UNMEASURED — probe: a lab drill timing \`node preseed\` → \`cluster init\` → \`install\`" "measured each release, and falling"
+# Seconds, with the path they measure: `scripts/drills/deploy.sh` writes all three.
+first_app=$(measured deploy-first-app-seconds)
+if [[ -n $first_app ]]; then
+    row "1 deploy" "seconds from a bare machine to the first app" "netinst $(measured deploy-os-seconds); then to an app with no dependency $first_app; to one with a database and sign-in $(measured deploy-full-app-seconds)" "measured each release, and falling"
+else
+    row "1 deploy" "seconds from a bare machine to the first app" "UNMEASURED — probe: \`scripts/drills/deploy.sh\`" "measured each release, and falling"
+fi
 
 # 2. Never lose ----------------------------------------------------------------------
 # Not here: "volumes with `backup: false`" — all twelve carry their reason, often in a
 # comment above the list item, and counting comments by distance reported seven
 # false alarms on its first run (2026-10-27).
-row "2 never lose" "apps whose restore was rehearsed in the last 30 days" "UNMEASURED — nothing in the repository records it; \`hlb dr exercise\` rehearses PostgreSQL's base backup" "every app with data, weekly, alerting when one fails"
+# Proves the packaging on a CI runner, never a house's own data: the row after it does.
+quality=$(curl -fsS -m 10 https://turi-industries.github.io/homelabus-catalog/quality-v1.json 2>/dev/null |
+    jq -r '[.apps[].last] | "\(map(select(.restore == "passed")) | length) of \(length), on hlb \(map(.hlb) | max), newest \(map(.date) | max)"' 2>/dev/null)
+row "2 never lose" "apps whose restore passed in the catalog's CI" "${quality:-unknown (no network, or no jq)}" "every app with data, each week"
+row "2 never lose" "apps whose restore was rehearsed on the house's own data in the last 30 days" "UNMEASURED — nothing in the repository records it; \`hlb dr exercise\` rehearses PostgreSQL's base backup" "every app with data, weekly, alerting when one fails"
 
 # 3. Never stolen --------------------------------------------------------------------
 # Not here: images without a digest — `catalog validate` refuses them already, and the
@@ -76,8 +99,15 @@ else
 fi
 row "3 never stolen" "catalog variables handing a container a secret through its environment" "${in_env:-UNMEASURED — the test holding the count is gone}" "0: \`docker inspect\` shows no secret"
 # A fact of each machine, not of the repository: the cluster says it, the code cannot.
-row "3 never stolen" "nodes per protection level (A verified boot … D a virtual machine)" "UNMEASURED — probe: \`hlb cluster status\` on the lab, a level per node (lab, 2026-10-29: deb1 and deb2 at D, virtual machines)" "every manager and the controller's node at A or B"
-row "3 never stolen" "what a node taken away from the lab gives up" "UNMEASURED — probe: a lab drill booting a node away from its Tangs (lab, 2026-10-29: enc2, Debian 13, from \`node preseed --encrypt\` to \`node bind-disk\` — away from both Tangs, nothing mounted after 2 min, the initrd's SSH alone answering; its disk on another TPM, Tangs up, closed; the kit's key opens it. Level A, 2026-10-29: enc3, UEFI and Secure Boot — GRUB chosen in the firmware, Tangs up, it waits; the kit's key opens it)" "nothing readable"
+levels=$(measured node-levels)
+row "3 never stolen" "nodes per protection level (A verified boot … D a virtual machine)" "${levels:-UNMEASURED — probe: \`scripts/drills/stolen.sh\`} — the lab only: its virtual machines read D by design, so this moves on real hardware alone" "every manager and the controller's node at A or B"
+no_tang=$(measured stolen-enc2-no-tang)
+if [[ -n $no_tang ]]; then
+    gives_up="no Tang, level B: $no_tang; no Tang, level A: $(measured stolen-enc3-no-tang); another TPM: $(measured stolen-enc2-other-tpm)"
+else
+    gives_up="UNMEASURED — probe: \`scripts/drills/stolen.sh\`"
+fi
+row "3 never stolen" "what a node taken away from the lab gives up" "$gives_up" "closed, each time"
 
 # 4. An app without Rust -------------------------------------------------------------
 # An app enters by a pull request to `homelabus-catalog`, mounted at `catalog/apps`: no
@@ -120,7 +150,10 @@ row "5 available" "minutes until the vital apps answer from the VPS, the house c
 row "6 up to date" "days from a security fix's release to its application" "UNMEASURED — probe: the updater's first-seen date against its applied date; the controller never calls \`hlb-updater\`" "a patch within 7 days, an exploited CVE at the next window"
 
 # 7. Simple --------------------------------------------------------------------------
-row "7 simple" "questions the Minimal profile asks before the first app" "UNMEASURED — probe: the installer's answer file, its required fields counted by a test" "capped; a module for hosters never raises it"
+# No Minimal profile exists before the installer of phase 6: until then the figure is
+# what the path from a bare machine really asked, each answer a call in the drill.
+answers=$(measured deploy-answers)
+row "7 simple" "answers the path from a bare machine demands, to an app with a database and sign-in" "${answers:-UNMEASURED — probe: \`scripts/drills/deploy.sh\`}" "capped; a module for hosters never raises it"
 
 # How the sessions work ---------------------------------------------------------------
 largest=$(wc -m .claude/rules/*.md | grep -v ' total$' | sort -n | tail -1)
