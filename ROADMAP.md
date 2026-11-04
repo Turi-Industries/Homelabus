@@ -1379,12 +1379,15 @@ partner"), success and time measured before and after.
 
 #### Standing, whatever the phase
 
-**Goal 2 — never lose.** A restore rehearsed for every app holding data — volume,
-database, bucket — in a disposable copy, weekly, its result kept and alerting on
-failure, and readable by `hlb` so the scorecard can count it — the lifeboat (phase 4)
-does it nightly for the vital apps, the catalog's CI (phase 3) for every app's
-packaging. Proposed beside it: reciprocal backups between two houses, each keeping the
-other's encrypted copy append-only — an off-site copy with no provider at all.
+**Goal 2 — never lose.** Every app's backups are read back weekly: volumes counted, dumps
+restored into a disposable server, SQLite checked, buckets read to their end. What is
+left: a read-back proves a copy returns, not that the app runs on it. A store copied live
+passes (`.claude/rules/backups.md`), so an app restored whole and started in a disposable
+copy, its assertions held, stays to do — the catalog's CI does it for packaging, the
+lifeboat (phase 4) will for the vital apps nightly. A verification reads the newest
+destination it can, so an off-site copy is rarely the one read. Proposed beside it:
+reciprocal backups between two houses, each keeping the other's encrypted copy append-only
+— an off-site copy with no provider at all.
 
 **Goal 4 — no Rust: the schema gaps**, each a closed list a new app has had to extend,
 ranked by how many apps they would have spared (audit of 2026-10-27):
