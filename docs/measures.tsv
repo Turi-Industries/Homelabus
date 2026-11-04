@@ -9,3 +9,4 @@ date	hlb	measure	value	note
 2026-11-04	0.4.4	stolen-reopen-seconds	38	enc2, one Tang back
 2026-11-04	0.4.4	node-levels	D:5	lab: virtual machines read D by design
 2026-11-04	0.4.5-dev	restores-read-back	14 of 14	the lab's own backups; restored and counted, never started
+2026-11-04	0.4.5-dev	updates-lag	1 applied, the slowest in 0 d; 27 waiting, the oldest for 0 d	the lab, every update and not a fix's, applied by a person
