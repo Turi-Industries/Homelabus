@@ -31,19 +31,16 @@ row() { printf '| %s | %s | %s | %s |\n' "$1" "$2" "$3" "$4"; }
 # on, and saying so when a newer release has come since: a figure that stops being
 # measured must not go on reading as today's. Prints nothing for a measure with no row.
 measured() {
-    awk -F'\t' -v m="$1" -v latest="${tag#v}" '
-        $3 == m { value = $4; hlb = $2; date = $1 }
-        END {
-            if (value == "") exit
-            printf "%s (hlb %s, %s)", value, hlb, date
-            if (latest != "" && hlb != latest) printf " — STALE, the newest release is %s", latest
-        }' docs/measures.tsv 2>/dev/null
+    local row value hlb date
+    row=$(awk -F'\t' -v m="$1" '$3 == m { line = $4 "\t" $2 "\t" $1 } END { if (line != "") print line }' docs/measures.tsv 2>/dev/null)
+    [[ -n $row ]] || return 0
+    IFS=$'\t' read -r value hlb date <<<"$row"
+    printf '%s (hlb %s, %s)' "$value" "$hlb" "$date"
+    # A build between two releases is no older than the newest one: 0.4.5-dev after 0.4.4.
+    if [[ -n ${tag:-} && $(printf '%s\n%s\n' "${hlb%-dev}" "${tag#v}" | sort -V | head -1) != "${tag#v}" ]]; then
+        printf ' — STALE, the newest release is %s' "${tag#v}"
+    fi
 }
-
-echo "Scorecard of $(git rev-parse --short HEAD), $(date +%F)"
-echo
-echo '| Goal | Measure | Now | Target |'
-echo '|---|---|---|---|'
 
 # 1. Deploy -------------------------------------------------------------------------
 tag=$(git describe --tags --abbrev=0 2>/dev/null)
@@ -73,7 +70,8 @@ fi
 quality=$(curl -fsS -m 10 https://turi-industries.github.io/homelabus-catalog/quality-v1.json 2>/dev/null |
     jq -r '[.apps[].last] | "\(map(select(.restore == "passed")) | length) of \(length), on hlb \(map(.hlb) | max), newest \(map(.date) | max)"' 2>/dev/null)
 row "2 never lose" "apps whose restore passed in the catalog's CI" "${quality:-unknown (no network, or no jq)}" "every app with data, each week"
-row "2 never lose" "apps whose restore was rehearsed on the house's own data in the last 30 days" "UNMEASURED — nothing in the repository records it; \`hlb dr exercise\` rehearses PostgreSQL's base backup" "every app with data, weekly, alerting when one fails"
+restores=$(measured restores-read-back)
+row "2 never lose" "apps whose backups were read back and read good on the lab in the last 30 days: restored and counted, never started" "${restores:-UNMEASURED — probe: \`scripts/drills/restores.sh\`}" "every app with data, weekly, alerting when one fails"
 
 # 3. Never stolen --------------------------------------------------------------------
 # Not here: images without a digest — `catalog validate` refuses them already, and the
