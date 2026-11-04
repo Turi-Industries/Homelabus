@@ -243,6 +243,34 @@ pub async fn snapshot_all(root: &Path, staging: &Path) -> Result<Vec<Snapshotted
     Ok(produced)
 }
 
+/// Asks SQLite itself whether `path` is a whole database, read-only.
+///
+/// 🔴 Restic's own check says the bytes it took came back, and a size says nothing about a
+/// file cut short: `integrity_check` reads every page and every index.
+pub async fn integrity(path: &Path) -> Result<()> {
+    use sqlx::Connection as _;
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true);
+    let unreadable = |e: sqlx::Error| Error::Unexpected(format!("not a whole database: {e}"));
+    let mut db = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .map_err(unreadable)?;
+    let said: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_all(&mut db)
+        .await
+        .map_err(unreadable)?;
+    let _ = db.close().await;
+    if said == ["ok"] {
+        Ok(())
+    } else {
+        Err(Error::Unexpected(format!(
+            "not a whole database: {}",
+            said.join("; ")
+        )))
+    }
+}
+
 /// The tag of a database's consistent snapshot, archived where it sits in its volume.
 pub const SNAPSHOT_KIND: &str = "kind:sqlite-snapshot";
 
@@ -522,6 +550,25 @@ mod tests_litestream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_whole_database_passes_and_one_cut_short_does_not() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let whole = dir.path().join("whole.db");
+        base(&whole, 500).await;
+        let copy = dir.path().join("copy.db");
+        snapshot(&whole, &copy).await.expect("snapshot");
+        integrity(&copy).await.expect("a whole database passes");
+
+        let bytes = std::fs::read(&copy).expect("read");
+        let cut = dir.path().join("cut.db");
+        std::fs::write(&cut, &bytes[..bytes.len() / 2]).expect("write");
+        assert!(integrity(&cut).await.is_err(), "a file cut short must fail");
+
+        let junk = dir.path().join("junk.db");
+        std::fs::write(&junk, b"not a database at all, and long enough").expect("write");
+        assert!(integrity(&junk).await.is_err());
+    }
 
     /// Creates a real SQLite database with content.
     async fn base(path: &Path, rows: usize) {

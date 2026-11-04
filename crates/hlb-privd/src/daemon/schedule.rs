@@ -133,12 +133,7 @@ impl VerifyLoop {
         let mut due = Vec::new();
         for (app, status) in self.state.installed_apps().await? {
             // As the backups: a failed app has a more urgent problem.
-            let kinds = self.state.backup_kinds(&app).await?;
-            let read = [
-                hlb_state::backup_kind::VOLUME,
-                hlb_state::backup_kind::SQL_DUMP,
-            ];
-            if status == "failed" || !read.iter().any(|k| kinds.contains(k)) {
+            if status == "failed" || self.state.backup_kinds(&app).await?.is_empty() {
                 continue;
             }
             let age = self

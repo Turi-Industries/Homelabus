@@ -6,8 +6,10 @@
 //! - Its databases: each dump restored into a disposable server of the installed image,
 //!   its tables counted against what the dump names ([`crate::dump_reading`]).
 //!
-//! ⚠️ Not read: SQLite snapshots and buckets. And nothing starts: a store copied live
-//! passes the volume's count and might not open.
+//! - Its SQLite databases: each consistent snapshot put through SQLite's own check.
+//! - Its buckets: each archive read to its end, whose trailer counts what it holds.
+//!
+//! ⚠️ Nothing starts: a store copied live passes the volume's count and might not open.
 
 use hlb_backup::{Class, Destination};
 use hlb_secrets::Vault;
@@ -32,7 +34,7 @@ const DUMP_GROWTH: u64 = 4;
 /// One thing read back.
 #[derive(Debug)]
 pub struct Part {
-    /// `volumes`, or `database <name>`.
+    /// `volumes`, `database <name>`, `sqlite <path>` or `bucket <name>`.
     pub what: String,
     pub snapshot: String,
     pub destination: String,
@@ -82,6 +84,8 @@ pub async fn app(
     let mut parts = Vec::new();
     parts.extend(volumes(state, vault, network, fallback, app, unasked).await?);
     parts.extend(databases(state, vault, network, fallback, app, unasked).await?);
+    parts.extend(sqlite(state, vault, network, fallback, app, unasked).await?);
+    parts.extend(buckets(state, vault, network, fallback, app, unasked).await?);
     let Some(first) = parts.first() else {
         return Ok(None);
     };
@@ -248,6 +252,184 @@ async fn databases(
     Ok(parts)
 }
 
+async fn sqlite(
+    state: &State,
+    vault: &Vault,
+    network: &str,
+    fallback: Option<&str>,
+    app: &str,
+    unasked: bool,
+) -> Result<Vec<Part>> {
+    let dests = effective_destinations(state, app, Class::Bulky, fallback).await?;
+    let Some((_, d)) = newest(state, app, backup_kind::SQLITE, &dests).await? else {
+        return Ok(Vec::new());
+    };
+    let failed = |what: String, e: String| Part {
+        what,
+        snapshot: String::new(),
+        destination: d.name.clone(),
+        outcome: Err(e),
+    };
+    let repo = match repository(state, vault, network, d).await {
+        Ok(r) => r,
+        Err(e) => return Ok(vec![failed("sqlite".into(), e)]),
+    };
+    let all = match repo.snapshots(Some(&format!("app:{app}"))).await {
+        Ok(a) => a,
+        Err(e) => return Ok(vec![failed("sqlite".into(), e.to_string())]),
+    };
+    let taken = state.snapshots_taken(app).await?;
+    let mut parts = Vec::new();
+    for (db, snapshot) in newest_sqlite(&all, &taken) {
+        let outcome = async {
+            // The database, beside its empty journal files.
+            let path = snapshot
+                .paths
+                .iter()
+                .find(|p| !p.ends_with("-wal") && !p.ends_with("-shm"))
+                .ok_or_else(|| format!("snapshot {} names no database", snapshot.id))?;
+            let bytes = repo
+                .stats(&snapshot.id)
+                .await
+                .map_err(|e| e.to_string())?
+                .bytes;
+            let room = hlb_backup::verify::room_here()
+                .await
+                .map_err(|e| e.to_string())?;
+            let limit = (unasked && d.is_s3()).then_some(UNASKED_BILLED_LIMIT);
+            if let Some(why) = hlb_backup::verify::refusal(bytes, room, limit) {
+                return Err(why);
+            }
+            // Dropped with this block, whatever happened: a clear copy of the database.
+            let dir = tempfile::tempdir().map_err(|e| format!("no space to read it in: {e}"))?;
+            let file = dir.path().join("read.db");
+            let mut out = tokio::fs::File::create(&file)
+                .await
+                .map_err(|e| format!("no space to read it in: {e}"))?;
+            repo.dump(&snapshot.id, path, &mut out)
+                .await
+                .map_err(|e| format!("the snapshot could not be read back: {e}"))?;
+            out.sync_all()
+                .await
+                .map_err(|e| format!("the snapshot could not be read back: {e}"))?;
+            drop(out);
+            hlb_backup::sqlite::integrity(&file)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(format!("{bytes} bytes, whole by SQLite's own check"))
+        }
+        .await;
+        parts.push(Part {
+            what: format!("sqlite {db}"),
+            snapshot: snapshot.id.clone(),
+            destination: d.name.clone(),
+            outcome,
+        });
+    }
+    Ok(parts)
+}
+
+/// The newest snapshot Homelabus took of each SQLite database, by its `db:` tag.
+fn newest_sqlite<'a>(
+    all: &'a [hlb_backup::restic::Snapshot],
+    taken: &std::collections::HashSet<String>,
+) -> Vec<(String, &'a hlb_backup::restic::Snapshot)> {
+    let mut newest: std::collections::BTreeMap<String, &hlb_backup::restic::Snapshot> =
+        Default::default();
+    for s in all {
+        let is_sqlite = s
+            .tags
+            .iter()
+            .any(|t| t == hlb_backup::sqlite::SNAPSHOT_KIND);
+        let db = s.tags.iter().find_map(|t| t.strip_prefix("db:"));
+        let (true, true, Some(db), Some(at)) = (is_sqlite, taken.contains(&s.id), db, s.epoch())
+        else {
+            continue;
+        };
+        if newest
+            .get(db)
+            .is_none_or(|n| n.epoch().is_none_or(|e| e < at))
+        {
+            newest.insert(db.to_string(), s);
+        }
+    }
+    newest.into_iter().collect()
+}
+
+async fn buckets(
+    state: &State,
+    vault: &Vault,
+    network: &str,
+    fallback: Option<&str>,
+    app: &str,
+    unasked: bool,
+) -> Result<Vec<Part>> {
+    let dests = effective_destinations(state, app, Class::Bulky, fallback).await?;
+    let Some((_, holder)) = newest(state, app, backup_kind::BUCKET, &dests).await? else {
+        return Ok(Vec::new());
+    };
+    let restore = Restore {
+        state,
+        vault,
+        fallback_repo: fallback,
+        network,
+        orchestrator: None,
+    };
+    let mut parts = Vec::new();
+    for bucket in state.buckets_to_backup(app).await? {
+        let (mut snapshot, mut destination) = (String::new(), holder.name.clone());
+        let outcome = async {
+            let source = restore
+                .find_bucket(app, &bucket, Some(&holder.name), None)
+                .await?;
+            snapshot.clone_from(&source.snapshot.id);
+            destination.clone_from(&source.destination.name);
+            let d = &source.destination;
+            let repo = repository(state, vault, network, d).await?;
+            let bytes = repo
+                .stats(&source.snapshot.id)
+                .await
+                .map_err(|e| e.to_string())?
+                .bytes;
+            // No room asked for: an archive is read as it comes, and written nowhere.
+            let limit = (unasked && d.is_s3()).then_some(UNASKED_BILLED_LIMIT);
+            if let Some(why) = hlb_backup::verify::refusal(bytes, u64::MAX, limit) {
+                return Err(why);
+            }
+            let read = crate::bucket::read(&repo, &source.snapshot.id, &bucket).await?;
+            Ok(format!(
+                "{} objects, {} bytes, whole by its archive's own count",
+                read.objects, read.bytes
+            ))
+        }
+        .await;
+        parts.push(Part {
+            what: format!("bucket {bucket}"),
+            snapshot,
+            destination,
+            outcome,
+        });
+    }
+    Ok(parts)
+}
+
+async fn repository(
+    state: &State,
+    vault: &Vault,
+    network: &str,
+    d: &Destination,
+) -> std::result::Result<hlb_backup::Repository<hlb_backup::runner::ContainerRunner>, String> {
+    let password = restic_password(state, vault)
+        .await
+        .map_err(|e| e.to_string())?;
+    let creds = credentials(state, vault, d)
+        .await
+        .map_err(|e| e.to_string())?;
+    let env = d.env(creds.as_deref()).map_err(|e| e.to_string())?;
+    let (runner, location) = d.runner(Some(network));
+    Ok(hlb_backup::Repository::new(runner, location, password).extra_env(env))
+}
+
 /// Why a dump of `bytes` is not read back, before it is fetched.
 fn refused(bytes: u64, room: u64, unasked: bool, billed: bool) -> Option<String> {
     if unasked && bytes > UNASKED_DUMP_LIMIT {
@@ -348,6 +530,46 @@ mod tests {
         assert!(refused(1000, 3000, false, false)
             .expect("refused")
             .contains("do not fit"));
+    }
+
+    fn snapshot(id: &str, time: &str, db: &str) -> hlb_backup::restic::Snapshot {
+        hlb_backup::restic::Snapshot {
+            id: id.into(),
+            time: time.into(),
+            paths: vec!["/donnees/v/x.db".into()],
+            tags: vec![
+                hlb_backup::sqlite::SNAPSHOT_KIND.to_string(),
+                format!("db:{db}"),
+            ],
+            hostname: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_newest_of_each_database_is_read_and_one_nobody_took_never() {
+        let old = "2026-11-01T10:00:00Z";
+        let new = "2026-11-04T10:00:00Z";
+        let all = [
+            snapshot("a-old", old, "a.db"),
+            snapshot("a-new", new, "a.db"),
+            snapshot("b-only", old, "b.db"),
+            snapshot("c-foreign", new, "c.db"),
+        ];
+        let taken = ["a-old", "a-new", "b-only"]
+            .map(String::from)
+            .into_iter()
+            .collect();
+        let read: Vec<(String, &str)> = newest_sqlite(&all, &taken)
+            .into_iter()
+            .map(|(db, s)| (db, s.id.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("a.db".to_string(), "a-new"),
+                ("b.db".to_string(), "b-only")
+            ]
+        );
     }
 
     #[test]
