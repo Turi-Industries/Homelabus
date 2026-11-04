@@ -26,6 +26,7 @@ pub mod mailbox;
 pub mod pki;
 pub mod prune;
 pub mod reconcile;
+pub mod removal;
 pub mod roles;
 pub mod sources;
 pub mod stalwart_migrate;

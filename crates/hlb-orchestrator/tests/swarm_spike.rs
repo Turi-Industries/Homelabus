@@ -527,6 +527,66 @@ async fn files_reach_the_container_at_their_path() {
     println!("✓ file delivered at its path");
 }
 
+/// Removing a service takes the secrets its files rode on, every version of them, and a
+/// second removal finds nothing left to do. Left behind, a signing key outlived its app
+/// (Anubis, on the lab) while the preview promised nothing would be left.
+#[tokio::test]
+#[ignore = "needs an active Swarm"]
+async fn removing_a_service_takes_its_file_secrets() {
+    let o = orch().await;
+    let n = name("gone");
+    let neighbour = name("gone-neighbour");
+    cleanup(&o, &n).await;
+    cleanup(&o, &neighbour).await;
+
+    let secrets = |prefix: String| async move {
+        let out = tokio::process::Command::new("docker")
+            .args(["secret", "ls", "--format", "{{.Name}}"])
+            .output()
+            .await
+            .expect("docker secret ls");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with(&prefix))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+
+    o.deploy(&sleeper(&n).file("/etc/one.toml", "one"))
+        .await
+        .expect("deploy");
+    o.wait_healthy(&n, 60).await.expect("running");
+    o.deploy(&sleeper(&n).file("/etc/one.toml", "two"))
+        .await
+        .expect("a new version of the file");
+    o.deploy(&sleeper(&neighbour).file("/etc/one.toml", "one"))
+        .await
+        .expect("a neighbour sharing the name's start");
+    let mine = format!("{n}-file-");
+    assert_eq!(secrets(mine.clone()).await.len(), 2, "two versions");
+
+    o.remove(&n).await.expect("removed");
+    assert_eq!(secrets(mine.clone()).await, Vec::<String>::new());
+    assert_eq!(
+        secrets(format!("{neighbour}-file-")).await.len(),
+        1,
+        "the neighbour keeps its own"
+    );
+
+    assert!(
+        matches!(
+            o.remove(&n).await,
+            Err(hlb_orchestrator::Error::NotFound(_))
+        ),
+        "already gone reads as it always did"
+    );
+    cleanup(&o, &neighbour).await;
+    assert_eq!(
+        secrets(format!("{neighbour}-file-")).await,
+        Vec::<String>::new()
+    );
+}
+
 /// `publishedPorts` reaches Swarm, in host mode: declared and ignored until 2026-10-14.
 /// By its protocol: LiveKit's media is UDP, which Swarm was always handed as TCP.
 #[tokio::test]

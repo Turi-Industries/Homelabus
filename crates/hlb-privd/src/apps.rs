@@ -703,7 +703,7 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
 
     let volumes = p.state.app_volumes(&app).await.unwrap_or_default();
     let mut steps = vec![ActionStep {
-        description: format!("remove the {app} service from Swarm"),
+        description: format!("remove the {app} service from Swarm, and the secrets its files use"),
         state: StepState::Planned,
         error: None,
     }];
@@ -717,6 +717,16 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
                     " — and it is NOT backed up"
                 }
             ),
+            state: StepState::Planned,
+            error: None,
+        });
+    }
+    let secrets = hlb_engine::removal::secrets_left(&p.state, &app)
+        .await
+        .unwrap_or_default();
+    if let Some(line) = hlb_engine::removal::secrets_line(&app, secrets.len()) {
+        steps.push(ActionStep {
+            description: line,
             state: StepState::Planned,
             error: None,
         });
@@ -746,9 +756,9 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
             }
         }
 
-        // 2. The volumes are KEPT — and the step says so, which is why it is `Done`
-        //    and not skipped: "nothing was done to this volume" is the outcome we
-        //    promised, and a step left `Planned` would read as unfinished work.
+        // 2. The volumes and the secrets are KEPT — and the step says so, which is why it
+        //    is `Done` and not skipped: "nothing was done to this volume" is the outcome
+        //    we promised, and a step left `Planned` would read as unfinished work.
         for e in steps.iter_mut().skip(1) {
             e.state = StepState::Done;
         }
@@ -790,10 +800,7 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
         // precisely the sentence you read before confirming a
         // suppression.
         summary: match volumes.len() {
-            0 => format!(
-                "delete {app} — no volume declared: nothing will be left of this \
-                 application"
-            ),
+            0 => format!("delete {app} — {}", hlb_engine::removal::NO_VOLUME),
             n => format!(
                 "delete {app} — {} {} kept{}, the data stays",
                 hlb_api::plural(n as u64, "volume", "volumes"),

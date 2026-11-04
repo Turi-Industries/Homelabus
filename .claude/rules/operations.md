@@ -37,6 +37,11 @@ monitoring, updates and routes have their own `operations-*.md`.
   alone, and Immich's machine-learning service stayed running, managed by nobody; an
   install that failed before its app's service existed could not be removed at all
   ("service not found"). `hlb_engine::remove_services` serves the CLI and the controller.
+  🔴 And the Swarm secrets its files rode on: the preview said "nothing will be left"
+  while Anubis's signing key stayed in the Swarm and in the vault (2026-11-04).
+  `SwarmOrchestrator::remove` takes every version of them. The vault's are kept, and the
+  preview says so — a volume or a backup kept was written with them; `hlb secrets-forget`
+  deletes them, for an app the audit log shows removed and not installed again.
 - **A scheduled job runs in its app's own container** (`spec.jobs`, `hlb_engine::jobs`),
   looked at hourly and run when due; a failed run is tried again a day later, kept as
   failed until one succeeds, in the inbox (`job_failed`) and notified. An app whose plan

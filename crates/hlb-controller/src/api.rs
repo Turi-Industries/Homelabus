@@ -6243,6 +6243,44 @@ steps:
     }
 
     #[tokio::test]
+    async fn a_removal_s_preview_says_what_it_leaves_behind() {
+        // 🔴 "No volume declared: nothing will be left" was read before confirming, and
+        // Anubis's signing key stayed in the vault. Zero volumes must not read as "the
+        // data stays" either.
+        let st = State::in_memory().await.expect("base");
+        st.upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("app");
+        st.store_secret_if_absent("gitea-jwt-secret", b"x", "jwt")
+            .await
+            .expect("secret");
+        st.store_secret_if_absent("restic-repo-password", b"x", "repository")
+            .await
+            .expect("secret");
+        let r = router(app_state(st, true));
+
+        let resp = r
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/apps/gitea")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let said = String::from_utf8_lossy(&bytes);
+        assert!(!said.contains("nothing will be left"), "{said}");
+        assert!(!said.contains("the data stays"), "{said}");
+        assert!(said.contains("1 secret stays in the vault"), "{said}");
+        assert!(said.contains("hlb secrets-forget gitea"), "{said}");
+    }
+
+    #[tokio::test]
     async fn a_preview_still_leaves_a_trace() {
         // Knowing someone looked at what a purge would do is information. But it is NOT
         // logged as an execution.

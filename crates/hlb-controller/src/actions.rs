@@ -750,7 +750,7 @@ pub async fn delete_app(
         .ask_confirmed(proof, asked)
         .await
         .map_err(privd_error)?;
-    respond(&s, auth.identity(), "app-remove", &app, r).await
+    respond(&s, auth.identity(), hlb_state::APP_REMOVED, &app, r).await
 }
 
 /// Purges one of the SIGNED-IN account's own expired-but-still-active aliases.
@@ -1059,25 +1059,6 @@ pub async fn list_plans(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn removing_an_app_without_volumes_promises_nothing() {
-        // 🔴 Found by running the preview: "0 volume is kept, the data stays" promises
-        // a survival with no object. It is the sentence you read just before confirming
-        // a deletion — it must say what will really
-        // happen.
-        //
-        // ⚠️ The summary is built in `delete_app`; we reproduce here the only rule
-        // that matters, and a real call checks it end to end in
-        // `every_mutating_route_previews_without_acting`.
-        let phrase = |n: usize| match n {
-            0 => "no volume declared: nothing will be left".to_string(),
-            n => format!("{n} kept"),
-        };
-        assert!(phrase(0).contains("nothing will be left"));
-        assert!(!phrase(0).contains("the data stays"));
-        assert!(phrase(2).contains("kept"));
-    }
-
     #[test]
     fn a_saved_plan_can_only_target_a_route_that_exists() {
         // 🔴 A plan targeting an unknown route would be accepted here and would fail at

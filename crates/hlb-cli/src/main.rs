@@ -463,6 +463,22 @@ enum Command {
         name: String,
     },
 
+    /// Delete from the vault what `hlb remove` left of an app. Preview by default.
+    ///
+    /// 🔴 A reinstall then draws new secrets: a volume or a backup kept from before may
+    /// no longer open. Only an app this house removed, and that is not installed again:
+    /// the audit log proves the name was an app's, or `secrets-forget restic` would take
+    /// the password of every backup.
+    SecretsForget {
+        app: String,
+        /// Repeat the app's name. Required by --apply.
+        #[arg(long)]
+        confirm: Option<String>,
+        /// Actually delete them.
+        #[arg(long, requires = "confirm")]
+        apply: bool,
+    },
+
     /// Audit log: who did what, when.
     Audit {
         #[arg(long, default_value = "30")]
@@ -6079,12 +6095,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 let volumes = state.app_volumes(app).await?;
                 println!("Removing \"{app}\"\n");
-                println!("  · the {app} service is removed from Swarm");
+                println!(
+                    "  · the {app} service is removed from Swarm, and the secrets its files use"
+                );
                 // 🔴 Said BEFORE the confirmation, not after: this is the sentence on
                 // which someone decides. "0 volume kept" must not read as "the data
-                // stays" — with no volume, nothing is left of the app.
+                // stays" — with no volume, no file of the app survives.
                 if volumes.is_empty() {
-                    println!("  · no volume declared: NOTHING will be left of this app");
+                    println!("  · {}", hlb_engine::removal::NO_VOLUME);
                 } else {
                     for (name, _, backup, _) in &volumes {
                         println!(
@@ -6096,6 +6114,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                         );
                     }
+                }
+                let secrets = hlb_engine::removal::secrets_left(&state, app).await?;
+                if let Some(line) = hlb_engine::removal::secrets_line(app, secrets.len()) {
+                    println!("  · {line}");
                 }
                 println!("  · the backups and the audit log are kept");
 
@@ -6126,7 +6148,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 state.forget_app(app).await?;
                 state
-                    .audit("cli", ACTOR_ROLE, "app-remove", app, "ok", None)
+                    .audit("cli", ACTOR_ROLE, hlb_state::APP_REMOVED, app, "ok", None)
                     .await?;
                 println!("✓ {app} forgotten: manifest, plan and guides");
                 // Its route goes with it: left in the Caddyfile it would answer 502 at
@@ -6137,9 +6159,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 {
                     println!("✓ its route is no longer published");
                 }
-                println!(
-                    "\nThe volumes and the backups are still there — a reinstall picks them up."
-                );
+                println!("\nWhat is listed as kept is still there — a reinstall picks it up.");
                 Ok(ExitCode::SUCCESS)
             })
         }
@@ -9723,6 +9743,66 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     .audit("cli", ACTOR_ROLE, "secret-read", name, "ok", None)
                     .await?;
                 println!("{value}");
+                Ok(ExitCode::SUCCESS)
+            })
+        }
+
+        Command::SecretsForget {
+            app,
+            confirm,
+            apply,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                let state = open_state(&cli).await?;
+                let installed = state
+                    .installed_apps()
+                    .await?
+                    .into_iter()
+                    .any(|(n, _)| &n == app);
+                if installed {
+                    eprintln!("🔴 \"{app}\" is installed: it runs on these secrets.");
+                    eprintln!("   `hlb remove {app}` first.");
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+                }
+                if !state.app_was_removed(app).await? {
+                    eprintln!("🔴 The audit log holds no record of \"{app}\" being removed.");
+                    eprintln!("   Nothing says these names were an app's: nothing was deleted.");
+                    return Ok(ExitCode::FAILURE);
+                }
+
+                let secrets = hlb_engine::removal::secrets_left(&state, app).await?;
+                if secrets.is_empty() {
+                    println!("Nothing of \"{app}\" is left in the vault.");
+                    return Ok(ExitCode::SUCCESS);
+                }
+                println!("Forgetting what \"{app}\" left in the vault\n");
+                for name in &secrets {
+                    println!("  · {name}");
+                }
+                println!(
+                    "\n🔴 A reinstall draws new ones: a volume or a backup kept from before may \
+                     no longer open."
+                );
+
+                if !*apply {
+                    println!("\nPreview: nothing was done.");
+                    println!("  hlb secrets-forget {app} --confirm {app} --apply");
+                    return Ok(ExitCode::SUCCESS);
+                }
+                if confirm.as_deref() != Some(app.as_str()) {
+                    eprintln!("\n🔴 Confirmation missing: --confirm {app}");
+                    return Ok(ExitCode::FAILURE);
+                }
+
+                println!();
+                for name in &secrets {
+                    state.forget_secret(name).await?;
+                    state
+                        .audit("cli", ACTOR_ROLE, "secret-forget", name, "ok", Some(app))
+                        .await?;
+                    println!("✓ {name} deleted");
+                }
                 Ok(ExitCode::SUCCESS)
             })
         }

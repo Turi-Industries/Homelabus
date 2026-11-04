@@ -592,6 +592,10 @@ pub struct ShippedMigration {
     pub reversible: bool,
 }
 
+/// The audit action of an app's removal. `hlb secrets-forget` reads it back as the proof
+/// that a name was an app's, so its writers and its reader share this one spelling.
+pub const APP_REMOVED: &str = "app-remove";
+
 /// Cheap to clone: the pool is shared.
 #[derive(Clone)]
 pub struct State {
@@ -1256,6 +1260,19 @@ impl State {
                 ))
             })
             .collect()
+    }
+
+    /// Whether this house ever removed an app of this name, and it succeeded. A preview
+    /// and a failure are logged under the same action, and prove nothing.
+    pub async fn app_was_removed(&self, app: &str) -> Result<bool> {
+        Ok(sqlx::query(
+            "SELECT 1 FROM audit_log WHERE action = ?1 AND target = ?2 AND outcome = 'ok' LIMIT 1",
+        )
+        .bind(APP_REMOVED)
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
     }
 
     /// The audit log filtered on one target.
@@ -5310,6 +5327,57 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn only_a_removal_that_succeeded_counts_as_one() {
+        let s = super::State::in_memory().await.expect("state");
+        assert!(!s.app_was_removed("gitea").await.expect("read"));
+        for outcome in ["preview", "failed"] {
+            s.audit(
+                "cli",
+                hlb_types::Role::Admin,
+                super::APP_REMOVED,
+                "gitea",
+                outcome,
+                None,
+            )
+            .await
+            .expect("audit");
+        }
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            "app-install",
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            super::APP_REMOVED,
+            "other",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
+        assert!(!s.app_was_removed("gitea").await.expect("read"));
+
+        s.audit(
+            "cli",
+            hlb_types::Role::Admin,
+            super::APP_REMOVED,
+            "gitea",
+            "ok",
+            None,
+        )
+        .await
+        .expect("audit");
+        assert!(s.app_was_removed("gitea").await.expect("read"));
+    }
+
     use super::*;
 
     #[tokio::test]

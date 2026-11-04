@@ -345,7 +345,7 @@ impl Privd {
             Intent::Remove(i) => {
                 let app = i.app.clone();
                 let r = apps::remove(self, i).await;
-                self.mirror(r.applied, "app-remove", &app).await;
+                self.mirror(r.applied, hlb_state::APP_REMOVED, &app).await;
                 serde_json::to_value(r)?
             }
             Intent::BackUp(i) => serde_json::to_value(backup::back_up(self, i).await)?,

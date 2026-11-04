@@ -75,6 +75,7 @@ blocks new installs and upgrades from the source, never what runs.
 ./target/debug/hlb scale gitea 3             # --apply; zero is refused
 ./target/debug/hlb stop gitea                # 0 replicas, everything else kept
 ./target/debug/hlb remove gitea --confirm gitea --apply
+./target/debug/hlb secrets-forget gitea --confirm gitea --apply   # what the removal left in the vault
 ```
 
 `scale ... 0` is refused on purpose: scaling to zero is a shutdown, not a resize, and

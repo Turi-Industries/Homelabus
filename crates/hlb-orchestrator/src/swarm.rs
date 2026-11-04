@@ -20,8 +20,8 @@ use bollard::models::{
     TaskSpecRestartPolicyConditionEnum,
 };
 use bollard::query_parameters::{
-    ListNodesOptions, ListServicesOptionsBuilder, ListTasksOptionsBuilder,
-    UpdateNodeOptionsBuilder, UpdateServiceOptionsBuilder,
+    ListNodesOptions, ListSecretsOptionsBuilder, ListServicesOptionsBuilder,
+    ListTasksOptionsBuilder, UpdateNodeOptionsBuilder, UpdateServiceOptionsBuilder,
 };
 use bollard::Docker;
 
@@ -54,6 +54,9 @@ fn registry_host(image: &str) -> Option<&str> {
         .then_some(first)
 }
 
+/// How long a service's name may be and still be whole in its file secrets' names.
+const FILE_SECRET_ROOM: usize = 64 - "-file-".len() - 12;
+
 /// The Swarm secret carrying one file of a service: named after the service, the path
 /// and the content, so a new version of the file is a new secret.
 ///
@@ -63,13 +66,12 @@ fn registry_host(image: &str) -> Option<&str> {
 /// two services sharing a prefix share no secret; a name that fits is named as it
 /// always was, or every running service would be redeployed for new secrets.
 fn file_secret_name(service: &str, path: &str, content: &str) -> String {
-    const ROOM: usize = 64 - "-file-".len() - 12;
-    if service.len() <= ROOM {
+    if service.len() <= FILE_SECRET_ROOM {
         let hex = hlb_types::token::sha256_hex(format!("{path}\n{content}").as_bytes());
         return format!("{service}-file-{}", &hex[..12]);
     }
     let hex = hlb_types::token::sha256_hex(format!("{service}\n{path}\n{content}").as_bytes());
-    let mut end = ROOM;
+    let mut end = FILE_SECRET_ROOM;
     while !service.is_char_boundary(end) {
         end -= 1;
     }
@@ -78,6 +80,21 @@ fn file_secret_name(service: &str, path: &str, content: &str) -> String {
         service[..end].trim_end_matches('-'),
         &hex[..12]
     )
+}
+
+/// Whether a Swarm secret carries a file of this service, in any version.
+///
+/// Read exactly, never as a prefix: `foo-file-…` is `foo`'s, and `foo-file-file-…` is a
+/// service called `foo-file`'s. A name cut to fit no longer says whose it is, so it
+/// matches nothing: those are job runs', and a run deletes its own.
+fn is_file_secret_of(service: &str, secret: &str) -> bool {
+    service.len() <= FILE_SECRET_ROOM
+        && secret
+            .strip_prefix(service)
+            .and_then(|rest| rest.strip_prefix("-file-"))
+            .is_some_and(|hash| {
+                hash.len() == 12 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
 }
 
 /// An RFC 3339 timestamp as Docker returns them, in Unix seconds.
@@ -319,6 +336,41 @@ impl SwarmOrchestrator {
             });
         }
         Ok(out)
+    }
+
+    /// Deletes the secrets a removed service's files rode on, every version of them.
+    async fn remove_file_secrets(&self, service: &str) -> Result<()> {
+        let mut filters = HashMap::new();
+        filters.insert("label".to_string(), vec![format!("{MANAGED_LABEL}=true")]);
+        let opts = ListSecretsOptionsBuilder::default()
+            .filters(&filters)
+            .build();
+        for secret in self.docker.list_secrets(Some(opts)).await? {
+            let Some(name) = secret
+                .spec
+                .and_then(|s| s.name)
+                .filter(|n| is_file_secret_of(service, n))
+            else {
+                continue;
+            };
+            let mut tries = 0;
+            loop {
+                match self.docker.delete_secret(&name).await {
+                    Ok(()) => break,
+                    Err(bollard::errors::Error::DockerResponseServerError {
+                        status_code: 404,
+                        ..
+                    }) => break,
+                    Err(e) if tries == 10 => return Err(e.into()),
+                    // Refused while a stopping task's container still holds it.
+                    Err(_) => {
+                        tries += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Puts the ingress network at [`crate::OVERLAY_MTU`].
@@ -1822,12 +1874,18 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn remove(&self, name: &str) -> Result<()> {
-        self.docker.delete_service(name).await.map_err(|e| match e {
+        let removed = self.docker.delete_service(name).await.map_err(|e| match e {
             bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
             } => Error::NotFound(name.to_string()),
             other => Error::Docker(other),
-        })
+        });
+        // Also when the service was already gone: an earlier removal refused here runs
+        // again and finishes. A file can carry a key, and nothing else would ever delete it.
+        if matches!(removed, Ok(()) | Err(Error::NotFound(_))) {
+            self.remove_file_secrets(name).await?;
+        }
+        removed
     }
 
     async fn tasks(&self, service: Option<&str>) -> Result<Vec<TaskInfo>> {
@@ -1974,6 +2032,37 @@ mod tests {
         // Two services cut to one prefix keep secrets of their own.
         let b = file_secret_name(&format!("{run}2"), "/run/hlb/env/PGPASSWORD", "x");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_service_owns_its_own_file_secrets_and_no_other() {
+        let mine = file_secret_name("foo", "/etc/foo.toml", "x");
+        assert!(super::is_file_secret_of("foo", &mine));
+        // Every version of the file: a changed content is a new secret beside the old.
+        assert!(super::is_file_secret_of(
+            "foo",
+            &file_secret_name("foo", "/etc/foo.toml", "y")
+        ));
+
+        for other in ["foo-bar", "foo-file", "fo"] {
+            let theirs = file_secret_name(other, "/etc/foo.toml", "x");
+            assert!(!super::is_file_secret_of("foo", &theirs), "{theirs}");
+        }
+        for not_a_file in [
+            "foo",
+            "foo-file-",
+            "foo-file-short",
+            "foo-file-a86d9033cd8g",
+            "foo-file-A86D9033CD88",
+            "foo-file-a86d9033cd880",
+        ] {
+            assert!(!super::is_file_secret_of("foo", not_a_file), "{not_a_file}");
+        }
+
+        // Cut to fit, a name no longer says whose it is: another run's could match.
+        let long = "x".repeat(FILE_SECRET_ROOM + 1);
+        let cut = file_secret_name(&long, "/etc/foo.toml", "x");
+        assert!(!super::is_file_secret_of(&long, &cut), "{cut}");
     }
 
     #[test]
