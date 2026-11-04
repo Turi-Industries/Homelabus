@@ -227,6 +227,121 @@ async fn a_sqlite_database_in_an_unflagged_volume_is_snapshotted_not_only_copied
     }
 }
 
+fn mail_at(volume: &std::path::Path, replicas: u64) -> Mail {
+    Mail {
+        volume: volume.to_path_buf(),
+        replicas: std::sync::Mutex::new(replicas),
+        scaled: std::sync::Mutex::new(Vec::new()),
+    }
+}
+
+// The lab's Termix, 2026-11-04: a daemon replaced during a copy left it at 0, the next pass
+// read that 0, "started" it at 0 and released the hold. Nothing ever started it again.
+#[tokio::test]
+async fn a_pass_after_one_that_died_gives_back_what_the_first_one_stopped() {
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(dir.path().join(STOPPED), "x").expect("marker");
+    let state = hlb_state::State::in_memory().await.expect("state");
+    let mail = mail_at(dir.path(), 0);
+    let first = [("mail".to_string(), 1)];
+    state
+        .hold_services(&first, "backup copy of data", 3600)
+        .await
+        .expect("the pass that died");
+
+    let second = [("mail".to_string(), 0)];
+    hlb_backup_run::restore::stop(&mail, &state, &second, "backup copy of data")
+        .await
+        .expect("stop");
+    hlb_backup_run::restore::start(&mail, &state, &second)
+        .await
+        .expect("start");
+
+    assert_eq!(*mail.replicas.lock().unwrap(), 1, "running again");
+    assert_eq!(state.held("mail").await.expect("hold"), None);
+}
+
+#[tokio::test]
+async fn a_daemon_starting_restarts_an_interrupted_copy_and_never_a_restore() {
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(dir.path().join(STOPPED), "x").expect("marker");
+    let state = hlb_state::State::in_memory().await.expect("state");
+    let mail = mail_at(dir.path(), 0);
+    state
+        .hold_services(&[("mail".to_string(), 2)], "backup copy of data", 3600)
+        .await
+        .expect("hold");
+    state
+        .hold_services(&[("other".to_string(), 1)], "restore of other-data", 3600)
+        .await
+        .expect("hold");
+
+    let started = hlb_backup_run::restore::restart_interrupted_copies(&mail, &state)
+        .await
+        .expect("restart");
+
+    assert_eq!(started, ["mail"]);
+    assert_eq!(*mail.scaled.lock().unwrap(), [2]);
+    assert_eq!(state.held("mail").await.expect("hold"), None);
+    assert!(state.held("other").await.expect("hold").is_some());
+}
+
+// Copied, a volume being restored is half of two states, and the pass's start would run the
+// app on it.
+#[tokio::test]
+async fn a_pass_leaves_alone_a_service_a_restore_holds() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: mail }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n    \
+         - { kind: storage, name: data, path: /data, copy: stopped }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("mail", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume("mail", "mail-data", "/nowhere", true, false)
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", "/nowhere/repo", "critical,bulky", None)
+        .await
+        .expect("destination");
+    state
+        .hold_services(&[("mail".to_string(), 1)], "restore of mail-data", 3600)
+        .await
+        .expect("hold");
+    let mail = mail_at(dir.path(), 0);
+    let pass = Pass {
+        state: &state,
+        vault: &vault,
+        state_path: &state_path,
+        fallback_repo: None,
+        network: "bridge",
+        postgres_admin: None,
+        mariadb_admin: None,
+        schedule: hlb_backup::Schedule::default(),
+        force: true,
+        only: Some("mail"),
+        orchestrator: Some(&mail),
+        s3_endpoint: None,
+    };
+    let mut events = Vec::new();
+    let sum = pass.run(&mut |e| events.push(e)).await.expect("pass");
+
+    assert!(sum.failed >= 1, "{events:#?}");
+    assert!(mail.scaled.lock().unwrap().is_empty(), "not touched");
+    assert!(
+        state.held("mail").await.expect("hold").is_some(),
+        "still held"
+    );
+}
+
 /// One service whose stop and start leave a trace in its volume: the copy shows which
 /// of the two it was taken during.
 struct Mail {

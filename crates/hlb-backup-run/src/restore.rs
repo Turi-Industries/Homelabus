@@ -865,11 +865,10 @@ pub async fn stop(
     services: &[(String, u64)],
     why: &str,
 ) -> Result<(), String> {
-    let names: Vec<String> = services.iter().map(|(s, _)| s.clone()).collect();
     state
-        .hold_services(&names, why, HOLD_SECS)
+        .hold_services(services, why, HOLD_SECS)
         .await
-        .map_err(|e| format!("holding {} stopped: {e}", names.join(", ")))?;
+        .map_err(|e| format!("holding services stopped: {e}"))?;
     for (s, replicas) in services {
         if *replicas > 0 {
             o.scale(s, 0)
@@ -896,6 +895,33 @@ pub async fn stop(
     Ok(())
 }
 
+/// What a hold taken for a backup's copy says. 🔴 A stored value, read to tell a copy a
+/// daemon's restart interrupted from a restore someone is running.
+pub const COPY_HOLD: &str = "backup copy of ";
+
+/// Starts again what a backup's copy stopped and a dead process never gave back: called as
+/// the daemon starts, when no pass of its own can be running. Left to the hold's end,
+/// Stalwart was a day without mail, and with no `--reconcile-apply` for ever.
+///
+/// ⚠️ A pass run by hand at that moment has its service started under it, and its copy
+/// fails or is taken live; a restore's hold is never touched. What was started.
+pub async fn restart_interrupted_copies(
+    o: &dyn Orchestrator,
+    state: &State,
+) -> Result<Vec<String>, String> {
+    let holds = state.service_holds().await.map_err(|e| e.to_string())?;
+    let mut started = Vec::new();
+    for h in holds.iter().filter(|h| h.why.starts_with(COPY_HOLD)) {
+        // Held before the count was recorded: nothing says what to give back.
+        let Some(replicas) = h.replicas else {
+            continue;
+        };
+        start(o, state, &[(h.service.clone(), replicas)]).await?;
+        started.push(h.service.clone());
+    }
+    Ok(started)
+}
+
 /// Gives each service back its replicas, its companions before the app — the order
 /// they were deployed in.
 ///
@@ -907,9 +933,17 @@ pub async fn start(
     stopped: &[(String, u64)],
 ) -> Result<(), String> {
     let mut failed = None;
+    // The hold's count over the caller's: read from Swarm after a process died holding the
+    // service, the caller's is the 0 it left.
+    let holds = state.service_holds().await.unwrap_or_default();
     for (s, replicas) in stopped.iter().rev() {
-        if *replicas > 0 {
-            if let Err(e) = o.scale(s, *replicas).await {
+        let held = holds
+            .iter()
+            .find(|h| &h.service == s)
+            .and_then(|h| h.replicas);
+        let replicas = held.map_or(*replicas, |h| h.max(*replicas));
+        if replicas > 0 {
+            if let Err(e) = o.scale(s, replicas).await {
                 failed.get_or_insert(format!("starting {s} again: {e}"));
             }
         }

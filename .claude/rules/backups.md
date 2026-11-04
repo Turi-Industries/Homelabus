@@ -96,6 +96,13 @@ during an outage.
   last entry: stopped at `TRAILER`, the reader closed its pipe on `restic dump`, and a whole
   bucket failed with "broken pipe" (the first real reading of Fluxer's, 2026-11-04).
   `tarball::Reader::drain`. `bucket::restore` had the same race, once every object was back.
+- **🔴 A daemon replaced during a copy took Termix down for good** (the lab, 2026-11-04). It
+  had scaled it to 0 for `copy: stopped`; the next pass read that 0 as what to give back,
+  "started" it at 0 and released the hold, so with no `--reconcile-apply` nothing ever ran it
+  again, a gap in a log line. Stalwart stops the same way. A hold records the replicas, held
+  again keeps the larger (`service_holds.replicas`), `restore::start` trusts it over its
+  caller, and the daemon restarts an interrupted copy as it starts. A pass refuses a service
+  a restore holds: it would have copied the half-written volume, then started the app on it.
 - **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
   size. Hence `restic check --read-data-subset` on top of the count.
 - **Two numbers for a backup, not one.** RPO says what you would lose; confidence says

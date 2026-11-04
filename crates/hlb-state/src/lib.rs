@@ -231,6 +231,15 @@ pub struct UpdateLags {
     pub waiting: Vec<UpdateLag>,
 }
 
+/// A service stopped on purpose ([`State::hold_services`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceHold {
+    pub service: String,
+    pub why: String,
+    /// What to give it back. `None`: held before this was recorded.
+    pub replicas: Option<u64>,
+}
+
 /// How an image update ended. Stored by name in `update_runs.outcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateRunOutcome {
@@ -1117,21 +1126,50 @@ impl State {
         )
     }
 
-    /// Holds `services` stopped for `secs`: reconciliation leaves them as they are.
-    pub async fn hold_services(&self, services: &[String], why: &str, secs: i64) -> Result<()> {
-        for s in services {
+    /// Holds `services` stopped for `secs`: reconciliation leaves them as they are. Each
+    /// comes with the replicas to give it back.
+    ///
+    /// 🔴 Held again, the larger count stays: a process that died holding a service left it
+    /// at 0, which is what the next one reads, and it must not become what is given back.
+    pub async fn hold_services(
+        &self,
+        services: &[(String, u64)],
+        why: &str,
+        secs: i64,
+    ) -> Result<()> {
+        for (service, replicas) in services {
             sqlx::query(
-                "INSERT INTO service_holds (service, why, until)
-                 VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER) + ?3)
-                 ON CONFLICT(service) DO UPDATE SET why = excluded.why, until = excluded.until",
+                "INSERT INTO service_holds (service, why, until, replicas)
+                 VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER) + ?3, ?4)
+                 ON CONFLICT(service) DO UPDATE SET
+                     why = excluded.why,
+                     until = excluded.until,
+                     replicas = MAX(COALESCE(service_holds.replicas, 0), excluded.replicas)",
             )
-            .bind(s)
+            .bind(service)
             .bind(why)
             .bind(secs)
+            .bind(*replicas as i64)
             .execute(&self.pool)
             .await?;
         }
         Ok(())
+    }
+
+    /// Every hold, lapsed or not, by service: a lapsed one still says what to give back.
+    pub async fn service_holds(&self) -> Result<Vec<ServiceHold>> {
+        let rows = sqlx::query("SELECT service, why, replicas FROM service_holds ORDER BY service")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(ServiceHold {
+                    service: r.try_get("service")?,
+                    why: r.try_get("why")?,
+                    replicas: r.try_get::<Option<i64>, _>("replicas")?.map(|n| n as u64),
+                })
+            })
+            .collect()
     }
 
     pub async fn release_services(&self, services: &[String]) -> Result<()> {
@@ -5466,6 +5504,22 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_service_held_again_keeps_what_it_is_to_be_given_back() {
+        let s = State::in_memory().await.expect("state");
+        s.hold_services(&[("mail".to_string(), 2)], "backup copy of a", 3600)
+            .await
+            .expect("hold");
+        // The next pass reads the 0 the first one left.
+        s.hold_services(&[("mail".to_string(), 0)], "backup copy of b", 3600)
+            .await
+            .expect("hold");
+        let holds = s.service_holds().await.expect("read");
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].replicas, Some(2));
+        assert_eq!(holds[0].why, "backup copy of b");
+    }
+
     #[tokio::test]
     async fn an_update_s_lag_runs_from_its_first_sighting_to_its_application() {
         let s = State::in_memory().await.expect("state");
