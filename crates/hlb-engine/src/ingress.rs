@@ -460,9 +460,37 @@ async fn settle<O: Orchestrator + ?Sized>(orch: &O) -> crate::Result<()> {
 /// volume it would be placed nowhere.
 pub async fn app_blockers<O: Orchestrator + ?Sized>(
     orch: &O,
+    state: &State,
     m: &hlb_types::Manifest,
 ) -> Vec<String> {
     let mut out = Vec::new();
+    // Unrefused, the preview lists a database and an account nothing can make, and the
+    // apply ends with Docker refusing a `{{ smtp.from }}` nothing filled.
+    let needed: std::collections::BTreeSet<&str> = m
+        .spec
+        .requires
+        .iter()
+        .filter_map(hlb_types::Capability::platform_service)
+        .filter(|service| *service != m.metadata.name)
+        .collect();
+    if !needed.is_empty() {
+        let recorded = state.installed_apps().await.unwrap_or_default();
+        for service in needed {
+            // A failover removes the old primary's service and the standby takes its
+            // name as an alias, so Swarm alone would refuse a house that moved its
+            // database. Only a service that finished installing counts.
+            let running = recorded
+                .iter()
+                .any(|(name, status)| name == service && status == "running");
+            if !running && is_absent(orch, service).await {
+                out.push(format!(
+                    "{} needs {service}, which is not installed: hlb install {service} \
+                     --apply first",
+                    m.metadata.name
+                ));
+            }
+        }
+    }
     // Another app's volume exists once that app runs, on its node: before, the service
     // would be placed nowhere, and the install would time out saying "no suitable node".
     for c in &m.spec.requires {

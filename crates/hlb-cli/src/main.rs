@@ -5322,7 +5322,7 @@ async fn switch_manifest(
     // What an install refuses, an upgrade refuses too: another app's volume with
     // that app gone.
     let ingress = match SwarmOrchestrator::connect().await {
-        Ok(orch) => hlb_engine::ingress::app_blockers(&orch, next).await,
+        Ok(orch) => hlb_engine::ingress::app_blockers(&orch, state, next).await,
         Err(_) => Vec::new(),
     };
     let blockers: Vec<String> = refused
@@ -6218,7 +6218,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 // serving names nobody chose; an app, a route through what is missing.
                 if let Ok(orch) = SwarmOrchestrator::connect().await {
                     let mut blockers =
-                        hlb_engine::ingress::app_blockers(&orch, &entry.manifest).await;
+                        hlb_engine::ingress::app_blockers(&orch, &state, &entry.manifest).await;
                     if entry.manifest.metadata.name == hlb_types::manifest::INGRESS_SERVICE {
                         blockers.extend(hlb_engine::ingress::blockers(&orch, &state).await);
                     }

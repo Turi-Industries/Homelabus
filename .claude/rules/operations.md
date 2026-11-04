@@ -29,6 +29,12 @@ monitoring, updates and routes have their own `operations-*.md`.
   imports and displays photos perfectly, and never recognises anyone. Hence deploying the
   companion BEFORE the app, waiting for it to become healthy, and a guide step that makes
   you check it really works.
+- **An app whose services are not there is refused at preview.** On a bare machine
+  Vikunja's preview listed a database, a client and an account, three ended unimplemented,
+  and Docker refused a `{{ smtp.from }}` nothing filled (2026-11-04, the first timed
+  deployment). `ingress::app_blockers` asks Swarm for each `platform_service()`; a service
+  gone from Swarm and recorded `running` counts, since a failover removes the old
+  primary's and the standby answers to its name.
 - **Secrets before companions.** The resolver deployed companions first and generated
   the secrets after: Seafile's notification server would have started with
   `{{ secret.jwt-key }}` as its key. Generated secrets are scanned from the app's
