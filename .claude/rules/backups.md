@@ -78,6 +78,12 @@ during an outage.
 - **A restic S3 repository is not MOUNTED.** Mounting it creates an empty directory and
   restic replies "repository does not exist", naming a local path unrelated to the real
   destination. And joining an internal Garage needs a `--network`.
+- **A verification nobody runs verifies nothing.** `hlb backup verify` existed and only
+  ran when typed: on 2026-11-04 every app of the lab read "verified never". The daemon reads
+  one app an hour, each weekly, a failure again a day later (`VerifyLoop`), through
+  `hlb_backup_run::verify`, the CLI's too. Unasked it refuses what would not leave a tenth
+  of the disk free, and past 5 GiB from S3, which may bill. ⚠️ It proves restic returns
+  what it took: it covers volumes only, and starts nothing, so a store copied live passes.
 - **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
   size. Hence `restic check --read-data-subset` on top of the count.
 - **Two numbers for a backup, not one.** RPO says what you would lose; confidence says
