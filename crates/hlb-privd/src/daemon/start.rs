@@ -1277,6 +1277,18 @@ pub async fn start(
         orchestrator: orch_api,
     });
 
+    // Before any loop can start a pass of its own.
+    if let Some(o) = &held.orchestrator {
+        match hlb_backup_run::restore::restart_interrupted_copies(o.as_ref(), &held.state).await {
+            Ok(started) if started.is_empty() => {}
+            Ok(started) => tracing::warn!(
+                services = started.join(", "),
+                "started again: a backup's copy was interrupted while they were stopped"
+            ),
+            Err(e) => tracing::error!("an interrupted backup's copy not undone: {e}"),
+        }
+    }
+
     // What `hlb catalog source` added or removed since, read again.
     {
         let (catalog, dir, st) = (catalog.clone(), cfg.catalog.clone(), state.clone());

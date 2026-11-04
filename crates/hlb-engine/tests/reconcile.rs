@@ -835,7 +835,7 @@ async fn a_service_held_for_a_copy_is_left_stopped_until_the_hold_lapses() {
     // written.
     let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24", 0, 0)]);
     let s = state_with_running_gitea().await;
-    s.hold_services(&["gitea".to_string()], "restore of gitea-data", 3600)
+    s.hold_services(&[("gitea".to_string(), 2)], "restore of gitea-data", 3600)
         .await
         .expect("hold");
 
@@ -845,7 +845,7 @@ async fn a_service_held_for_a_copy_is_left_stopped_until_the_hold_lapses() {
     assert!(report.drifts[0].refusal().is_some());
 
     // Lapsed — the pass that held it died —: taken back like any other drift.
-    s.hold_services(&["gitea".to_string()], "restore of gitea-data", -1)
+    s.hold_services(&[("gitea".to_string(), 2)], "restore of gitea-data", -1)
         .await
         .expect("hold");
     Reconciler::new(&o, &s).reconcile(true).await.unwrap();

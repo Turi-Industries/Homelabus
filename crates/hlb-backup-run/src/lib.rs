@@ -366,6 +366,15 @@ async fn stop_for_copy<'o>(
             names.join(", ")
         )));
     };
+    // A restore is writing this volume: copied, it is half of two states, and started
+    // afterwards the app would run on it.
+    for s in &names {
+        if let Some(why) = state.held(s).await? {
+            if !why.starts_with(restore::COPY_HOLD) {
+                return Ok(Err(format!("{s} is held stopped, not copied: {why}")));
+            }
+        }
+    }
     // Not `restore::replicas`, which leaves out a service it cannot read: one that
     // may be running is not copied.
     let mut services = Vec::new();
@@ -379,7 +388,7 @@ async fn stop_for_copy<'o>(
             }
         }
     }
-    let why = format!("backup copy of {}", volumes.join(", "));
+    let why = format!("{}{}", restore::COPY_HOLD, volumes.join(", "));
     if let Err(e) = restore::stop(o, state, &services, &why).await {
         return Ok(Err(match restore::start(o, state, &services).await {
             Ok(()) => e,
