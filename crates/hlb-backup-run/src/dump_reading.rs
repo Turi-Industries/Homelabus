@@ -58,37 +58,46 @@ pub async fn read(reading: &Reading<'_>, dump: &[u8]) -> Result<Tables, String> 
 }
 
 async fn start(name: &str, r: &Reading<'_>) -> Result<(), String> {
-    let settings: &[&str] = match r.engine {
-        DbEngine::Postgres => &[
-            "-e",
-            "POSTGRES_PASSWORD=disposable",
-            "-e",
-            "POSTGRES_HOST_AUTH_METHOD=trust",
+    // Nothing here is a secret, and it goes by name all the same: `ps` shows no value of a
+    // docker command, so nobody has to read this one to know.
+    let settings = match r.engine {
+        DbEngine::Postgres => vec![
+            ("POSTGRES_PASSWORD".to_string(), "disposable".to_string()),
+            ("POSTGRES_HOST_AUTH_METHOD".to_string(), "trust".to_string()),
         ],
-        DbEngine::Mariadb => &["-e", "MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1"],
+        DbEngine::Mariadb => vec![(
+            "MARIADB_ALLOW_EMPTY_ROOT_PASSWORD".to_string(),
+            "1".to_string(),
+        )],
     };
-    let mut args = vec![
-        "run",
-        "-d",
-        "--name",
-        name,
-        "--network",
-        "none",
-        // Past this it dies, and the apps' server on the same machine does not.
-        "--memory",
-        "1g",
-    ];
-    args.extend_from_slice(settings);
-    args.push(r.image);
-    docker(&args)
+    let mut run = tokio::process::Command::new("docker");
+    run.args(["run", "-d", "--name", name, "--network", "none"]);
+    // Past this it dies, and the apps' server on the same machine does not.
+    run.args(["--memory", "1g"]);
+    hlb_backup::docker_env::pass_by_name(&mut run, settings.iter());
+    run.arg(r.image);
+    let out = run
+        .output()
         .await
-        .map_err(|e| format!("the disposable server did not start: {e}"))?;
+        .map_err(|e| format!("the disposable server did not start: docker: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "the disposable server did not start: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
 
     // Over TCP: both images' first start runs a temporary server on its socket alone,
     // and stops it. Asked on the socket, the first answer comes from that one.
     let probe: &[&str] = match r.engine {
         DbEngine::Postgres => &["pg_isready", "-h", SCRATCH_HOST, "-U", "postgres"],
-        DbEngine::Mariadb => &["mariadb", "-uroot", "-h", SCRATCH_HOST, "-e", "SELECT 1"],
+        DbEngine::Mariadb => &[
+            "mariadb",
+            "-uroot",
+            "-h",
+            SCRATCH_HOST,
+            "--execute=SELECT 1",
+        ],
     };
     let mut exec = vec!["exec", name];
     exec.extend_from_slice(probe);
@@ -285,10 +294,10 @@ impl DumpRunner for Exec {
         };
         let mut cmd = tokio::process::Command::new("docker");
         cmd.args(["exec", "-i"]);
-        for (k, v) in env.iter().filter(|(k, _)| k != "HLB_STDIN_B64") {
-            cmd.arg("-e").arg(k);
-            cmd.env(k, v);
-        }
+        hlb_backup::docker_env::pass_by_name(
+            &mut cmd,
+            env.iter().filter(|(k, _)| k != "HLB_STDIN_B64"),
+        );
         cmd.arg(&self.0).args(["sh", "-c", &script]);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
