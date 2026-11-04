@@ -57,7 +57,7 @@ pub async fn run(
             return Ok(ExitCode::FAILURE);
         }
         (None, [only]) => only.clone(),
-        (None, []) if !databases_of(&manifest, app).is_empty() => {
+        (None, []) if !restore::databases_of(&manifest, app).is_empty() => {
             eprintln!("🔴 {app} backs up no volume and no bucket — its database: --database");
             return Ok(ExitCode::FAILURE);
         }
@@ -67,7 +67,7 @@ pub async fn run(
         }
         (None, several) => {
             eprintln!("Which of {app}'s? {}", several.join(", "));
-            if !databases_of(&manifest, app).is_empty() {
+            if !restore::databases_of(&manifest, app).is_empty() {
                 eprintln!("  its database: --database");
             }
             return Ok(ExitCode::FAILURE);
@@ -386,31 +386,6 @@ async fn bucket(
     }
 }
 
-/// The app's databases: `(engine, name, extensions)`, named as the resolver names them.
-fn databases_of<'m>(
-    manifest: &'m hlb_types::Manifest,
-    app: &str,
-) -> Vec<(hlb_types::DbEngine, String, &'m [String])> {
-    manifest
-        .spec
-        .requires
-        .iter()
-        .filter_map(|c| match c {
-            hlb_types::Capability::Database {
-                engine,
-                name,
-                extensions,
-                connections: _,
-            } => Some((
-                *engine,
-                name.clone().unwrap_or_else(|| app.to_string()),
-                extensions.as_slice(),
-            )),
-            _ => None,
-        })
-        .collect()
-}
-
 /// The same for a database: its dump restored into it, recreated as provisioning makes
 /// it, the app stopped meanwhile, what it holds now dumped first.
 async fn database(
@@ -422,7 +397,7 @@ async fn database(
     name: &str,
     r: &Request<'_>,
 ) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let all = databases_of(manifest, app);
+    let all = restore::databases_of(manifest, app);
     let found = match (name, all.as_slice()) {
         ("", [only]) => only,
         ("", []) => {

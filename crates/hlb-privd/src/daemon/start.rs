@@ -1502,7 +1502,10 @@ pub async fn start(
                     let Some(install) = &held.install else {
                         return;
                     };
-                    let due = match schedule::VerifyLoop::new(held.state.clone()).due_apps().await {
+                    let due = match schedule::VerifyLoop::new(held.state.clone())
+                        .due_apps()
+                        .await
+                    {
                         Ok(d) => d,
                         Err(e) => {
                             tracing::warn!("no reading looked at: {e}");
@@ -1516,7 +1519,7 @@ pub async fn start(
                             &network,
                             fallback.as_deref(),
                             &app,
-                            Some(hlb_backup_run::verify::UNASKED_BILLED_LIMIT),
+                            true,
                         )
                         .await;
                         let read = match read {
@@ -1529,7 +1532,7 @@ pub async fn start(
                             }
                         };
                         let outcome = if read.matches() { "ok" } else { "failed" };
-                        tracing::info!(app, destination = %read.destination, outcome, "{}", read.describe());
+                        tracing::info!(app, outcome, "{}", read.describe());
                         let _ = held
                             .state
                             .audit(
@@ -1546,7 +1549,7 @@ pub async fn start(
                                 .tell(&hlb_notify::Notification::important(
                                     "backup-verification",
                                     &format!("The backup of {app} did not read back"),
-                                    &format!("{}: {}", read.destination, read.describe()),
+                                    &read.describe(),
                                 ))
                                 .await;
                         }

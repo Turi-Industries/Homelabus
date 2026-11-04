@@ -319,7 +319,7 @@ async fn check_in<R: Runner>(
 
 /// Why a snapshot is not restored, before anything is written. A disk filled by a
 /// verification would stop the apps sharing it, on a night nobody is watching.
-fn refusal(bytes: u64, room: u64, billed_limit: Option<u64>) -> Option<String> {
+pub fn refusal(bytes: u64, room: u64, billed_limit: Option<u64>) -> Option<String> {
     if let Some(limit) = billed_limit.filter(|limit| bytes > *limit) {
         return Some(format!(
             "not restored: {bytes} bytes from a destination that may bill by transfer, \
@@ -330,6 +330,17 @@ fn refusal(bytes: u64, room: u64, billed_limit: Option<u64>) -> Option<String> {
     (bytes > room / 10 * 9).then(|| {
         format!("not restored: {bytes} bytes do not fit in the {room} free on this machine")
     })
+}
+
+/// The bytes free where this machine's Docker writes.
+pub async fn room_here() -> Result<u64> {
+    let volume = format!("hlb-verif-{}", token());
+    docker(&["volume", "create", &volume]).await?;
+    let room = room_in_volume(&volume).await;
+    if let Err(e) = docker(&["volume", "rm", "-f", &volume]).await {
+        tracing::warn!(volume, "volume not removed: {e}");
+    }
+    room
 }
 
 /// The bytes free where a restore would write, from inside a container: the disposable
@@ -436,7 +447,7 @@ pub fn public_token() -> String {
 ///
 /// The counter settles the case within one process, the PID that of two processes
 /// started in the same clock tick.
-fn token() -> String {
+pub fn token() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
 

@@ -11682,33 +11682,34 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     let mut drifts = 0;
 
                     for a in targets {
-                        // Asked by hand: no limit on what a billed destination serves.
                         let read = hlb_backup_run::verify::app(
                             &state,
                             &vault,
                             &cli.platform_network,
                             cli.backup_repo.as_deref(),
                             &a,
-                            None,
+                            false,
                         )
                         .await?;
-                        // No snapshot: nothing to verify, and above all no "✓" that
-                        // would suggest otherwise.
+                        // No backup: nothing to verify, and above all no "✓" that would
+                        // suggest otherwise.
                         let Some(read) = read else {
                             if app.is_some() {
-                                println!("{a}: no volume backup to verify.");
+                                println!("{a}: no backup to verify.");
                             }
                             continue;
                         };
-                        let short = &read.snapshot[..8.min(read.snapshot.len())];
-                        if read.matches() {
-                            println!("{a} ({short} on {})… {}", read.destination, read.describe());
-                        } else {
-                            println!("{a} ({short} on {})… ✗ {}", read.destination, read.describe());
+                        verified += 1;
+                        if !read.matches() {
                             drifts += 1;
                         }
-                        if read.outcome.is_ok() {
-                            verified += 1;
+                        for p in &read.parts {
+                            let short = &p.snapshot[..8.min(p.snapshot.len())];
+                            let (mark, text) = match &p.outcome {
+                                Ok(t) => ("", t),
+                                Err(e) => ("✗ ", e),
+                            };
+                            println!("{a}, {} ({short} on {})… {mark}{text}", p.what, p.destination);
                         }
                     }
 

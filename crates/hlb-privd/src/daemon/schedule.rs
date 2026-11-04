@@ -109,7 +109,7 @@ impl BackupLoop {
     }
 }
 
-/// Which apps' volumes to read back now. Looked at often and one at a time: read together,
+/// Which apps' backups to read back now. Looked at often and one at a time: read together,
 /// a house's whole backup would come back through one disk on one night.
 pub struct VerifyLoop {
     state: Arc<State>,
@@ -133,13 +133,12 @@ impl VerifyLoop {
         let mut due = Vec::new();
         for (app, status) in self.state.installed_apps().await? {
             // As the backups: a failed app has a more urgent problem.
-            if status == "failed"
-                || !self
-                    .state
-                    .backup_kinds(&app)
-                    .await?
-                    .contains(&hlb_state::backup_kind::VOLUME)
-            {
+            let kinds = self.state.backup_kinds(&app).await?;
+            let read = [
+                hlb_state::backup_kind::VOLUME,
+                hlb_state::backup_kind::SQL_DUMP,
+            ];
+            if status == "failed" || !read.iter().any(|k| kinds.contains(k)) {
                 continue;
             }
             let age = self
@@ -353,6 +352,18 @@ mod tests {
             (Some(99), "also-old".to_string()),
         ]);
         assert_eq!(order, ["alpha", "zulu", "also-old", "old", "young"]);
+    }
+
+    #[tokio::test]
+    async fn an_app_holding_only_a_database_is_due() {
+        let y = "apiVersion: hlb/v1\nkind: App\nmetadata: { name: notes }\n\
+                 spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n    \
+                 - { kind: database, engine: postgres }\n";
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(y).expect("test manifest");
+        let s = Arc::new(State::in_memory().await.expect("state"));
+        s.upsert_app("notes", &m, None).await.expect("upsert");
+        s.set_app_status("notes", "running").await.expect("status");
+        assert_eq!(VerifyLoop::new(s).due_apps().await.expect("due"), ["notes"]);
     }
 
     #[tokio::test]
