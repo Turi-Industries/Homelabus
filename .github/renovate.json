@@ -48,6 +48,11 @@
       "allowedVersions": "<0.12"
     },
     {
+      "description": "bech32 stays on what age uses: 0.12 changes the API of the code encoding the kit's key and adds a second copy, and even age 0.12 is on 0.11. Lift when age moves, or at once for an advisory against 0.9.",
+      "matchPackageNames": ["bech32"],
+      "allowedVersions": "<0.10"
+    },
+    {
       "description": "MariaDB's rolling releases (13.0, 13.1…) are supported for a quarter or two; the catalog follows its yearly LTS, 12.3 supported until 2029. Lift for the next LTS.",
       "matchPackageNames": ["mariadb"],
       "allowedVersions": "<13"
