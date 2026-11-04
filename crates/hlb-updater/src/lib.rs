@@ -350,7 +350,7 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
             out.held.push((app.clone(), why));
             theirs = None;
         }
-        match candidate(registry, now, at, &app, &m, theirs).await {
+        match candidate(state, registry, now, at, &app, &m, theirs).await {
             Ok(Some(c)) => out.candidates.push(c),
             Ok(None) => {}
             Err(e) => out.unreadable.push((app, e.to_string())),
@@ -396,6 +396,7 @@ fn proposed_digests(c: &Candidate) -> Vec<&str> {
 
 /// The update one app has, if any: its own image, its companions', or both.
 async fn candidate<T: chrono::Datelike + chrono::Timelike>(
+    state: &State,
     registry: &RegistryClient,
     now: &T,
     at: i64,
@@ -434,10 +435,18 @@ async fn candidate<T: chrono::Datelike + chrono::Timelike>(
         from_digest: m.spec.image.digest.clone(),
         to_digest,
         in_window,
-        needs_backup: m.spec.update.backup_before,
+        needs_backup: owes_backup(state, app, m).await?,
         maturity,
         companions,
     }))
+}
+
+/// Whether an update of `app` must take a copy first: its manifest asks, and it holds
+/// something to copy. A cache's only volume says `backup: false`, and its update was refused
+/// for ever for lacking the copy nothing was meant to take. Known from what it declares,
+/// never from a provider finding nothing: "no known volume" stays a refusal.
+pub async fn owes_backup(state: &State, app: &str, m: &Manifest) -> Result<bool> {
+    Ok(m.spec.update.backup_before && !state.backup_kinds(app).await?.is_empty())
 }
 
 /// The app's own image's move, dated: the catalog's, else what its channel allows.
@@ -723,6 +732,74 @@ mod tests {
         // The companions alone: the app's own image does not start again.
         c.kind = UpdateKind::Companions;
         assert_eq!(c.to_verify(&installed, Some(&catalog)).len(), 1);
+    }
+
+    async fn installed(requires: &str, update: &str) -> (State, Manifest) {
+        let m: Manifest = serde_yaml_ng::from_str(&format!(
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: {{ name: x }}
+spec:
+  image: {{ repo: a/b, tag: "1" }}
+  requires: {requires}
+  update: {update}
+"#
+        ))
+        .expect("manifest");
+        let state = State::in_memory().await.expect("state");
+        state.upsert_app("x", &m, None).await.expect("app");
+        (state, m)
+    }
+
+    #[tokio::test]
+    async fn a_cache_whose_volume_says_no_backup_owes_no_copy_before_an_update() {
+        let (state, m) = installed(
+            "[{ kind: storage, name: data, path: /data, backup: false }]",
+            "{ channel: minor }",
+        )
+        .await;
+        state
+            .add_volume("x", "x-data", "/nowhere", false, false)
+            .await
+            .expect("volume");
+        assert!(!owes_backup(&state, "x", &m).await.expect("read"));
+    }
+
+    #[tokio::test]
+    async fn an_app_with_a_volume_or_a_database_still_owes_its_copy() {
+        let (state, m) = installed(
+            "[{ kind: storage, name: data, path: /data }]",
+            "{ channel: minor }",
+        )
+        .await;
+        state
+            .add_volume("x", "x-data", "/nowhere", true, false)
+            .await
+            .expect("volume");
+        assert!(owes_backup(&state, "x", &m).await.expect("read"));
+
+        // Holding no volume is no pass for a database: a provider refuses it further on.
+        let (state, m) = installed(
+            "[{ kind: database, engine: postgres }]",
+            "{ channel: minor }",
+        )
+        .await;
+        assert!(owes_backup(&state, "x", &m).await.expect("read"));
+    }
+
+    #[tokio::test]
+    async fn a_manifest_asking_for_no_copy_owes_none_whatever_it_holds() {
+        let (state, m) = installed(
+            "[{ kind: storage, name: data, path: /data }]",
+            "{ channel: minor, backupBefore: false }",
+        )
+        .await;
+        state
+            .add_volume("x", "x-data", "/nowhere", true, false)
+            .await
+            .expect("volume");
+        assert!(!owes_backup(&state, "x", &m).await.expect("read"));
     }
 
     #[test]

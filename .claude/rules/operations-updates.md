@@ -88,6 +88,13 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   (`CompanionMove`), switched first — the install's order — each frozen into the state
   once it runs; one that does not come up stops the update before the app. A companion
   follows the CATALOG only: no registry watch of its own.
+- **An app holding nothing owes no copy before an update.** Valkey's only volume says
+  `backup: false`, and `hlb update apply` refused it for ever: the CLI took a copy whenever a
+  destination existed, whatever `backupBefore` said, and the copy found no volume. Four other
+  manifests had the same fate. `owes_backup` asks `State::backup_kinds`, the question
+  `Coverage::needs_backup` already answers; "no known volume" stays a refusal for an app that
+  owes one. ⚠️ Garage's volumes say `backup: false` too, so it now moves with no copy: its
+  objects are copied per bucket, by the apps owning them.
 - **A major is rehearsed on its predecessor's data, through the manifest's own start**,
   and from an EMPTY volume too: Seafile's start skipped two directories its image's
   `start.py` makes first, and only a fresh volume showed it. Rehearsed and immature is
