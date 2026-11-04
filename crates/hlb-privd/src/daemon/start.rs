@@ -185,6 +185,11 @@ pub struct Config {
     #[arg(long, default_value = "3600", env = "HLB_VERIFY_SECS")]
     pub verify_secs: u64,
 
+    /// How often the registries are asked what each app could move to, recording when each
+    /// image was first seen. It reads and records: nothing is updated by it.
+    #[arg(long, default_value = "86400", env = "HLB_UPDATE_WATCH_SECS")]
+    pub update_watch_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1483,6 +1488,46 @@ pub async fn start(
     // disk the databases share was full. A failure, or a destination found erasable
     // that was not, is notified.
     {
+        // When each image was first seen, which no registry says: what a delay in applying a
+        // fix is counted from. It reads and records. Past ten minutes: Docker Hub counts
+        // each manifest read, and a daemon restarting in a loop would spend them.
+        let held_watch = held.clone();
+        tracing::info!(interval = cfg.update_watch_secs, "update watch loop");
+        tasks.push(tokio::spawn(schedule::every_after(
+            Duration::from_secs(600).min(Duration::from_secs(cfg.update_watch_secs)),
+            Duration::from_secs(cfg.update_watch_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_watch.clone();
+                async move {
+                    let (Some(install), Some(catalog)) = (&held.install, held.privd.catalog.get())
+                    else {
+                        return;
+                    };
+                    let mut followed = std::collections::BTreeMap::new();
+                    for (app, _) in held.state.installed_apps().await.unwrap_or_default() {
+                        let source = held.state.app_source(&app).await.ok().flatten();
+                        if let Ok(e) = catalog.followed(&app, source.as_deref()) {
+                            followed.insert(app, e.manifest.clone());
+                        }
+                    }
+                    match hlb_updater::watch(&held.state, &install.registry, &followed).await {
+                        Ok(checked) => {
+                            for (app, why) in &checked.unreadable {
+                                tracing::warn!(app, "its registry could not be read: {why}");
+                            }
+                            tracing::info!(
+                                proposed = checked.candidates.len(),
+                                unreadable = checked.unreadable.len(),
+                                "update watch"
+                            );
+                        }
+                        Err(e) => tracing::warn!("no update watched: {e}"),
+                    }
+                }
+            },
+        )));
+
         // A backup nobody reads back is a hypothesis: `hlb backup verify` existed and only
         // ran when someone typed it, so every app of the lab read "verified never". One
         // app a tick, the first one due that has a snapshot.

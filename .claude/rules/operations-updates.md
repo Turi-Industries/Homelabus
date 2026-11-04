@@ -27,6 +27,12 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   are spent it refuses even the `HEAD` it does not count. A 429 read as "registry down"
   hid it; `Error::RateLimited` names it. Measured on 2026-10-19: a pass over the whole
   catalog spent 13, dating each image only as far as its first mature build.
+- **When an image was first seen is ours to record.** No registry says when this house could
+  have known, and GHCR and Quay date little: the daemon asks daily (`hlb_updater::watch`),
+  applying nothing, past ten minutes after a start. A pass over the lab spent 26 of Docker
+  Hub's 100 reads an hour (2026-11-04). `hlb update lag` joins a first sighting to the run
+  that applied it, by digest, the detail's for a companion. It counts EVERY update: no CVE
+  data says which are fixes before phase 5.
 - **The `v` is part of a tag's shape.** Bulwark publishes `1.15.0` and `v1.15.0` side by
   side; `Version::same_flavor` keeps a tag written the way it was.
 - **Versions cannot say "downward" across a moving tag.** An installation on `v2` runs

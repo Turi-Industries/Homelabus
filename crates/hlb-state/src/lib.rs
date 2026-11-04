@@ -216,6 +216,21 @@ pub struct JobRun {
     pub output: String,
 }
 
+/// One image's time since this house first saw it proposed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateLag {
+    pub app: String,
+    pub digest: String,
+    pub seconds: i64,
+}
+
+/// What [`State::update_lags`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateLags {
+    pub applied: Vec<UpdateLag>,
+    pub waiting: Vec<UpdateLag>,
+}
+
 /// How an image update ended. Stored by name in `update_runs.outcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateRunOutcome {
@@ -5034,6 +5049,76 @@ impl State {
         Ok(r.last_insert_rowid())
     }
 
+    /// A pass proposed moving `app` to `digest`: its first sighting is kept, its last moves.
+    pub async fn note_update_seen(&self, app: &str, digest: &str, at: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO update_first_seen (app, digest, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT(app, digest) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        )
+        .bind(app)
+        .bind(digest)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// How long each update took from first sighting to being applied, and how long the
+    /// ones still proposed have waited. Oldest sighting first.
+    ///
+    /// An image is found in a run's `to_image`, or in its `detail` for a companion, which
+    /// moves with the app's own image named elsewhere. 🔴 `applied` only: a rolled-back
+    /// update is still not applied, and its lag would read as a fix delivered.
+    pub async fn update_lags(&self, now: i64) -> Result<UpdateLags> {
+        // Two days: a daily pass that misses one does not drop what it proposed.
+        const STILL_PROPOSED_S: i64 = 2 * 86_400;
+        let seen = sqlx::query(
+            "SELECT app, digest, first_seen_at, last_seen_at FROM update_first_seen
+             ORDER BY first_seen_at, app, digest",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let runs = sqlx::query(
+            "SELECT app, ran_at, to_image, detail FROM update_runs
+             WHERE outcome = ?1 ORDER BY ran_at",
+        )
+        .bind(UpdateRunOutcome::Applied.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut lags = UpdateLags::default();
+        for row in seen {
+            let app: String = row.try_get("app")?;
+            let digest: String = row.try_get("digest")?;
+            let first: i64 = row.try_get("first_seen_at")?;
+            let last: i64 = row.try_get("last_seen_at")?;
+            let mut applied = None;
+            for run in &runs {
+                let to_image: String = run.try_get("to_image")?;
+                let detail: String = run.try_get("detail")?;
+                let run_app: String = run.try_get("app")?;
+                if run_app == app && (to_image.contains(&digest) || detail.contains(&digest)) {
+                    applied = Some(run.try_get::<i64, _>("ran_at")?);
+                    break;
+                }
+            }
+            match applied {
+                Some(at) => lags.applied.push(UpdateLag {
+                    app,
+                    digest,
+                    seconds: (at - first).max(0),
+                }),
+                None if now - last <= STILL_PROPOSED_S => lags.waiting.push(UpdateLag {
+                    app,
+                    digest,
+                    seconds: (now - first).max(0),
+                }),
+                None => {}
+            }
+        }
+        Ok(lags)
+    }
+
     /// The updates nobody has been told about yet, oldest first.
     ///
     /// ⚠️ An outcome this version cannot read is returned as `inconclusive`, never
@@ -5381,6 +5466,80 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn an_update_s_lag_runs_from_its_first_sighting_to_its_application() {
+        let s = State::in_memory().await.expect("state");
+        let day = 86_400;
+        let run = |app: &str, at: i64, to: &str, detail: &str, outcome| UpdateRun {
+            id: 0,
+            app: app.into(),
+            ran_at: at,
+            from_image: "a:1".into(),
+            to_image: to.into(),
+            outcome,
+            detail: detail.into(),
+        };
+        // Seen on day 1 and again on day 3: the first sighting counts.
+        s.note_update_seen("gitea", "sha256:a", day)
+            .await
+            .expect("seen");
+        s.note_update_seen("gitea", "sha256:a", 3 * day)
+            .await
+            .expect("seen");
+        // A companion's image is named in the run's detail.
+        s.note_update_seen("immich", "sha256:ml", day)
+            .await
+            .expect("seen");
+        // Rolled back: not applied, still proposed.
+        s.note_update_seen("n8n", "sha256:bad", 9 * day)
+            .await
+            .expect("seen");
+        // Replaced by a newer build long ago: waiting for nothing.
+        s.note_update_seen("vikunja", "sha256:old", day)
+            .await
+            .expect("seen");
+
+        for r in [
+            run(
+                "gitea",
+                5 * day,
+                "gitea:2@sha256:a",
+                "",
+                UpdateRunOutcome::Applied,
+            ),
+            run(
+                "immich",
+                2 * day,
+                "immich:3",
+                "with ml → ml:3@sha256:ml",
+                UpdateRunOutcome::Applied,
+            ),
+            run(
+                "n8n",
+                10 * day,
+                "n8n:2@sha256:bad",
+                "",
+                UpdateRunOutcome::RolledBack,
+            ),
+            // The same digest in another app's run is not this app's.
+            run("mealie", day, "x@sha256:ml", "", UpdateRunOutcome::Applied),
+        ] {
+            s.record_update_run(&r).await.expect("run");
+        }
+
+        let lags = s.update_lags(10 * day).await.expect("lags");
+        let of = |l: &[UpdateLag]| {
+            l.iter()
+                .map(|x| (x.app.clone(), x.seconds / day))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of(&lags.applied),
+            [("gitea".to_string(), 4), ("immich".to_string(), 1)]
+        );
+        assert_eq!(of(&lags.waiting), [("n8n".to_string(), 1)]);
+    }
+
     #[tokio::test]
     async fn a_removed_app_s_domains_outlive_it_until_cleared() {
         let s = State::in_memory().await.expect("state");

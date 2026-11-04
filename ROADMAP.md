@@ -2351,6 +2351,8 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
+  - `hlb update apply valkey` is refused, "no known volume": an image with nothing to back up
+    cannot take the backup its manifest's `backupBefore` asks for, so a cache never updates.
 - ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
   and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
   10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration

@@ -360,6 +360,40 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     Ok(out)
 }
 
+/// The daemon's daily look: what each app could move to, each image's first sighting
+/// recorded. It applies nothing: what moves and when is `hlb update apply`'s.
+pub async fn watch(
+    state: &State,
+    registry: &RegistryClient,
+    catalog: &BTreeMap<String, Manifest>,
+) -> Result<Checked> {
+    let now = chrono::Utc::now();
+    let checked = check(state, registry, &now, now.timestamp(), catalog).await?;
+    note_seen(state, &checked, now.timestamp()).await?;
+    Ok(checked)
+}
+
+/// Records when this house first saw each proposed image: no registry says when it could
+/// have known, and a `hlb update check` nobody ran would otherwise date nothing.
+pub async fn note_seen(state: &State, checked: &Checked, at: i64) -> Result<()> {
+    for c in &checked.candidates {
+        for digest in proposed_digests(c) {
+            state.note_update_seen(&c.app, digest, at).await?;
+        }
+    }
+    Ok(())
+}
+
+/// What a candidate would run that does not run yet. Its `to_digest` is the image it runs
+/// already when only its companions move, and it is not proposed.
+fn proposed_digests(c: &Candidate) -> Vec<&str> {
+    let own = (!matches!(c.kind, UpdateKind::Companions)).then_some(c.to_digest.as_str());
+    own.into_iter()
+        .chain(c.companions.iter().filter_map(|m| m.to.digest.as_deref()))
+        .filter(|d| !d.is_empty())
+        .collect()
+}
+
 /// The update one app has, if any: its own image, its companions', or both.
 async fn candidate<T: chrono::Datelike + chrono::Timelike>(
     registry: &RegistryClient,
@@ -586,6 +620,40 @@ pub fn authorize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_is_proposed_is_what_would_change_and_not_what_already_runs() {
+        let image = |digest: Option<&str>| Image {
+            repo: "a/ml".into(),
+            tag: "2".into(),
+            digest: digest.map(String::from),
+            built_here: false,
+            signed_by: None,
+        };
+        let candidate = |kind, companions| Candidate {
+            app: "immich".into(),
+            kind,
+            from_tag: "1".into(),
+            from_digest: Some("sha256:runs".into()),
+            to_digest: "sha256:runs".into(),
+            in_window: true,
+            needs_backup: false,
+            maturity: Maturity::Mature,
+            companions,
+        };
+        let companion = |digest| CompanionMove {
+            name: "ml".into(),
+            service: "immich-ml".into(),
+            to: image(digest),
+            maturity: Maturity::Mature,
+        };
+
+        let only_companion = candidate(UpdateKind::Companions, vec![companion(Some("sha256:ml"))]);
+        assert_eq!(proposed_digests(&only_companion), ["sha256:ml"]);
+
+        let own = candidate(UpdateKind::DigestOnly, vec![companion(None)]);
+        assert_eq!(proposed_digests(&own), ["sha256:runs"]);
+    }
 
     fn candidate(needs_backup: bool) -> Candidate {
         Candidate {
