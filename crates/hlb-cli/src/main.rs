@@ -6115,6 +6115,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         );
                     }
                 }
+                let manifest = state.app_manifest(app).await?;
+                for line in hlb_engine::removal::kept_elsewhere(app, &manifest) {
+                    println!("  · {line}");
+                }
                 let secrets = hlb_engine::removal::secrets_left(&state, app).await?;
                 if let Some(line) = hlb_engine::removal::secrets_line(app, secrets.len()) {
                     println!("  · {line}");
@@ -6135,7 +6139,6 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 // The service first: forgetting the app while it still runs would leave
                 // a service nobody manages, invisible to every screen.
                 let orch = SwarmOrchestrator::connect().await?;
-                let manifest = state.app_manifest(app).await?;
                 let removed = hlb_engine::remove_services(&orch, app, &manifest).await?;
                 println!();
                 for service in hlb_engine::services_of(app, &manifest) {
@@ -9784,6 +9787,9 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     "\n🔴 A reinstall draws new ones: a volume or a backup kept from before may \
                      no longer open."
                 );
+                for line in hlb_engine::removal::forget_warnings(app, &secrets) {
+                    println!("   {line}");
+                }
 
                 if !*apply {
                     println!("\nPreview: nothing was done.");

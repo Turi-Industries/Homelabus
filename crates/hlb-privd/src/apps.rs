@@ -721,10 +721,18 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
             error: None,
         });
     }
+    let manifest = p.state.app_manifest(&app).await;
+    let elsewhere = manifest
+        .as_ref()
+        .map(|m| hlb_engine::removal::kept_elsewhere(&app, m))
+        .unwrap_or_default();
     let secrets = hlb_engine::removal::secrets_left(&p.state, &app)
         .await
         .unwrap_or_default();
-    if let Some(line) = hlb_engine::removal::secrets_line(&app, secrets.len()) {
+    for line in elsewhere
+        .into_iter()
+        .chain(hlb_engine::removal::secrets_line(&app, secrets.len()))
+    {
         steps.push(ActionStep {
             description: line,
             state: StepState::Planned,
@@ -736,7 +744,6 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
         // 1. The Swarm service. First, because it is the only step that STOPS
         //    something: forgetting the app while it still runs would leave a service
         //    nobody manages any more, invisible to every screen.
-        let manifest = p.state.app_manifest(&app).await;
         match (&p.orchestrator, manifest) {
             (Some(o), Ok(m)) => match hlb_engine::remove_services(o.as_ref(), &app, &m).await {
                 Ok(_) => steps[0].state = StepState::Done,
@@ -756,7 +763,7 @@ pub(crate) async fn remove(p: &Privd, i: Remove) -> ActionResult {
             }
         }
 
-        // 2. The volumes and the secrets are KEPT — and the step says so, which is why it
+        // 2. The volumes, the secrets and the rest are KEPT — and the step says so, which is why it
         //    is `Done` and not skipped: "nothing was done to this volume" is the outcome
         //    we promised, and a step left `Planned` would read as unfinished work.
         for e in steps.iter_mut().skip(1) {

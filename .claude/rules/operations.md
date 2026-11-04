@@ -41,7 +41,13 @@ monitoring, updates and routes have their own `operations-*.md`.
   while Anubis's signing key stayed in the Swarm and in the vault (2026-11-04).
   `SwarmOrchestrator::remove` takes every version of them. The vault's are kept, and the
   preview says so — a volume or a backup kept was written with them; `hlb secrets-forget`
-  deletes them, for an app the audit log shows removed and not installed again.
+  deletes them, for an app the audit log shows removed and not installed again. 🔴 So do
+  its database and role, its OIDC client or portal callback, its bucket and key, its mail
+  accounts: no removal touches them, and until 2026-11-04 no preview named them
+  (`removal::kept_elsewhere`, an exhaustive match). A reinstall finds them again. After
+  `secrets-forget`, a role takes the newly drawn password at `provision`, where it kept
+  the old one and the app was refused; an OIDC client, a Garage key or an SMTP account
+  stops the install until deleted in its own service, as the forget's preview says.
 - **A scheduled job runs in its app's own container** (`spec.jobs`, `hlb_engine::jobs`),
   looked at hourly and run when due; a failed run is tried again a day later, kept as
   failed until one succeeds, in the inbox (`job_failed`) and notified. An app whose plan

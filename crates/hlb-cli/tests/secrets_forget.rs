@@ -53,7 +53,12 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     let house = tempfile::tempdir().expect("house");
     let dir = house.path();
     assert!(hlb(dir, &["emergency", "kit"]).status.success());
-    for name in ["anubis-signing-key", "restic-repo-password", "cluster-ca"] {
+    for name in [
+        "anubis-signing-key",
+        "anubis-oidc-secret",
+        "restic-repo-password",
+        "cluster-ca",
+    ] {
         deposit(dir, name);
     }
     let vault = |dir: &Path| text(&hlb(dir, &["secrets"]));
@@ -84,6 +89,11 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     assert!(preview.status.success(), "{}", text(&preview));
     assert!(text(&preview).contains("anubis-signing-key"));
     assert!(text(&preview).contains("Preview"));
+    assert!(
+        text(&preview).contains("the OIDC client stays in PocketID"),
+        "{}",
+        text(&preview)
+    );
     assert!(vault(dir).contains("anubis-signing-key"), "a preview acts");
 
     let wrong = hlb(

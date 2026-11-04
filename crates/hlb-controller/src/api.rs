@@ -6281,6 +6281,36 @@ steps:
     }
 
     #[tokio::test]
+    async fn a_removal_s_preview_says_the_database_stays() {
+        let st = State::in_memory().await.expect("base");
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: { name: gitea }\n\
+             spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n\
+             \x20   - { kind: database, engine: postgres }\n",
+        )
+        .expect("test manifest");
+        st.upsert_app("gitea", &m, None).await.expect("app");
+        let r = router(app_state(st, true));
+
+        let resp = r
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/apps/gitea")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let said = String::from_utf8_lossy(&bytes);
+        assert!(said.contains("postgres database"), "{said}");
+    }
+
+    #[tokio::test]
     async fn a_preview_still_leaves_a_trace() {
         // Knowing someone looked at what a purge would do is information. But it is NOT
         // logged as an execution.
