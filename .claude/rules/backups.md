@@ -103,6 +103,10 @@ during an outage.
   again keeps the larger (`service_holds.replicas`), `restore::start` trusts it over its
   caller, and the daemon restarts an interrupted copy as it starts. A pass refuses a service
   a restore holds: it would have copied the half-written volume, then started the app on it.
+  A restore refuses a service a copy holds (`restore::stop_for_restore`), since the copy's end
+  would start it the same way, and moves nothing to say so: starting it to undo the refusal
+  pulls it out from under the copy. A restore's own hold refuses nothing, or one that died
+  would lock the next out for a day.
 - **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
   size. Hence `restic check --read-data-subset` on top of the count.
 - **Two numbers for a backup, not one.** RPO says what you would lose; confidence says

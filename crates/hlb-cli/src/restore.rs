@@ -176,10 +176,11 @@ pub async fn run(
     };
 
     println!();
-    if let Err(e) = restore::stop(o, state, &services, &format!("restore of {volume}")).await {
-        restore::start(o, state, &services).await?;
-        eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
-        audit(state, app, "refused", &e).await?;
+    if let Err(not) =
+        restore::stop_for_restore(o, state, &services, &format!("restore of {volume}")).await
+    {
+        say_not_stopped(&not, app);
+        audit(state, app, "refused", not.message()).await?;
         return Ok(ExitCode::FAILURE);
     }
     if !names.is_empty() {
@@ -327,11 +328,11 @@ async fn bucket(
     let endpoint = crate::relay::reach(hlb_objstore::S3_URL, &cli.platform_network);
 
     println!();
-    if let Err(e) = restore::stop(o, state, &services, &format!("restore of bucket {bucket}")).await
+    if let Err(not) =
+        restore::stop_for_restore(o, state, &services, &format!("restore of bucket {bucket}")).await
     {
-        restore::start(o, state, &services).await?;
-        eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
-        audit_as(state, "bucket-restore", app, "refused", &e).await?;
+        say_not_stopped(&not, app);
+        audit_as(state, "bucket-restore", app, "refused", not.message()).await?;
         return Ok(ExitCode::FAILURE);
     }
     if !names.is_empty() {
@@ -509,11 +510,11 @@ async fn database(
     };
 
     println!();
-    if let Err(e) = restore::stop(o, state, &services, &format!("restore of database {name}")).await
+    if let Err(not) =
+        restore::stop_for_restore(o, state, &services, &format!("restore of database {name}")).await
     {
-        restore::start(o, state, &services).await?;
-        eprintln!("🔴 {e}: nothing was restored, and {app} is started again.");
-        audit_as(state, "database-restore", app, "refused", &e).await?;
+        say_not_stopped(&not, app);
+        audit_as(state, "database-restore", app, "refused", not.message()).await?;
         return Ok(ExitCode::FAILURE);
     }
     if !names.is_empty() {
@@ -658,6 +659,16 @@ async fn after(
         audit_as(state, "post-restore", app, "failed", &left.join("; ")).await?;
     }
     Ok(left.is_empty())
+}
+
+/// Says why a restore did not begin, and whether the app runs.
+fn say_not_stopped(not: &restore::NotStopped, app: &str) {
+    match not {
+        restore::NotStopped::Copying(why) => eprintln!("🔴 {why}. Nothing was restored."),
+        restore::NotStopped::Failed(why) => {
+            eprintln!("🔴 {why}: nothing was restored, and {app} is started again.");
+        }
+    }
 }
 
 async fn audit(
