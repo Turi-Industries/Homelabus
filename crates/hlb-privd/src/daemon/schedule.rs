@@ -109,6 +109,66 @@ impl BackupLoop {
     }
 }
 
+/// Which apps' volumes to read back now. Looked at often and one at a time: read together,
+/// a house's whole backup would come back through one disk on one night.
+pub struct VerifyLoop {
+    state: Arc<State>,
+}
+
+impl VerifyLoop {
+    /// A week between readings: read on a week's notice, a broken backup costs at most
+    /// a week's worth of believing in it.
+    const EVERY_S: i64 = 7 * 86_400;
+    /// A failure is read again a day later, not at the next tick: every hour, a refusal
+    /// about disk space would be an hourly notification.
+    const AFTER_FAILURE_S: i64 = 86_400;
+
+    pub fn new(state: Arc<State>) -> Self {
+        Self { state }
+    }
+
+    /// The apps due, longest unread first, a never-read one before any other. Reproducible:
+    /// names break ties. Separate from reading, which takes a repository and Docker.
+    pub async fn due_apps(&self) -> Result<Vec<String>, hlb_state::Error> {
+        let mut due = Vec::new();
+        for (app, status) in self.state.installed_apps().await? {
+            // As the backups: a failed app has a more urgent problem.
+            if status == "failed"
+                || !self
+                    .state
+                    .backup_kinds(&app)
+                    .await?
+                    .contains(&hlb_state::backup_kind::VOLUME)
+            {
+                continue;
+            }
+            let age = self
+                .state
+                .seconds_since_last_verification_attempt(&app)
+                .await?;
+            let failed = self.state.last_verification_failed(&app).await?;
+            if Self::is_due(age, failed) {
+                due.push((age, app));
+            }
+        }
+        Ok(Self::longest_unread_first(due))
+    }
+
+    fn is_due(age: Option<i64>, failed: bool) -> bool {
+        let wait = if failed {
+            Self::AFTER_FAILURE_S
+        } else {
+            Self::EVERY_S
+        };
+        age.is_none_or(|a| a >= wait)
+    }
+
+    fn longest_unread_first(mut apps: Vec<(Option<i64>, String)>) -> Vec<String> {
+        apps.sort_by_key(|(age, app)| (std::cmp::Reverse(age.unwrap_or(i64::MAX)), app.clone()));
+        apps.into_iter().map(|(_, app)| app).collect()
+    }
+}
+
 /// Prunes uptime samples past the retained window — mirrors
 /// `AliasPurgeLoop`'s shape, the one working precedent for a scheduled
 /// `DELETE FROM ... WHERE <ts> < ?` loop. Run once a day: at the sampling cadence,
@@ -250,6 +310,61 @@ mod tests {
                 .expect("volume");
         }
         Arc::new(s)
+    }
+
+    #[tokio::test]
+    async fn an_app_never_read_back_is_due_and_one_just_read_is_not() {
+        let s = state_with(&[("gitea", "running"), ("vikunja", "running")]).await;
+        let l = VerifyLoop::new(s.clone());
+        assert_eq!(l.due_apps().await.expect("due"), ["gitea", "vikunja"]);
+
+        s.record_verification("gitea", "abc", true, None)
+            .await
+            .expect("record");
+        assert_eq!(l.due_apps().await.expect("due"), ["vikunja"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_reading_is_not_read_again_at_the_next_tick() {
+        let s = state_with(&[("gitea", "running")]).await;
+        s.record_verification("gitea", "abc", false, Some("does not fit"))
+            .await
+            .expect("record");
+        assert!(VerifyLoop::new(s).due_apps().await.expect("due").is_empty());
+    }
+
+    #[test]
+    fn a_failed_reading_waits_a_day_and_a_good_one_a_week() {
+        let day = 86_400;
+        assert!(VerifyLoop::is_due(None, false));
+        assert!(!VerifyLoop::is_due(Some(day - 1), true));
+        assert!(VerifyLoop::is_due(Some(day), true));
+        assert!(!VerifyLoop::is_due(Some(7 * day - 1), false));
+        assert!(VerifyLoop::is_due(Some(7 * day), false));
+    }
+
+    #[test]
+    fn the_never_read_come_first_then_the_longest_unread_and_names_break_ties() {
+        let order = VerifyLoop::longest_unread_first(vec![
+            (Some(10), "young".to_string()),
+            (Some(99), "old".to_string()),
+            (None, "zulu".to_string()),
+            (None, "alpha".to_string()),
+            (Some(99), "also-old".to_string()),
+        ]);
+        assert_eq!(order, ["alpha", "zulu", "also-old", "old", "young"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_app_and_one_holding_no_volume_are_never_due() {
+        let s = state_with(&[("gitea", "failed")]).await;
+        s.upsert_app("nothing", &manifest("nothing"), None)
+            .await
+            .expect("upsert");
+        s.set_app_status("nothing", "running")
+            .await
+            .expect("status");
+        assert!(VerifyLoop::new(s).due_apps().await.expect("due").is_empty());
     }
 
     #[tokio::test]

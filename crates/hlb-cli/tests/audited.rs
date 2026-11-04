@@ -24,7 +24,6 @@ const EXEMPT: &[(&str, &str)] = &[
         "records what a check observed, decided by nobody",
     ),
     ("Command::Assert", "records what a reading observed"),
-    ("BackupCmd::Verify", "records what a verification observed"),
     ("MailCmd::Dns", "records what the DNS lookups observed"),
     ("MailCmd::Queue", "records what Stalwart's queue holds"),
     (
