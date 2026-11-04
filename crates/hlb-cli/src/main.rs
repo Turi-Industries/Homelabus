@@ -11520,8 +11520,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!(
                                 "{app:<14} {:<18} {:<18} {verdict}",
                                 age.map(fmt_age).unwrap_or_else(|| "never".into()),
-                                verif.map(|s| fmt_age(std::time::Duration::from_secs(s as u64)))
-                                    .unwrap_or_else(|| "never".into()),
+                                verified_column(verif, state.last_verification_failed(app).await?),
                             );
 
                             // The per-destination detail, under the summary.
@@ -12627,9 +12626,26 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
     }
 }
 
+/// `hlb backup status`'s column. 🔴 The age counts successes only: an app whose reading has
+/// just failed would still say "2 d", beside a green summary.
+fn verified_column(age: Option<i64>, last_failed: bool) -> String {
+    if last_failed {
+        return "🔴 failed".to_string();
+    }
+    age.map(|s| fmt_age(std::time::Duration::from_secs(s.max(0) as u64)))
+        .unwrap_or_else(|| "never".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reading_that_failed_after_a_success_does_not_read_as_verified() {
+        assert_eq!(verified_column(None, false), "never");
+        assert_eq!(verified_column(Some(172_800), true), "🔴 failed");
+        assert_ne!(verified_column(Some(172_800), false), "🔴 failed");
+    }
 
     #[test]
     fn the_migrations_a_rollback_announces_are_every_one_shipped() {

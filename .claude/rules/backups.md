@@ -88,9 +88,14 @@ during an outage.
   answering over TCP: both images' first start runs a temporary server on the socket.
   Unasked it refuses what would not leave a tenth of the disk free (a dump counts for four
   times its size), a dump past 1 GiB, held in the daemon's memory, and past 5 GiB from S3,
-  which may bill. ⚠️ SQLite snapshots and buckets are not read yet, a volume's store is
-  counted and never started, and the servers' images pulled for it stay on that node
+  which may bill. A SQLite snapshot goes through `PRAGMA integrity_check`, in a temporary
+  directory; a bucket's archive is read to its end and written nowhere. ⚠️ A volume's store
+  is counted and never started, and the servers' images pulled for it stay on that node
   until the nightly prune: deb1 lost 700 MB.
+- **A reader gone at the trailer breaks the writer.** A tar ends with zero blocks after its
+  last entry: stopped at `TRAILER`, the reader closed its pipe on `restic dump`, and a whole
+  bucket failed with "broken pipe" (the first real reading of Fluxer's, 2026-11-04).
+  `tarball::Reader::drain`. `bucket::restore` had the same race, once every object was back.
 - **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
   size. Hence `restic check --read-data-subset` on top of the count.
 - **Two numbers for a backup, not one.** RPO says what you would lose; confidence says

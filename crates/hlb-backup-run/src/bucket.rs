@@ -162,6 +162,55 @@ pub async fn restore<R: Runner>(
     Ok(Restored { written, deleted })
 }
 
+/// What an archive held when read to its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Read {
+    pub objects: u64,
+    pub bytes: u64,
+}
+
+/// Reads `bucket`'s archive to its end and writes it nowhere: its trailer is what says it
+/// is whole, and restoring it would need the app stopped.
+pub async fn read<R: Runner>(
+    repo: &Repository<R>,
+    snapshot: &str,
+    bucket: &str,
+) -> Result<Read, String> {
+    let (mut w, r) = tokio::io::duplex(1 << 20);
+    let path = archive_path(bucket);
+    let dumping = async {
+        let d = repo.dump(snapshot, &path, &mut w).await;
+        let _ = w.shutdown().await;
+        d.map_err(|e| e.to_string())
+    };
+    let (dumped, read) = tokio::join!(dumping, read_archive(Reader::new(r)));
+    // The reader's complaint first: a dump stopped by a closed pipe says only that.
+    let read = read?;
+    dumped?;
+    Ok(read)
+}
+
+async fn read_archive<R: tokio::io::AsyncRead + Unpin>(
+    mut archive: Reader<R>,
+) -> Result<Read, String> {
+    let mut seen = Read {
+        objects: 0,
+        bytes: 0,
+    };
+    let mut buf = vec![0u8; 256 * 1024];
+    while archive.next().await.map_err(|e| e.to_string())?.is_some() {
+        seen.objects += 1;
+        loop {
+            match archive.read(&mut buf).await.map_err(|e| e.to_string())? {
+                0 => break,
+                n => seen.bytes += n as u64,
+            }
+        }
+    }
+    archive.drain().await.map_err(|e| e.to_string())?;
+    Ok(seen)
+}
+
 /// Every object of the archive written into `b`. Their count, and their keys.
 async fn write_back<R: tokio::io::AsyncRead + Unpin>(
     mut archive: Reader<R>,
@@ -195,6 +244,7 @@ async fn write_back<R: tokio::io::AsyncRead + Unpin>(
         put.map_err(|err| format!("{}: {err}", e.path))?;
         keys.insert(e.path);
     }
+    archive.drain().await.map_err(|e| e.to_string())?;
     Ok((keys.len() as u64, keys))
 }
 
@@ -210,6 +260,62 @@ fn reqwest_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn archive(objects: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut w = tarball::Writer::new(&mut out);
+        for (path, body) in objects {
+            w.start(&Entry {
+                path: path.to_string(),
+                size: body.len() as u64,
+                mtime: 0,
+                headers: Vec::new(),
+            })
+            .await
+            .expect("start");
+            w.write(body).await.expect("write");
+            w.end_entry().await.expect("end");
+        }
+        w.finish().await.expect("finish");
+        out
+    }
+
+    // `restic dump` writes the tar's end after the trailer the reader stops at. Reader
+    // gone, the dump failed on a closed pipe, and a whole bucket read as a failed one.
+    #[tokio::test]
+    async fn the_end_of_the_archive_after_its_trailer_is_read_too() {
+        let mut bytes = archive(&[("a", b"hello")]).await;
+        bytes.extend(std::iter::repeat_n(0u8, 20 * 1024));
+        let (mut w, r) = tokio::io::duplex(64);
+        let writing = async {
+            let wrote = tokio::io::AsyncWriteExt::write_all(&mut w, &bytes).await;
+            let _ = w.shutdown().await;
+            wrote
+        };
+        let (wrote, read) = tokio::join!(writing, read_archive(Reader::new(r)));
+        assert_eq!(read.expect("whole").objects, 1);
+        wrote.expect("the writer must reach its end");
+    }
+
+    #[tokio::test]
+    async fn an_archive_is_read_to_its_end_and_one_cut_short_fails() {
+        let bytes = archive(&[("a", b"hello"), ("b/c", b"world!")]).await;
+        let read = read_archive(Reader::new(bytes.as_slice()))
+            .await
+            .expect("whole");
+        assert_eq!(
+            read,
+            Read {
+                objects: 2,
+                bytes: 11
+            }
+        );
+
+        // 🔴 A truncated archive is still a valid tar: only its trailer says otherwise.
+        let cut = &bytes[..1024];
+        assert!(read_archive(Reader::new(cut)).await.is_err());
+        assert!(read_archive(Reader::new(&[][..])).await.is_err());
+    }
 
     #[test]
     fn a_buckets_archive_has_a_path_of_its_own() {
