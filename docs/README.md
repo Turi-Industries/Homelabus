@@ -106,7 +106,9 @@ the next session in that checkout is shown in full, and `/clear` starts it.
 `scripts/scorecard.sh` prints the project's goals as numbers — deploy anywhere, never
 lose data, never have it stolen, an app without Rust, always available, always up to
 date, simple — and says UNMEASURED where the
-repository cannot answer. `scripts/improve.sh N` runs `/improve` N times, one fresh
+repository cannot answer. What only a machine can answer comes from the lab's drills
+(`scripts/drills/`), which write to `docs/measures.tsv`; a figure older than the newest
+release says STALE. `scripts/improve.sh N` runs `/improve` N times, one fresh
 session each, in one worktree, and stops at the first iteration that needs a human or
 commits nothing. It never pushes or merges: the branch waits for review, and the next
 run continues it rather than redoing its step from `main`. Twelve commits unreviewed and

@@ -2339,6 +2339,20 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 
 ### 4. The rest, in decreasing order of interest
 
+- **What the first timed deployment found** — 2026-11-04, `scripts/drills/deploy.sh` on
+  0.4.4; the figures are in `docs/measures.tsv`. The README's three commands had never
+  worked on a bare machine.
+  - 🔴 `hlb install vikunja` names a database, an OIDC client and a mail account in its
+    preview while no PostgreSQL, PocketID or Stalwart runs. Applied, three of them end
+    unimplemented, and Docker refuses the service over a `{{ smtp.from }}` nothing
+    filled. The preview should refuse and name what to install first, or install it:
+    "a declaration nobody reads". The README now lists the chain by hand.
+  - A DNS record can be attested only after an `--apply` has refused to start: the
+    preview records no plan `hlb ack` can find.
+  - `tier_for_memory` wants 8192 MB, and a VM given 4096 MB reports 3922, so a machine
+    sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
+    real one before moving the threshold.
+  - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
 - ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
   and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
   10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration

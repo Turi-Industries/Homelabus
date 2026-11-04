@@ -1,0 +1,10 @@
+date	hlb	measure	value	note
+2026-11-04	0.4.4	deploy-os-seconds	136	netinst by preseed, no encryption, lab VM
+2026-11-04	0.4.4	deploy-first-app-seconds	70	lab VM, 4096 MB, 2 vCPU, Debian 13 cloud image; librespeed behind Caddy
+2026-11-04	0.4.4	deploy-full-app-seconds	251	lab VM, 4096 MB, 2 vCPU, Debian 13 cloud image; Vikunja, PostgreSQL, Stalwart, PocketID
+2026-11-04	0.4.4	deploy-answers	7	the drill's ask calls
+2026-11-04	0.4.4	stolen-enc2-no-tang	closed	level B node; 120 s; opened alone at home first
+2026-11-04	0.4.4	stolen-enc2-other-tpm	closed	Tangs reachable; 120 s
+2026-11-04	0.4.4	stolen-enc3-no-tang	closed	level A node; 120 s; opened alone at home first
+2026-11-04	0.4.4	stolen-reopen-seconds	38	enc2, one Tang back
+2026-11-04	0.4.4	node-levels	D:5	lab: virtual machines read D by design
