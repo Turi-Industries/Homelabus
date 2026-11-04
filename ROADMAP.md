@@ -2351,8 +2351,11 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
-  - `hlb update apply valkey` is refused, "no known volume": an image with nothing to back up
-    cannot take the backup its manifest's `backupBefore` asks for, so a cache never updates.
+- **An update's prior copy holds no database** — read in the code on 2026-11-05.
+  `PlacedProvider::snapshot` copies volumes; dumps run in the pass alone. An app with a volume
+  and a database is updated with its database as old as the last pass, across whatever
+  migration the image runs, and one holding only a database (Roundcube) is refused for ever,
+  "no known volume". The fix is a dump in that copy.
 - ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
   and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
   10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration

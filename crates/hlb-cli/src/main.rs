@@ -11371,7 +11371,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 .await?;
                         }
 
-                        if let Some(p) = &provider {
+                        if !c.needs_backup {
+                            println!(
+                                "no backup first: {app} holds nothing to copy, or asks for none."
+                            );
+                        } else if let Some(p) = &provider {
                             use hlb_updater::BackupProvider;
                             print!("backup first… ");
                             match p.snapshot(app).await {
