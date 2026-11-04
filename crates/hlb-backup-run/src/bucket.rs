@@ -207,6 +207,7 @@ async fn read_archive<R: tokio::io::AsyncRead + Unpin>(
             }
         }
     }
+    archive.drain().await.map_err(|e| e.to_string())?;
     Ok(seen)
 }
 
@@ -243,6 +244,7 @@ async fn write_back<R: tokio::io::AsyncRead + Unpin>(
         put.map_err(|err| format!("{}: {err}", e.path))?;
         keys.insert(e.path);
     }
+    archive.drain().await.map_err(|e| e.to_string())?;
     Ok((keys.len() as u64, keys))
 }
 
@@ -276,6 +278,23 @@ mod tests {
         }
         w.finish().await.expect("finish");
         out
+    }
+
+    // `restic dump` writes the tar's end after the trailer the reader stops at. Reader
+    // gone, the dump failed on a closed pipe, and a whole bucket read as a failed one.
+    #[tokio::test]
+    async fn the_end_of_the_archive_after_its_trailer_is_read_too() {
+        let mut bytes = archive(&[("a", b"hello")]).await;
+        bytes.extend(std::iter::repeat_n(0u8, 20 * 1024));
+        let (mut w, r) = tokio::io::duplex(64);
+        let writing = async {
+            let wrote = tokio::io::AsyncWriteExt::write_all(&mut w, &bytes).await;
+            let _ = w.shutdown().await;
+            wrote
+        };
+        let (wrote, read) = tokio::join!(writing, read_archive(Reader::new(r)));
+        assert_eq!(read.expect("whole").objects, 1);
+        wrote.expect("the writer must reach its end");
     }
 
     #[tokio::test]

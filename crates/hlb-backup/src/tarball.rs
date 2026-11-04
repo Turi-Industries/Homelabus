@@ -279,6 +279,18 @@ impl<R: AsyncRead + Unpin> Reader<R> {
         }
     }
 
+    /// Reads what follows the trailer, once [`Self::next`] has said the archive is whole.
+    ///
+    /// 🔴 A tar ends with blocks of zeros after the last entry. A reader gone at the trailer
+    /// closes its pipe on the writer still sending them: `restic dump` then fails on a
+    /// bucket that is whole, depending on how far it had got.
+    pub async fn drain(&mut self) -> Result<()> {
+        tokio::io::copy(&mut self.input, &mut tokio::io::sink())
+            .await
+            .map_err(|e| Error::Unexpected(format!("reading the archive's end: {e}")))?;
+        Ok(())
+    }
+
     async fn block(&mut self) -> Result<[u8; BLOCK]> {
         let mut b = [0u8; BLOCK];
         match self.input.read_exact(&mut b).await {
