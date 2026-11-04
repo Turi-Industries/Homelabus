@@ -81,9 +81,16 @@ during an outage.
 - **A verification nobody runs verifies nothing.** `hlb backup verify` existed and only
   ran when typed: on 2026-11-04 every app of the lab read "verified never". The daemon reads
   one app an hour, each weekly, a failure again a day later (`VerifyLoop`), through
-  `hlb_backup_run::verify`, the CLI's too. Unasked it refuses what would not leave a tenth
-  of the disk free, and past 5 GiB from S3, which may bill. ⚠️ It proves restic returns
-  what it took: it covers volumes only, and starts nothing, so a store copied live passes.
+  `hlb_backup_run::verify`, the CLI's too. Volumes are restored and counted. Each dump goes
+  into a disposable server of the installed image, no network, and its tables are counted
+  against what it names (`dump_reading`): `pg_restore --list`, and a MariaDB dump's lines
+  starting `CREATE TABLE`, since a view's stand-in is `/*!50001 CREATE TABLE`. Ready means
+  answering over TCP: both images' first start runs a temporary server on the socket.
+  Unasked it refuses what would not leave a tenth of the disk free (a dump counts for four
+  times its size), a dump past 1 GiB, held in the daemon's memory, and past 5 GiB from S3,
+  which may bill. ⚠️ SQLite snapshots and buckets are not read yet, a volume's store is
+  counted and never started, and the servers' images pulled for it stay on that node
+  until the nightly prune: deb1 lost 700 MB.
 - **Comparing sizes does not detect corruption.** A flipped bit leaves the file the same
   size. Hence `restic check --read-data-subset` on top of the count.
 - **Two numbers for a backup, not one.** RPO says what you would lose; confidence says

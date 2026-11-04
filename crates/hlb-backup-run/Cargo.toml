@@ -21,7 +21,7 @@ hlb-updater.workspace = true
 sha2 = "0.11"
 tempfile = "3"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

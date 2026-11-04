@@ -15,6 +15,7 @@
 
 pub mod bucket;
 pub mod coverage;
+pub mod dump_reading;
 pub mod engine_copy;
 pub mod erasure;
 pub mod kit;

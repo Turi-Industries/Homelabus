@@ -236,6 +236,31 @@ pub struct Database<'a> {
     pub extensions: &'a [String],
 }
 
+/// The app's databases: `(engine, name, extensions)`, named as the resolver names them.
+pub fn databases_of<'m>(
+    manifest: &'m hlb_types::Manifest,
+    app: &str,
+) -> Vec<(hlb_types::DbEngine, String, &'m [String])> {
+    manifest
+        .spec
+        .requires
+        .iter()
+        .filter_map(|c| match c {
+            hlb_types::Capability::Database {
+                engine,
+                name,
+                extensions,
+                connections: _,
+            } => Some((
+                *engine,
+                name.clone().unwrap_or_else(|| app.to_string()),
+                extensions.as_slice(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What a restore is told about the installation.
 pub struct Restore<'a> {
     pub state: &'a State,
