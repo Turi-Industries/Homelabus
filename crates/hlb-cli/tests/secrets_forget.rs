@@ -90,7 +90,7 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     assert!(text(&preview).contains("anubis-signing-key"));
     assert!(text(&preview).contains("Preview"));
     assert!(
-        text(&preview).contains("the OIDC client stays in PocketID"),
+        text(&preview).contains("the OIDC client \"anubis\" is deleted from PocketID"),
         "{}",
         text(&preview)
     );
@@ -103,13 +103,17 @@ fn a_removed_app_s_secrets_go_by_preview_then_by_name_and_nothing_else_does() {
     assert!(!wrong.status.success(), "{}", text(&wrong));
     assert!(vault(dir).contains("anubis-signing-key"));
 
+    // No PocketID given: its client is still there, so what opens it stays, and the run
+    // says it did not finish. Forgotten here, a reinstall would stop on that client.
     let done = hlb(
         dir,
         &["secrets-forget", "anubis", "--confirm", "anubis", "--apply"],
     );
-    assert!(done.status.success(), "{}", text(&done));
+    assert!(!done.status.success(), "{}", text(&done));
+    assert!(text(&done).contains("no PocketID given"), "{}", text(&done));
     let left = vault(dir);
     assert!(!left.contains("anubis-signing-key"), "{left}");
+    assert!(left.contains("anubis-oidc-secret"), "{left}");
     assert!(left.contains("restic-repo-password"), "{left}");
     assert!(left.contains("cluster-ca"), "{left}");
 
@@ -163,4 +167,53 @@ fn an_installed_app_s_secrets_stay_whatever_its_past() {
     assert!(!r.status.success(), "{}", text(&r));
     assert!(text(&r).contains("installed"), "{}", text(&r));
     assert!(text(&hlb(dir, &["secrets"])).contains("gitea-db-password"));
+}
+
+#[test]
+fn a_removed_app_s_callback_is_named_with_no_secret_left_and_stays_until_it_goes() {
+    let house = tempfile::tempdir().expect("house");
+    let dir = house.path();
+    assert!(hlb(dir, &["emergency", "kit"]).status.success());
+
+    let (rt, state) = state_of(dir);
+    rt.block_on(async {
+        let manifest = serde_json::from_str(
+            r#"{"apiVersion":"hlb/v1","kind":"App","metadata":{"name":"wiki"},
+                "spec":{"image":{"repo":"a/b","tag":"1"},
+                        "requires":[{"kind":"sso","mode":"proxy-only"}]}}"#,
+        )
+        .expect("manifest");
+        state
+            .upsert_app("wiki", &manifest, Some("wiki.example.test"))
+            .await
+            .expect("app");
+        state.forget_app("wiki").await.expect("forgotten");
+        state
+            .audit(
+                "cli",
+                hlb_types::Role::Admin,
+                hlb_state::APP_REMOVED,
+                "wiki",
+                "ok",
+                None,
+            )
+            .await
+            .expect("audit");
+    });
+
+    let url = "https://wiki.example.test/oauth2/callback";
+    let preview = hlb(dir, &["secrets-forget", "wiki"]);
+    assert!(preview.status.success(), "{}", text(&preview));
+    assert!(text(&preview).contains(url), "{}", text(&preview));
+
+    let done = hlb(
+        dir,
+        &["secrets-forget", "wiki", "--confirm", "wiki", "--apply"],
+    );
+    assert!(!done.status.success(), "{}", text(&done));
+    assert_eq!(
+        rt.block_on(state.removed_domains("wiki")).expect("domains"),
+        vec!["wiki.example.test".to_string()],
+        "kept for the run that finishes it"
+    );
 }

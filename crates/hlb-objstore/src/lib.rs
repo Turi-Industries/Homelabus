@@ -542,7 +542,9 @@ impl Garage {
         deleted
     }
 
-    async fn delete_key(&self, access_key_id: &str) -> Result<()> {
+    /// Deletes a key by its id. Its buckets and what they hold stay; so do the grants
+    /// of every other key.
+    pub async fn delete_key(&self, access_key_id: &str) -> Result<()> {
         self.call(
             "DeleteKey",
             reqwest::Method::POST,

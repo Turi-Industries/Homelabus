@@ -183,6 +183,29 @@ pub struct OidcClient {
     pub pkce_enabled: bool,
 }
 
+/// What [`PocketId::drop_callback`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallbackDrop {
+    Dropped,
+    /// No such client, or it does not accept that URL.
+    NotThere,
+    /// The client's only URL, left in place.
+    OnlyOne,
+}
+
+/// Takes `url` out of `known`, unless nothing would be left.
+fn without_callback(known: &mut Vec<serde_json::Value>, url: &str) -> CallbackDrop {
+    let is_it = |u: &serde_json::Value| u.as_str() == Some(url);
+    if !known.iter().any(is_it) {
+        CallbackDrop::NotThere
+    } else if known.iter().all(is_it) {
+        CallbackDrop::OnlyOne
+    } else {
+        known.retain(|u| !is_it(u));
+        CallbackDrop::Dropped
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct CreateRequest<'a> {
     name: &'a str,
@@ -414,6 +437,37 @@ impl PocketId {
             Some(c) => self.add_callback_urls(&c.id, urls).await,
             None => Ok(false),
         }
+    }
+
+    /// Has the client named `name` stop accepting `url`, keeping every other field and
+    /// URL: the portal's client carries one per app behind it, and an update replaces
+    /// what it is sent. Its last URL stays: an empty list is not left for PocketID to
+    /// interpret, on the client every app behind the portal signs in with.
+    pub async fn drop_callback(&self, name: &str, url: &str) -> Result<CallbackDrop> {
+        let Some(found) = self.find_by_name(name).await? else {
+            return Ok(CallbackDrop::NotThere);
+        };
+        let path = format!("/api/oidc/clients/{}", found.id);
+        let mut current: serde_json::Value = self
+            .send(self.http.get(self.url(&path)), "reading the client")
+            .await?
+            .json()
+            .await
+            .map_err(|e| Error::Unexpected(format!("unreadable client: {e}")))?;
+        let known = current
+            .get_mut("callbackURLs")
+            .and_then(|u| u.as_array_mut())
+            .ok_or_else(|| Error::Unexpected("client without callbackURLs".into()))?;
+        let done = without_callback(known, url);
+        if done == CallbackDrop::Dropped {
+            self.send(
+                self.http.put(self.url(&path)).json(&current),
+                "updating the client",
+            )
+            .await?;
+            tracing::info!(client = name, url, "callback URL removed");
+        }
+        Ok(done)
     }
 
     /// Adds to the client `id` those of `urls` it does not accept yet, keeping every
@@ -706,6 +760,43 @@ fn one_time_body(user_id: &str, ttl: &str) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_callback_goes_alone_and_never_the_last_one() {
+        let portal = || {
+            vec![
+                serde_json::json!("https://auth.example.test/oauth2/callback"),
+                serde_json::json!("https://wiki.example.test/oauth2/callback"),
+            ]
+        };
+        let wiki = "https://wiki.example.test/oauth2/callback";
+
+        let mut known = portal();
+        assert_eq!(
+            super::without_callback(&mut known, wiki),
+            super::CallbackDrop::Dropped
+        );
+        assert_eq!(
+            known,
+            vec![serde_json::json!(
+                "https://auth.example.test/oauth2/callback"
+            )]
+        );
+
+        let mut known = portal();
+        assert_eq!(
+            super::without_callback(&mut known, "https://other.example.test/x"),
+            super::CallbackDrop::NotThere
+        );
+        assert_eq!(known, portal());
+
+        let mut only = vec![serde_json::json!(wiki)];
+        assert_eq!(
+            super::without_callback(&mut only, wiki),
+            super::CallbackDrop::OnlyOne
+        );
+        assert_eq!(only.len(), 1);
+    }
+
     use super::*;
     use std::sync::{Arc, Mutex};
 

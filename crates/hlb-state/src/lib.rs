@@ -596,6 +596,10 @@ pub struct ShippedMigration {
 /// that a name was an app's, so its writers and its reader share this one spelling.
 pub const APP_REMOVED: &str = "app-remove";
 
+fn removed_domains_key(app: &str) -> String {
+    format!("removed-domains:{app}")
+}
+
 /// Cheap to clone: the pool is shared.
 #[derive(Clone)]
 pub struct State {
@@ -3198,12 +3202,49 @@ impl State {
     /// `ON DELETE CASCADE`. Deleting them by hand here would drift the day a table is
     /// added — and the orphan rows would resurface as a ghost app on the next screen
     /// that walks them.
+    ///
+    /// The domain of an app behind the portal is kept apart: what the portal accepts for
+    /// it is computed from the domain, which nothing else remembers once the app is gone.
     pub async fn forget_app(&self, name: &str) -> Result<()> {
+        let behind_portal = self.app_manifest(name).await.is_ok_and(|m| {
+            m.spec.requires.iter().any(|need| {
+                matches!(
+                    need,
+                    hlb_types::capability::Capability::Sso {
+                        mode: hlb_types::capability::SsoMode::ProxyOnly
+                            | hlb_types::capability::SsoMode::ProxyHeader,
+                        redirect_paths: _,
+                    }
+                )
+            })
+        });
+        if let (true, Some(domain)) = (behind_portal, self.app_domain(name).await?) {
+            let mut domains = self.removed_domains(name).await?;
+            if !domains.contains(&domain) {
+                domains.push(domain);
+                self.put_setting(&removed_domains_key(name), Some(&domains.join("\n")))
+                    .await?;
+            }
+        }
         sqlx::query("DELETE FROM apps WHERE name = ?1")
             .bind(name)
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// The domains an app was published at when it was removed.
+    pub async fn removed_domains(&self, app: &str) -> Result<Vec<String>> {
+        Ok(self
+            .setting(&removed_domains_key(app))
+            .await?
+            .map(|all| all.lines().map(str::to_string).collect())
+            .unwrap_or_default())
+    }
+
+    /// Nothing is left at the domains [`Self::removed_domains`] kept for this app.
+    pub async fn clear_removed_domains(&self, app: &str) -> Result<()> {
+        self.put_setting(&removed_domains_key(app), None).await
     }
 
     pub async fn set_app_status(&self, name: &str, status: &str) -> Result<()> {
@@ -5327,6 +5368,39 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_removed_app_s_domains_outlive_it_until_cleared() {
+        let s = State::in_memory().await.expect("state");
+        let mut m = manifest("wiki");
+        for domain in ["a.example.test", "b.example.test"] {
+            s.upsert_app("wiki", &m, Some(domain)).await.expect("app");
+            s.forget_app("wiki").await.expect("forgotten");
+        }
+        assert_eq!(
+            s.removed_domains("wiki").await.expect("domains"),
+            Vec::<String>::new(),
+            "no portal, no callback to find again"
+        );
+
+        m.spec.requires = vec![hlb_types::capability::Capability::Sso {
+            mode: hlb_types::capability::SsoMode::ProxyOnly,
+            redirect_paths: Vec::new(),
+        }];
+        for domain in ["a.example.test", "b.example.test", "a.example.test"] {
+            s.upsert_app("wiki", &m, Some(domain)).await.expect("app");
+            s.forget_app("wiki").await.expect("forgotten");
+        }
+        assert_eq!(
+            s.removed_domains("wiki").await.expect("domains"),
+            vec!["a.example.test".to_string(), "b.example.test".to_string()]
+        );
+        s.clear_removed_domains("wiki").await.expect("cleared");
+        assert_eq!(
+            s.removed_domains("wiki").await.expect("domains"),
+            Vec::<String>::new()
+        );
+    }
+
     #[tokio::test]
     async fn only_a_removal_that_succeeded_counts_as_one() {
         let s = super::State::in_memory().await.expect("state");

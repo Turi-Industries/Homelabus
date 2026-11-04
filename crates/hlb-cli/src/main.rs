@@ -9775,18 +9775,24 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 let secrets = hlb_engine::removal::secrets_left(&state, app).await?;
-                if secrets.is_empty() {
-                    println!("Nothing of \"{app}\" is left in the vault.");
+                let leftovers = hlb_engine::removal::leftovers_in(&state, app, &secrets).await?;
+                if secrets.is_empty() && leftovers.is_empty() {
+                    println!("Nothing of \"{app}\" is left in the vault or its services.");
                     return Ok(ExitCode::SUCCESS);
                 }
-                println!("Forgetting what \"{app}\" left in the vault\n");
+                println!("Forgetting what \"{app}\" left\n");
                 for name in &secrets {
                     println!("  · {name}");
                 }
-                println!(
-                    "\n🔴 A reinstall draws new ones: a volume or a backup kept from before may \
-                     no longer open."
-                );
+                for leftover in &leftovers {
+                    println!("  · {}", leftover.said(app));
+                }
+                if !secrets.is_empty() {
+                    println!(
+                        "\n🔴 A reinstall draws new ones: a volume or a backup kept from before \
+                         may no longer open."
+                    );
+                }
                 for line in hlb_engine::removal::forget_warnings(app, &secrets) {
                     println!("   {line}");
                 }
@@ -9802,12 +9808,81 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 println!();
-                for name in &secrets {
+                let mut stay: Vec<String> = Vec::new();
+                let mut unfinished = false;
+                let mut callback_stays = false;
+                if !leftovers.is_empty() {
+                    let vault = open_vault(&cli)?;
+                    let identity = match (&cli.pocketid_url, &cli.pocketid_key) {
+                        (Some(u), Some(k)) => Some(hlb_identity::PocketId::new(
+                            relay::reach(u, &cli.platform_network),
+                            k,
+                        )),
+                        _ => None,
+                    };
+                    let objstore = match (&cli.garage_url, &cli.garage_token) {
+                        (Some(u), Some(t)) => Some(hlb_objstore::Garage::new(
+                            relay::reach(u, &cli.platform_network),
+                            t.clone(),
+                        )),
+                        _ => None,
+                    };
+                    let mail = mail_admin(&cli);
+                    let services = hlb_engine::removal::Services {
+                        identity: identity.as_ref(),
+                        objstore: objstore.as_ref(),
+                        mail: mail.as_ref(),
+                    };
+                    // The other half first, each secret only once it is gone: forgotten
+                    // first, a refusal here would leave the door the secret opened and
+                    // nothing to resume with.
+                    for leftover in &leftovers {
+                        let taken =
+                            hlb_engine::removal::take(leftover, app, &state, &vault, services)
+                                .await?;
+                        let (outcome, line) = match &taken {
+                            hlb_engine::removal::Taken::Gone(line) => ("ok", line),
+                            hlb_engine::removal::Taken::Stays(line) => ("refused", line),
+                        };
+                        state
+                            .audit(
+                                "cli",
+                                ACTOR_ROLE,
+                                "leftover-forget",
+                                app,
+                                outcome,
+                                Some(line),
+                            )
+                            .await?;
+                        match taken {
+                            hlb_engine::removal::Taken::Gone(_) => println!("✓ {line}"),
+                            hlb_engine::removal::Taken::Stays(_) => {
+                                eprintln!("🔴 {} stays: {line}", leftover.named(app));
+                                stay.extend(leftover.secrets(app));
+                                unfinished = true;
+                                callback_stays |= matches!(
+                                    leftover,
+                                    hlb_engine::removal::Leftover::PortalCallback { .. }
+                                );
+                            }
+                        }
+                    }
+                }
+                for name in secrets.iter().filter(|name| !stay.contains(name)) {
                     state.forget_secret(name).await?;
                     state
                         .audit("cli", ACTOR_ROLE, "secret-forget", name, "ok", Some(app))
                         .await?;
                     println!("✓ {name} deleted");
+                }
+                if !callback_stays {
+                    state.clear_removed_domains(app).await?;
+                }
+                if unfinished {
+                    eprintln!(
+                        "\n🔴 Not finished: what opens the above stays in the vault. Run it again."
+                    );
+                    return Ok(ExitCode::FAILURE);
                 }
                 Ok(ExitCode::SUCCESS)
             })

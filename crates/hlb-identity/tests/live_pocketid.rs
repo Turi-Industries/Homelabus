@@ -18,7 +18,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use hlb_identity::PocketId;
+use hlb_identity::{CallbackDrop, PocketId};
 
 const CONTAINER: &str = "hlb-test-pocketid";
 const PORT: u16 = 11412;
@@ -47,8 +47,8 @@ fn start() -> PocketId {
     let m = manifest();
     let env = &m.spec.env;
     assert_eq!(
-        env.get("STATIC_API_KEY").map(String::as_str),
-        Some("{{ secret.api-key }}"),
+        env.get("STATIC_API_KEY_FILE").map(String::as_str),
+        Some("/run/secrets/api-key"),
         "the key Homelabus calls PocketID with is the one the manifest sets"
     );
 
@@ -62,17 +62,18 @@ fn start() -> PocketId {
     ];
     // Every variable the manifest sets, its templates filled the way an install would.
     for (k, v) in env {
-        let v = match k.as_str() {
-            "APP_URL" => url.clone(),
-            "STATIC_API_KEY" => API_KEY.to_string(),
-            "ENCRYPTION_KEY" => "test-encryption-key-0123456789".to_string(),
-            _ => {
-                assert!(
-                    !v.contains("{{"),
-                    "{k}={v}: a template this test does not fill"
-                );
-                v.clone()
-            }
+        // The manifest's two secrets ride on files; a throwaway container takes them as
+        // the variables those files stand for.
+        let (k, v) = match k.as_str() {
+            "APP_URL" => (k.as_str(), url.clone()),
+            "STATIC_API_KEY_FILE" => ("STATIC_API_KEY", API_KEY.to_string()),
+            "ENCRYPTION_KEY_FILE" => (
+                "ENCRYPTION_KEY",
+                "test-encryption-key-0123456789".to_string(),
+            ),
+            // Its sending account: no mail here, and a file named and absent stops it.
+            _ if v.contains("{{") || k.ends_with("_FILE") => continue,
+            _ => (k.as_str(), v.clone()),
         };
         args.extend(["-e".to_string(), format!("{k}={v}")]);
     }
@@ -361,6 +362,34 @@ async fn a_callback_is_added_and_nothing_else_moves() {
     assert!(after.pkce_enabled, "PKCE survived the update");
     assert!(!after.is_public, "the client stayed confidential");
     println!("✓ callback added, the rest of the client unchanged");
+
+    // Taken off the same way: the update replaces what it is sent.
+    let wiki = "https://wiki.example.fr/oauth2/callback";
+    let auth = "https://auth.example.fr/oauth2/callback";
+    assert_eq!(
+        p.drop_callback("oauth2-proxy", wiki).await.expect("drop"),
+        CallbackDrop::Dropped
+    );
+    assert_eq!(
+        p.drop_callback("oauth2-proxy", wiki).await.expect("again"),
+        CallbackDrop::NotThere
+    );
+    assert_eq!(
+        p.drop_callback("oauth2-proxy", auth).await.expect("last"),
+        CallbackDrop::OnlyOne
+    );
+    assert_eq!(
+        p.drop_callback("nobody", wiki).await.expect("no client"),
+        CallbackDrop::NotThere
+    );
+    let after = p
+        .find_by_name("oauth2-proxy")
+        .await
+        .expect("read")
+        .expect("present");
+    assert_eq!(after.callback_urls, vec![auth.to_string()]);
+    assert!(after.pkce_enabled, "PKCE survived the removal");
+    assert!(!after.is_public, "the client stayed confidential");
     stop();
 }
 

@@ -46,8 +46,15 @@ monitoring, updates and routes have their own `operations-*.md`.
   accounts: no removal touches them, and until 2026-11-04 no preview named them
   (`removal::kept_elsewhere`, an exhaustive match). A reinstall finds them again. After
   `secrets-forget`, a role takes the newly drawn password at `provision`, where it kept
-  the old one and the app was refused; an OIDC client, a Garage key or an SMTP account
-  stops the install until deleted in its own service, as the forget's preview says.
+  the old one and the app was refused. 🔴 A secret forgotten alone leaves an OIDC client,
+  a Garage key or an SMTP account a reinstall stops on: `secrets-forget` deletes those and
+  the portal's callback first (`removal::Leftover`), each secret only once its other half
+  is gone, so a refusal resumes. Data stays: the database, the bucket, and an SMTP account
+  that is also the mail account. Each is proved the app's before it goes — the client's and
+  the key's id against the vault's, the account by its password and no owner, since an
+  address is handed out again. `forget_app` keeps the domain of an app behind the portal
+  (`removed-domains:<app>`): nothing else remembers the callback's URL. The portal's last
+  callback stays.
 - **A scheduled job runs in its app's own container** (`spec.jobs`, `hlb_engine::jobs`),
   looked at hourly and run when due; a failed run is tried again a day later, kept as
   failed until one succeeds, in the inbox (`job_failed`) and notified. An app whose plan

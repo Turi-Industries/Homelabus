@@ -445,6 +445,51 @@ impl Stalwart {
         Ok(ids(&args).into_iter().next())
     }
 
+    /// Whether this address and password open an account, asked of the JMAP session.
+    /// A refusal counts toward Stalwart's ban on the caller's address: asked once, never
+    /// in a loop.
+    pub async fn accepts(&self, address: &str, password: &str) -> Result<bool> {
+        let attempt = Self::new(
+            self.base_url.clone(),
+            Auth::Basic {
+                user: address.to_string(),
+                password: password.to_string(),
+            },
+        );
+        match attempt.generation().await {
+            Ok(_) => Ok(true),
+            Err(Error::Unauthorized) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Deletes the account at this address, and the mail it holds; `false` when there is
+    /// none. 🔴 Stalwart keeps nothing of it: whoever calls this has established whose
+    /// account it is.
+    pub async fn destroy_account(&self, address: &str) -> Result<bool> {
+        let (local, domain) = address
+            .split_once('@')
+            .ok_or_else(|| Error::Unexpected(format!("not an address: {address}")))?;
+        let domain_id = match self.domain_id(domain).await {
+            Ok(id) => id,
+            Err(Error::UnknownDomain(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let Some(id) = self.find_account(local, &domain_id).await? else {
+            return Ok(false);
+        };
+        let args = self
+            .call("x:Account/set", serde_json::json!({ "destroy": [&id] }))
+            .await?;
+        if let Some(err) = args.get("notDestroyed").and_then(|v| v.get(&id)) {
+            return Err(Error::NotCreated {
+                object: format!("the removal of {address}"),
+                reason: describe_set_error(err),
+            });
+        }
+        Ok(true)
+    }
+
     /// Creates a user account.
     ///
     /// The body follows the upstream schema: `@type` discriminator, local part in

@@ -211,6 +211,39 @@ async fn a_mailbox_is_provisioned_end_to_end() {
 
 #[tokio::test]
 #[ignore = "needs Docker"]
+async fn an_account_is_deleted_by_its_address_and_a_wrong_password_opens_nothing() {
+    let s = start();
+    s.ensure_account("gitea@example.org", "an-app-password-123456", &[])
+        .await
+        .expect("account");
+    s.ensure_account("other@example.org", "another-password-123456", &[])
+        .await
+        .expect("account");
+
+    assert!(s
+        .accepts("gitea@example.org", "an-app-password-123456")
+        .await
+        .expect("asked"));
+    assert!(!s
+        .accepts("gitea@example.org", "not-its-password-123456")
+        .await
+        .expect("asked"));
+
+    assert!(s.destroy_account("gitea@example.org").await.expect("gone"));
+    assert!(!s.destroy_account("gitea@example.org").await.expect("none"));
+    assert!(!s.destroy_account("gitea@nowhere.test").await.expect("none"));
+    let domain = s.domain_id("example.org").await.expect("domain");
+    assert_eq!(s.find_account("gitea", &domain).await.expect("query"), None);
+    assert!(s
+        .find_account("other", &domain)
+        .await
+        .expect("query")
+        .is_some());
+    stop();
+}
+
+#[tokio::test]
+#[ignore = "needs Docker"]
 async fn postmaster_and_abuse_reach_whoever_opens_the_shared_mailbox() {
     let s = start();
     let alice = s
