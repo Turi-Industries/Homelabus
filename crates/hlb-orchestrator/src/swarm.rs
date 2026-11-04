@@ -245,7 +245,10 @@ impl SwarmOrchestrator {
             return;
         };
         for svc in services {
-            let Some(service) = svc.spec.and_then(|s| s.name) else {
+            let Some(spec) = svc.spec else {
+                continue;
+            };
+            let Some(service) = spec.name else {
                 continue;
             };
             if !is_run_of(&service, name) {
@@ -262,8 +265,18 @@ impl SwarmOrchestrator {
                         "complete" | "failed" | "rejected" | "shutdown" | "orphaned" | "remove"
                     )
                 });
-            if ended {
-                let _ = self.docker.delete_service(&service).await;
+            if ended && self.docker.delete_service(&service).await.is_ok() {
+                // Read from its spec: a long run's secret names no longer say whose they
+                // are. A run cut short never reached its own cleanup.
+                let secrets: Vec<String> = spec
+                    .task_template
+                    .and_then(|t| t.container_spec)
+                    .and_then(|c| c.secrets)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|f| f.secret_name)
+                    .collect();
+                self.forget_run_secrets(&secrets).await;
             }
         }
     }
@@ -353,24 +366,37 @@ impl SwarmOrchestrator {
             else {
                 continue;
             };
-            let mut tries = 0;
-            loop {
-                match self.docker.delete_secret(&name).await {
-                    Ok(()) => break,
-                    Err(bollard::errors::Error::DockerResponseServerError {
-                        status_code: 404,
-                        ..
-                    }) => break,
-                    Err(e) if tries == 10 => return Err(e.into()),
-                    // Refused while a stopping task's container still holds it.
-                    Err(_) => {
-                        tries += 1;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
+            self.delete_secret_patiently(&name).await?;
+        }
+        Ok(())
+    }
+
+    /// Deletes a secret, waiting while a stopping task's container still holds it.
+    async fn delete_secret_patiently(&self, name: &str) -> Result<()> {
+        let mut tries = 0;
+        loop {
+            match self.docker.delete_secret(name).await {
+                Ok(())
+                | Err(bollard::errors::Error::DockerResponseServerError {
+                    status_code: 404, ..
+                }) => return Ok(()),
+                Err(e) if tries == 10 => return Err(e.into()),
+                Err(_) => {
+                    tries += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
         }
-        Ok(())
+    }
+
+    /// Deletes a finished run's secrets. Its file may carry a credential, so one that
+    /// stays is said; the run's own outcome does not depend on it.
+    async fn forget_run_secrets(&self, secrets: &[String]) {
+        for name in secrets {
+            if let Err(e) = self.delete_secret_patiently(name).await {
+                tracing::warn!(secret = %name, error = %e, "a job's file secret could not be deleted");
+            }
+        }
     }
 
     /// Puts the ingress network at [`crate::OVERLAY_MTU`].
@@ -1209,9 +1235,15 @@ impl Orchestrator for SwarmOrchestrator {
         {
             c.secrets = Some(files);
         }
-        self.docker
+        if let Err(e) = self
+            .docker
             .create_service(service, self.credentials_for(&spec.image))
-            .await?;
+            .await
+        {
+            // No service, so no later run would ever find these.
+            self.forget_run_secrets(&secrets).await;
+            return Err(e.into());
+        }
 
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
         let outcome = loop {
@@ -1264,15 +1296,7 @@ impl Orchestrator for SwarmOrchestrator {
         }
         let _ = self.docker.delete_service(&spec.name).await;
         // The file may carry a credential: it does not outlive the one task that read it.
-        for name in secrets {
-            for _ in 0..10 {
-                if self.docker.delete_secret(&name).await.is_ok() {
-                    break;
-                }
-                // Refused while the task's container still holds it.
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-        }
+        self.forget_run_secrets(&secrets).await;
         Ok(JobOutcome {
             succeeded: outcome == Some(true),
             output,

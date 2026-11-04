@@ -539,19 +539,6 @@ async fn removing_a_service_takes_its_file_secrets() {
     cleanup(&o, &n).await;
     cleanup(&o, &neighbour).await;
 
-    let secrets = |prefix: String| async move {
-        let out = tokio::process::Command::new("docker")
-            .args(["secret", "ls", "--format", "{{.Name}}"])
-            .output()
-            .await
-            .expect("docker secret ls");
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| l.starts_with(&prefix))
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-    };
-
     o.deploy(&sleeper(&n).file("/etc/one.toml", "one"))
         .await
         .expect("deploy");
@@ -563,12 +550,12 @@ async fn removing_a_service_takes_its_file_secrets() {
         .await
         .expect("a neighbour sharing the name's start");
     let mine = format!("{n}-file-");
-    assert_eq!(secrets(mine.clone()).await.len(), 2, "two versions");
+    assert_eq!(secrets_named(&mine).len(), 2, "two versions");
 
     o.remove(&n).await.expect("removed");
-    assert_eq!(secrets(mine.clone()).await, Vec::<String>::new());
+    assert_eq!(secrets_named(&mine), Vec::<String>::new());
     assert_eq!(
-        secrets(format!("{neighbour}-file-")).await.len(),
+        secrets_named(&format!("{neighbour}-file-")).len(),
         1,
         "the neighbour keeps its own"
     );
@@ -582,9 +569,63 @@ async fn removing_a_service_takes_its_file_secrets() {
     );
     cleanup(&o, &neighbour).await;
     assert_eq!(
-        secrets(format!("{neighbour}-file-")).await,
+        secrets_named(&format!("{neighbour}-file-")),
         Vec::<String>::new()
     );
+}
+
+fn secrets_named(prefix: &str) -> Vec<String> {
+    let out = std::process::Command::new("docker")
+        .args(["secret", "ls", "--format", "{{.Name}}"])
+        .output()
+        .expect("docker secret ls");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with(prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A job's files can carry a credential. A process killed during a run left its service
+/// to the next run, which cleared the service and not its secrets: sixteen stayed on the
+/// lab, unused, from the hours its Docker was being restarted.
+#[tokio::test]
+#[ignore = "needs an active Swarm"]
+async fn an_interrupted_run_s_secrets_go_with_it() {
+    let o = orch().await;
+    let n = name("interrupted");
+    let prefix = format!("{n}-");
+    let job = ServiceSpec::new(&n, IMAGE)
+        .command(["sleep", "3"])
+        .job()
+        .file("/etc/one.toml", "a credential")
+        .constraint(local_node(&o).await);
+
+    // Dropped while it waits for the task, as a killed process stops waiting.
+    let cut = tokio::time::timeout(std::time::Duration::from_secs(2), o.run_job(&job, 60)).await;
+    assert!(cut.is_err(), "the run was to be interrupted");
+    assert_eq!(secrets_named(&prefix).len(), 1, "the cut run left its file");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    let next = o.run_job(&job, 60).await.expect("the next run");
+    assert!(next.succeeded, "{:?}", next.output);
+    assert_eq!(secrets_named(&prefix), Vec::<String>::new());
+}
+
+/// Swarm refusing the service leaves no run to clear later: its files go at once.
+#[tokio::test]
+#[ignore = "needs an active Swarm"]
+async fn a_run_swarm_refuses_leaves_no_secret() {
+    let o = orch().await;
+    let n = name("refused");
+    let job = ServiceSpec::new(&n, IMAGE)
+        .command(["true"])
+        .job()
+        .file("/etc/one.toml", "a credential")
+        .constraint("not a constraint");
+
+    assert!(o.run_job(&job, 10).await.is_err(), "Swarm was to refuse it");
+    assert_eq!(secrets_named(&format!("{n}-")), Vec::<String>::new());
 }
 
 /// `publishedPorts` reaches Swarm, in host mode: declared and ignored until 2026-10-14.

@@ -92,6 +92,12 @@ Most of these fail behind a healthy task.
   down. `inspect_whole` reads it again through the CLI; `swarm_spike.rs` holds it.
 - **A Swarm secret is immutable.** Configuration files ride on secrets (bollard 0.19 has
   no configs), named after a hash of their content, so a new version is a new secret.
+- **🔴 A job's secret outlives a run nobody finished.** A job carries credentials as
+  files and deletes them at its end. A process killed mid-run never gets there; the next
+  run cleared the service and left the secrets, and nothing said so: sixteen on the lab,
+  a week old, dated from the hours its Docker was being restarted (found 2026-11-04).
+  `clear_ended_runs` reads them from the spec of the run it clears, and a run Swarm
+  refuses deletes its own.
 - **A private image needs its credentials sent WITH the service.** The Swarm daemon never
   reads a node's `docker login`: every node fails on "pull access denied" with a good
   login in place. `SwarmOrchestrator::with_registry_auth`, fed from the vault's
