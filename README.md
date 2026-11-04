@@ -87,10 +87,27 @@ curl -fsSL https://github.com/Turi-Industries/Homelabus/releases/latest/download
 # a fresh Debian has wget and no curl:
 #   wget -qO- https://github.com/Turi-Industries/Homelabus/releases/latest/download/install.sh | sh
 
-sudo hlb cluster init --endpoint 192.168.1.10 --apply   # Docker, Swarm, the state, the vault
-hlb install vikunja                                     # shows what it would do, changes nothing
-hlb install vikunja --apply                             # does it
+# As root, from one directory: the state and the vault's key are made here
+hlb cluster init --endpoint 192.168.1.10 --apply         # Docker, Swarm, the state, the vault
+hlb config exposure --domain home.lan --internal --node "$(hostname)" --apply
+hlb install caddy --apply                                # addresses and certificates
+
+# What Vikunja needs. Installing an app does not install these for you yet.
+hlb install postgres --apply
+hlb install stalwart --apply
+hlb install pocket-id --apply
+
+hlb install vikunja                                      # shows what it would do, changes nothing
+hlb install vikunja --apply                              # stops: the app's DNS record comes first
+hlb ack vikunja/dns-record                               # checks it; --force attests one it cannot see
+hlb install vikunja --apply                              # does it
 ```
+
+PostgreSQL, Stalwart and PocketID ask for a node reporting 8192 MB or more, which a
+machine sold as 8 GB does not, and refuse a smaller one: `hlb node tier <node> --set
+heavy --apply` overrides that, and the machine can then run out of memory.
+`scripts/drills/deploy.sh` runs this path on a bare VM, and
+[docs/measures.tsv](docs/measures.tsv) keeps what it took.
 
 From a checkout, `cargo build --release -p hlb-cli` builds the same binary. Putting
 apps online and inviting people takes a few more commands, all in
