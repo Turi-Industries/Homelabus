@@ -2647,14 +2647,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// The repository password — see [`hlb_backup_run::restic_password`].
-async fn restic_password(
-    state: &State,
-    vault: &Vault,
-) -> Result<String, Box<dyn std::error::Error>> {
-    Ok(hlb_backup_run::restic_password(state, vault).await?)
-}
-
 /// The provider an update's prior backup goes through: the app's first bulky
 /// destination, or `--backup-repo`. `None` refuses the update.
 async fn build_backup_provider(
@@ -11676,91 +11668,51 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
 
                     BackupCmd::Verify { app } => {
-                        let password = restic_password(&state, &vault).await?;
+                    // A named app, or every app that already has a snapshot.
+                    let targets: Vec<String> = match app {
+                        Some(a) => vec![a.clone()],
+                        None => state
+                            .installed_apps()
+                            .await?
+                            .into_iter()
+                            .map(|(n, _)| n)
+                            .collect(),
+                    };
+                    let mut verified = 0;
+                    let mut drifts = 0;
 
-                        // A named app, or every app that already has a snapshot.
-                        let targets: Vec<String> = match app {
-                            Some(a) => vec![a.clone()],
-                            None => state
-                                .installed_apps()
-                                .await?
-                                .into_iter()
-                                .map(|(n, _)| n)
-                                .collect(),
-                        };
-                        let mut verified = 0;
-                        let mut drifts = 0;
-
-                        for a in targets {
-                            // 🔴 A VOLUME snapshot, read from the destination holding
-                            // it: the newest row of any kind was a dump, read from
-                            // `--backup-repo` whatever its destination, and its
-                            // verification said the app's volumes restored.
-                            let dests = hlb_backup_run::effective_destinations(
-                                &state,
-                                &a,
-                                hlb_backup::Class::Bulky,
-                                cli.backup_repo.as_deref(),
-                            )
-                            .await?;
-                            let names: Vec<String> = dests.iter().map(|d| d.name.clone()).collect();
-                            let found = state
-                                .latest_snapshot(&a, hlb_state::backup_kind::VOLUME, &names)
-                                .await?;
-                            let Some((snap, d)) = found.and_then(|(snap, name)| {
-                                dests.into_iter().find(|d| d.name == name).map(|d| (snap, d))
-                            }) else {
-                                // No snapshot: nothing to verify, and above all no "✓"
-                                // that would suggest otherwise.
-                                if app.is_some() {
-                                    println!("{a}: no volume backup to verify.");
-                                }
-                                continue;
-                            };
-
-                            print!("{a} ({} on {})… ", &snap[..8.min(snap.len())], d.name);
-                            use std::io::Write as _;
-                            let _ = std::io::stdout().flush();
-
-                            let outcome = match hlb_backup_run::credentials(&state, &vault, &d).await {
-                                Ok(creds) => {
-                                    hlb_backup::verify_snapshot_on(
-                                        &d,
-                                        creds.as_deref(),
-                                        Some(&cli.platform_network),
-                                        &password,
-                                        &snap,
-                                    )
-                                    .await
-                                }
-                                Err(e) => Err(hlb_backup::Error::Unexpected(e.to_string())),
-                            };
-                            match outcome {
-                                Ok(v) => {
-                                    println!("{}", v.describe());
-                                    // 🔴 A discrepancy is recorded as a verification
-                                    // FAILURE: `hlb backup status` must keep reporting
-                                    // this app as unverified.
-                                    let detail = (!v.matches()).then(|| v.describe());
-                                    state
-                                        .record_verification(&a, &snap, v.matches(), detail.as_deref())
-                                        .await?;
-                                    verified += 1;
-                                    if !v.matches() {
-                                        drifts += 1;
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("✗ {e}");
-                                    state
-                                        .record_verification(&a, &snap, false, Some(&e.to_string()))
-                                        .await?;
-                                    drifts += 1;
-                                }
+                    for a in targets {
+                        // Asked by hand: no limit on what a billed destination serves.
+                        let read = hlb_backup_run::verify::app(
+                            &state,
+                            &vault,
+                            &cli.platform_network,
+                            cli.backup_repo.as_deref(),
+                            &a,
+                            None,
+                        )
+                        .await?;
+                        // No snapshot: nothing to verify, and above all no "✓" that
+                        // would suggest otherwise.
+                        let Some(read) = read else {
+                            if app.is_some() {
+                                println!("{a}: no volume backup to verify.");
                             }
+                            continue;
+                        };
+                        let short = &read.snapshot[..8.min(read.snapshot.len())];
+                        if read.matches() {
+                            println!("{a} ({short} on {})… {}", read.destination, read.describe());
+                        } else {
+                            println!("{a} ({short} on {})… ✗ {}", read.destination, read.describe());
+                            drifts += 1;
                         }
+                        if read.outcome.is_ok() {
+                            verified += 1;
+                        }
+                    }
 
-                        if verified == 0 && drifts == 0 {
+                    if verified == 0 && drifts == 0 {
                             println!("No snapshot to verify.");
                             return Ok(ExitCode::SUCCESS);
                         }

@@ -21,6 +21,7 @@ pub mod kit;
 pub mod placement;
 pub mod restore;
 pub mod upkeep;
+pub mod verify;
 
 use std::collections::BTreeMap;
 use std::path::Path;

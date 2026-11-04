@@ -2782,6 +2782,19 @@ impl State {
         Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
     }
 
+    /// Age of the last verification of `app` however it ended, in seconds.
+    pub async fn seconds_since_last_verification_attempt(&self, app: &str) -> Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT CAST(strftime('%s','now') AS INTEGER)
+                    - CAST(strftime('%s', MAX(verified_at)) AS INTEGER) AS age
+             FROM restore_verifications WHERE app = ?1",
+        )
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("age").ok().flatten()))
+    }
+
     /// Did the latest restore verification of `app` fail?
     ///
     /// 🔴 The age above counts successes only, so a verification failing after one

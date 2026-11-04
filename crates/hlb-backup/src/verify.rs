@@ -250,7 +250,7 @@ pub async fn verify_snapshot(
         classes: vec![crate::destination::Class::Bulky],
         credentials_secret: None,
     };
-    verify_snapshot_on(&dest, None, None, password, snapshot).await
+    verify_snapshot_on(&dest, None, None, password, snapshot, None).await
 }
 
 /// [`verify_snapshot`], read from the DESTINATION that holds the snapshot — local, S3
@@ -259,12 +259,16 @@ pub async fn verify_snapshot(
 /// 🔴 A snapshot lives in the repository it was written to: asked of `--backup-repo`,
 /// one on the off-site was "not found", and recorded as a failed verification of
 /// backups that were fine. `credentials` is the secret's VALUE, out of the vault.
+///
+/// `billed_limit` refuses a snapshot larger than that from an S3 destination, which a
+/// provider may bill by transfer: what runs unasked must not run up a bill.
 pub async fn verify_snapshot_on(
     dest: &crate::destination::Destination,
     credentials: Option<&str>,
     network: Option<&str>,
     password: &str,
     snapshot: &str,
+    billed_limit: Option<u64>,
 ) -> Result<Verification> {
     let env = dest.env(credentials)?;
     // A unique name: two concurrent verifications must not mix, and a reused volume
@@ -280,7 +284,8 @@ pub async fn verify_snapshot_on(
         password.to_string(),
     )
     .extra_env(env);
-    let result = check_in(&volume, &repo, snapshot).await;
+    let limit = billed_limit.filter(|_| dest.is_s3());
+    let result = check_in(&volume, &repo, snapshot, limit).await;
 
     // Unconditional cleanup: a failure must not leave behind a volume carrying a
     // cleartext copy of the data.
@@ -294,7 +299,14 @@ async fn check_in<R: Runner>(
     volume: &str,
     repo: &Repository<R>,
     snapshot: &str,
+    billed_limit: Option<u64>,
 ) -> Result<Verification> {
+    let expected = repo.stats(snapshot).await?;
+    let room = room_in_volume(volume).await?;
+    if let Some(why) = refusal(expected.bytes, room, billed_limit) {
+        return Err(crate::Error::Unexpected(why));
+    }
+
     let vol = volume.to_string();
     let v = verify_by_restore(repo, snapshot, "/verif", move |_| async move {
         count_in_volume(&vol).await
@@ -303,6 +315,52 @@ async fn check_in<R: Runner>(
 
     // The comparison does not see a flipped bit: the file keeps its size.
     Ok(with_data_check(v, repo, DEFAULT_SUBSET).await)
+}
+
+/// Why a snapshot is not restored, before anything is written. A disk filled by a
+/// verification would stop the apps sharing it, on a night nobody is watching.
+fn refusal(bytes: u64, room: u64, billed_limit: Option<u64>) -> Option<String> {
+    if let Some(limit) = billed_limit.filter(|limit| bytes > *limit) {
+        return Some(format!(
+            "not restored: {bytes} bytes from a destination that may bill by transfer, \
+             over the {limit} read unasked. hlb backup verify <app> reads it when asked"
+        ));
+    }
+    // A tenth kept free: the disk is the apps' too.
+    (bytes > room / 10 * 9).then(|| {
+        format!("not restored: {bytes} bytes do not fit in the {room} free on this machine")
+    })
+}
+
+/// The bytes free where a restore would write, from inside a container: the disposable
+/// volume's disk is Docker's, which this process may not see.
+async fn room_in_volume(volume: &str) -> Result<u64> {
+    let out = docker(&[
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        "-v",
+        &format!("{volume}:/verif"),
+        IMAGE,
+        "-c",
+        "df -P -k /verif | awk 'NR==2 {print $4}'",
+    ])
+    .await?;
+    parse_room(&out)
+}
+
+/// 🔴 Never zero by default: an unreadable answer is not a full disk, and would refuse
+/// every verification with a message about space.
+fn parse_room(output: &str) -> Result<u64> {
+    output
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .and_then(|l| l.trim().parse::<u64>().ok())
+        .map(|kib| kib.saturating_mul(1024))
+        .ok_or_else(|| {
+            crate::Error::Unexpected(format!("unreadable free space: \"{}\"", output.trim()))
+        })
 }
 
 /// Counts the restored regular files, from inside a container.
@@ -397,6 +455,29 @@ fn token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_that_would_fill_the_disk_is_not_restored() {
+        assert!(refusal(90, 100, None).is_none());
+        let refused = refusal(91, 100, None).expect("refused");
+        assert!(refused.contains("do not fit"), "{refused}");
+    }
+
+    #[test]
+    fn a_large_snapshot_is_read_from_a_billed_destination_only_when_asked() {
+        let room = 1_000_000;
+        assert!(refusal(500, room, Some(500)).is_none());
+        let refused = refusal(501, room, Some(500)).expect("refused");
+        assert!(refused.contains("hlb backup verify"), "{refused}");
+        assert!(refusal(501, room, None).is_none());
+    }
+
+    #[test]
+    fn unreadable_free_space_is_an_error_and_never_a_full_disk() {
+        assert_eq!(parse_room("2048\n").expect("read"), 2_097_152);
+        assert!(parse_room("").is_err());
+        assert!(parse_room("df: /verif: not found").is_err());
+    }
 
     fn verification(restored: (u64, u64), expected: (u64, u64)) -> Verification {
         Verification {

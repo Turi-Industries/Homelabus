@@ -180,6 +180,11 @@ pub struct Config {
     #[arg(long, default_value = "86400", env = "HLB_UPKEEP_SECS")]
     pub upkeep_secs: u64,
 
+    /// How often the apps due a reading of their volumes are looked at. Each tick reads one
+    /// app, and each app is read weekly.
+    #[arg(long, default_value = "3600", env = "HLB_VERIFY_SECS")]
+    pub verify_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1478,6 +1483,79 @@ pub async fn start(
     // disk the databases share was full. A failure, or a destination found erasable
     // that was not, is notified.
     {
+        // A backup nobody reads back is a hypothesis: `hlb backup verify` existed and only
+        // ran when someone typed it, so every app of the lab read "verified never". One
+        // app a tick, the first one due that has a snapshot.
+        let held_verify = held.clone();
+        let notif_verify = notif.clone();
+        let (network_verify, fallback_verify) =
+            (cfg.platform_network.clone(), cfg.backup_repo.clone());
+        tracing::info!(interval = cfg.verify_secs, "restore verification loop");
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(cfg.verify_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_verify.clone();
+                let notif = notif_verify.clone();
+                let (network, fallback) = (network_verify.clone(), fallback_verify.clone());
+                async move {
+                    let Some(install) = &held.install else {
+                        return;
+                    };
+                    let due = match schedule::VerifyLoop::new(held.state.clone()).due_apps().await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!("no reading looked at: {e}");
+                            return;
+                        }
+                    };
+                    for app in due {
+                        let read = hlb_backup_run::verify::app(
+                            &held.state,
+                            &install.vault,
+                            &network,
+                            fallback.as_deref(),
+                            &app,
+                            Some(hlb_backup_run::verify::UNASKED_BILLED_LIMIT),
+                        )
+                        .await;
+                        let read = match read {
+                            Ok(Some(r)) => r,
+                            // Not backed up yet: the backups say so. The next app's turn.
+                            Ok(None) => continue,
+                            Err(e) => {
+                                tracing::warn!(app, "not read back: {e}");
+                                continue;
+                            }
+                        };
+                        let outcome = if read.matches() { "ok" } else { "failed" };
+                        tracing::info!(app, destination = %read.destination, outcome, "{}", read.describe());
+                        let _ = held
+                            .state
+                            .audit(
+                                "controller",
+                                hlb_types::Role::Admin,
+                                "backup-verify",
+                                &app,
+                                outcome,
+                                Some(&read.describe()),
+                            )
+                            .await;
+                        if !read.matches() {
+                            notif
+                                .tell(&hlb_notify::Notification::important(
+                                    "backup-verification",
+                                    &format!("The backup of {app} did not read back"),
+                                    &format!("{}: {}", read.destination, read.describe()),
+                                ))
+                                .await;
+                        }
+                        return;
+                    }
+                }
+            },
+        )));
+
         let held = held.clone();
         let notif_upkeep = notif.clone();
         let network = cfg.platform_network.clone();
