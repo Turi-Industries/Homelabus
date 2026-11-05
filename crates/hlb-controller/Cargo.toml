@@ -57,7 +57,6 @@ hlb-guide.workspace = true
 hlb-notify.workspace = true
 futures.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
-hlb-updater.workspace = true
 axum = "0.8"
 utoipa.workspace = true
 utoipa-axum.workspace = true
