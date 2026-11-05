@@ -24,8 +24,9 @@ fi
 
 maria=$(docker ps -qf 'name=^mariadb\.1\.')
 if [[ -n $maria ]]; then
-    # The password stays in the container: read there, from its own secret.
-    docker exec -i "$maria" sh -c 'export MYSQL_PWD=$(cat /run/secrets/root-password)
+    # The password stays in the container: read there, from its own secret. 🔴 No `-i`: this
+    # script arrives on standard input, and a client holding it open eats the rest of it.
+    docker exec "$maria" sh -c 'export MYSQL_PWD=$(cat /run/secrets/root-password)
         q=$(mariadb -uroot -N -e "
             select group_concat(concat(
                 \"select \", char(39), \"table mariadb/\", table_schema, \"/\", table_name, char(39),
