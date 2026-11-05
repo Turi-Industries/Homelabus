@@ -791,6 +791,7 @@ impl Pass<'_> {
         if self.includes(STATE_APP) {
             self.state_snapshot(&mut |e| emit(e, &mut sum)).await?;
         }
+        let before_the_apps = sum.done;
 
         // -- Volumes: the BULKY class, per destination ------------------------------
         // Where each app's volumes went in this pass: its SQLite databases follow them
@@ -1098,6 +1099,20 @@ impl Pass<'_> {
                     );
                 }
             }
+        }
+
+        // -- Homelabus's own state, again -------------------------------------------
+        // 🔴 A restore takes only the snapshots the state recorded, and the copy above
+        // predates all of this pass's: restored after a disaster, it called them "a backup
+        // someone else wrote" and went back to the pass before (12 hours, on the lab). That
+        // first copy stays for a pass cut short. Saying "no destination" once is enough.
+        if self.includes(STATE_APP) && sum.done > before_the_apps {
+            self.state_snapshot(&mut |e| {
+                if !matches!(e, Event::NotCovered { .. }) {
+                    emit(e, &mut sum)
+                }
+            })
+            .await?;
         }
 
         Ok(sum)
