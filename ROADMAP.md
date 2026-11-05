@@ -2354,12 +2354,11 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
-- **A restore stopped halfway cannot be retried on NFS** — met on the lab 2026-11-05. It leaves
-  the app at 0 replicas with no data pin, so a second is refused, "runs nowhere", until
-  `docker service scale`. Running it "here" is no fix: a node without the volume would create
-  an empty local one and restore into that.
-- **`catalog-sources/official` does not come back with the state** — seen in the same drill. Every
-  command of a recovery says the source is left out and uses the catalog the binary carries.
+- ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
+  2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
+  nowhere". The hold records the volume's node before anything stops.
+- ✅ **A catalog source's cache does not come back with the state** — seen in the same drill and
+  answered 2026-11-05: the kit's step 4 fetches it, and the warning names the verb.
 - ✅ **An update's prior copy held no database** — read in the code and fixed 2026-11-05.
   An app with a volume and a database was updated with its database as old as the last
   pass, across whatever migration the image runs, and one holding only a database

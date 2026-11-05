@@ -402,6 +402,42 @@ mod tests {
         dir
     }
 
+    // The cache sits beside the state and in no backup, while the counter comes back with the
+    // state: a restored house reads the very index it had already read, and must take it.
+    #[tokio::test]
+    async fn a_cache_lost_with_the_house_comes_back_at_the_counter_the_state_kept() {
+        let cat = catalog();
+        let served = tempfile::tempdir().expect("served");
+        index::build(cat.path(), "community", None, served.path(), now()).expect("built");
+        index::sign(served.path(), &SEED, None, now()).expect("signed");
+        let url = serve(served.path().to_path_buf()).await;
+
+        let home = tempfile::tempdir().expect("home");
+        let state = State::in_memory().await.expect("state");
+        let directory = home.path().join("gone").join("community");
+        let src = CatalogSource {
+            name: "community".into(),
+            directory: directory.display().to_string(),
+            signed: Some(hlb_state::SignedSource {
+                url,
+                key: index::public_key(&SEED),
+                counter: Some(1),
+            }),
+        };
+        assert!(state.add_catalog_source(&src).await.expect("added"));
+        assert!(!directory.exists());
+
+        let f = fetch(&state, &src, "test", hlb_types::Role::Admin)
+            .await
+            .expect("fetched")
+            .expect("a signed source");
+        assert!(matches!(f.files, Some((n, 0)) if n > 0), "{:?}", f.files);
+        let mut c = hlb_catalog::Catalog::default();
+        c.add_signed_source("community", &directory, &index::public_key(&SEED), now())
+            .expect("the cache reads again");
+        assert!(c.get("community/librespeed").is_ok());
+    }
+
     #[tokio::test]
     async fn a_fetch_takes_a_new_index_once_and_names_a_revoked_install() {
         let cat = catalog();

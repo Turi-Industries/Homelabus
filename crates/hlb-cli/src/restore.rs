@@ -176,8 +176,15 @@ pub async fn run(
     };
 
     println!();
-    if let Err(not) =
-        restore::stop_for_restore(o, state, &services, &format!("restore of {volume}")).await
+    let at = restore.node_of(&place).await;
+    if let Err(not) = restore::stop_for_restore(
+        o,
+        state,
+        &services,
+        &format!("restore of {volume}"),
+        at.as_deref(),
+    )
+    .await
     {
         say_not_stopped(&not, app);
         audit(state, app, "refused", not.message()).await?;
@@ -328,8 +335,14 @@ async fn bucket(
     let endpoint = crate::relay::reach(hlb_objstore::S3_URL, &cli.platform_network);
 
     println!();
-    if let Err(not) =
-        restore::stop_for_restore(o, state, &services, &format!("restore of bucket {bucket}")).await
+    if let Err(not) = restore::stop_for_restore(
+        o,
+        state,
+        &services,
+        &format!("restore of bucket {bucket}"),
+        None,
+    )
+    .await
     {
         say_not_stopped(&not, app);
         audit_as(state, "bucket-restore", app, "refused", not.message()).await?;
@@ -510,8 +523,14 @@ async fn database(
     };
 
     println!();
-    if let Err(not) =
-        restore::stop_for_restore(o, state, &services, &format!("restore of database {name}")).await
+    if let Err(not) = restore::stop_for_restore(
+        o,
+        state,
+        &services,
+        &format!("restore of database {name}"),
+        None,
+    )
+    .await
     {
         say_not_stopped(&not, app);
         audit_as(state, "database-restore", app, "refused", not.message()).await?;

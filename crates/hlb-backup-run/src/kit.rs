@@ -407,6 +407,7 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
     line("");
     line("   hlb cluster init --apply");
     line("   hlb config exposure --node <this machine> --apply");
+    line("   hlb catalog source fetch");
     line("");
     line("   Then each app, in the order `hlb order` prints. It first starts empty: a");
     line("   restore needs a service to stop, and a node holding its volume.");

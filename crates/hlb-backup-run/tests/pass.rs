@@ -361,7 +361,72 @@ fn mail_at(volume: &std::path::Path, replicas: u64) -> Mail {
         volume: volume.to_path_buf(),
         replicas: std::sync::Mutex::new(replicas),
         scaled: std::sync::Mutex::new(Vec::new()),
+        here: None,
     }
+}
+
+// Scaled to 0 an app on NFS has no task and no pin: a restore that stopped halfway left it
+// there, and the next was refused, "runs nowhere", until someone scaled it by hand.
+#[tokio::test]
+async fn a_restore_stopped_halfway_is_tried_again_where_it_stopped() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let state = hlb_state::State::in_memory().await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: mail }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("mail", &manifest, None)
+        .await
+        .expect("app");
+    let mail = Mail {
+        here: Some("n1".into()),
+        ..mail_at(dir.path(), 0)
+    };
+    let restore = hlb_backup_run::restore::Restore {
+        state: &state,
+        vault: &vault,
+        fallback_repo: None,
+        network: "bridge",
+        orchestrator: Some(&mail),
+    };
+    use hlb_backup_run::placement::Place;
+    let place = || restore.place_of("mail", "mail-data");
+    assert!(matches!(place().await, Ok(Place::Unknown(_))));
+
+    let services = [("mail".to_string(), 2)];
+    hlb_backup_run::restore::stop_for_restore(
+        &mail,
+        &state,
+        &services,
+        "restore of mail-data",
+        Some("n1"),
+    )
+    .await
+    .expect("stopped");
+    assert_eq!(place().await, Ok(Place::Here), "this machine");
+
+    hlb_backup_run::restore::stop_for_restore(
+        &mail,
+        &state,
+        &services,
+        "restore of mail-data",
+        Some("n2"),
+    )
+    .await
+    .expect("stopped");
+    assert!(
+        matches!(place().await, Ok(Place::Node { id, .. }) if id == "n2"),
+        "another node, by its id"
+    );
+
+    // Started again, the hold says nothing more.
+    hlb_backup_run::restore::start(&mail, &state, &services)
+        .await
+        .expect("started");
+    assert!(matches!(place().await, Ok(Place::Unknown(_))));
 }
 
 // The lab's Termix, 2026-11-04: a daemon replaced during a copy left it at 0, the next pass
@@ -487,6 +552,7 @@ async fn a_restore_leaves_alone_a_service_a_copy_holds() {
         &state,
         &[("mail".to_string(), 0)],
         "restore of data",
+        None,
     )
     .await
     .expect_err("refused");
@@ -511,13 +577,13 @@ async fn a_restore_stops_what_nothing_holds_and_retries_after_its_own_hold() {
     let mail = mail_at(dir.path(), 1);
     let services = [("mail".to_string(), 1)];
 
-    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data")
+    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data", None)
         .await
         .expect("nothing holds it");
     assert_eq!(*mail.replicas.lock().unwrap(), 0, "stopped");
 
     // A restore that died must not lock the next one out for a day.
-    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data")
+    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data", None)
         .await
         .expect("its own hold refuses nothing");
 }
@@ -528,12 +594,17 @@ struct Mail {
     volume: std::path::PathBuf,
     replicas: std::sync::Mutex<u64>,
     scaled: std::sync::Mutex<Vec<u64>>,
+    /// This machine's node id. `None`: no Swarm to ask.
+    here: Option<String>,
 }
 
 const STOPPED: &str = "written-while-stopped";
 
 #[async_trait::async_trait]
 impl hlb_orchestrator::Orchestrator for Mail {
+    async fn local_node(&self) -> hlb_orchestrator::Result<Option<String>> {
+        Ok(self.here.clone())
+    }
     async fn ping(&self) -> hlb_orchestrator::Result<String> {
         Ok("fake".into())
     }
@@ -702,6 +773,7 @@ async fn a_volume_declared_copied_stopped_is_never_copied_while_its_service_runs
     }
 
     let mail = Mail {
+        here: None,
         volume: host.path().to_path_buf(),
         replicas: std::sync::Mutex::new(1),
         scaled: std::sync::Mutex::new(Vec::new()),

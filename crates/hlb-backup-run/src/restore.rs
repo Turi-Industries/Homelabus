@@ -446,11 +446,46 @@ impl Restore<'_> {
             .await
             .map_err(|e| e.to_string())?;
         let volumes = [volume.to_string()];
-        crate::locate_volumes(self.orchestrator, &volumes, &services)
+        let place = crate::locate_volumes(self.orchestrator, &volumes, &services)
             .await
             .into_keys()
             .next()
-            .ok_or_else(|| format!("{volume} could not be placed"))
+            .ok_or_else(|| format!("{volume} could not be placed"))?;
+        if !matches!(place, Place::Unknown(_)) {
+            return Ok(place);
+        }
+        // Scaled to 0 by a restore that stopped halfway: only that restore knows where it was.
+        let service = crate::placement::owner(volume, &services);
+        let held = self
+            .state
+            .hold_node(service)
+            .await
+            .map_err(|e| e.to_string())?;
+        let (Some(node), Some(o)) = (held, self.orchestrator) else {
+            return Ok(place);
+        };
+        if o.local_node().await.ok().flatten().as_deref() == Some(node.as_str()) {
+            return Ok(Place::Here);
+        }
+        let hostname = o
+            .nodes()
+            .await
+            .ok()
+            .and_then(|nodes| nodes.into_iter().find(|n| n.id == node))
+            .map_or_else(|| node.clone(), |n| n.hostname);
+        Ok(Place::Node { id: node, hostname })
+    }
+
+    /// The node id of `place`: what a restore records before it stops anything.
+    pub async fn node_of(&self, place: &Place) -> Option<String> {
+        match place {
+            Place::Here => match self.orchestrator {
+                Some(o) => o.local_node().await.ok().flatten(),
+                None => None,
+            },
+            Place::Node { id, .. } => Some(id.clone()),
+            Place::Unknown(_) => None,
+        }
     }
 
     /// Restores `volume` in place, on the machine holding it, from `source`. What it
@@ -923,11 +958,15 @@ impl NotStopped {
 /// Starting it here to undo a refusal would pull it out from under the copy, so the refusal
 /// comes before anything moves. A hold left by a restore that died refuses nothing, or the
 /// next attempt would wait a day.
+///
+/// `at` is the node holding the volume the restore will write, when it writes one: recorded
+/// before anything stops, so the next attempt finds it with no task left to ask.
 pub async fn stop_for_restore(
     o: &dyn Orchestrator,
     state: &State,
     services: &[(String, u64)],
     why: &str,
+    at: Option<&str>,
 ) -> Result<(), NotStopped> {
     for (s, _) in services {
         let held = state
@@ -940,6 +979,15 @@ pub async fn stop_for_restore(
                  if none is running, restarting hlb-privd gives it back"
             )));
         }
+    }
+    if let Some(node) = at {
+        let names: Vec<String> = services.iter().map(|(s, _)| s.clone()).collect();
+        let held = state.hold_services(services, why, HOLD_SECS).await;
+        let noted = match held {
+            Ok(()) => state.set_hold_node(&names, node).await,
+            Err(e) => Err(e),
+        };
+        noted.map_err(|e| NotStopped::Failed(format!("holding services stopped: {e}")))?;
     }
     if let Err(e) = stop(o, state, services, why).await {
         return Err(NotStopped::Failed(match start(o, state, services).await {
