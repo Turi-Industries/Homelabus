@@ -2,17 +2,22 @@
 #
 # Goal 2, to its end: the house is gone, a bare machine and the emergency kit are left.
 # Everything the kit says, then every app of the lab started on its restored copy and asked
-# whether it holds what its manifest promises. One row of docs/measures.tsv:
+# whether it holds what its manifest promises. Two rows of docs/measures.tsv:
 #
 #   recovery-started   "<running with its assertions read good> of <apps holding data>"
+#   recovery-content   what the house's tables and volumes held that the new machine holds
+#
+# 🔴 An assertion reads an app's settings: a database restored empty passes every one of them.
+# So the house is read first (`witness.sh`), then a pass taken, so what was read is in it. A
+# table with rows must have rows after, not as many: an app restarted cleans its sessions.
 #
 # ⚠️ Each restore backs up what it overwrites first, so `rest` receives a small copy of each
 # empty volume, tagged `kind:pre-restore`: no restore takes one unless named. The daemon is
 # never run: no pass writes to a destination, and no app's job runs.
 #
-# Needs the lab, its lease through the session's hook, a pass taken by a build that copies
-# the state at the end of a pass (0.4.6), or the newest pass is refused, and deb1 up: `rest`
-# lives there. The VM takes 8 GB, so deb2 goes down, and it cannot reach deb1 or deb2 but for
+# Needs the lab, its lease through the session's hook, a build that copies the state at the
+# end of a pass (0.4.6), or the newest pass is refused, and deb1 up: `rest` lives there. The
+# VM takes 8 GB, so deb2 goes down, and it cannot reach deb1 or deb2 but for
 # `rest`: what comes back depends on nothing of the house.
 #
 # 🔴 deb1 is paused first, and stays so: with deb2 down Swarm moves its services onto deb1,
@@ -56,6 +61,16 @@ clean() {
 trap clean EXIT
 
 lab test ! -e "/vms/$vm" || { echo "/vms/$vm exists: an earlier drill's" >&2; trap - EXIT; exit 1; }
+
+# What the house holds, then the pass that copies it ---------------------------------------
+house=$(mktemp)
+after=$(mktemp)
+for node in deb1 deb2; do
+    lab /lab/vm.sh ssh "$node" 'bash -s -- $(docker volume ls -q)' <scripts/drills/witness.sh >>"$house"
+done
+deb1 "cd /root; HLB_STATE=/var/lib/homelabus/hlb.db HLB_MASTER_KEY=/root/hlb-master.key \
+    $hlb_on_deb1 backup run --force" | tail -1
+
 deb1 'docker node update --availability pause deb1' >/dev/null
 lab /lab/vm.sh ssh deb2 systemctl poweroff 2>/dev/null || true
 lab /lab/vm.sh up "$vm" 13 debian-12 8192 4
@@ -165,6 +180,7 @@ restore_one() {
     local out
     out=\$(/root/hlb backup restore "\$@" --from rest --apply 2>&1)
     echo "\$out" | quiet | grep -E '^✓ .* restored|^🔴'
+    sed -nE 's/^✓ ([^ ]+) restored.*/\1/p' <<<"\$out" >> /root/d/restored
     grep -q '^✓ .* restored' <<<"\$out" || unrestored="\$unrestored \$1"
 }
 
@@ -221,7 +237,35 @@ read -r _ good held < <(on 'grep "^RESULT" /root/d/recover.log')
 ((held > 0)) || { echo "no app with data was recovered" >&2; exit 1; }
 
 echo "hlb $version: $good of $held started on their restored copy"
+
+# What came back ---------------------------------------------------------------------------
+# A volume is judged only if restored here: the house holds caches no pass takes. A node's
+# leftovers are the larger of the two, and read the same way: a volume holding files.
+restored=$(on 'sort -u /root/d/restored' | tr '\n' ' ')
+on "bash -s -- $restored" <scripts/drills/witness.sh >"$after"
+read -r tables volumes < <(awk -v restored="$restored" '
+    BEGIN { n = split(restored, r, " "); for (i = 1; i <= n; i++) back[r[i]] = 1 }
+    NR == FNR { if ($3 > held[$1 " " $2]) held[$1 " " $2] = $3; next }
+    { now[$1 " " $2] = $3 }
+    END {
+        for (k in held) {
+            if (held[k] == 0) continue
+            split(k, w, " ")
+            if (w[1] == "volume" && !(w[2] in back)) continue
+            total[w[1]]++
+            if (now[k] > 0) kept[w[1]]++
+            else print "LOST " k " held " held[k] > "/dev/stderr"
+        }
+        printf "%d/%d %d/%d\n", kept["table"], total["table"], kept["volume"], total["volume"]
+    }' "$house" "$after")
+rm -f "$house" "$after"
+# 🔴 Nothing read is not "0 of 0": a reader broken on both sides would pass as nothing lost.
+[[ $tables != */0 && $volumes != */0 ]] || { echo "the house read as holding nothing" >&2; exit 1; }
+content="${tables%/*} of ${tables#*/} tables and ${volumes%/*} of ${volumes#*/} volumes"
+echo "hlb $version: $content holding data still hold it"
 if ((record)); then
     scripts/measure.sh recovery-started "$good of $held" "$version" \
         "a bare VM, the kit and rest alone; each volume and bucket said restored, its services up, every assertion it declares read good"
+    scripts/measure.sh recovery-content "$content" "$version" \
+        "read on the house before the pass, then on the bare VM: each still holding rows or files"
 fi
