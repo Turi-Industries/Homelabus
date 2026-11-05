@@ -146,9 +146,10 @@ during an outage.
   `system.nfs4_acl` where the share's filesystem has ACLs (ext4, XFS) and refuses to remove it;
   restic 0.19.1 removes each attribute the snapshot lacks, so it exited 1 after writing every
   file. Both restores pass `--exclude-xattr` (`restic::NFS4_ACL`), found on a share of ext4:
-  the lab's ZFS has none, and no drill had restored one. ⚠️ A restore stopped halfway leaves
-  an NFS app at 0 replicas with no pin, and a second is refused ("runs nowhere") until
-  `docker service scale` starts it.
+  the lab's ZFS has none, and no drill had restored one. A restore stopped halfway leaves an
+  NFS app at 0 replicas with no pin: the hold records the volume's node before anything stops
+  (`service_holds.node`), and `place_of` reads it last. Never "here" without it: a node lacking
+  the volume creates an empty local one, and the restore lands in that.
 - **The copy a restore takes first is never "the latest".** It is tagged
   `kind:pre-restore`; taken as the default, a second restore would bring back the very
   data the first replaced. Only its id restores it. ⚠️ `kind:pre-update` is what every

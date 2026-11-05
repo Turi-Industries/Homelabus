@@ -1172,6 +1172,28 @@ impl State {
             .collect()
     }
 
+    /// Records the node whose volume a restore is about to write under `services`.
+    pub async fn set_hold_node(&self, services: &[String], node: &str) -> Result<()> {
+        for s in services {
+            sqlx::query("UPDATE service_holds SET node = ?2 WHERE service = ?1")
+                .bind(s)
+                .bind(node)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The node a hold on `service` recorded, lapsed or not: a restore that stopped halfway
+    /// keeps the service down past its hold, and is what asks.
+    pub async fn hold_node(&self, service: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT node FROM service_holds WHERE service = ?1")
+            .bind(service)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| r.try_get("node").ok()).flatten())
+    }
+
     pub async fn release_services(&self, services: &[String]) -> Result<()> {
         for s in services {
             sqlx::query("DELETE FROM service_holds WHERE service = ?1")

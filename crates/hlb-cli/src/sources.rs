@@ -25,6 +25,10 @@ pub async fn catalog_with_sources(cli: &Cli, state: &State) -> Result<Catalog> {
                 "⚠️  catalog source \"{}\" ({}) left out: {e}",
                 src.name, src.directory
             );
+            // Its cache sits beside the state, in no backup: on a restored house it is gone.
+            if src.signed.is_some() {
+                eprintln!("    hlb catalog source fetch {} reads it again", src.name);
+            }
         }
     }
     Ok(c)

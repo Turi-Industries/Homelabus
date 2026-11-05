@@ -87,7 +87,7 @@ export HLB_STATE=$state HLB_MASTER_KEY=$key
 export DEBIAN_FRONTEND=noninteractive
 cd /root/d
 
-quiet() { grep -vE '^ *\$|does not resolve|^Run .docker|catalog source' | cut -c1-200; }
+quiet() { grep -vE '^ *\$|does not resolve|^Run .docker' | cut -c1-200; }
 
 apt-get -qq update >/dev/null 2>&1
 apt-get -qq install -y nftables restic nfs-kernel-server >/dev/null 2>&1
@@ -110,6 +110,7 @@ RESTIC_PASSWORD_FILE=/root/d/restic-pw restic -r rest:http://10.77.0.11:8000/ \\
 /root/hlb cluster init --no-mesh --advertise-addr $ip --apply 2>&1 | tail -2
 /root/hlb node tier $vm --set heavy --apply 2>&1 | tail -1
 /root/hlb config exposure --node $vm --apply 2>&1 | tail -1
+/root/hlb catalog source fetch 2>&1 | tail -1
 
 # Served as \`hlb storage export\` serves it: the lab's share is on deb2, out of reach.
 install -d /etc/exports.d

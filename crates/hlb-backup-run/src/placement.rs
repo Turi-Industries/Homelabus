@@ -41,7 +41,7 @@ pub enum Place {
 /// The service a volume belongs to: the longest of the app's services its name starts
 /// with (`immich-machine-learning-cache` is the companion's, not `immich`'s). A volume
 /// of another app the app reads (`owner:`) is read where the app runs.
-fn owner<'a>(volume: &str, services: &'a [String]) -> &'a str {
+pub(crate) fn owner<'a>(volume: &str, services: &'a [String]) -> &'a str {
     services
         .iter()
         .filter(|s| volume.starts_with(&format!("{s}-")))
