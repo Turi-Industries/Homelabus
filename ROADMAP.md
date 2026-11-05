@@ -2363,11 +2363,10 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
   An app with a volume and a database was updated with its database as old as the last
   pass, across whatever migration the image runs, and one holding only a database
   (Roundcube) was refused for ever, "no known volume". The copy dumps each database now.
-- **An update's prior copy still takes a SQLite database live** — read in the code on
-  2026-11-05. The pass snapshots it with `VACUUM INTO`; the copy takes the volume as restic
-  reads it, and `restore::sqlite_after` finds no snapshot of that pass to put back. Five
-  manifests are concerned: PocketID, Jellyfin, Grafana, ntfy, CrowdSec (Termix stops for its
-  copy). A bucket is not in that copy either: Fluxer's objects are as old as the last pass.
+- ✅ **An update's prior copy took a SQLite database live and no bucket** — read in the code
+  and fixed 2026-11-05. A rollback of PocketID, Jellyfin, Grafana, ntfy or CrowdSec got what
+  restic read of the live files, and Fluxer's objects were as old as the last pass. The copy
+  stops what writes SQLite and reads every bucket, or refuses the update.
 - ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
   and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
   10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration

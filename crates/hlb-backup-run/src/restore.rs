@@ -160,6 +160,11 @@ fn pick_where<'a>(
     picked
 }
 
+/// Was `s` copied with what writes it stopped? Then a SQLite database in it opens as it is.
+pub fn copied_stopped(s: &Snapshot) -> bool {
+    s.tags.iter().any(|t| t == crate::STOPPED_TAG)
+}
+
 /// The pass that took `s`: its [`crate::PASS_TAG`] tag, whole.
 fn pass_of(s: &Snapshot) -> Option<&str> {
     s.tags
@@ -694,7 +699,7 @@ impl Restore<'_> {
     ///
     /// ⚠️ The app must still be stopped. A database with no consistent snapshot of that
     /// pass — a copy taken before an update or a restore, a pass before 2026-10-21 that
-    /// tagged none — stays as restic copied it.
+    /// tagged none — stays as restic copied it, which [`copied_stopped`] says of a copy.
     pub async fn sqlite_after(
         &self,
         app: &str,

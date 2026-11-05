@@ -832,6 +832,133 @@ async fn a_volume_declared_copied_stopped_is_never_copied_while_its_service_runs
     }
 }
 
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped() {
+    // 🔴 A pass takes such a database by `VACUUM INTO`, and a restore puts that back by its
+    // `pass:` tag. An update's copy carries none, so what restic read of the live file was
+    // all a rollback had: three files read one after another while the app wrote.
+    let dir = tempfile::tempdir().expect("tmp");
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+
+    let host = tempfile::tempdir().expect("volume dir");
+    let (data, repo) = ("hlb-copy-sqlite", "hlb-copy-sqlite-repo");
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+    }
+    let device = format!("device={}", host.path().display());
+    assert!(docker(&[
+        "volume",
+        "create",
+        "--driver",
+        "local",
+        "--opt",
+        "type=none",
+        "--opt",
+        "o=bind",
+        "--opt",
+        &device,
+        data,
+    ])
+    .status
+    .success());
+    docker(&["volume", "create", repo]);
+    std::fs::write(host.path().join("app.db"), "SQLite format 3\0").expect("database");
+
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: mail }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n  requires:\n    \
+         - { kind: storage, name: data, path: /data, sqlite: true }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("mail", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume("mail", data, &host.path().display().to_string(), true, true)
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+
+    let mail = Mail {
+        here: None,
+        volume: host.path().to_path_buf(),
+        replicas: std::sync::Mutex::new(1),
+        scaled: std::sync::Mutex::new(Vec::new()),
+    };
+    let admins = hlb_backup_run::Admins {
+        postgres: None,
+        mariadb: None,
+    };
+    let id =
+        hlb_backup_run::provider_for_update(&state, &vault, "bridge", admins, None, None, "mail")
+            .await
+            .expect("read")
+            .expect("a provider")
+            .copy(Some(&mail), "mail")
+            .await
+            .expect("the copy");
+
+    assert_eq!(
+        *mail.scaled.lock().unwrap(),
+        [0, 1],
+        "stopped, then started"
+    );
+    assert_eq!(state.held("mail").await.expect("hold"), None, "released");
+    assert!(
+        state
+            .snapshots_taken("mail")
+            .await
+            .expect("read")
+            .contains(&id),
+        "a copy not recorded is one the restore refuses"
+    );
+    let password = hlb_backup_run::restic_password(&state, &vault)
+        .await
+        .expect("pw");
+    let ls = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{repo}:/repo"),
+        "-e",
+        &format!("RESTIC_PASSWORD={password}"),
+        "restic/restic:latest",
+        "-r",
+        "/repo",
+        "ls",
+        &id,
+    ]);
+    let out = String::from_utf8_lossy(&ls.stdout);
+    assert!(
+        out.contains(&format!("/donnees/{data}/{STOPPED}")),
+        "taken while it ran: {out}"
+    );
+    // The restore says nothing of a live copy: this one is not.
+    let source = hlb_backup_run::restore::Restore {
+        state: &state,
+        vault: &vault,
+        fallback_repo: None,
+        network: "bridge",
+        orchestrator: None,
+    }
+    .find("mail", data, None, None)
+    .await
+    .expect("the copy");
+    assert_eq!(source.snapshot.id, id);
+    assert!(hlb_backup_run::restore::copied_stopped(&source.snapshot));
+
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+    }
+}
+
 /// Removes what the PostgreSQL copy test made, however it ends.
 struct PgCleanup;
 

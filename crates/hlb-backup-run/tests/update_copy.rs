@@ -164,7 +164,7 @@ spec:
         postgres: Some(&admin),
         mariadb: None,
     };
-    let copy = provider_for_update(&state, &vault, NETWORK, admins, None, "chat")
+    let copy = provider_for_update(&state, &vault, NETWORK, admins, None, None, "chat")
         .await
         .expect("read")
         .expect("a provider")

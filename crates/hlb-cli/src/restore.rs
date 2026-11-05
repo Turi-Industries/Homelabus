@@ -204,6 +204,8 @@ pub async fn run(
             // volume, and pairs it by the pass's tag, so a volume without one gets nothing.
             match restore.sqlite_after(app, &volume, &place, &source).await {
                 Ok(back) if back.is_empty() && !sqlite => {}
+                // Taken for an update, its service stopped: nothing to put back.
+                Ok(back) if back.is_empty() && restore::copied_stopped(snap) => {}
                 Ok(back) if back.is_empty() => println!(
                     "  ⚠️ no consistent snapshot of its SQLite databases from that pass: \
                          they are as restic copied them, live"

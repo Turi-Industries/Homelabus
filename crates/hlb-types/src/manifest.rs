@@ -748,6 +748,26 @@ impl Spec {
             )
     }
 
+    /// The service of `app` that writes `volume`, named as the resolver names volumes: the
+    /// app's own, or a companion's. `None`: no volume of this manifest, another app's
+    /// mounted here among them, since that one is its owner's to write.
+    pub fn service_of_volume(&self, app: &str, volume: &str) -> Option<String> {
+        let own = self.requires.iter().any(|c| {
+            matches!(c, crate::Capability::Storage { name, owner: None, .. }
+                if format!("{app}-{name}") == volume)
+        });
+        if own {
+            return Some(app.to_string());
+        }
+        self.companions.iter().find_map(|c| {
+            let service = c.service(app);
+            c.storage
+                .iter()
+                .any(|v| format!("{service}-{}", v.name) == volume)
+                .then_some(service)
+        })
+    }
+
     /// The services of `app` to stop while its volumes are copied: each one writing a
     /// volume declared `copy: stopped` — the app's own, a companion's.
     pub fn stopped_for_copy(&self, app: &str) -> Vec<String> {
