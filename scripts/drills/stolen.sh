@@ -26,7 +26,7 @@ cd "$(git rev-parse --show-toplevel)"
 record=1
 [[ ${1:-} == --no-record ]] && record=0
 
-hlb_on_deb1=${LAB_HLB:-/root/lab-046/hlb}
+hlb_on_deb1=${LAB_HLB:-/root/lab-047/hlb}
 enc2=10.77.0.19
 enc3=10.77.0.17
 wait_closed=120
