@@ -68,8 +68,11 @@ fi
 # false alarms on its first run (2026-10-27).
 # Proves the packaging on a CI runner, never a house's own data: the row after it does.
 quality=$(curl -fsS -m 10 https://turi-industries.github.io/homelabus-catalog/quality-v1.json 2>/dev/null |
-    jq -r '[.apps[].last] | "\(map(select(.restore == "passed")) | length) of \(length), on hlb \(map(.hlb) | max), newest \(map(.date) | max)"' 2>/dev/null)
-row "2 never lose" "apps whose restore passed in the catalog's CI" "${quality:-unknown (no network, or no jq)}" "every app with data, each week"
+    # 🔴 Not run with the cycle carried on past it is an app keeping nothing (LibreSpeed), which
+    # read as a failure: "12 of 13" sent a reader looking for a broken app. Not run because a
+    # step before it failed still counts against: there the cycle stops, uninstall unrun.
+    jq -r '[.apps[].last | select((.restore == "notRun" and .uninstall == "passed") | not)] | "\(map(select(.restore == "passed")) | length) of \(length), on hlb \(map(.hlb) | max), newest \(map(.date) | max)"' 2>/dev/null)
+row "2 never lose" "apps holding data whose restore passed in the catalog's CI" "${quality:-unknown (no network, or no jq)}" "every app with data, each week"
 restores=$(measured restores-read-back)
 row "2 never lose" "apps whose backups were read back and read good on the lab in the last 30 days: restored and counted, never started" "${restores:-UNMEASURED — probe: \`scripts/drills/restores.sh\`}" "every app with data, weekly, alerting when one fails"
 started=$(measured recovery-started)
