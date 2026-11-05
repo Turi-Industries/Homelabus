@@ -2354,6 +2354,16 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
+- **A node's reboot can leave a pinned service down** — seen on the lab 2026-11-05. deb2 off, its
+  free services landed on deb1 and stayed, Swarm rebalancing nothing, and Stalwart, pinned to
+  deb1 by its data, stayed Pending on "insufficient resources" until
+  `docker service update --force` moved Fluxer's two largest back. What the house says about
+  it, and what a person is told to do, has not been looked at.
+- **enc3 held 16 minutes in its initrd, once** — the stolen drill, 2026-11-05: Tangs active, it
+  opened only at 15:40:53 of a boot begun at 15:24, about when deb2 powered off for another
+  drill, so a connection to deb2's Tang may have hung the unlock. Not seen again: it opened in
+  22 s on the next run. A timing guess, unproven; if it recurs, read the initrd's clevis from
+  `ssh -p 2222` before anything is shut down.
 - ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
   2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
   nowhere". The hold records the volume's node before anything stops.
