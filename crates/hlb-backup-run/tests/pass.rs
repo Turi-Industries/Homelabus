@@ -116,6 +116,135 @@ async fn a_pass_sends_volumes_and_state_to_the_declared_destination() {
     }
 }
 
+// After a disaster the state comes back through the kit's own restic command, and a restore
+// takes only the snapshots that state recorded. Read from a state copied before the volumes,
+// the newest pass was "a backup someone else wrote": on the lab, 12 hours lost by default.
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn the_state_a_pass_leaves_knows_what_that_pass_took() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let state_path = dir.path().join("hlb.db");
+    let state = hlb_state::State::open(&state_path).await.expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+
+    let (data, repo) = ("hlb-pass-closing-data", "hlb-pass-closing-repo");
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+        docker(&["volume", "create", v]);
+    }
+    let w = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{data}:/d"),
+        "alpine:3",
+        "sh",
+        "-c",
+        "echo precious > /d/file.txt",
+    ]);
+    assert!(w.status.success());
+
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: demo }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("demo", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .add_volume("demo", data, "/unused", true, false)
+        .await
+        .expect("volume");
+    state
+        .upsert_destination("nas", repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+
+    let pass = |force| Pass {
+        state: &state,
+        vault: &vault,
+        state_path: &state_path,
+        fallback_repo: None,
+        network: "bridge",
+        postgres_admin: None,
+        mariadb_admin: None,
+        schedule: hlb_backup::Schedule::default(),
+        force,
+        only: None,
+        orchestrator: None,
+        s3_endpoint: None,
+    };
+    let state_copies = |events: &[Event]| {
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::Done { what, .. } if what == "hlb state"))
+            .count()
+    };
+
+    let mut events = Vec::new();
+    let sum = pass(true).run(&mut |e| events.push(e)).await.expect("pass");
+    assert_eq!(sum.failed, 0, "{events:?}");
+    let volumes = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Done { what, snapshot, .. } if what == "demo volumes" => Some(snapshot.clone()),
+            _ => None,
+        })
+        .expect("the volume's snapshot");
+
+    let password = hlb_backup_run::restic_password(&state, &vault)
+        .await
+        .expect("pw");
+    let dump = std::process::Command::new("docker")
+        .env("RESTIC_PASSWORD", &password)
+        .args([
+            "run",
+            "--rm",
+            "-e",
+            "RESTIC_PASSWORD",
+            "-v",
+            &format!("{repo}:/repo"),
+            "restic/restic:latest",
+            "-r",
+            "/repo",
+            "dump",
+            "latest",
+            "--tag",
+            "app:hlb,db:state",
+            "/staging/hlb-state.snapshot",
+        ])
+        .output()
+        .expect("docker reachable");
+    assert!(
+        dump.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dump.stderr)
+    );
+    let back = dir.path().join("back.db");
+    std::fs::write(&back, &dump.stdout).expect("write");
+    let restored = hlb_state::State::open(&back).await.expect("restored state");
+    assert!(
+        restored
+            .snapshots_taken("demo")
+            .await
+            .expect("read")
+            .contains(&volumes),
+        "the state restic hands back does not know the pass's own snapshot {volumes}"
+    );
+
+    // Nothing due: the first copy already knows everything, and a second would be a copy
+    // every time the daemon looks.
+    let mut quiet = Vec::new();
+    pass(false).run(&mut |e| quiet.push(e)).await.expect("pass");
+    assert_eq!(state_copies(&quiet), 1, "{quiet:?}");
+
+    for v in [data, repo] {
+        let _ = docker(&["volume", "rm", "-f", v]);
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs Docker and python3"]
 async fn a_sqlite_database_in_an_unflagged_volume_is_snapshotted_not_only_copied_live() {

@@ -200,6 +200,14 @@ during an outage.
   refusal comes before anything stops. Tagged as a pass's dump: the newest, which a restore
   takes unasked, and retention's to forget. ⚠️ Its SQLite is still copied live and its buckets
   not at all.
+- **🔴 A pass copies the state again at its end, once it took anything.** A restore takes
+  only what the state recorded (`snapshots_taken`), and the kit brings back the newest state:
+  copied first and only then, it had no row for the volumes and dumps its own pass took, and
+  after a disaster they were "a backup someone else wrote", the pass before chosen by default
+  (12 hours on the lab, 2026-11-05, `tests/pass.rs`). The first copy stays for a pass cut
+  short. ⚠️ A pass of one app (`--app`, "back up now") copies no state, and an update's copy
+  neither: until the next pass that took something, each is set aside and restored by its
+  full id.
 - **A database had no way back.** Dumps were taken, recorded and verified every night,
   and `hlb backup restore` put back volumes and buckets only: Fluxer whole could not be
   restored. `--database` drops the database and recreates it with provisioning's own
