@@ -342,6 +342,57 @@ async fn a_pass_leaves_alone_a_service_a_restore_holds() {
     );
 }
 
+// Restored under a copy, the copy's end started the app on a volume half written.
+#[tokio::test]
+async fn a_restore_leaves_alone_a_service_a_copy_holds() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let state = hlb_state::State::in_memory().await.expect("state");
+    let mail = mail_at(dir.path(), 0);
+    state
+        .hold_services(&[("mail".to_string(), 2)], "backup copy of data", 3600)
+        .await
+        .expect("hold");
+
+    let refused = hlb_backup_run::restore::stop_for_restore(
+        &mail,
+        &state,
+        &[("mail".to_string(), 0)],
+        "restore of data",
+    )
+    .await
+    .expect_err("refused");
+
+    assert!(
+        refused.message().contains("backup copy of data"),
+        "{refused:?}"
+    );
+    assert!(mail.scaled.lock().unwrap().is_empty(), "not touched");
+    assert_eq!(
+        state.held("mail").await.expect("hold").as_deref(),
+        Some("backup copy of data"),
+        "still the copy's to give back"
+    );
+}
+
+#[tokio::test]
+async fn a_restore_stops_what_nothing_holds_and_retries_after_its_own_hold() {
+    let dir = tempfile::tempdir().expect("tmp");
+    std::fs::write(dir.path().join(STOPPED), "x").expect("marker");
+    let state = hlb_state::State::in_memory().await.expect("state");
+    let mail = mail_at(dir.path(), 1);
+    let services = [("mail".to_string(), 1)];
+
+    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data")
+        .await
+        .expect("nothing holds it");
+    assert_eq!(*mail.replicas.lock().unwrap(), 0, "stopped");
+
+    // A restore that died must not lock the next one out for a day.
+    hlb_backup_run::restore::stop_for_restore(&mail, &state, &services, "restore of data")
+        .await
+        .expect("its own hold refuses nothing");
+}
+
 /// One service whose stop and start leave a trace in its volume: the copy shows which
 /// of the two it was taken during.
 struct Mail {

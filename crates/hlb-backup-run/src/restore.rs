@@ -899,6 +899,57 @@ pub async fn stop(
 /// daemon's restart interrupted from a restore someone is running.
 pub const COPY_HOLD: &str = "backup copy of ";
 
+/// Why a restore did not begin. Nothing was restored either way, and what differs is whether
+/// the services run: a copy holding them starts them itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotStopped {
+    /// A backup's copy holds a service, which was left as it is.
+    Copying(String),
+    /// A service could not be stopped, and every service was started again.
+    Failed(String),
+}
+
+impl NotStopped {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Copying(why) | Self::Failed(why) => why,
+        }
+    }
+}
+
+/// [`stop`], for a restore about to write under the services.
+///
+/// 🔴 Refused while a copy holds one: the copy's end starts it, on a volume half restored.
+/// Starting it here to undo a refusal would pull it out from under the copy, so the refusal
+/// comes before anything moves. A hold left by a restore that died refuses nothing, or the
+/// next attempt would wait a day.
+pub async fn stop_for_restore(
+    o: &dyn Orchestrator,
+    state: &State,
+    services: &[(String, u64)],
+    why: &str,
+) -> Result<(), NotStopped> {
+    for (s, _) in services {
+        let held = state
+            .held(s)
+            .await
+            .map_err(|e| NotStopped::Failed(format!("reading what holds {s}: {e}")))?;
+        if let Some(held) = held.filter(|h| h.starts_with(COPY_HOLD)) {
+            return Err(NotStopped::Copying(format!(
+                "{s} is stopped for a {held}, which starts it when it ends. Wait for that pass; \
+                 if none is running, restarting hlb-privd gives it back"
+            )));
+        }
+    }
+    if let Err(e) = stop(o, state, services, why).await {
+        return Err(NotStopped::Failed(match start(o, state, services).await {
+            Ok(()) => e,
+            Err(again) => format!("{e}; and then {again}"),
+        }));
+    }
+    Ok(())
+}
+
 /// Starts again what a backup's copy stopped and a dead process never gave back: called as
 /// the daemon starts, when no pass of its own can be running. Left to the hold's end,
 /// Stalwart was a day without mail, and with no `--reconcile-apply` for ever.
