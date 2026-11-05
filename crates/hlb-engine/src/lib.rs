@@ -2325,6 +2325,7 @@ mod tests {
                 id: "id".into(),
                 desired_replicas: 1,
                 running_replicas: 1,
+                global: false,
                 image: "img".into(),
                 update_state: Some(UpdateState::Completed),
             })

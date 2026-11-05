@@ -173,6 +173,7 @@ fn during(spec: &str, running_image: &str, state: Option<UpdateState>, running: 
             id: "id".into(),
             desired_replicas: 1,
             running_replicas: running,
+            global: false,
             image: spec.into(),
             update_state: state,
         },

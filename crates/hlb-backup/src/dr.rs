@@ -47,9 +47,10 @@ pub enum Profile {
 impl Profile {
     /// Chooses the profile from the host node's memory.
     ///
-    /// 8 GB is where the `heavy` tier starts.
+    /// Where the `heavy` tier starts: `hlb_types::swarm::HEAVY_TIER_MIN_MB`, held to it by
+    /// `the_drill_s_profile_turns_where_the_heavy_tier_starts`.
     pub fn for_memory(mb: u64) -> Self {
-        if mb >= 8192 {
+        if mb >= 7168 {
             Self::Normal
         } else {
             Self::Minimal
@@ -462,9 +463,10 @@ mod tests {
 
     #[test]
     fn the_profile_threshold_matches_the_tier_rule() {
-        // Above 8 GB the node is "heavy".
+        // What an 8 GB machine reports is "heavy".
         assert_eq!(Profile::for_memory(8192), Profile::Normal);
-        assert_eq!(Profile::for_memory(8191), Profile::Minimal);
+        assert_eq!(Profile::for_memory(7168), Profile::Normal);
+        assert_eq!(Profile::for_memory(7167), Profile::Minimal);
         assert_eq!(Profile::for_memory(4096), Profile::Minimal);
     }
 }

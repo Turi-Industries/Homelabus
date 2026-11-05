@@ -2345,25 +2345,22 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 
 ### 4. The rest, in decreasing order of interest
 
-- **What the first timed deployment found** — 2026-11-04, `scripts/drills/deploy.sh` on
-  0.4.4; the figures are in `docs/measures.tsv`. The README's three commands had never
-  worked on a bare machine.
-  - A DNS record can be attested only after an `--apply` has refused to start: the
-    preview records no plan `hlb ack` can find.
-  - `tier_for_memory` wants 8192 MB, and a VM given 4096 MB reports 3922, so a machine
-    sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
-    real one before moving the threshold.
-  - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
-- **A node's reboot can leave a pinned service down** — seen on the lab 2026-11-05. deb2 off, its
-  free services landed on deb1 and stayed, Swarm rebalancing nothing, and Stalwart, pinned to
-  deb1 by its data, stayed Pending on "insufficient resources" until
-  `docker service update --force` moved Fluxer's two largest back. What the house says about
-  it, and what a person is told to do, has not been looked at.
-- **enc3 held 16 minutes in its initrd, once** — the stolen drill, 2026-11-05: Tangs active, it
-  opened only at 15:40:53 of a boot begun at 15:24, about when deb2 powered off for another
-  drill, so a connection to deb2's Tang may have hung the unlock. Not seen again: it opened in
-  22 s on the next run. A timing guess, unproven; if it recurs, read the initrd's clevis from
-  `ssh -p 2222` before anything is shut down.
+- ✅ **What the first timed deployment found** — 2026-11-04, `scripts/drills/deploy.sh` on 0.4.4;
+  the figures are in `docs/measures.tsv`. Answered 2026-11-05: `hlb ack` attests a step before
+  the first `--apply` (`attested_ahead`), a machine reporting 7168 MB is `heavy`
+  (`HEAVY_TIER_MIN_MB`), and `hlb ps` says a global service is global.
+- ✅ **A node's reboot can leave a pinned service down** — seen on the lab 2026-11-05, answered the
+  same day. deb2 off, its free services landed on deb1 and stayed, Swarm rebalancing nothing,
+  and Stalwart, pinned to deb1 by its data, stayed Pending on "insufficient resources" until
+  `docker service update --force` moved Fluxer's two largest back. Reconciliation reads it now
+  (`Drift::NoRoom`, harm broken) and, applied, moves the largest free services a node can take.
+  Tested on fakes: Swarm's own choice of where they land has not been run on the lab.
+- **enc3 held in its initrd after power cuts** — 2026-11-05: 1004 s during the stolen drill, then
+  at least 7 minutes after a power cut, when it was cut again. That second time both Tangs answered
+  200 every 6 s, so the wait is not theirs: the first entry here blamed a Tang, wrongly. It looks
+  like the TPM's dictionary-attack lockout, whose usual recovery time is 1000 s. Not proven:
+  `tpm2_getcap properties-variable` once it opens says. If so, a real node meets it after a few
+  power cuts, and waits 17 minutes with nothing said.
 - ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
   2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
   nowhere". The hold records the volume's node before anything stops.

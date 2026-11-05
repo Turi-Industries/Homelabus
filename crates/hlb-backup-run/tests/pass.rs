@@ -675,6 +675,7 @@ impl hlb_orchestrator::Orchestrator for Mail {
             id: "id".into(),
             desired_replicas: r,
             running_replicas: r as usize,
+            global: false,
             image: "a/b:1".into(),
             update_state: None,
         })
@@ -1597,4 +1598,12 @@ async fn a_mariadb_directory_copied_while_written_restores_into_a_server_that_st
         String::from_utf8_lossy(&check.stderr)
     );
     assert!(maria_rows(MA_BACK) >= before, "the rows written before");
+}
+
+#[test]
+fn the_drill_s_profile_turns_where_the_heavy_tier_starts() {
+    use hlb_backup::dr::Profile;
+    use hlb_types::swarm::HEAVY_TIER_MIN_MB;
+    assert_eq!(Profile::for_memory(HEAVY_TIER_MIN_MB), Profile::Normal);
+    assert_eq!(Profile::for_memory(HEAVY_TIER_MIN_MB - 1), Profile::Minimal);
 }
