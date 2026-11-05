@@ -22,8 +22,9 @@
 #
 # 🔴 deb1 is paused first, and stays so: with deb2 down Swarm moves its services onto deb1,
 # whose images filled its disk (17 to 19 GB of containerd in minutes), and `rest`, on the same
-# disk, answered restores 507. Afterwards boot deb2, then
-# `docker node update --availability active deb1`.
+# disk, answered restores 507. Afterwards boot deb2, wait until `docker node ls` reads it
+# Ready, then `docker node update --availability active deb1`: active first, what ran on deb2
+# lands on deb1, and Stalwart, pinned there by its data, finds no memory left to reserve.
 #
 # Usage: scripts/drills/recovery.sh [--no-record]
 
