@@ -218,7 +218,7 @@ during an outage.
   same `pass:` tag, and this copy carries none. Not `VACUUM INTO`, which reads the file from
   the machine it runs on and refuses a volume elsewhere: stopped, the database is consistent as
   it lies, on any node, and the update is about to restart the app anyway; the copy is tagged
-  `copy:stopped`, so the restore does not warn of a live one. Which volumes hold
+  `kind:copied-stopped`, so the restore does not warn of a live one. Which volumes hold
   SQLite is the state's word (`app_volumes.sqlite`), the manifest's plus what a pass found. ⚠️ A
   volume no manifest flags, updated before any pass looked in it, is still copied live. A bucket
   Garage cannot be asked for, from here, refuses the update; it holds the objects a migration

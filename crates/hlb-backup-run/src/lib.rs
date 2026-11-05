@@ -833,7 +833,7 @@ const BACKED_UP: &str = "kind:pre-update";
 /// What an update's prior copy carries when it stopped what writes its volumes: a SQLite
 /// database in it is consistent as it lies, with no snapshot of a pass to put back. ⚠️ A
 /// stored value.
-pub const STOPPED_TAG: &str = "copy:stopped";
+pub const STOPPED_TAG: &str = "kind:copied-stopped";
 
 /// What every snapshot a pass takes carries, before the pass's id: the volume's and
 /// its databases' snapshots of one pass carry the same, and only those go together at
