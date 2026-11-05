@@ -16,7 +16,7 @@ cd "$(git rev-parse --show-toplevel)"
 record=1
 [[ ${1:-} == --no-record ]] && record=0
 
-hlb_on_deb1=${LAB_HLB:-/root/lab-045/hlb}
+hlb_on_deb1=${LAB_HLB:-/root/lab-046/hlb}
 hlb() {
     docker exec -i hlb-lab /lab/vm.sh ssh deb1 \
         "cd /root; HLB_STATE=/var/lib/homelabus/hlb.db HLB_MASTER_KEY=/root/hlb-master.key $hlb_on_deb1 $*"
