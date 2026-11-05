@@ -3,6 +3,36 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.7] — 2026-11-05
+
+Rolling back an update now has something sound to go back to. An update's prior copy stops
+what writes SQLite while it copies, so PocketID, Jellyfin, Grafana, ntfy and CrowdSec no longer
+come back from files read live, and it reads every bucket, so Fluxer's objects are no older than
+the update. The recovery drill now holds the new machine to what the house held, since an
+assertion reads settings and passes on a database restored empty: 57 of 57 tables and 14 of 14
+volumes on the lab.
+
+**Upgrading from 0.4.6:**
+
+- No migration: 0.4.6 still opens the state afterwards.
+- Updating an app that holds SQLite now stops it for the length of its copy, on top of the
+  restart the update itself causes.
+- An update is newly refused, before anything stops, for an app with a bucket and no bulky
+  destination, whose S3 key is not in the vault, or whose Garage cannot be reached from where
+  `hlb` runs. Those updates used to pass with the objects as old as the last pass.
+- A copy taken by 0.4.6 still restores as it was read: the restore warns of that, and of no
+  copy taken from here on.
+
+### Fixed
+
+- Stop what writes SQLite for an update's copy, and copy its buckets
+
+### Changed
+
+- Read what the house holds, and hold the recovered machine to it
+- Count only the apps holding data in the catalog's restore row
+- Validate the catalog with hlb 0.4.6
+
 ## [0.4.6] — 2026-11-05
 
 A bare machine, the emergency kit and one destination now bring every app of the lab back:

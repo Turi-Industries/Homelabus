@@ -1,0 +1,2465 @@
+{
+  "guide": {
+    "$defs": {
+      "ApiCall": {
+        "additionalProperties": false,
+        "description": "One request of an `api` automation.",
+        "properties": {
+          "body": {
+            "description": "JSON.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge": {
+            "description": "The body is merged (RFC 7386) over what a GET of the same path answers, and the\nresult sent: one setting among many an app takes back whole. 🔴 Jellyfin's\nplugin configuration is one document — its SSO provider and each account's link\nto its PocketID identity inside — and a body sent alone resets the rest.",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "verb": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verb",
+          "path"
+        ],
+        "type": "object"
+      },
+      "ApiProbe": {
+        "additionalProperties": false,
+        "description": "A GET whose JSON says an `api` automation's work is there already.",
+        "properties": {
+          "equals": {
+            "description": "The value it holds once done, written as JSON: `true`, `\"done\"`.",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pointer": {
+            "description": "A JSON pointer into the answer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "pointer",
+          "equals"
+        ],
+        "type": "object"
+      },
+      "Automation": {
+        "description": "A way of doing the step without human intervention.\n\nOrder matters: the ladder is walked down until something works. Environment\nvariables first - declarative and checkable - and the web interface dead last.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Level 1: environment variables. The most reliable.",
+            "properties": {
+              "method": {
+                "const": "env",
+                "type": "string"
+              },
+              "vars": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "method",
+              "vars"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Level 2: a command inside the container (`gitea admin`, `occ`…).",
+            "properties": {
+              "command": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "method": {
+                "const": "exec",
+                "type": "string"
+              },
+              "probe": {
+                "description": "Detection command, so that what is already done is not replayed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "probeMatches": {
+                "description": "Pattern expected in `probe`'s output when it is already done.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "service": {
+                "description": "A companion's container, by its name under `companions`; absent, the app's\nown. Fluxer rebuilds its search from its api, not from the proxy in front.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "method",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Level 3: the app's own API, by its service name on the overlay — calls made in\norder, since a first-run wizard is several. A body takes the binding tokens and\nthe generated secrets (`{{ secret.admin-password }}`) at run time, like `env`:\nnever in the plan.",
+            "properties": {
+              "calls": {
+                "items": {
+                  "$ref": "#/$defs/ApiCall"
+                },
+                "type": "array"
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Sent with the probe and every call.",
+                "type": "object"
+              },
+              "method": {
+                "const": "api",
+                "type": "string"
+              },
+              "port": {
+                "description": "Absent: the first ingress's port.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "probe": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ApiProbe"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A GET saying it is done already, so a step is never replayed — most\nfirst-run endpoints refuse a second call, or worse, accept it."
+              },
+              "signIn": {
+                "description": "A recovery sign-in, by its `secret`, made by its proof before the probe —\nfor an app whose settings only its administrator writes: Jellyfin's SSO\nplugin. The string its proof's `pointer` reaches is `{{ token }}` in\n`headers`, and nowhere else.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "method",
+              "calls"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "One write in the app's own PostgreSQL database, its values BOUND as parameters\n(`$1`, `$2`… for `params`, in order), never written into the statement — for\nwhat only a command line writes otherwise: an argument is readable in `ps` by\nevery account of the node, and Gitea's CLI takes its sign-in secret no other way.\n`params` take the binding tokens and generated secrets at run time, like a body.",
+            "properties": {
+              "method": {
+                "const": "sql",
+                "type": "string"
+              },
+              "params": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "probe": {
+                "description": "A query on the same parameters whose first column is `true` once the write\nis there: read before (nothing is written twice) and after (it took).",
+                "type": "string"
+              },
+              "restart": {
+                "default": false,
+                "description": "Restart the app after writing, for one that reads the value at its start\nonly.",
+                "type": "boolean"
+              },
+              "statement": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "method",
+              "statement",
+              "params",
+              "probe"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GuideStep": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Steps that must be handled before this one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "automate": {
+            "description": "Automation attempts, tried in order.",
+            "items": {
+              "$ref": "#/$defs/Automation"
+            },
+            "type": "array"
+          },
+          "body": {
+            "default": "",
+            "description": "Text shown to the user. `{{ domain }}` templates are resolved in it.",
+            "type": "string"
+          },
+          "deeplink": {
+            "description": "A direct link to the page in question - not \"go into the settings\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "phase": {
+            "$ref": "#/$defs/Phase",
+            "default": "post-install"
+          },
+          "recheck": {
+            "description": "Periodic re-check, e.g. \"24h\" or \"7d\". Catches drift: a deleted DNS record, a\nhome router that loses its NAT rule after a firmware update. The controller's\nnightly pass checks again every handled step this old, and opens it again when\nits check now fails (`hlb_engine::recheck_guides`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/$defs/Severity",
+            "default": "required"
+          },
+          "title": {
+            "type": "string"
+          },
+          "verify": {
+            "$ref": "#/$defs/Verify",
+            "default": {
+              "type": "attest"
+            },
+            "description": "How to observe that it is done."
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "JsonValue": {
+        "additionalProperties": false,
+        "description": "A value an answer's JSON holds.",
+        "properties": {
+          "equals": {
+            "description": "The value it holds once done, written as JSON: `true`, `\"done\"`.",
+            "type": "string"
+          },
+          "pointer": {
+            "description": "A JSON pointer into the answer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pointer",
+          "equals"
+        ],
+        "type": "object"
+      },
+      "Phase": {
+        "oneOf": [
+          {
+            "enum": [
+              "post-install"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "pre-install",
+            "description": "A prerequisite: no point deploying without it.",
+            "type": "string"
+          },
+          {
+            "const": "first-login",
+            "description": "On first opening the app.",
+            "type": "string"
+          },
+          {
+            "const": "maintenance",
+            "description": "Recurring.",
+            "type": "string"
+          },
+          {
+            "const": "post-upgrade",
+            "description": "Only when crossing a version boundary.",
+            "type": "string"
+          },
+          {
+            "const": "post-restore",
+            "description": "After a restore of the app's data, once it runs again: run by `hlb backup\nrestore`, never by an install — a search index rebuilt from the database, the\nfiles restored checked against their blocks.",
+            "type": "string"
+          }
+        ]
+      },
+      "Severity": {
+        "oneOf": [
+          {
+            "enum": [
+              "recommended"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "blocking",
+            "description": "The install does not start until this is done.",
+            "type": "string"
+          },
+          {
+            "const": "required",
+            "description": "The app is deployed but marked incomplete.",
+            "type": "string"
+          },
+          {
+            "const": "tip",
+            "description": "A tip, which a person may dismiss.",
+            "type": "string"
+          }
+        ]
+      },
+      "Verify": {
+        "description": "How to establish that a step is done.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "🔴 No check is possible: the user attests, and the UI must say so.\n\nA deliberate default: a step with no declared `verify` is **not** treated as\nverifiable. Better to display \"not verified\" than to let someone believe.",
+            "properties": {
+              "type": {
+                "const": "attest",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A DNS record resolves.",
+            "properties": {
+              "expectContains": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "record": {
+                "type": "string"
+              },
+              "type": {
+                "const": "dns",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "record"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A URL answers with one of the expected codes — and, with `expectJson`, says in\nits body what the step changed. Its first answer is judged: a redirect is not\nfollowed, since a sign-in page answering 200 says nothing of the app behind it.",
+            "properties": {
+              "expectJson": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/JsonValue"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A value in the JSON answer. A post-install step expecting a 2xx needs one:\nan app answering is what its install already established, not that an\nadministrator exists."
+              },
+              "expectStatus": {
+                "default": [
+                  200,
+                  204
+                ],
+                "items": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "http",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A port is reachable.",
+            "properties": {
+              "target": {
+                "type": "string"
+              },
+              "type": {
+                "const": "tcp",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A command inside the container.",
+            "properties": {
+              "command": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "expectContains": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "const": "exec",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "command"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "An app's `guide.yaml` file.",
+    "properties": {
+      "steps": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/GuideStep"
+        },
+        "type": "array"
+      }
+    },
+    "title": "Guide",
+    "type": "object"
+  },
+  "manifest": {
+    "$defs": {
+      "Access": {
+        "additionalProperties": false,
+        "description": "An app's access, in its manifest's `spec.access`.",
+        "properties": {
+          "accounts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Accounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app's own accounts, each enabled while its person holds a role let in."
+          },
+          "admins": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Admins"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who administers the app: the roles at this level or above, when allowed in.\nListed when such a role is given to someone — what the gesture really opens."
+          },
+          "claims": {
+            "additionalProperties": {
+              "$ref": "#/$defs/Claim"
+            },
+            "description": "Custom claims written on each allowed role's group, by name.",
+            "type": "object"
+          },
+          "floor": {
+            "$ref": "#/$defs/Role",
+            "default": "user",
+            "description": "The lowest permission level a role must hold to be allowed in. Termix holds\nevery machine's SSH access: `admin`. A role below it is never allowed, whatever\nsomeone asks for."
+          },
+          "members": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Members"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Membership Homelabus keeps inside the app itself."
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Nodes"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cluster's machines, which Homelabus keeps inside the app."
+          },
+          "quota": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Quota"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A storage quota, set per role and per person."
+          }
+        },
+        "type": "object"
+      },
+      "AccountWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "verb": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verb",
+          "path"
+        ],
+        "type": "object"
+      },
+      "Accounts": {
+        "additionalProperties": false,
+        "description": "The accounts an app keeps for the people who signed in to it through PocketID.\n\n🔴 An app that makes an account at a first sign-in keeps it after: PocketID's\nrestriction stops the next sign-in, while the tokens its TV and phone already hold\nkeep working — Jellyfin's, until the account is disabled. So each account the app\nlinks to a PocketID identity is disabled once that person holds no role let in —\nor is no longer in Homelabus at all — and enabled again once they do. An account\nlinked to nobody (the recovery administrator) is never touched.",
+        "properties": {
+          "apply": {
+            "$ref": "#/$defs/AccountsApply"
+          }
+        },
+        "required": [
+          "apply"
+        ],
+        "type": "object"
+      },
+      "AccountsApply": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Through the app's API, at its first ingress's port, signed in as a recovery\nsign-in — never Basic: `headers` carry the token its proof reads,\n`{{ token }}`.",
+            "properties": {
+              "disabled": {
+                "description": "A JSON pointer inside that object: `true` while the account is disabled.",
+                "type": "string"
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "links": {
+                "$ref": "#/$defs/JsonAt",
+                "description": "A GET whose JSON at `pointer` is one object: PocketID id → the app's\naccount id."
+              },
+              "read": {
+                "$ref": "#/$defs/JsonAt",
+                "description": "A GET of one account, `{{ account }}` its id, the object at `pointer`\nholding `disabled`."
+              },
+              "signIn": {
+                "type": "string"
+              },
+              "type": {
+                "const": "http",
+                "type": "string"
+              },
+              "write": {
+                "$ref": "#/$defs/AccountWrite",
+                "description": "🔴 Sent the WHOLE object read, `disabled` set: Jellyfin's\n`POST /Users/{id}/Policy` resets every field it is not sent."
+              }
+            },
+            "required": [
+              "type",
+              "signIn",
+              "headers",
+              "links",
+              "read",
+              "disabled",
+              "write"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Admins": {
+        "additionalProperties": false,
+        "properties": {
+          "apply": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AdminsApply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For an app no claim makes anyone its administrator: what makes a person one, and\nwhat unmakes them — kept in step with their role, person by person."
+          },
+          "level": {
+            "$ref": "#/$defs/Role"
+          },
+          "means": {
+            "description": "What administering the app gives, as a phrase: \"every repository and every\naccount\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "means"
+        ],
+        "type": "object"
+      },
+      "AdminsApply": {
+        "additionalProperties": false,
+        "description": "Fluxer's administrators are an ACL on the account, which no claim sets: the commands\nthat grant and take it back, run with `{{ person.sub }}` (their PocketID id). Each\nexits 0 once done and [`ABSENT_EXIT`] when the person has no account in the app yet\n— retried, not failed. Never through a shell.",
+        "properties": {
+          "grant": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "revoke": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "service": {
+            "description": "The companion they run in, by name; the app's own service when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "grant",
+          "revoke"
+        ],
+        "type": "object"
+      },
+      "ApiVersion": {
+        "enum": [
+          "hlb/v1"
+        ],
+        "type": "string"
+      },
+      "Assertion": {
+        "additionalProperties": false,
+        "description": "One property of the running app.",
+        "properties": {
+          "check": {
+            "$ref": "#/$defs/Check"
+          },
+          "fix": {
+            "description": "What a person does when it does not hold, said beside it. A door reported open\nwith no way given to close it stays open: Seafile's default administrator was\nreported on the lab for nine days.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "holds": {
+            "description": "What is true while it passes, as a sentence: \"nobody signs up without an\ninvitation\". Said as it is when it does not.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable: the last result is stored under it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "holds",
+          "check"
+        ],
+        "type": "object"
+      },
+      "AuthRoute": {
+        "additionalProperties": false,
+        "description": "A place an app checks a secret.\n\n🔴 Matched on the DECODED, cleaned path — as the app routes it: Vaultwarden takes\n`/identity/connect/%74oken` for its token endpoint and Gitea `//user/login` for its\nsign-in, and a limit on the raw path let both through.",
+        "properties": {
+          "failsWith": {
+            "description": "The status the app answers a WRONG secret with, from its own source: Vaultwarden\nsays 400, most say 401. Absent where a wrong secret looks like a success — Gitea\nanswers 200 and shows the form again —, where only the rate limit bounds it.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "paths": {
+            "description": "Exact paths, or a prefix ending in `*`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      },
+      "CacheEngine": {
+        "enum": [
+          "valkey"
+        ],
+        "type": "string"
+      },
+      "Capability": {
+        "description": "A need declared by an application.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "A dedicated database on a shared engine.",
+            "properties": {
+              "connections": {
+                "description": "The most connections the app opens to it — every process and companion\ntogether — and what its manifest caps it to.\n\n🔴 The server's limit is shared: left to their own defaults, Gitea's pool is\nunlimited, Vikunja's 100 and Roundcube's one per Apache worker (150), each\nable to take every connection alone. The catalog sums these against the\nserver's limit. Optional on read: a manifest frozen before it still loads.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "engine": {
+                "$ref": "#/$defs/DbEngine"
+              },
+              "extensions": {
+                "description": "Extensions to enable in the database (`vector`, `vchord`, `cube`...).\n\n🔴 An extension cannot be installed from SQL: it must be PRESENT in the\nserver image. Otherwise `CREATE EXTENSION` fails on \"extension is not\navailable\", which looks like a permissions problem.\n\nDeclaring them here makes the requirement visible in the catalog and lets\nthe executor fail with the remedy - which image to use - instead of letting\nthe app start against an incomplete database.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "const": "database",
+                "type": "string"
+              },
+              "name": {
+                "description": "Database name. Defaults to the app's name.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "engine"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A cache. Shared by default, dedicated when the app cannot tolerate neighbours.",
+            "properties": {
+              "dedicated": {
+                "default": false,
+                "type": "boolean"
+              },
+              "engine": {
+                "$ref": "#/$defs/CacheEngine"
+              },
+              "kind": {
+                "const": "cache",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "engine"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Single sign-on through the identity provider.",
+            "properties": {
+              "kind": {
+                "const": "sso",
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/$defs/SsoMode"
+              },
+              "redirectPaths": {
+                "default": [],
+                "description": "Callback paths, relative to the domain chosen at install time.\nNever a hard-coded URL: the domain is only known at deploy time.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "kind",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A dedicated S3 bucket on the platform's object storage.\n\n## Why this is not just another `Storage`\n\nA volume is mounted at a path; a bucket is spoken to over HTTP with access\nkeys. The app does not need to be placed near its data, and the volume stops\nbeing a placement constraint - precisely the point on a heterogeneous cluster.\n\n🔴 **Isolation per bucket AND per key**, like databases. One shared key would\ngive every app read access to every other's buckets: Immich's photos readable\nfrom the wiki, and the other way round.",
+            "properties": {
+              "backup": {
+                "default": true,
+                "description": "🔴 Is the content irreplaceable?\n\nTrue by default, as for volumes. A cache bucket declares it false - but\nforgetting must err on the side that backs up.",
+                "type": "boolean"
+              },
+              "bucket": {
+                "description": "Bucket name. Defaults to the app's name.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "expireAfterDays": {
+                "description": "Objects older than this many days are deleted by Garage itself, and an\nupload left unfinished as long is abandoned: Fluxer's `uploads` is a staging\nbucket whose files move on once a message is sent, and the rest is litter.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "const": "object-storage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Outgoing mail through the platform's mail server, on its submission port.",
+            "properties": {
+              "kind": {
+                "const": "smtp",
+                "type": "string"
+              },
+              "sender": {
+                "$ref": "#/$defs/SmtpSender",
+                "default": "app",
+                "description": "Who the mail goes out as. By default the app itself, through an account of\nits own the resolver creates."
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A mail account with its aliases.",
+            "properties": {
+              "aliases": {
+                "default": false,
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "mail-account",
+                "type": "string"
+              },
+              "quotaBytes": {
+                "default": null,
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A persistent volume.",
+            "properties": {
+              "backup": {
+                "default": true,
+                "type": "boolean"
+              },
+              "copy": {
+                "$ref": "#/$defs/VolumeCopy",
+                "description": "How the nightly pass reads it."
+              },
+              "kind": {
+                "const": "storage",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "owner": {
+                "description": "Another app's volume of this `name`, mounted here: CrowdSec reading the log\nCaddy writes. Never created nor backed up by this app — its owner does both\n— and the service runs on the node that holds it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "sqlite": {
+                "default": false,
+                "description": "A SQLite database: forces a specific backup method.",
+                "type": "boolean"
+              },
+              "tier": {
+                "$ref": "#/$defs/StorageTier",
+                "default": "local"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Check": {
+        "description": "How an assertion is read.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "A GET to the app itself, by its service name on the overlay: the app's own\nanswer, never the ingress's — a portal in front would answer for it. Redirects\nare not followed: a `303` to the sign-in page IS the answer.",
+            "properties": {
+              "contains": {
+                "description": "Text the body must carry.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "equals": true,
+              "host": {
+                "description": "The `Host` sent, in place of the service's name: a name the app was told\nnothing of, to see it refused (Django's `ALLOWED_HOSTS`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "pointer": {
+                "description": "A JSON pointer into the body (`/settings/disableUserRegistration`), read\nwith `equals`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "port": {
+                "description": "Absent: the first ingress's port.",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "default": [
+                  200
+                ],
+                "items": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "http",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A variable of the environment the running task was started with — Swarm's\nrecord of it, which a `docker service update --env-rm` changes and the\nmanifest does not.",
+            "properties": {
+              "equals": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "const": "env",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "equals"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A read-only query on the app's own database: the first column of its first row,\nas text.",
+            "properties": {
+              "database": {
+                "description": "Which of the app's databases, when it has several (Seafile has three).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "equals": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "type": {
+                "const": "sql",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "query",
+              "equals"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "Claim": {
+        "additionalProperties": false,
+        "description": "A custom claim's value, per role: exactly one of the two.\n\n⚠️ Two fields rather than an enum: `serde_yaml_ng` reads an enum's variant from a\nYAML tag (`!byLevel`), which nobody writes by hand.",
+        "properties": {
+          "byLevel": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "By the role's level: the entry of the highest level at or below it. A role\nbelow every entry gets no claim at all.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "json": {
+            "description": "A JSON value, whose strings take `{{ role.id }}`, `{{ role.name }}` and\n`{{ role.group }}` — filled inside the value, so a name carrying a quote stays\none string."
+          }
+        },
+        "type": "object"
+      },
+      "Companion": {
+        "additionalProperties": false,
+        "description": "A companion container.\n\nDeployed as `<app>-<name>`, on the same network as the app, which therefore reaches\nit by that name. It shares the app's lifecycle: installed with it, stopped with it.\n\n## 🔴 What a companion does NOT have, and why\n\n- **No `ingress`.** An internal helper exposed publicly is a component with no\n  authentication facing the internet. The rule lives in the type, not in a piece of\n  guidance: there is no field to fill in. The app may hand it one path of its own\n  host (`ingress[].paths`), which is the app's decision, written on its route.\n- **No `requires`.** A companion asking for its own database or its own OIDC client\n  would be an app in disguise, and should be one. Its only needs are a volume and\n  some variables.\n- **No `replicas`.** Exactly one instance. Spreading a cache or a model across\n  several would need coordination nothing here provides, and the app would see its\n  requests land on one instance or the other at random.",
+        "properties": {
+          "args": {
+            "description": "After the image's own entrypoint, as the app's `args`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "Replaces the image's entrypoint, as the app's does: NATS starts JetStream from\nits command line only. It takes no token — an argument is readable in `ps` by\nevery account of the node —, so a secret goes in `env` or `files`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "files": {
+            "description": "Configuration files, as the app's: Swarm secrets, given their tokens at\ndeployment. LiveKit and Fluxer's api read theirs from a file.",
+            "items": {
+              "$ref": "#/$defs/ConfigFile"
+            },
+            "type": "array"
+          },
+          "healthcheck": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Healthcheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "$ref": "#/$defs/Image"
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Memory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its own: a model server and the app it serves do not share a budget."
+          },
+          "name": {
+            "description": "Service name suffix, and the name the app reaches it by.\n\n⚠️ Lowercase, digits and hyphens: this is a DNS name on the Swarm network.",
+            "type": "string"
+          },
+          "nodeLabel": {
+            "description": "Only on a node carrying this label set to `true`, as the app's `swarm.nodeLabel`:\na companion publishing ports the router forwards (LiveKit's media) runs where\nthe router forwards them, `hlb.ingress`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process": {
+            "$ref": "#/$defs/Process"
+          },
+          "security": {
+            "$ref": "#/$defs/SecuritySpec",
+            "default": {
+              "capDrop": [
+                "ALL"
+              ],
+              "noNewPrivileges": true,
+              "readOnlyRootfs": true
+            }
+          },
+          "sharedEnv": {
+            "description": "Takes the app's `sharedEnv` beneath its own `env`.",
+            "type": "boolean"
+          },
+          "storage": {
+            "description": "The companion's own volumes, `(name, path)`.\n\n⚠️ The name is prefixed with `<app>-<companion>-`. A model cache does not need\nbacking up: it re-downloads. The flag exists anyway, because some companions\ncarry state that cannot be rebuilt.",
+            "items": {
+              "$ref": "#/$defs/CompanionVolume"
+            },
+            "type": "array"
+          },
+          "tier": {
+            "description": "Placement. Absent means the app's own.\n\n⚠️ A companion doing real computation (machine learning) deserves `heavy` even\nwhen its app is `light`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "image"
+        ],
+        "type": "object"
+      },
+      "CompanionVolume": {
+        "additionalProperties": false,
+        "description": "A companion's volume.",
+        "properties": {
+          "backup": {
+            "default": false,
+            "description": "False by default, **the opposite of app volumes**.\n\n🔴 The asymmetry is deliberate. An app volume holds irreplaceable data and the\nsafe default is to back it up. A companion volume almost always holds derived\ncontent - downloaded models, caches - whose backup would bloat the repository\nwhile protecting nothing. The companion that is an exception says so.",
+            "type": "boolean"
+          },
+          "copy": {
+            "$ref": "#/$defs/VolumeCopy",
+            "description": "How the nightly pass reads it, as an app volume."
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ],
+        "type": "object"
+      },
+      "ConfigFile": {
+        "additionalProperties": false,
+        "description": "One configuration file.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path inside the container.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "Criticality": {
+        "description": "Ordered most critical first: a backup pass serves a `vital` app before the rest, so\none cut short has saved what matters most.",
+        "oneOf": [
+          {
+            "const": "vital",
+            "description": "Needed to get back in to everything else, or reachable while the house is down:\npasswords, sign-in.",
+            "type": "string"
+          },
+          {
+            "const": "important",
+            "description": "Missed within the day: files, photos, mail, the household's chat.",
+            "type": "string"
+          },
+          {
+            "const": "normal",
+            "description": "Waits for the repair.",
+            "type": "string"
+          }
+        ]
+      },
+      "DbEngine": {
+        "enum": [
+          "postgres",
+          "mariadb"
+        ],
+        "type": "string"
+      },
+      "Download": {
+        "additionalProperties": false,
+        "description": "One file fetched by URL, checked against its hash, put in a volume.\n\n🔴 The hash is what pins it: a release asset can be replaced under the same URL,\nand what is fetched runs inside the app with its data.",
+        "properties": {
+          "into": {
+            "description": "The directory it lands in, relative to the volume. REPLACED WHOLE, so a file\nan older version had does not stay beside the new ones.",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Lowercase hex, of the file as fetched.",
+            "type": "string"
+          },
+          "storage": {
+            "description": "The `kind: storage` it goes into, by `name` — one of the app's own.",
+            "type": "string"
+          },
+          "unzip": {
+            "description": "The file is a zip, extracted there; otherwise it is put there under the URL's\nlast segment.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "`https://` only.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "sha256",
+          "storage",
+          "into"
+        ],
+        "type": "object"
+      },
+      "ExposePolicy": {
+        "oneOf": [
+          {
+            "enum": [
+              "public"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "Reachable from the VPN only. A deliberate default.",
+            "type": "string"
+          },
+          {
+            "const": "after-guide",
+            "description": "Public exposure only once the guide is complete - closes the \"first to sign up\nbecomes admin\" window that scanners exploit.",
+            "type": "string"
+          }
+        ]
+      },
+      "Healthcheck": {
+        "additionalProperties": false,
+        "properties": {
+          "intervalSecs": {
+            "default": 30,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retries": {
+            "default": 3,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "startPeriodSecs": {
+            "default": 30,
+            "description": "Startup grace period: a database takes time to open, and counting its failures\nduring that window would make the deployment loop.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "test": {
+            "description": "Docker's form: `[\"CMD\", \"pg_isready\", \"-U\", \"postgres\"]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeoutSecs": {
+            "default": 5,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "test"
+        ],
+        "type": "object"
+      },
+      "Image": {
+        "additionalProperties": false,
+        "properties": {
+          "builtHere": {
+            "description": "Built from this repository's `Dockerfile` by its release: the digest exists only\nonce a release has built it, so the catalog cannot carry one — what pins it is\nthe Dockerfile's own bases, each by digest.",
+            "type": "boolean"
+          },
+          "digest": {
+            "description": "Hard pinning. `tag` alone is not enough: a tag is mutable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          },
+          "signedBy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ImageSigner"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who signs this image's releases, when its publisher signs them with cosign.\nDeclared, an update whose new digest carries no signature from it is refused:\nfor an image that is always signed, a missing signature is a substitution."
+          },
+          "tag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "tag"
+        ],
+        "type": "object"
+      },
+      "ImageSigner": {
+        "additionalProperties": false,
+        "description": "A GitHub Actions workflow signing an image keylessly, through Sigstore.",
+        "properties": {
+          "github": {
+            "description": "`owner/repository`, as in `github.com/<owner>/<repository>`.",
+            "type": "string"
+          },
+          "workflow": {
+            "description": "The workflow's file name in `.github/workflows/`, e.g. `release.yml`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "github",
+          "workflow"
+        ],
+        "type": "object"
+      },
+      "Ingress": {
+        "additionalProperties": false,
+        "properties": {
+          "authRoutes": {
+            "description": "Where this host checks a secret — a password, a second factor, a token. Each is\nrate limited at the ingress, per client address, before the app sees it; and\nwhat the app answers a wrong secret with is what CrowdSec bans on.",
+            "items": {
+              "$ref": "#/$defs/AuthRoute"
+            },
+            "type": "array"
+          },
+          "chain": {
+            "default": [],
+            "description": "The ingress chain: caddy-front → caddy-back, the two links naming the one\n`caddy` service.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expose": {
+            "$ref": "#/$defs/ExposePolicy",
+            "default": "private"
+          },
+          "host": {
+            "description": "Domain template, resolved at install time.",
+            "type": "string"
+          },
+          "openPaths": {
+            "description": "🔴 Paths of this host reached by ANYONE: past the portal and the private ranges\n— n8n's production webhooks, which a service outside calls with no\nsession. The bouncer and the scanners' cut still stand. Exact paths, or a prefix\nending in `*`; never the whole host.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paths": {
+            "description": "Paths of this host one of the app's companions answers instead of the app:\nSeafile's notification server at `/notification`.",
+            "items": {
+              "$ref": "#/$defs/PathRoute"
+            },
+            "type": "array"
+          },
+          "port": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host",
+          "port"
+        ],
+        "type": "object"
+      },
+      "Job": {
+        "additionalProperties": false,
+        "description": "A scheduled job, run in the app's running container.",
+        "properties": {
+          "command": {
+            "description": "Run as `docker exec` in a running task of the app; exit 0 is success.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "does": {
+            "description": "What it does, said wherever its runs are listed.",
+            "type": "string"
+          },
+          "every": {
+            "$ref": "#/$defs/Period"
+          },
+          "id": {
+            "description": "Lowercase letters, digits and hyphens: `hlb job <app> <id>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "does",
+          "every",
+          "command"
+        ],
+        "type": "object"
+      },
+      "JsonAt": {
+        "additionalProperties": false,
+        "description": "A GET, and where in its JSON the value is.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "pointer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "pointer"
+        ],
+        "type": "object"
+      },
+      "Kind": {
+        "oneOf": [
+          {
+            "enum": [
+              "App"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "PlatformService",
+            "description": "The shared services (postgres, caddy, pocket-id...), described in the same\nformat but deployed before everything else.",
+            "type": "string"
+          }
+        ]
+      },
+      "Members": {
+        "description": "Membership Homelabus keeps inside the app.",
+        "oneOf": [
+          {
+            "const": "bitwarden-directory",
+            "description": "A Bitwarden organisation's members, through the route Bitwarden's Directory\nConnector imports with (`/api/public/organization/import`): whoever holds an\nallowed role is invited by their address, whoever no longer does is removed.\nMembers added by hand are never touched — only those the import made carry an\nexternal id. The organisation and its API key are made by an owner, once: an\norganisation's key is encrypted by its owners' clients, which no server can be.\nThe key is kept as `<app>-organization-key`, its id as `<app>-organization-id`.",
+            "type": "string"
+          }
+        ]
+      },
+      "Memory": {
+        "additionalProperties": false,
+        "description": "A service's memory, as Swarm holds it.\n\n- **`reserve`** is what a node must have free for Swarm to place it there — and what\n  the capacity budget compares with what is left. Too low, and a node is filled past\n  what its services use at rest.\n- **`limit`** is where the kernel kills it. 🔴 Too low is a NEW silent failure: the\n  app is killed under load (a thumbnail run, a migration), restarts, and looks\n  healthy between two kills. It is set for the app's peak, not its rest.",
+        "properties": {
+          "limit": {
+            "type": "string"
+          },
+          "reserve": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reserve",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "Metadata": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "criticality": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Criticality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much the household loses while the app is down. Required of an app by the\ncatalog, optional when read: a manifest frozen before it reads as `normal`. A\nplatform service has none — it matters as much as what requires it."
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hlb": {
+            "description": "The `hlb` versions this manifest runs on, a semver range: `\">=0.4.0\"`. Required\nby the catalog, optional when read: a manifest frozen before it has none. An\n`hlb` outside it sets the app aside, where it would otherwise refuse the whole\ncatalog over one field it does not know (`hlb_types::release`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Nodes": {
+        "description": "The cluster's machines, kept inside the app.",
+        "oneOf": [
+          {
+            "const": "termix",
+            "description": "A Termix host per node, removed when the node leaves, shared with the Termix\nroles its `OIDC_ROLE_MAP` gives at sign-in. Each node holds a dedicated Unix\naccount — never root, no right beyond a shell — whose key Homelabus generates\nand authorizes from Termix's own node only. Its API key is an administrator's\nto hand over, once (`hlb termix connect`): making one takes a session.",
+            "type": "string"
+          }
+        ]
+      },
+      "PathRoute": {
+        "additionalProperties": false,
+        "description": "A path of the app's host handed to one of its companions.\n\nWritten on the APP's route, never on the companion: whoever reads the route sees\nwhat it publishes, and a companion still has no way to publish itself. The path\ntakes the route's whole chain — the bouncer, the private ranges, the portal.",
+        "properties": {
+          "companion": {
+            "description": "The companion, by its name in `companions`.",
+            "type": "string"
+          },
+          "keepPrefix": {
+            "description": "The companion is handed the path whole: Fluxer's api answers\n`/.well-known/fluxer` under that name, and its static server `/emoji/…`.",
+            "type": "boolean"
+          },
+          "port": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prefix": {
+            "description": "`/notification`: it and everything under it, the prefix taken off before the\ncompanion sees the request.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prefix",
+          "companion",
+          "port"
+        ],
+        "type": "object"
+      },
+      "Period": {
+        "enum": [
+          "day",
+          "week"
+        ],
+        "type": "string"
+      },
+      "Process": {
+        "additionalProperties": false,
+        "description": "How a container's process is run and stopped: the options of Swarm's container spec\na manifest may set — none loosens isolation (no host network, device or privilege:\nthose have no field). Measured on 577 apps of two public stores, these are the\nwhole tail once isolation is kept; each reaches Swarm in `hlb-orchestrator`\nthrough a destructuring with no `..`, so a field added here is mapped or fails to\ncompile.",
+        "properties": {
+          "groups": {
+            "description": "Supplementary groups, by name or number.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hostname": {
+            "description": "The name it sees as its own; never a name others reach it by.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "init": {
+            "description": "A minimal init as PID 1, reaping what a forking process leaves behind: without\nit zombies pile up until the task can fork no more.",
+            "type": "boolean"
+          },
+          "stopGraceSecs": {
+            "description": "Seconds between the stop signal and `SIGKILL`. Absent is Swarm's 10: a database\nflushing more than that is killed mid-write at every update.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stopSignal": {
+            "description": "The signal that asks it to stop, `SIGINT` for an app that ignores `SIGTERM`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sysctls": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Kernel settings of its own network namespace only (`net.*`): any other would\nbe the node's.",
+            "type": "object"
+          },
+          "ulimits": {
+            "additionalProperties": {
+              "$ref": "#/$defs/Ulimit"
+            },
+            "description": "Resource limits by name (`nofile`), as `ulimit` reads them.",
+            "type": "object"
+          },
+          "workingDir": {
+            "description": "The directory it starts in, absolute.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PublishedPort": {
+        "anyOf": [
+          {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "A port published on the node, by its protocol."
+      },
+      "Quota": {
+        "additionalProperties": false,
+        "description": "A storage quota the app enforces, set per role — and per person, over their role.",
+        "properties": {
+          "apply": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuotaApply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What keeps an EXISTING account in step, person by person.\n\n🔴 A claim read at creation only changes nothing afterwards: Immich v3.1.0\nreads its role claim at every sign-in and its quota claim never again."
+          },
+          "claim": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuotaClaim"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A claim the app reads when it creates an account at a first sign-in — Immich's\n`immich_quota`. No quota means no claim, never `0`: Immich takes `0` as \"no\nspace at all\"."
+          }
+        },
+        "type": "object"
+      },
+      "QuotaApply": {
+        "description": "How a person's quota reaches an account that exists, with `{{ person.sub }}` (their\nPocketID id, which the app keeps as its OIDC subject) and `{{ quota }}` (in `unit`;\n`none` in a command, `NULL` in a statement, when there is no quota).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "A command run in the app's running container, never through a shell. It exits\n0 once the quota is set and [`ABSENT_EXIT`] when the person has no account in\nthe app yet — they have not signed in to it — which is retried, not failed.",
+            "properties": {
+              "command": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "const": "exec",
+                "type": "string"
+              },
+              "unit": {
+                "$ref": "#/$defs/QuotaUnit"
+              }
+            },
+            "required": [
+              "type",
+              "command",
+              "unit"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "One `UPDATE` on the app's own database. No row updated means no account yet.",
+            "properties": {
+              "database": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "statement": {
+                "type": "string"
+              },
+              "type": {
+                "const": "sql",
+                "type": "string"
+              },
+              "unit": {
+                "$ref": "#/$defs/QuotaUnit"
+              }
+            },
+            "required": [
+              "type",
+              "statement",
+              "unit"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "QuotaClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/$defs/QuotaUnit"
+          }
+        },
+        "required": [
+          "name",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "QuotaUnit": {
+        "enum": [
+          "bytes",
+          "MiB",
+          "GiB"
+        ],
+        "type": "string"
+      },
+      "RecoveryLogin": {
+        "additionalProperties": false,
+        "description": "A recovery sign-in: a generated secret, and the name it goes with.",
+        "properties": {
+          "path": {
+            "description": "Where it signs in, on the app's domain (`/admin`). Absent: the domain itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SignIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How Homelabus signs in with it every night, to know it still opens the app.\n\n🔴 A password read at an app's FIRST start only opens nothing on an\ninstallation that began without it: Seafile's lab ran on the image's own\n`me@example.com` while the emergency vault held a password for an account that\ndid not exist — found the day someone tried it, which is the day PocketID is\ndown.\n\nRequired by the catalog; optional when read, or every manifest frozen before\nproofs existed would no longer be read at all."
+          },
+          "secret": {
+            "description": "The generated secret, as the manifest names it: `admin-password` for\n`{{ secret.admin-password }}`. Validation refuses one nothing generates.",
+            "type": "string"
+          },
+          "username": {
+            "description": "The name it signs in with — literal, or `{{ smtp.from }}` for the address\nHomelabus gave the app. Absent: the app asks for the password alone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "oneOf": [
+          {
+            "const": "user",
+            "description": "Someone who has an account and nothing else: their mailbox, their aliases,\nthe portal. This is **not** an operations role.\n\nIt is the default, so it is what an unreadable token role and a PocketID\nidentity unknown to Homelabus both get. The default must always be the least\nprivileged.",
+            "type": "string"
+          },
+          {
+            "const": "viewer",
+            "description": "See everything about operations, change nothing.",
+            "type": "string"
+          },
+          {
+            "const": "operator",
+            "description": "Day-to-day work: install, update, back up, publish.",
+            "type": "string"
+          },
+          {
+            "const": "admin",
+            "description": "Everything, including what destroys and what grants rights.",
+            "type": "string"
+          }
+        ]
+      },
+      "Runtime": {
+        "oneOf": [
+          {
+            "enum": [
+              "swarm"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "compose",
+            "description": "`docker compose` on a dedicated host, driven over SSH.",
+            "type": "string"
+          }
+        ]
+      },
+      "SecuritySpec": {
+        "additionalProperties": false,
+        "properties": {
+          "capAdd": {
+            "description": "Capabilities added back explicitly. An app that needs one must say so.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "capDrop": {
+            "default": [
+              "ALL"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "noNewPrivileges": {
+            "default": true,
+            "type": "boolean"
+          },
+          "publishedPorts": {
+            "description": "Ports published on the host. Empty by default - and forbidden on `proxy-header`.\n`25` is TCP; `\"7882/udp\"` says its protocol — LiveKit's media arrives over UDP.",
+            "items": {
+              "$ref": "#/$defs/PublishedPort"
+            },
+            "type": "array"
+          },
+          "readOnlyRootfs": {
+            "default": true,
+            "type": "boolean"
+          },
+          "tmpfs": {
+            "description": "Directories given an empty in-memory filesystem at every start: what an image\nwrites outside its volumes — a socket, a heartbeat, a rendered configuration —\nunder a read-only root. Nothing written there survives the task. A path, or\n`{ path, size }`: `/dev/shm` is 64 MiB unless given one, which a browser or\nPostgreSQL's parallel queries outgrow.",
+            "items": {
+              "$ref": "#/$defs/Tmpfs"
+            },
+            "type": "array"
+          },
+          "user": {
+            "description": "`uid:gid`. Absent means whatever the image declares.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SignIn": {
+        "additionalProperties": false,
+        "description": "One POST to the app itself, by its service name on the overlay, that signs in.",
+        "properties": {
+          "basic": {
+            "description": "The username and password sent as HTTP Basic instead, the body holding neither:\nStalwart's administrator signs in no other way.",
+            "type": "boolean"
+          },
+          "body": {
+            "description": "JSON, its `{{ username }}` and `{{ password }}` filled at run time — inside its\nstrings only, so a password is escaped as JSON.",
+            "type": "string"
+          },
+          "form": {
+            "description": "The body's fields sent as a form (`application/x-www-form-urlencoded`), still\nwritten as one JSON object of strings: an OAuth2 password grant (RFC 6749 §4.3)\ntakes nothing else — FastAPI's `OAuth2PasswordRequestForm`, Mealie's\n`/api/auth/token`, which reads a JSON body as empty fields.",
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Sent as they are: Jellyfin signs in no client that does not name itself.",
+            "type": "object"
+          },
+          "path": {
+            "description": "At the first ingress's port.",
+            "type": "string"
+          },
+          "pointer": {
+            "description": "A JSON pointer the answer holds once signed in — a session, a token. A status\nalone is not enough: n8n answers its starting page `200` to every route.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "body",
+          "pointer"
+        ],
+        "type": "object"
+      },
+      "SizedTmpfs": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "description": "Read as text, so a size refused says why rather than \"no variant matched\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "size"
+        ],
+        "type": "object"
+      },
+      "SmtpSender": {
+        "description": "Who an app's mail goes out as.",
+        "oneOf": [
+          {
+            "const": "app",
+            "description": "The app, as `<app>@<mail domain>`: an account of its own, which Stalwart lets\nsend as that address only.",
+            "type": "string"
+          },
+          {
+            "const": "person",
+            "description": "The person signed in, with their own mailbox's credentials — a webmail. No\naccount is made for the app.",
+            "type": "string"
+          }
+        ]
+      },
+      "Spec": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Access"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who may sign in, and what the app is told about them — see [`crate::access`].\nAbsent: any role may be allowed, and the app reads nothing of it."
+          },
+          "args": {
+            "description": "Arguments after the image's own entrypoint, which stays: `command` replaces it,\nso a manifest adding three settings had to restate it, and an image moving its\nentrypoint would be overridden in silence. Takes no token, as `command`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assertions": {
+            "description": "What the running app must keep true — each door the configuration above\ncloses, read back by its effect every night into the inbox.",
+            "items": {
+              "$ref": "#/$defs/Assertion"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "Replaces the image's entrypoint. For an app that takes part of its configuration\nfrom its own command line only, run before it starts: Gitea's sign-in sources\nlive in its database, and a source changed while it runs is not seen until it\nrestarts. The script it runs is one of `files`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "companions": {
+            "description": "Companion containers, deployed **with** the app and for it alone.\n\nSome apps do not fit in one container: Immich needs a separate machine-learning\nservice, Seafile an in-memory cache. These are not platform services - they are\nshared with nobody, and they are born and die with the app.\n\n🔴 **A companion never has an `ingress`.** It is an internal helper, not a\nservice: opening a route to it would publish a component designed to talk only\nto its app, often with no authentication whatsoever. The rule is structural -\nthe type simply has no field for it. A path of the app's own route may lead to\none (`ingress[].paths`): the app's decision, read where its route is.",
+            "items": {
+              "$ref": "#/$defs/Companion"
+            },
+            "type": "array"
+          },
+          "downloads": {
+            "description": "Files fetched into one of the app's volumes before it starts — what the image\ndoes not ship and the app loads from its data: Jellyfin's SSO plugin.",
+            "items": {
+              "$ref": "#/$defs/Download"
+            },
+            "type": "array"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "How the app receives what the resolver provisioned.\n\n🔴 **The missing half of the capability resolver.** Declaring `kind: database`\ncreates the database, the role and the password - and still does not tell the\napp how to connect to it. Without this field an app starts and silently falls\nback to its internal SQLite: it looks like it works, and its data is neither in\nthe provisioned database nor backed up with it.\n\nValues may carry **tokens** resolved at deploy time:\n`{{ db.host }}`, `{{ db.name }}`, `{{ db.user }}`, `{{ db.password }}`,\n`{{ db.url }}`, `{{ cache.host }}`, `{{ oidc.issuer }}`,\n`{{ oidc.client_id }}`, `{{ oidc.client_secret }}`, `{{ smtp.host }}`,\n`{{ smtp.user }}`, `{{ smtp.password }}`, `{{ domain }}`.\n\n🔴 **A secret token is NEVER resolved here.** The plan is displayed by\n`hlb plan`, recorded in the state and exported to the Git mirror: letting a\npassword in would publish it in all three places. Substitution happens in the\nexecutor, at deploy time, and only Swarm ever sees the value.\n\n⚠️ `BTreeMap` and not `HashMap`: plans must be reproducible from one run to the\nnext, or snapshot tests become worthless.",
+            "type": "object"
+          },
+          "files": {
+            "description": "Configuration files the service reads, put in the container at their path.\n\nFor software that takes no configuration from its environment: Garage refuses to\nstart without a `garage.toml`. Delivered as Swarm secrets — encrypted at rest —\nand given their tokens like `env` at deploy time, so the plan never carries a\nvalue Homelabus generates.",
+            "items": {
+              "$ref": "#/$defs/ConfigFile"
+            },
+            "type": "array"
+          },
+          "image": {
+            "$ref": "#/$defs/Image"
+          },
+          "ingress": {
+            "items": {
+              "$ref": "#/$defs/Ingress"
+            },
+            "type": "array"
+          },
+          "jobs": {
+            "description": "Work the running app needs done on a schedule, inside its own container —\nSeafile's garbage collection, without which a deleted file's blocks are never\nfreed. The controller runs each when it is due; a failed run is in the inbox.",
+            "items": {
+              "$ref": "#/$defs/Job"
+            },
+            "type": "array"
+          },
+          "process": {
+            "$ref": "#/$defs/Process",
+            "description": "How its process is run and stopped."
+          },
+          "recovery": {
+            "description": "The sign-ins Homelabus generated that open the app WITHOUT PocketID — its own\nadministrator. Each is deposited in the emergency vault (`hlb emergency vault`),\nwhere an owner finds it the day the SSO signs nobody in.",
+            "items": {
+              "$ref": "#/$defs/RecoveryLogin"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "items": {
+              "$ref": "#/$defs/Capability"
+            },
+            "type": "array"
+          },
+          "runtime": {
+            "$ref": "#/$defs/Runtime",
+            "default": "swarm",
+            "description": "Where the app runs. Not everything is swarmable."
+          },
+          "security": {
+            "$ref": "#/$defs/SecuritySpec",
+            "default": {
+              "capDrop": [
+                "ALL"
+              ],
+              "noNewPrivileges": true,
+              "readOnlyRootfs": true
+            }
+          },
+          "sharedEnv": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Variables given to every companion that says `sharedEnv: true`, beneath its own:\nFluxer's thirteen services read one environment, written once here rather than\nthirteen times — and a copy missed would be the service that breaks.",
+            "type": "object"
+          },
+          "swarm": {
+            "$ref": "#/$defs/SwarmSpec",
+            "default": {
+              "replicas": 1
+            }
+          },
+          "update": {
+            "$ref": "#/$defs/UpdatePolicy",
+            "default": {
+              "autoRollback": true,
+              "backupBefore": true,
+              "channel": "patch",
+              "maturationDays": 7
+            }
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "type": "object"
+      },
+      "SsoMode": {
+        "description": "The four SSO integration modes.",
+        "oneOf": [
+          {
+            "const": "native",
+            "description": "The app speaks OIDC natively. The best case.",
+            "type": "string"
+          },
+          {
+            "const": "proxy-header",
+            "description": "The app reads a trusted header. ⚠️ Requires network isolation.",
+            "type": "string"
+          },
+          {
+            "const": "proxy-only",
+            "description": "The app has no notion of identity: a portal sits in front.",
+            "type": "string"
+          },
+          {
+            "const": "none",
+            "description": "Deliberately excluded, or a protocol that cannot take part.",
+            "type": "string"
+          }
+        ]
+      },
+      "StorageTier": {
+        "oneOf": [
+          {
+            "const": "local",
+            "description": "Local volume + placement constraint. Mandatory for databases.",
+            "type": "string"
+          },
+          {
+            "const": "nfs",
+            "description": "NFS from the NAS. ⚠️ Never for a database.",
+            "type": "string"
+          }
+        ]
+      },
+      "SwarmSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "healthcheck": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Healthcheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Memory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it needs of a node's memory, and the most it may take. Required by `catalog\nvalidate`; optional here so a manifest frozen before it still reads."
+          },
+          "nodeLabel": {
+            "description": "Only on a node carrying this label set to `true`: for a service that must run on\none chosen machine, the ingress on the one the router forwards to. A label no\nnode carries leaves the service unplaced — the install refuses that first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replicas": {
+            "default": 1,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tier": {
+            "description": "`heavy` or `light` - placement follows from the node's resources.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Tmpfs": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/$defs/SizedTmpfs"
+          }
+        ],
+        "description": "An in-memory directory. Its size is memory: what is written there counts against\nthe service's limit."
+      },
+      "Ulimit": {
+        "additionalProperties": false,
+        "description": "A resource limit: what the process starts with, and the most it may raise it to.",
+        "properties": {
+          "hard": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "soft": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "soft",
+          "hard"
+        ],
+        "type": "object"
+      },
+      "UpdateChannel": {
+        "oneOf": [
+          {
+            "enum": [
+              "patch",
+              "minor"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "pin",
+            "description": "Never updated automatically. For Vaultwarden and anything critical.",
+            "type": "string"
+          },
+          {
+            "const": "latest",
+            "description": "⚠️ Discouraged: follows a mutable tag.",
+            "type": "string"
+          }
+        ]
+      },
+      "UpdatePolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "autoRollback": {
+            "default": true,
+            "type": "boolean"
+          },
+          "backupBefore": {
+            "default": true,
+            "type": "boolean"
+          },
+          "channel": {
+            "$ref": "#/$defs/UpdateChannel",
+            "default": "patch"
+          },
+          "maturationDays": {
+            "default": 7,
+            "description": "Days an image must have been published before it is proposed: a broken release\nis usually withdrawn or fixed within the week. Never under\n[`MIN_MATURATION_DAYS`].",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watchUpstream": {
+            "description": "Upstream repository to watch when the deployed image is a fork.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window": {
+            "description": "Maintenance window, e.g. \"sun 03:00-05:00\". Absent means any time.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VolumeCopy": {
+        "description": "How a backed-up volume is read for its copy.",
+        "oneOf": [
+          {
+            "const": "live",
+            "description": "While its service runs: files each written whole. A SQLite database in it is\nsnapshotted apart, found by its header.",
+            "type": "string"
+          },
+          {
+            "const": "stopped",
+            "description": "Its service stopped for the copy and started again after. 🔴 A store whose\nfiles only make sense together — RocksDB, LMDB —: restic reads them one after\nanother, and Stalwart's copy named an SST written after restic had passed it,\nand did not open.",
+            "type": "string"
+          },
+          {
+            "const": "pg-basebackup",
+            "description": "A PostgreSQL data directory, copied by `pg_basebackup` while the server runs:\nstarts as a server that crashed at the copy's end. 🔴 restic reading the\ndirectory itself takes each file at another instant, and no recovery mends that.",
+            "type": "string"
+          },
+          {
+            "const": "mariadb-backup",
+            "description": "A MariaDB data directory, copied by `mariadb-backup` while the server runs and\nprepared, for the same reason.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "apiVersion": {
+        "$ref": "#/$defs/ApiVersion"
+      },
+      "kind": {
+        "$ref": "#/$defs/Kind"
+      },
+      "metadata": {
+        "$ref": "#/$defs/Metadata"
+      },
+      "spec": {
+        "$ref": "#/$defs/Spec"
+      }
+    },
+    "required": [
+      "apiVersion",
+      "kind",
+      "metadata",
+      "spec"
+    ],
+    "title": "Manifest",
+    "type": "object"
+  }
+}
