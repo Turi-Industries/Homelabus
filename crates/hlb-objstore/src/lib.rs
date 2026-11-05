@@ -501,9 +501,10 @@ impl Garage {
     /// written by a key of Homelabus's own that owns this bucket alone, made for the
     /// call and deleted after it, whatever came of it.
     ///
-    /// 🔴 Garage 2.5.0 takes a lifecycle from the bucket's OWNER only (2.4.1 took it
-    /// from read-write; measured, `tests/live_garage.rs`), and an app never owns its
-    /// bucket: owning it, a compromised app deletes it.
+    /// 🔴 Garage 2.5.0 takes a lifecycle from the bucket's OWNER only, 2.4.1 from a WRITER
+    /// only and reads it back to a READER only (measured, `tests/live_garage.rs`): this key
+    /// is all three, since a house runs the version it froze and a restored one comes back
+    /// on it. An app never owns its bucket: owning it, a compromised app deletes it.
     pub async fn expire_after(&self, bucket_id: &str, bucket: &str, days: u32) -> Result<()> {
         let endpoint = self.s3.clone().ok_or_else(|| Error::Malformed {
             operation: "PutBucketLifecycleConfiguration",
@@ -522,7 +523,7 @@ impl Garage {
                 Some(serde_json::json!({
                     "bucketId": bucket_id,
                     "accessKeyId": key.access_key_id,
-                    "permissions": { "read": false, "write": false, "owner": true }
+                    "permissions": { "read": true, "write": true, "owner": true }
                 })),
             )
             .await?;
