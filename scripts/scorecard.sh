@@ -77,6 +77,8 @@ restores=$(measured restores-read-back)
 row "2 never lose" "apps whose backups were read back and read good on the lab in the last 30 days: restored and counted, never started" "${restores:-UNMEASURED — probe: \`scripts/drills/restores.sh\`}" "every app with data, weekly, alerting when one fails"
 started=$(measured recovery-started)
 row "2 never lose" "apps started on their restored copy on a bare machine, from the kit and one destination alone, every assertion read good" "${started:-UNMEASURED — probe: \`scripts/drills/recovery.sh\`}" "every app with data, each release"
+content=$(measured recovery-content)
+row "2 never lose" "what the house's tables and volumes held, still held on that machine" "${content:-UNMEASURED — probe: \`scripts/drills/recovery.sh\`}" "all of them, each release"
 
 # 3. Never stolen --------------------------------------------------------------------
 # Not here: images without a digest — `catalog validate` refuses them already, and the
