@@ -386,6 +386,9 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
                 line(&format!("     AWS_ACCESS_KEY_ID={key}"));
                 line(&format!("     AWS_SECRET_ACCESS_KEY={secret}"));
             }
+            None if d.location.starts_with("rest:") => {
+                line("     a restic REST server, at this address")
+            }
             None => line("     a path on the machine that holds it"),
         }
     }
@@ -400,8 +403,17 @@ pub fn render(kit: &Kit, installation: &str, printed: &str) -> String {
     line("       /staging/hlb-state.snapshot > hlb.db");
     line("");
     line("   With HLB_STATE=hlb.db and HLB_MASTER_KEY naming the key file of 1.,");
-    line("   `hlb backup status` lists what each destination holds, and");
-    line("   `hlb backup restore <app>` puts each volume back.");
+    line("   `hlb backup status` lists what each destination holds. On a new machine:");
+    line("");
+    line("   hlb cluster init --apply");
+    line("   hlb config exposure --node <this machine> --apply");
+    line("");
+    line("   Then each app, in the order `hlb order` prints. It first starts empty: a");
+    line("   restore needs a service to stop, and a node holding its volume.");
+    line("");
+    line("   hlb install <app> --apply");
+    line("   hlb backup restore <app> --from <destination> --apply");
+    line("   hlb assert <app>");
     line("");
     line("5. Each app's own administrator is in Vaultwarden, collection \"Server\": it");
     line("   comes back with the state and its volume, and opens with an owner's");
