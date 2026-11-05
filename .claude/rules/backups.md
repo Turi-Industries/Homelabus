@@ -207,12 +207,22 @@ during an outage.
   buckets are one outcome per destination, as its volumes: recorded one by one, the
   bucket that succeeded made the app fresh while the other went unread.
 - **An update's prior copy dumps every database the app declares**
-  (`PlacedProvider::snapshot`): it held volumes alone, so a migration gone wrong went back to
+  (`PlacedProvider::copy`): it held volumes alone, so a migration gone wrong went back to
   the last pass, and an app holding only a database was refused for ever. Volumes go to the
   first bulky destination and dumps to the first critical one, as a pass routes them, and each
   refusal comes before anything stops. Tagged as a pass's dump: the newest, which a restore
-  takes unasked, and retention's to forget. ⚠️ Its SQLite is still copied live and its buckets
-  not at all.
+  takes unasked, and retention's to forget.
+- **An update's prior copy stops what writes SQLite, and reads the buckets**
+  (`stopped_for_update_copy`, `PlacedProvider::copy_buckets`). Taken live, a rollback got three
+  files restic read one after another: `restore::sqlite_after` puts back only a snapshot of the
+  same `pass:` tag, and this copy carries none. Not `VACUUM INTO`, which reads the file from
+  the machine it runs on and refuses a volume elsewhere: stopped, the database is consistent as
+  it lies, on any node, and the update is about to restart the app anyway; the copy is tagged
+  `kind:copied-stopped`, so the restore does not warn of a live one. Which volumes hold
+  SQLite is the state's word (`app_volumes.sqlite`), the manifest's plus what a pass found. ⚠️ A
+  volume no manifest flags, updated before any pass looked in it, is still copied live. A bucket
+  Garage cannot be asked for, from here, refuses the update; it holds the objects a migration
+  may rewrite. Every byte is read at each update, as at each pass.
 - **🔴 A pass copies the state again at its end, once it took anything.** A restore takes
   only what the state recorded (`snapshots_taken`), and the kit brings back the newest state:
   copied first and only then, it had no row for the volumes and dumps its own pass took, and

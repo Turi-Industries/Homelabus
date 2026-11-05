@@ -2650,8 +2650,8 @@ fn main() -> ExitCode {
 }
 
 /// The provider an update's prior copy goes through: the app's first bulky destination for
-/// its volumes and first critical one for its dumps, or `--backup-repo`. `None` refuses the
-/// update.
+/// its volumes and buckets and first critical one for its dumps, or `--backup-repo`. `None`
+/// refuses the update.
 async fn build_backup_provider(
     cli: &Cli,
     app: &str,
@@ -2662,11 +2662,18 @@ async fn build_backup_provider(
         postgres: cli.postgres_admin.as_deref(),
         mariadb: cli.mariadb_admin.as_deref(),
     };
+    // Garage does not resolve on a host: a relay, opened only for an app keeping a bucket.
+    let s3_endpoint = if state.buckets_to_backup(app).await?.is_empty() {
+        None
+    } else {
+        Some(relay::reach(hlb_objstore::S3_URL, &cli.platform_network))
+    };
     Ok(hlb_backup_run::provider_for_update(
         state,
         vault,
         &cli.platform_network,
         admins,
+        s3_endpoint.as_deref(),
         cli.backup_repo.as_deref(),
         app,
     )

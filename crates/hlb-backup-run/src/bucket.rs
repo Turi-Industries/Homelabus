@@ -35,14 +35,14 @@ pub use hlb_objstore::S3_URL;
 /// The tag every bucket snapshot carries. ⚠️ A stored value.
 pub const BUCKET_TAG: &str = "kind:bucket";
 
-/// `bucket`, reached with `app`'s own key — read and write, never owner — at `endpoint`.
-pub async fn open(
-    state: &State,
-    vault: &Vault,
-    endpoint: &str,
-    app: &str,
-    bucket: &str,
-) -> Result<s3::Bucket, String> {
+/// An app's own S3 key: its id and its secret. Read and write, never owner.
+pub struct S3Key {
+    id: String,
+    secret: String,
+}
+
+/// `app`'s S3 key, out of the vault.
+pub async fn key(state: &State, vault: &Vault, app: &str) -> Result<S3Key, String> {
     let (id_name, secret_name) = hlb_types::capability::s3_key_secrets(app);
     let read = |name: String| async move {
         match state.secret(&name).await.map_err(|e| e.to_string())? {
@@ -55,14 +55,30 @@ pub async fn open(
             "{app}'s S3 key is not in the vault: its buckets were never provisioned here"
         ));
     };
+    Ok(S3Key { id, secret })
+}
+
+/// `bucket`, reached with `key` at `endpoint`.
+pub async fn at(endpoint: &str, bucket: &str, key: &S3Key) -> Result<s3::Bucket, String> {
     let at = s3::Location {
         endpoint: endpoint.to_string(),
         bucket: bucket.to_string(),
         prefix: String::new(),
     };
-    s3::Bucket::connect(at, &id, &secret)
+    s3::Bucket::connect(at, &key.id, &key.secret)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// `bucket`, reached with `app`'s own key at `endpoint`.
+pub async fn open(
+    state: &State,
+    vault: &Vault,
+    endpoint: &str,
+    app: &str,
+    bucket: &str,
+) -> Result<s3::Bucket, String> {
+    at(endpoint, bucket, &key(state, vault, app).await?).await
 }
 
 /// Every object of `b` into `out`, as an archive ending with its trailer. The count.

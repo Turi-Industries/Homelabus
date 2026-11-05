@@ -3264,6 +3264,22 @@ spec:
     }
 
     #[test]
+    fn a_volume_belongs_to_the_service_declaring_it_and_never_to_the_app_borrowing_it() {
+        let y = format!(
+            "{BASE}  requires:\n    - kind: storage\n      name: data\n      path: /data\n    \
+             - kind: storage\n      name: log\n      path: /log\n      owner: caddy\n  \
+             companions:\n    - name: index\n      image: {{ repo: a/b, tag: \"1\" }}\n      \
+             storage:\n        - {{ name: idx, path: /idx }}\n"
+        );
+        let m = manifest(&y);
+        let of = |v| m.spec.service_of_volume("test", v);
+        assert_eq!(of("test-data").as_deref(), Some("test"));
+        assert_eq!(of("test-index-idx").as_deref(), Some("test-index"));
+        assert_eq!(of("test-log"), None);
+        assert_eq!(of("caddy-log"), None);
+    }
+
+    #[test]
     fn a_stopped_copy_stops_the_service_writing_the_volume_and_only_a_backed_up_one() {
         let y = format!(
             "{BASE}  requires:\n    - kind: storage\n      name: data\n      path: /data\n      \

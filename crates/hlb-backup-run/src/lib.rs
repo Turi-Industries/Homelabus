@@ -203,17 +203,46 @@ pub struct PlacedProvider {
     dumps_to: Option<(Destination, Option<String>)>,
     volumes: BTreeMap<String, Vec<String>>,
     services: BTreeMap<String, Vec<String>>,
+    /// The buckets of the app being updated, when it keeps any.
+    buckets: Option<PriorBuckets>,
+}
+
+/// The buckets an update's prior copy reads, and what it reads them with: found missing at
+/// the copy, not before, so an update refused for its maturity never hears of them.
+struct PriorBuckets {
+    app: String,
+    names: Vec<String>,
+    /// Where Garage's S3 API is reached from here.
+    endpoint: Option<String>,
+    key: std::result::Result<bucket::S3Key, String>,
 }
 
 #[async_trait::async_trait]
 impl hlb_updater::BackupProvider for PlacedProvider {
-    /// The app's volumes, then each of its databases: a migration is undone by the
-    /// database, and one as old as the last pass loses what was written since. Every
-    /// refusal comes before anything is stopped or copied.
     async fn snapshot(&self, app: &str) -> std::result::Result<String, String> {
+        let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
+        self.copy(
+            orch.as_ref()
+                .map(|o| o as &dyn hlb_orchestrator::Orchestrator),
+            app,
+        )
+        .await
+    }
+}
+
+impl PlacedProvider {
+    /// The app's volumes and buckets, then each of its databases: a migration is undone by
+    /// the database, and one as old as the last pass loses what was written since. Every
+    /// refusal comes before anything is stopped or copied. The last snapshot's id.
+    pub async fn copy(
+        &self,
+        orch: Option<&dyn hlb_orchestrator::Orchestrator>,
+        app: &str,
+    ) -> std::result::Result<String, String> {
         let databases = self.databases_to_dump(app).await?;
+        let buckets = self.buckets_to_read(app).await?;
         let volumes = self.volumes.get(app);
-        if volumes.is_none() && databases.is_empty() {
+        if volumes.is_none() && databases.is_empty() && buckets.is_empty() {
             // 🔴 No "nothing to back up, so we are fine". If the manifest requires a
             // backup and we do not know what to back up, that is an error.
             return Err(format!(
@@ -227,7 +256,10 @@ impl hlb_updater::BackupProvider for PlacedProvider {
                     "no destination accepts bulky data: {app}'s volumes cannot be copied first"
                 ));
             };
-            last = Some(self.copy_volumes(app, volumes, to).await?);
+            last = Some(self.copy_volumes(orch, app, volumes, to).await?);
+        }
+        if let (false, Some(to)) = (buckets.is_empty(), &self.volumes_to) {
+            last = Some(self.copy_buckets(app, &buckets, to).await?);
         }
         for db in &databases {
             last = Some(self.dump_first(app, db).await?);
@@ -245,6 +277,52 @@ struct PriorDump<'a> {
 }
 
 impl PlacedProvider {
+    /// The buckets the copy must read of `app`, opened: Garage out of reach is said before
+    /// the app is stopped for a copy that would then fail.
+    async fn buckets_to_read(
+        &self,
+        app: &str,
+    ) -> std::result::Result<Vec<(&str, hlb_objstore::s3::Bucket)>, String> {
+        let Some(b) = self.buckets.as_ref().filter(|b| b.app == app) else {
+            return Ok(Vec::new());
+        };
+        let refused = |why: String| format!("{app}'s buckets cannot be copied first: {why}");
+        if self.volumes_to.is_none() {
+            return Err(refused("no destination accepts bulky data".into()));
+        }
+        let Some(endpoint) = &b.endpoint else {
+            return Err(refused("Garage's S3 API is not reachable from here".into()));
+        };
+        let key = b.key.as_ref().map_err(|e| refused(e.clone()))?;
+        let mut open = Vec::new();
+        for name in &b.names {
+            let bucket = bucket::at(endpoint, name, key).await.map_err(refused)?;
+            open.push((name.as_str(), bucket));
+        }
+        Ok(open)
+    }
+
+    /// Each bucket to `to`, recorded as taken. Tagged with no pass, as the copy's volumes:
+    /// the newest archive, which a restore takes unasked.
+    async fn copy_buckets(
+        &self,
+        app: &str,
+        buckets: &[(&str, hlb_objstore::s3::Bucket)],
+        (dest, env): &(Destination, Vec<(String, String)>),
+    ) -> std::result::Result<String, String> {
+        let (runner, location) = dest.runner(Some(&self.network));
+        let repo = hlb_backup::Repository::new(runner, location, self.password.clone())
+            .extra_env(env.clone());
+        repo.init().await.map_err(|e| e.to_string())?;
+        let tag = format!("app:{app}");
+        let tags = [tag.as_str(), bucket::BUCKET_TAG];
+        let mut last = Err(format!("no bucket of {app} to back up"));
+        for (name, b) in buckets {
+            last = Ok(bucket_snapshot(&repo, (&self.state, &dest.name), b, name, &tags).await?);
+        }
+        last
+    }
+
     /// What the copy must dump of `app`. Refused here, not halfway through: an app's
     /// volumes copied and then no dump is an update refused after stopping it for nothing.
     async fn databases_to_dump(
@@ -316,25 +394,28 @@ impl PlacedProvider {
         Ok(id)
     }
 
-    /// An app's volumes to `to`, where each lives, its service stopped where one says so.
+    /// An app's volumes to `to`, where each lives, what writes them stopped where a copy
+    /// taken live would not open.
     async fn copy_volumes(
         &self,
+        orch: Option<&dyn hlb_orchestrator::Orchestrator>,
         app: &str,
         volumes: &[String],
         to: &(Destination, Vec<(String, String)>),
     ) -> std::result::Result<String, String> {
-        let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
-        let orch = orch
-            .as_ref()
-            .map(|o| o as &dyn hlb_orchestrator::Orchestrator);
         let services = self.services.get(app).cloned().unwrap_or_default();
         let places = locate_volumes(orch, volumes, &services).await;
         // The copy a rollback restores: one taken live from a store that needs its
         // service stopped would not open.
-        let stopped = stop_for_copy(&self.state, orch, app, volumes)
+        let names = stopped_for_update_copy(&self.state, app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let stopped = stop_for_copy(&self.state, orch, &names, volumes)
             .await
             .map_err(|e| e.to_string())??;
-        let taken = self.copy_and_back_up(orch, app, &places, to).await;
+        let taken = self
+            .copy_and_back_up(orch, app, &places, to, stopped.is_some())
+            .await;
         let Some((o, services)) = stopped else {
             return taken;
         };
@@ -353,6 +434,7 @@ impl PlacedProvider {
         app: &str,
         places: &BTreeMap<placement::Place, Vec<String>>,
         (dest, env): &(Destination, Vec<(String, String)>),
+        stopped: bool,
     ) -> std::result::Result<String, String> {
         let copies = engine_copy::declared(&self.state, app)
             .await
@@ -385,7 +467,7 @@ impl PlacedProvider {
             app,
             places,
             &sources,
-            None,
+            stopped.then_some(STOPPED_TAG),
         )
         .await;
         // A copy left on disk costs space, not the backup: the update goes on.
@@ -411,16 +493,43 @@ async fn services_of(state: &State, app: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Stops the services writing a volume of `app` its frozen manifest declares
-/// `copy: stopped`, held for the copy: what to start again after, `None` when
-/// every volume is copied live. `Err`: no copy is taken — never a live one instead.
+/// What an update's prior copy stops: what a pass stops, and each service writing a volume
+/// that holds SQLite. A pass takes those by `VACUUM INTO` beside the volume, which reads the
+/// file from this machine and needs no stop; this copy has to serve a volume on any node, the
+/// update is about to restart the app anyway, and a stopped database copied as it lies is
+/// consistent, its journal with it. In the app's order: its own service first.
+async fn stopped_for_update_copy(state: &State, app: &str) -> Result<Vec<String>> {
+    let spec = state.app_manifest(app).await?.spec;
+    let mut names = spec.stopped_for_copy(app);
+    for (owner, volume, _, sqlite) in state.backed_up_volumes().await? {
+        if owner != app || !sqlite {
+            continue;
+        }
+        // A volume its manifest no longer names is the app's own to answer for.
+        let service = spec
+            .service_of_volume(app, &volume)
+            .unwrap_or_else(|| app.to_string());
+        if names.contains(&service) {
+            continue;
+        }
+        if service == app {
+            names.insert(0, service);
+        } else {
+            names.push(service);
+        }
+    }
+    Ok(names)
+}
+
+/// Stops `names`, the services writing what `volumes` hold, held for the copy: what to
+/// start again after, `None` when there is nothing to stop. `Err`: no copy is taken — never
+/// a live one instead.
 async fn stop_for_copy<'o>(
     state: &State,
     orchestrator: Option<&'o dyn hlb_orchestrator::Orchestrator>,
-    app: &str,
+    names: &[String],
     volumes: &[String],
 ) -> Result<std::result::Result<Option<Stopped<'o>>, String>> {
-    let names = state.app_manifest(app).await?.spec.stopped_for_copy(app);
     if names.is_empty() {
         return Ok(Ok(None));
     }
@@ -432,7 +541,7 @@ async fn stop_for_copy<'o>(
     };
     // A restore is writing this volume: copied, it is half of two states, and started
     // afterwards the app would run on it.
-    for s in &names {
+    for s in names {
         if let Some(why) = state.held(s).await? {
             if !why.starts_with(restore::COPY_HOLD) {
                 return Ok(Err(format!("{s} is held stopped, not copied: {why}")));
@@ -442,7 +551,7 @@ async fn stop_for_copy<'o>(
     // Not `restore::replicas`, which leaves out a service it cannot read: one that
     // may be running is not copied.
     let mut services = Vec::new();
-    for s in &names {
+    for s in names {
         match o.status(s).await {
             Ok(st) => services.push((s.clone(), st.desired_replicas)),
             Err(e) => {
@@ -488,8 +597,8 @@ async fn locate_volumes(
 }
 
 /// Backs up an app's volumes to `d`, each set on the machine holding it. The last
-/// snapshot's id. `pass`: the tag of the pass taking them, `None` for an update's prior
-/// backup. `sources`: a volume read from another in its place — its engine's copy —,
+/// snapshot's id. `pass`: the tag of the pass taking them, or what an update's prior copy
+/// says of itself: [`STOPPED_TAG`], `None`. `sources`: a volume read from another in its place — its engine's copy —,
 /// at its own path.
 #[allow(clippy::too_many_arguments)]
 async fn back_up_where_they_are(
@@ -575,9 +684,10 @@ fn runner_at<'a>(
     }
 }
 
-/// The provider an update uses for its prior copy: volumes to the app's first bulky
-/// destination, dumps to its first critical one, the classes a pass routes them by. An app
-/// holding only a database has no use for a bulky one.
+/// The provider an update uses for its prior copy: volumes and buckets to the app's first
+/// bulky destination, dumps to its first critical one, the classes a pass routes them by. An
+/// app holding only a database has no use for a bulky one. `s3_endpoint`: where this process
+/// reaches Garage's S3 API, as [`Pass::s3_endpoint`].
 ///
 /// `None` when there is neither — and the update is then REFUSED by `hlb-updater`, which
 /// is the point: a schema migration is not undone by rolling back an image.
@@ -592,6 +702,7 @@ pub async fn provider_for_update(
     vault: &Vault,
     network: &str,
     admins: Admins<'_>,
+    s3_endpoint: Option<&str>,
     fallback: Option<&str>,
     app: &str,
 ) -> Result<Option<PlacedProvider>> {
@@ -614,6 +725,18 @@ pub async fn provider_for_update(
             Some((d, creds))
         }
         None => None,
+    };
+
+    let names = state.buckets_to_backup(app).await?;
+    let buckets = if names.is_empty() {
+        None
+    } else {
+        Some(PriorBuckets {
+            app: app.to_string(),
+            names,
+            endpoint: s3_endpoint.map(str::to_string),
+            key: bucket::key(state, vault, app).await,
+        })
     };
 
     let mut volumes: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -640,6 +763,7 @@ pub async fn provider_for_update(
         dumps_to,
         volumes,
         services,
+        buckets,
     }))
 }
 
@@ -706,6 +830,11 @@ pub async fn state_backup_age(state: &State) -> Result<Option<i64>> {
 /// it. ⚠️ A stored value: the snapshots already written carry it.
 const BACKED_UP: &str = "kind:pre-update";
 
+/// What an update's prior copy carries when it stopped what writes its volumes: a SQLite
+/// database in it is consistent as it lies, with no snapshot of a pass to put back. ⚠️ A
+/// stored value.
+pub const STOPPED_TAG: &str = "kind:copied-stopped";
+
 /// What every snapshot a pass takes carries, before the pass's id: the volume's and
 /// its databases' snapshots of one pass carry the same, and only those go together at
 /// a restore (`restore::sqlite_of_pass`). ⚠️ A stored value.
@@ -735,6 +864,26 @@ async fn snapshot<R: hlb_backup::restic::Runner>(
             .map_err(|e| format!("snapshot {last} taken, but not recorded: {e}"))?;
     }
     Ok(last)
+}
+
+/// A bucket backed up to `repo`, and recorded as taken on `to`: the state and the
+/// destination's name. `tags` holds its app's first: the snapshot is recorded under it.
+async fn bucket_snapshot<R: hlb_backup::restic::Runner>(
+    repo: &hlb_backup::Repository<R>,
+    to: (&State, &str),
+    b: &hlb_objstore::s3::Bucket,
+    name: &str,
+    tags: &[&str],
+) -> std::result::Result<String, String> {
+    let id = bucket::back_up(repo, b, name, tags).await?;
+    let app = tags
+        .first()
+        .and_then(|t| t.strip_prefix("app:"))
+        .unwrap_or_default();
+    to.0.record_snapshot(app, to.1, &id)
+        .await
+        .map_err(|e| format!("snapshot {id} taken, but not recorded: {e}"))?;
+    Ok(id)
 }
 
 /// Services stopped for a copy, and the replicas to give each back.
@@ -841,7 +990,13 @@ impl Pass<'_> {
             }
             // Stopped once for every destination, and copied by an engine's tool once:
             // N stops and N copies for N destinations otherwise.
-            let stopped = stop_for_copy(self.state, self.orchestrator, &app, &volumes).await?;
+            let names = self
+                .state
+                .app_manifest(&app)
+                .await?
+                .spec
+                .stopped_for_copy(&app);
+            let stopped = stop_for_copy(self.state, self.orchestrator, &names, &volumes).await?;
             let copies = engine_copy::declared(self.state, &app).await?;
             let sources = match &stopped {
                 Ok(_) if copies.is_empty() => Ok(BTreeMap::new()),
@@ -1300,11 +1455,7 @@ impl Pass<'_> {
         let mut last = String::new();
         for name in buckets {
             let b = bucket::open(self.state, self.vault, endpoint, app, name).await?;
-            last = bucket::back_up(&repo, &b, name, &tags).await?;
-            self.state
-                .record_snapshot(app, &d.name, &last)
-                .await
-                .map_err(|e| format!("snapshot {last} taken, but not recorded: {e}"))?;
+            last = bucket_snapshot(&repo, (self.state, &d.name), &b, name, &tags).await?;
         }
         Ok(last)
     }
@@ -1609,7 +1760,7 @@ mod tests {
             postgres: None,
             mariadb: None,
         };
-        provider_for_update(&state, &vault, "bridge", admins, None, "x")
+        provider_for_update(&state, &vault, "bridge", admins, None, None, "x")
             .await
             .expect("read")
     }
@@ -1650,6 +1801,97 @@ mod tests {
     async fn an_update_s_copy_refuses_a_volume_no_destination_accepts() {
         let err = refusal(WITH_VOLUME, "critical").await;
         assert!(err.contains("bulky"), "{err}");
+    }
+
+    const WITH_BUCKET: &str = "[{ kind: object-storage, bucket: cdn }]";
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_bucket_no_destination_accepts() {
+        let err = refusal(WITH_BUCKET, "critical").await;
+        assert!(err.contains("bulky"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_bucket_it_cannot_reach() {
+        // 🔴 Never an update on with the objects as old as the last pass, said by nobody.
+        let err = refusal(WITH_BUCKET, "critical,bulky").await;
+        assert!(err.contains("not reachable"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_bucket_whose_key_is_not_in_the_vault() {
+        use hlb_updater::BackupProvider;
+        let state = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let yaml = format!(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: x }}\n\
+             spec:\n  image: {{ repo: a/b, tag: \"1\" }}\n  requires: {WITH_BUCKET}\n"
+        );
+        let m = serde_yaml_ng::from_str(&yaml).expect("manifest");
+        state.upsert_app("x", &m, None).await.expect("installed");
+        state
+            .upsert_destination("nas", "/mnt/nas", "bulky", None)
+            .await
+            .expect("destination");
+        let admins = Admins {
+            postgres: None,
+            mariadb: None,
+        };
+        let err = provider_for_update(
+            &state,
+            &vault,
+            "bridge",
+            admins,
+            Some("http://garage:3900"),
+            None,
+            "x",
+        )
+        .await
+        .expect("read")
+        .expect("a provider")
+        .snapshot("x")
+        .await
+        .expect_err("refused");
+        assert!(err.contains("S3 key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_stops_what_writes_sqlite_whoever_said_it_holds_any() {
+        let state = State::in_memory().await.expect("state");
+        let yaml = "apiVersion: hlb/v1\nkind: App\nmetadata: { name: x }\n\
+             spec:\n  image: { repo: a/b, tag: \"1\" }\n  \
+             requires: [{ kind: storage, name: data, path: /d, sqlite: true }]\n  \
+             companions:\n    - name: index\n      image: { repo: a/c, tag: \"1\" }\n      \
+             storage: [{ name: idx, path: /i, backup: true }]\n";
+        let m = serde_yaml_ng::from_str(yaml).expect("manifest");
+        state.upsert_app("x", &m, None).await.expect("installed");
+        state
+            .add_volume("x", "x-data", "/nowhere", true, false)
+            .await
+            .expect("volume");
+        state
+            .add_volume("x", "x-index-idx", "/nowhere", true, false)
+            .await
+            .expect("volume");
+        assert!(
+            stopped_for_update_copy(&state, "x")
+                .await
+                .expect("read")
+                .is_empty(),
+            "the state's word, which a pass keeps current, not a second reading of the manifest"
+        );
+        // Found by a pass in a companion's volume no manifest flagged, then the app's.
+        state.mark_sqlite("x", "x-index-idx").await.expect("mark");
+        assert_eq!(
+            stopped_for_update_copy(&state, "x").await.expect("read"),
+            ["x-index"]
+        );
+        state.mark_sqlite("x", "x-data").await.expect("mark");
+        assert_eq!(
+            stopped_for_update_copy(&state, "x").await.expect("read"),
+            ["x", "x-index"],
+            "the app first: starting goes the other way, companions before it"
+        );
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 //! A bucket through the pass and back, against a real Garage and the catalog's restic:
-//! its objects and their headers come back, what was written since goes, and the copy
-//! the restore took first undoes it.
+//! its objects and their headers come back, what was written since goes, the copy the
+//! restore took first undoes it, and an update's prior copy holds what the pass did not.
 //!
 //! ```sh
 //! # a single-node Garage, laid out, its admin API and S3 API on 127.0.0.1
@@ -193,6 +193,41 @@ async fn a_bucket_backed_up_comes_back_whole_and_the_copy_taken_first_undoes_it(
         since,
         "the bucket as it was before the restore"
     );
+
+    // An update's prior copy holds what was written since the pass, and a failed migration
+    // is undone from it with nothing named.
+    let admins = hlb_backup_run::Admins {
+        postgres: None,
+        mariadb: None,
+    };
+    let copy = hlb_backup_run::provider_for_update(
+        &state,
+        &vault,
+        "bridge",
+        admins,
+        Some(&s3_url),
+        None,
+        "chat",
+    )
+    .await
+    .expect("read")
+    .expect("a provider")
+    .copy(None, "chat")
+    .await
+    .expect("the copy");
+    b.delete("attachments/later.txt", None)
+        .await
+        .expect("what a migration did");
+    let newest = restore
+        .find_bucket("chat", &bucket, None, None)
+        .await
+        .expect("a snapshot");
+    assert_eq!(newest.snapshot.id, copy, "the newest archive is the copy");
+    restore
+        .bucket_in_place("chat", &bucket, &s3_url, &newest)
+        .await
+        .expect("undone");
+    assert_eq!(contents(&b).await, since, "as it was before the update");
     println!("✓ {bucket}: backed up, restored whole, and the restore undone");
     let _ = docker(&["volume", "rm", "-f", repo]);
 }
