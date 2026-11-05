@@ -3,6 +3,45 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.6] — 2026-11-05
+
+A bare machine, the emergency kit and one destination now bring every app of the lab back:
+14 of 14 started on their restored copy (`scripts/drills/recovery.sh`). The newest backups
+are no longer refused after a disaster, where the restore fell back to the pass before: a
+pass copies the state again at its end, so the state restored knows that pass. An update's
+prior copy dumps each database the app declares.
+
+**Upgrading from 0.4.5:**
+
+- Migration 0057 runs at the first start: 0.4.5 cannot open the state after.
+- An update is newly refused, before anything stops, for an app with a database and no
+  critical destination, or whose server's administrator is unavailable. Those updates used
+  to pass with no dump.
+- Print the kit again: one printed earlier still opens the backups, and its step 4 does not
+  say how services come back.
+- Until a pass has run on 0.4.6, a state restored from a destination still sets its own
+  pass aside. The preview names that snapshot, and its full id restores it.
+
+### Added
+
+- Start every app of the lab on its restored copy, from a bare machine
+- Say in the emergency kit how services come back after the state
+
+### Fixed
+
+- Copy the state again at the end of a pass, so a restore knows that pass
+- Dump an app's databases in the copy an update takes first
+- Update an app that holds nothing without the copy it does not owe
+- Refuse a restore while a backup's copy holds the service
+- Restore an app on NFS that is crash-looping, and onto a share with ACLs
+- Try a restore stopped halfway on NFS again, where it stopped
+- Write a bucket's expiry on the Garage a house froze, not only the newest
+- Name the command that reads a catalog source again, when its cache is gone
+
+### Changed
+
+- Stop listing hlb-updater in the controller, which calls nothing from it
+
 ## [0.4.5] — 2026-11-04
 
 The daemon now reads every app's backups back each week: volumes, database dumps restored
