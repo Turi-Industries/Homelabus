@@ -21,3 +21,4 @@ date	hlb	measure	value	note
 2026-11-04	0.4.5	node-levels	D:5	lab: virtual machines read D by design
 2026-11-04	0.4.5	restores-read-back	14 of 14	the lab's own backups; restored and counted, never started
 2026-11-04	0.4.5	updates-lag	1 applied, the slowest in 0 d; 28 waiting, the oldest for 0 d	the lab, every update and not a fix's, applied by a person
+2026-11-05	0.4.6-dev	recovery-started	14 of 14	a bare VM, the kit and rest alone; each volume and bucket said restored, its services up, every assertion it declares read good

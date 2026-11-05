@@ -72,6 +72,8 @@ quality=$(curl -fsS -m 10 https://turi-industries.github.io/homelabus-catalog/qu
 row "2 never lose" "apps whose restore passed in the catalog's CI" "${quality:-unknown (no network, or no jq)}" "every app with data, each week"
 restores=$(measured restores-read-back)
 row "2 never lose" "apps whose backups were read back and read good on the lab in the last 30 days: restored and counted, never started" "${restores:-UNMEASURED — probe: \`scripts/drills/restores.sh\`}" "every app with data, weekly, alerting when one fails"
+started=$(measured recovery-started)
+row "2 never lose" "apps started on their restored copy on a bare machine, from the kit and one destination alone, every assertion read good" "${started:-UNMEASURED — probe: \`scripts/drills/recovery.sh\`}" "every app with data, each release"
 
 # 3. Never stolen --------------------------------------------------------------------
 # Not here: images without a digest — `catalog validate` refuses them already, and the
