@@ -1382,9 +1382,12 @@ partner"), success and time measured before and after.
 **Goal 2 — never lose.** Every app's backups are read back weekly: volumes counted, dumps
 restored into a disposable server, SQLite checked, buckets read to their end. What is
 left: a read-back proves a copy returns, not that the app runs on it. A store copied live
-passes (`.claude/rules/backups.md`), so an app restored whole and started in a disposable
-copy, its assertions held, stays to do — the catalog's CI does it for packaging, the
-lifeboat (phase 4) will for the vital apps nightly. A verification reads the newest
+passes (`.claude/rules/backups.md`), so `scripts/drills/recovery.sh` starts every app of the
+lab on a bare VM from the kit and one destination alone, its assertions held: 14 of 14 on
+2026-11-05, by hand. The catalog's CI does it for packaging, the lifeboat (phase 4) will for
+the vital apps nightly. ⚠️ The lab holds little (Vaultwarden no account, Vikunja no task), so
+on those an assertion says the app runs, not that a person's data came back. A verification
+reads the newest
 destination it can, so an off-site copy is rarely the one read. Proposed beside it:
 reciprocal backups between two houses, each keeping the other's encrypted copy append-only
 — an off-site copy with no provider at all.
@@ -2351,6 +2354,12 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
+- **A restore stopped halfway cannot be retried on NFS** — met on the lab 2026-11-05. It leaves
+  the app at 0 replicas with no data pin, so a second is refused, "runs nowhere", until
+  `docker service scale`. Running it "here" is no fix: a node without the volume would create
+  an empty local one and restore into that.
+- **`catalog-sources/official` does not come back with the state** — seen in the same drill. Every
+  command of a recovery says the source is left out and uses the catalog the binary carries.
 - ✅ **An update's prior copy held no database** — read in the code and fixed 2026-11-05.
   An app with a volume and a database was updated with its database as old as the last
   pass, across whatever migration the image runs, and one holding only a database
