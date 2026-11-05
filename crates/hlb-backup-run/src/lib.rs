@@ -190,74 +190,139 @@ pub async fn credentials(
     })
 }
 
-/// The volume backup provider for one destination: an update's prior backup, and the
-/// interface's "back up now".
-///
-/// 🔴 A local repository is MOUNTED, a remote one is reached over the network —
-/// [`Destination::runner`] decides, and getting it wrong produces a "repository does not
-/// exist" naming a local path unrelated to the real destination. And each volume is
-/// backed up where it lives: run here over a volume of another node, the prior backup
-/// of an update copied an empty or stale volume, and let the update through.
-pub async fn provider_for(
-    dest: &Destination,
-    network: &str,
-    admins: Admins<'_>,
-    state: &State,
-    vault: &Vault,
-) -> Result<PlacedProvider> {
-    let password = restic_password(state, vault).await?;
-    let env = dest.env(credentials(state, vault, dest).await?.as_deref())?;
-
-    let mut volumes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut services: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (app, _) in state.installed_apps().await? {
-        let v: Vec<String> = state
-            .volumes_to_backup(&app)
-            .await?
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        if !v.is_empty() {
-            services.insert(app.clone(), services_of(state, &app).await?);
-            volumes.insert(app, v);
-        }
-    }
-    Ok(PlacedProvider {
-        state: state.clone(),
-        dest: dest.clone(),
-        network: network.to_string(),
-        postgres_admin: admins.postgres.map(str::to_string),
-        mariadb_admin: admins.mariadb.map(str::to_string),
-        password,
-        env,
-        volumes,
-        services,
-    })
-}
-
-/// See [`provider_for`].
+/// What an update's prior copy is taken with: see [`provider_for_update`].
 pub struct PlacedProvider {
     state: State,
-    dest: Destination,
     network: String,
     postgres_admin: Option<String>,
     mariadb_admin: Option<String>,
     password: String,
-    env: Vec<(String, String)>,
+    /// The destination volumes go to, and its environment.
+    volumes_to: Option<(Destination, Vec<(String, String)>)>,
+    /// The destination dumps go to, and its credentials.
+    dumps_to: Option<(Destination, Option<String>)>,
     volumes: BTreeMap<String, Vec<String>>,
     services: BTreeMap<String, Vec<String>>,
 }
 
 #[async_trait::async_trait]
 impl hlb_updater::BackupProvider for PlacedProvider {
+    /// The app's volumes, then each of its databases: a migration is undone by the
+    /// database, and one as old as the last pass loses what was written since. Every
+    /// refusal comes before anything is stopped or copied.
     async fn snapshot(&self, app: &str) -> std::result::Result<String, String> {
-        let Some(volumes) = self.volumes.get(app) else {
+        let databases = self.databases_to_dump(app).await?;
+        let volumes = self.volumes.get(app);
+        if volumes.is_none() && databases.is_empty() {
             // 🔴 No "nothing to back up, so we are fine". If the manifest requires a
             // backup and we do not know what to back up, that is an error.
             return Err(format!(
-                "no known volume for \"{app}\" — the backup cannot be guaranteed"
+                "no known volume or database for \"{app}\" — the backup cannot be guaranteed"
             ));
-        };
+        }
+        let mut last = None;
+        if let Some(volumes) = volumes {
+            let Some(to) = &self.volumes_to else {
+                return Err(format!(
+                    "no destination accepts bulky data: {app}'s volumes cannot be copied first"
+                ));
+            };
+            last = Some(self.copy_volumes(app, volumes, to).await?);
+        }
+        for db in &databases {
+            last = Some(self.dump_first(app, db).await?);
+        }
+        last.ok_or_else(|| format!("nothing of {app} was copied"))
+    }
+}
+
+/// One database an update's prior copy dumps.
+struct PriorDump<'a> {
+    engine: String,
+    name: String,
+    admin: &'a str,
+    to: &'a (Destination, Option<String>),
+}
+
+impl PlacedProvider {
+    /// What the copy must dump of `app`. Refused here, not halfway through: an app's
+    /// volumes copied and then no dump is an update refused after stopping it for nothing.
+    async fn databases_to_dump(
+        &self,
+        app: &str,
+    ) -> std::result::Result<Vec<PriorDump<'_>>, String> {
+        let mut out = Vec::new();
+        for (owner, engine, name, _) in self
+            .state
+            .app_databases()
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if owner != app {
+                continue;
+            }
+            let admin = match engine.as_str() {
+                "postgres" => self.postgres_admin.as_deref(),
+                "mariadb" => self.mariadb_admin.as_deref(),
+                _ => return Err(format!("engine \"{engine}\" has no dumper")),
+            };
+            let Some(to) = &self.dumps_to else {
+                return Err(format!(
+                    "no destination accepts critical data: {name} cannot be dumped first"
+                ));
+            };
+            let Some(admin) = admin else {
+                return Err(format!(
+                    "--{engine}-admin missing: {name} cannot be dumped first"
+                ));
+            };
+            out.push(PriorDump {
+                engine,
+                name,
+                admin,
+                to,
+            });
+        }
+        Ok(out)
+    }
+
+    /// A database dumped to its destination, tagged as the pass's are: the newest dump,
+    /// so a restore after a failed migration takes it unasked, and retention forgets it
+    /// with the others. Recorded, or that restore would refuse it.
+    async fn dump_first(
+        &self,
+        app: &str,
+        db: &PriorDump<'_>,
+    ) -> std::result::Result<String, String> {
+        let dump = match db.engine.as_str() {
+            "postgres" => pg_dump(&self.network, app, &db.name, db.admin).await,
+            _ => maria_dump(&self.network, app, &db.name, db.admin).await,
+        }
+        .map_err(|e| format!("{} could not be dumped first: {e}", db.name))?;
+        let (d, creds) = db.to;
+        let id = hlb_backup::pgdump::scheduled::archive_to(
+            d,
+            creds.as_deref(),
+            Some(&self.network),
+            &self.password,
+            &dump,
+        )
+        .await
+        .map_err(|e| format!("{} could not be backed up first: {e}", db.name))?;
+        self.state
+            .record_snapshot(app, &d.name, &id)
+            .await
+            .map_err(|e| format!("snapshot {id} taken, but not recorded: {e}"))?;
+        Ok(id)
+    }
+
+    /// An app's volumes to `to`, where each lives, its service stopped where one says so.
+    async fn copy_volumes(
+        &self,
+        app: &str,
+        volumes: &[String],
+        to: &(Destination, Vec<(String, String)>),
+    ) -> std::result::Result<String, String> {
         let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
         let orch = orch
             .as_ref()
@@ -269,7 +334,7 @@ impl hlb_updater::BackupProvider for PlacedProvider {
         let stopped = stop_for_copy(&self.state, orch, app, volumes)
             .await
             .map_err(|e| e.to_string())??;
-        let taken = self.copy_and_back_up(orch, app, &places).await;
+        let taken = self.copy_and_back_up(orch, app, &places, to).await;
         let Some((o, services)) = stopped else {
             return taken;
         };
@@ -279,9 +344,7 @@ impl hlb_updater::BackupProvider for PlacedProvider {
             (Err(e), Err(t)) => Err(format!("{t}; and then {e}")),
         }
     }
-}
 
-impl PlacedProvider {
     /// An app's volumes to the destination, those its engine's tool copies read from
     /// that copy — taken here, and emptied after.
     async fn copy_and_back_up(
@@ -289,6 +352,7 @@ impl PlacedProvider {
         orch: Option<&dyn hlb_orchestrator::Orchestrator>,
         app: &str,
         places: &BTreeMap<placement::Place, Vec<String>>,
+        (dest, env): &(Destination, Vec<(String, String)>),
     ) -> std::result::Result<String, String> {
         let copies = engine_copy::declared(&self.state, app)
             .await
@@ -316,8 +380,8 @@ impl PlacedProvider {
             &self.state,
             orch,
             &self.network,
-            &self.dest,
-            (&self.password, &self.env),
+            dest,
+            (&self.password, env),
             app,
             places,
             &sources,
@@ -511,11 +575,18 @@ fn runner_at<'a>(
     }
 }
 
-/// The provider an update uses for its prior backup: the first destination of the
-/// app's bulky class.
+/// The provider an update uses for its prior copy: volumes to the app's first bulky
+/// destination, dumps to its first critical one, the classes a pass routes them by. An app
+/// holding only a database has no use for a bulky one.
 ///
-/// `None` when there is none — and the update is then REFUSED by `hlb-updater`, which
+/// `None` when there is neither — and the update is then REFUSED by `hlb-updater`, which
 /// is the point: a schema migration is not undone by rolling back an image.
+///
+/// 🔴 A local repository is MOUNTED, a remote one is reached over the network —
+/// [`Destination::runner`] decides, and getting it wrong produces a "repository does not
+/// exist" naming a local path unrelated to the real destination. And each volume is
+/// backed up where it lives: run here over a volume of another node, the prior backup
+/// of an update copied an empty or stale volume, and let the update through.
 pub async fn provider_for_update(
     state: &State,
     vault: &Vault,
@@ -524,13 +595,52 @@ pub async fn provider_for_update(
     fallback: Option<&str>,
     app: &str,
 ) -> Result<Option<PlacedProvider>> {
-    match effective_destinations(state, app, Class::Bulky, fallback)
-        .await?
-        .first()
-    {
-        Some(d) => Ok(Some(provider_for(d, network, admins, state, vault).await?)),
-        None => Ok(None),
+    let first = |destinations: Vec<Destination>| destinations.into_iter().next();
+    let bulky = first(effective_destinations(state, app, Class::Bulky, fallback).await?);
+    let critical = first(effective_destinations(state, app, Class::Critical, fallback).await?);
+    if bulky.is_none() && critical.is_none() {
+        return Ok(None);
     }
+    let volumes_to = match bulky {
+        Some(d) => {
+            let env = d.env(credentials(state, vault, &d).await?.as_deref())?;
+            Some((d, env))
+        }
+        None => None,
+    };
+    let dumps_to = match critical {
+        Some(d) => {
+            let creds = credentials(state, vault, &d).await?;
+            Some((d, creds))
+        }
+        None => None,
+    };
+
+    let mut volumes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut services: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (app, _) in state.installed_apps().await? {
+        let v: Vec<String> = state
+            .volumes_to_backup(&app)
+            .await?
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        if !v.is_empty() {
+            services.insert(app.clone(), services_of(state, &app).await?);
+            volumes.insert(app, v);
+        }
+    }
+    Ok(Some(PlacedProvider {
+        state: state.clone(),
+        network: network.to_string(),
+        postgres_admin: admins.postgres.map(str::to_string),
+        mariadb_admin: admins.mariadb.map(str::to_string),
+        password: restic_password(state, vault).await?,
+        volumes_to,
+        dumps_to,
+        volumes,
+        services,
+    }))
 }
 
 /// What a pass did, one item at a time.
@@ -1455,6 +1565,82 @@ mod tests {
             classes: vec![Class::Critical, Class::Bulky],
             credentials_secret: None,
         }
+    }
+
+    /// `app` installed from `requires`, and a provider for its update over one destination
+    /// of `classes` — none when empty. No administrator of any engine.
+    async fn provider_of(requires: &str, classes: &str) -> Option<PlacedProvider> {
+        let state = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let yaml = format!(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: x }}\n\
+             spec:\n  image: {{ repo: a/b, tag: \"1\" }}\n  requires: {requires}\n"
+        );
+        let m = serde_yaml_ng::from_str(&yaml).expect("manifest");
+        state.upsert_app("x", &m, None).await.expect("installed");
+        if requires.contains("kind: storage") {
+            state
+                .add_volume("x", "x-data", "/nowhere", true, false)
+                .await
+                .expect("volume");
+        }
+        if !classes.is_empty() {
+            state
+                .upsert_destination("nas", "/mnt/nas", classes, None)
+                .await
+                .expect("destination");
+        }
+        let admins = Admins {
+            postgres: None,
+            mariadb: None,
+        };
+        provider_for_update(&state, &vault, "bridge", admins, None, "x")
+            .await
+            .expect("read")
+    }
+
+    const WITH_DATABASE: &str = "[{ kind: database, engine: postgres }]";
+    const WITH_VOLUME: &str = "[{ kind: storage, name: data, path: /data }]";
+
+    /// Each refusal comes from the copy, so nothing of Docker is reached by these.
+    async fn refusal(requires: &str, classes: &str) -> String {
+        use hlb_updater::BackupProvider;
+        provider_of(requires, classes)
+            .await
+            .expect("a provider")
+            .snapshot("x")
+            .await
+            .expect_err("refused")
+    }
+
+    #[tokio::test]
+    async fn no_destination_at_all_gives_an_update_no_provider() {
+        assert!(provider_of(WITH_DATABASE, "").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_database_it_could_not_dump() {
+        let err = refusal(WITH_DATABASE, "critical").await;
+        assert!(err.contains("--postgres-admin"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_database_no_destination_accepts() {
+        // Routed as the pass routes it: a dump never lands on a bulky-only destination.
+        let err = refusal(WITH_DATABASE, "bulky").await;
+        assert!(err.contains("critical"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_a_volume_no_destination_accepts() {
+        let err = refusal(WITH_VOLUME, "critical").await;
+        assert!(err.contains("bulky"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_s_copy_refuses_an_app_it_finds_nothing_of() {
+        let err = refusal("[]", "critical,bulky").await;
+        assert!(err.contains("no known volume or database"), "{err}");
     }
 
     #[tokio::test]

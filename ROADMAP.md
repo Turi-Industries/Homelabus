@@ -2351,11 +2351,15 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
     sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
     real one before moving the threshold.
   - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
-- **An update's prior copy holds no database** — read in the code on 2026-11-05.
-  `PlacedProvider::snapshot` copies volumes; dumps run in the pass alone. An app with a volume
-  and a database is updated with its database as old as the last pass, across whatever
-  migration the image runs, and one holding only a database (Roundcube) is refused for ever,
-  "no known volume". The fix is a dump in that copy.
+- ✅ **An update's prior copy held no database** — read in the code and fixed 2026-11-05.
+  An app with a volume and a database was updated with its database as old as the last
+  pass, across whatever migration the image runs, and one holding only a database
+  (Roundcube) was refused for ever, "no known volume". The copy dumps each database now.
+- **An update's prior copy still takes a SQLite database live** — read in the code on
+  2026-11-05. The pass snapshots it with `VACUUM INTO`; the copy takes the volume as restic
+  reads it, and `restore::sqlite_after` finds no snapshot of that pass to put back. Five
+  manifests are concerned: PocketID, Jellyfin, Grafana, ntfy, CrowdSec (Termix stops for its
+  copy). A bucket is not in that copy either: Fluxer's objects are as old as the last pass.
 - ✅ **Two mesh peers recorded at one address overwrote each other's tunnel** — found
   and fixed 2026-10-29: the lab's mesh still recorded `arch1`, a VM long gone, at
   10.77.0.13, and `node add` of a fresh VM there pushed arch1's WireGuard configuration

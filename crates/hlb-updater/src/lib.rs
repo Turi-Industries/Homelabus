@@ -444,7 +444,7 @@ async fn candidate<T: chrono::Datelike + chrono::Timelike>(
 /// Whether an update of `app` must take a copy first: its manifest asks, and it holds
 /// something to copy. A cache's only volume says `backup: false`, and its update was refused
 /// for ever for lacking the copy nothing was meant to take. Known from what it declares,
-/// never from a provider finding nothing: "no known volume" stays a refusal.
+/// never from a provider finding nothing: finding nothing stays a refusal.
 pub async fn owes_backup(state: &State, app: &str, m: &Manifest) -> Result<bool> {
     Ok(m.spec.update.backup_before && !state.backup_kinds(app).await?.is_empty())
 }
@@ -779,7 +779,7 @@ spec:
             .expect("volume");
         assert!(owes_backup(&state, "x", &m).await.expect("read"));
 
-        // Holding no volume is no pass for a database: a provider refuses it further on.
+        // Holding no volume is no pass for a database: its dump is the copy.
         let (state, m) = installed(
             "[{ kind: database, engine: postgres }]",
             "{ channel: minor }",
