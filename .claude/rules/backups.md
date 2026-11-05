@@ -126,6 +126,11 @@ during an outage.
   Homelabus's state and the SQLite files, and mounted volumes under `/data/` where the
   CLI uses `/donnees/`: the two produced snapshots with different paths. There is one
   pass now, `hlb-backup-run`, and both call it.
+- **A service in a crash loop is placed where Swarm keeps starting it** (`placement::locate`):
+  no task of it is ever `running`, so an NFS app kept down by what its volume holds could not
+  be restored, the moment a restore exists for. Immich refuses an empty share once its
+  database says it had files, so on a restored house it stayed down for good. A data pin still
+  beats it: a start elsewhere does not move a volume.
 - **The pass reads a volume by its host path**, on the machine it runs on. The
   controller's container had none of them mounted (every SQLite backup: "No such
   file"), then could not cross an app's 0700 directory with every capability dropped
@@ -137,6 +142,13 @@ during an outage.
   database it no longer matches. `hlb backup restore` restores one path in place with
   `--delete`, the app stopped — and located BEFORE it stops: a stopped service on NFS
   runs nowhere, and no pin says where its volume is.
+- **🔴 Restored on NFS, every file failed, and the app stayed stopped.** An NFSv4 client shows
+  `system.nfs4_acl` where the share's filesystem has ACLs (ext4, XFS) and refuses to remove it;
+  restic 0.19.1 removes each attribute the snapshot lacks, so it exited 1 after writing every
+  file. Both restores pass `--exclude-xattr` (`restic::NFS4_ACL`), found on a share of ext4:
+  the lab's ZFS has none, and no drill had restored one. ⚠️ A restore stopped halfway leaves
+  an NFS app at 0 replicas with no pin, and a second is refused ("runs nowhere") until
+  `docker service scale` starts it.
 - **The copy a restore takes first is never "the latest".** It is tagged
   `kind:pre-restore`; taken as the default, a second restore would bring back the very
   data the first replaced. Only its id restores it. ⚠️ `kind:pre-update` is what every

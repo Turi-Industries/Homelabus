@@ -128,6 +128,12 @@ pub const DEFAULT_HOST: &str = "homelabus";
 /// endlessly, and a wait with no end is a pass that never reports.
 pub const LOCK_WAIT: &str = "10m";
 
+/// The NFSv4 client shows this attribute on every file of a share whose filesystem has ACLs
+/// (ext4, XFS), and refuses to remove it. A restore removes each attribute the snapshot does
+/// not hold, so it failed once per file, the app left stopped (0.19.1, measured on a house
+/// restored over NFS). It is the server's, no file's data.
+const NFS4_ACL: &str = "system.nfs4_acl";
+
 /// `args` waiting [`LOCK_WAIT`] for a lock held by another command.
 fn waiting(mut args: Vec<String>) -> Vec<String> {
     args.extend(["--retry-lock".to_string(), LOCK_WAIT.to_string()]);
@@ -347,6 +353,8 @@ impl<R: Runner> Repository<R> {
             "--target",
             path,
             "--delete",
+            "--exclude-xattr",
+            NFS4_ACL,
         ])
         .await?;
         tracing::info!(snapshot, path, "restored in place");
@@ -361,8 +369,15 @@ impl<R: Runner> Repository<R> {
     /// `dir`, the directory is the target and keeps its metadata; and without
     /// `--delete`, the volume's other files stay.
     pub async fn restore_files_in(&self, snapshot: &str, dir: &str) -> Result<()> {
-        self.exec(&["restore", &format!("{snapshot}:{dir}"), "--target", dir])
-            .await?;
+        self.exec(&[
+            "restore",
+            &format!("{snapshot}:{dir}"),
+            "--target",
+            dir,
+            "--exclude-xattr",
+            NFS4_ACL,
+        ])
+        .await?;
         tracing::info!(snapshot, dir, "files restored in place");
         Ok(())
     }
@@ -585,6 +600,8 @@ mod tests {
                 "--target",
                 "/donnees/app-data",
                 "--delete",
+                "--exclude-xattr",
+                "system.nfs4_acl",
                 "--retry-lock",
                 LOCK_WAIT
             ]
@@ -731,6 +748,8 @@ mod tests {
                 "3de83a48:/donnees/app-data/data",
                 "--target",
                 "/donnees/app-data/data",
+                "--exclude-xattr",
+                "system.nfs4_acl",
                 "--retry-lock",
                 LOCK_WAIT
             ]

@@ -54,9 +54,9 @@ fn owner<'a>(volume: &str, services: &'a [String]) -> &'a str {
 /// Groups `volumes` by the machine holding them.
 ///
 /// A service's volume is where its task runs; a service not running is placed by its
-/// data pin (`hlb.data.<service>`), which is where it would start again. `local` is
-/// this machine's node id: unknown — no Swarm — every volume is taken as here, which
-/// is what the pass did before it could tell.
+/// data pin (`hlb.data.<service>`), which is where it would start again, and with no pin
+/// where Swarm is starting it. `local` is this machine's node id: unknown — no Swarm —
+/// every volume is taken as here, which is what the pass did before it could tell.
 pub fn locate(
     volumes: &[String],
     services: &[String],
@@ -80,7 +80,15 @@ pub fn locate(
                         .find(|n| n.data.iter().any(|d| d == service))
                         .map(|n| n.id.clone())
                 };
-                match running.or_else(pinned) {
+                // A crash loop has no running task, only ever the next one on its way: `ready`
+                // through its restart delay, and for an instant on no node at all.
+                let starting = || {
+                    tasks
+                        .iter()
+                        .filter(|t| t.desired_state != "shutdown" && t.service == service)
+                        .find_map(|t| t.node_id.clone())
+                };
+                match running.or_else(pinned).or_else(starting) {
                     Some(id) if id == here => Place::Here,
                     Some(id) => Place::Node {
                         hostname: nodes
@@ -384,6 +392,44 @@ mod tests {
             matches!(at.keys().next(), Some(Place::Unknown(_))),
             "{at:?}"
         );
+    }
+
+    // On NFS no node holds its data, and between two crashes no task is running: refused,
+    // the app a corrupted volume keeps down could never be restored. On a restored house
+    // Immich reads its database, finds its share empty and exits, so it never came back.
+    #[test]
+    fn a_crash_looping_service_is_placed_where_swarm_keeps_starting_it() {
+        let nodes = [node("n1", "deb1", &[]), node("n2", "deb2", &[])];
+        let mut unplaced = task("immich", "n1", true);
+        unplaced.state = "pending".into();
+        unplaced.node_id = None;
+        let mut delayed = task("immich", "n2", true);
+        delayed.desired_state = "ready".into();
+        delayed.state = "ready".into();
+        let tasks = [task("immich", "n1", false), unplaced, delayed];
+        let at = locate(
+            &["immich-data".into()],
+            &["immich".into()],
+            &tasks,
+            &nodes,
+            Some("n1"),
+        );
+        assert!(
+            at.keys()
+                .all(|p| matches!(p, Place::Node { hostname, .. } if hostname == "deb2")),
+            "{at:?}"
+        );
+
+        // Its data pin says where the volume is: a start elsewhere does not move it.
+        let pinned = [node("n1", "deb1", &["immich"]), node("n2", "deb2", &[])];
+        let at = locate(
+            &["immich-data".into()],
+            &["immich".into()],
+            &tasks,
+            &pinned,
+            Some("n1"),
+        );
+        assert!(at.keys().all(|p| matches!(p, Place::Here)), "{at:?}");
     }
 
     #[test]
