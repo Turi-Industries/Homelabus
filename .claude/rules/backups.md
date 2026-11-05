@@ -193,6 +193,13 @@ during an outage.
   chunks by content. Every pass still READS every byte from Garage. All of an app's
   buckets are one outcome per destination, as its volumes: recorded one by one, the
   bucket that succeeded made the app fresh while the other went unread.
+- **An update's prior copy dumps every database the app declares**
+  (`PlacedProvider::snapshot`): it held volumes alone, so a migration gone wrong went back to
+  the last pass, and an app holding only a database was refused for ever. Volumes go to the
+  first bulky destination and dumps to the first critical one, as a pass routes them, and each
+  refusal comes before anything stops. Tagged as a pass's dump: the newest, which a restore
+  takes unasked, and retention's to forget. ⚠️ Its SQLite is still copied live and its buckets
+  not at all.
 - **A database had no way back.** Dumps were taken, recorded and verified every night,
   and `hlb backup restore` put back volumes and buckets only: Fluxer whole could not be
   restored. `--database` drops the database and recreates it with provisioning's own

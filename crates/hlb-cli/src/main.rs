@@ -2649,8 +2649,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// The provider an update's prior backup goes through: the app's first bulky
-/// destination, or `--backup-repo`. `None` refuses the update.
+/// The provider an update's prior copy goes through: the app's first bulky destination for
+/// its volumes and first critical one for its dumps, or `--backup-repo`. `None` refuses the
+/// update.
 async fn build_backup_provider(
     cli: &Cli,
     app: &str,
