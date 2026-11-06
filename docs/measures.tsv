@@ -51,3 +51,5 @@ date	hlb	measure	value	note
 2026-11-06	0.4.7	stolen-enc3-no-tang	closed	level A node; 120 s; opened alone at home first
 2026-11-06	0.4.7	stolen-reopen-seconds	38	enc2, one Tang back
 2026-11-06	0.4.7	node-levels	D:5	lab: virtual machines read D by design
+2026-11-06	0.4.7	recovery-started	14 of 14	a bare VM, the kit and rest alone; each volume and bucket said restored, its services up, every assertion it declares read good
+2026-11-06	0.4.7	recovery-content	57 of 57 tables and 14 of 14 volumes	read on the house before the pass, then on the bare VM: each still holding rows or files
