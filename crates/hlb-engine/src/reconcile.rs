@@ -16,7 +16,8 @@
 //! - **Restart a failed installation.** It would loop forever on the same error. That
 //!   needs an explicit intervention.
 //! - **Correct a convergence in flight.** If Swarm is starting tasks, it is left to
-//!   finish rather than being given contradictory orders.
+//!   finish rather than being given contradictory orders. What it will never finish is
+//!   no convergence: `NoRoom`, `PullStuck`.
 //! - **Recreate a deleted service.** It did, from the image and the tier alone: no
 //!   volumes, no environment, no probe — the data then landed in the container's
 //!   ephemeral layer, and the report said "1 gap corrected". Rebuilding it whole is the
@@ -131,6 +132,23 @@ fn make_room(
     }
 }
 
+/// How long a task repeats a pull failure before it is started again. 🔴 Not sooner: while the
+/// registry is still away a new task only fails the same way, and starting one restarts the
+/// service's healthy replicas with it. The new task's own age paces the next try.
+const PULL_STUCK_AFTER_SECS: i64 = 300;
+
+/// The pull failure `task` repeats, once it has done so for long enough.
+///
+/// A pull in progress shows no error, however long it takes, and a refusal or a missing tag ends
+/// the task, which Swarm then replaces: only a failure that leaves the task in `preparing` stays.
+fn repeated_pull_failure(task: &hlb_orchestrator::TaskInfo, now: i64) -> Option<&str> {
+    let since = task.updated_at?;
+    (task.desired_state == "running"
+        && task.state == "preparing"
+        && now - since >= PULL_STUCK_AFTER_SECS)
+        .then_some(task.err.as_deref()?)
+}
+
 /// Where the app's key id is kept: what it signs with.
 fn key_id_secret(app: &str) -> String {
     hlb_types::capability::s3_key_secrets(app).0
@@ -179,6 +197,12 @@ pub enum Drift {
         moves: Vec<String>,
     },
 
+    /// A task whose pull failed on a name or a timeout, in `Preparing` for good: Swarm keeps
+    /// that first error and repeats it each second without asking anything again, so the error
+    /// outlives the outage. A node booted before its network does it, and the task holds its
+    /// memory reservation meanwhile (measured on Docker 29.9, 2026-11-06).
+    PullStuck { app: String, error: String },
+
     /// Stopped on purpose — a restore, a store stopped for its copy — until the hold
     /// is released or lapses.
     Held { app: String, why: String },
@@ -210,7 +234,7 @@ impl Drift {
             Self::NoRoom { moves, .. } => !moves.is_empty(),
             _ => matches!(
                 self,
-                Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. }
+                Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } | Self::PullStuck { .. }
             ),
         }
     }
@@ -234,6 +258,7 @@ impl Drift {
             | Self::OrphanService { .. }
             | Self::Converging { .. }
             | Self::NoRoom { .. }
+            | Self::PullStuck { .. }
             | Self::Held { .. }
             | Self::StorageUnread { .. } => None,
         }
@@ -250,7 +275,9 @@ impl Drift {
     /// explain.
     pub fn refusal(&self) -> Option<&'static str> {
         match self {
-            Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } => None,
+            Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } | Self::PullStuck { .. } => {
+                None
+            }
             Self::NoRoom { moves, .. } if !moves.is_empty() => None,
             Self::NoRoom { .. } => Some(
                 "no other node has the memory to take what runs there, and its data keeps it \
@@ -311,7 +338,10 @@ impl Drift {
         match self {
             // A missing companion is the silent kind: Immich without its machine
             // learning shows every photo and recognises nobody.
-            Self::ServiceMissing { .. } | Self::StorageLost { .. } | Self::NoRoom { .. } => Broken,
+            Self::ServiceMissing { .. }
+            | Self::StorageLost { .. }
+            | Self::NoRoom { .. }
+            | Self::PullStuck { .. } => Broken,
             Self::StorageUnread { .. } => Unknown,
             Self::ReplicasDiverged { .. }
             | Self::ImageDiverged { .. }
@@ -330,6 +360,7 @@ impl Drift {
             | Self::Converging { app, .. }
             | Self::Held { app, .. }
             | Self::NoRoom { app, .. }
+            | Self::PullStuck { app, .. }
             | Self::StorageLost { app, .. } => app,
             Self::OrphanService { name } => name,
             Self::StorageUnread { .. } => "garage",
@@ -381,6 +412,10 @@ impl std::fmt::Display for Drift {
                 f,
                 "{app}: stays down, {node} holds its data and has no memory left for it — moving {} makes room",
                 moves.join(", ")
+            ),
+            Self::PullStuck { app, error } => write!(
+                f,
+                "{app}: stays down, Swarm repeats an old pull failure and will not try again — {error}"
             ),
             Self::StorageLost { app, buckets, key } => {
                 let lost: Vec<String> = buckets
@@ -787,7 +822,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             }
         }
 
-        self.no_room_drifts(&apps, &mut drifts).await?;
+        self.unfinishable_drifts(&apps, &mut drifts).await?;
         self.storage_drifts(&storage, &mut drifts).await?;
         self.portal_drifts(&apps, &mut drifts).await?;
 
@@ -806,7 +841,11 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
 
     /// Turns each `Converging` Swarm will never finish into what it is. Asked only when one
     /// exists: a healthy house reads no task for this.
-    async fn no_room_drifts(&self, apps: &[(String, String)], drifts: &mut [Drift]) -> Result<()> {
+    async fn unfinishable_drifts(
+        &self,
+        apps: &[(String, String)],
+        drifts: &mut [Drift],
+    ) -> Result<()> {
         if !drifts.iter().any(|d| matches!(d, Drift::Converging { .. })) {
             return Ok(());
         }
@@ -828,6 +867,17 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             let Drift::Converging { app, .. } = &*d else {
                 continue;
             };
+            let stale_pull = tasks
+                .iter()
+                .filter(|t| &t.service == app)
+                .find_map(|t| repeated_pull_failure(t, chrono::Utc::now().timestamp()));
+            if let Some(error) = stale_pull {
+                *d = Drift::PullStuck {
+                    app: app.clone(),
+                    error: error.to_string(),
+                };
+                continue;
+            }
             let starved = tasks.iter().any(|t| {
                 &t.service == app
                     && t.desired_state == "running"
@@ -901,6 +951,12 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 Ok(())
             }
 
+            // A new task pulls again; the stuck one never would.
+            Drift::PullStuck { app, .. } => {
+                self.orchestrator.reschedule(app).await?;
+                Ok(())
+            }
+
             // Deliberately inert: see the module header.
             Drift::ServiceMissing { .. }
             | Drift::OrphanService { .. }
@@ -947,6 +1003,10 @@ mod tests {
             Drift::Held {
                 app: "gitea".into(),
                 why: "restore of gitea-data".into(),
+            },
+            Drift::PullStuck {
+                app: "gitea".into(),
+                error: "lookup registry on [::1]:53".into(),
             },
             Drift::StorageLost {
                 app: "fluxer".into(),

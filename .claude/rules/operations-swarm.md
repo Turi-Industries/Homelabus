@@ -44,6 +44,12 @@ Most of these fail behind a healthy task.
 - **Replicas share no local volume.** Vikunja ran two over its `files`: on two nodes, two
   diverging copies behind one routing mesh; on one, two processes racing their
   migrations. Validation refuses more than one replica over a `tier: local` volume.
+- **🔴 A task's pull error can be a recording.** A Swarm task whose pull fails on a name or a
+  timeout stays `Preparing`, and Swarm repeats that error each second without trying again:
+  `lookup … on [::1]:53` went on long after the resolver worked, and read as "Docker has no
+  DNS" (Docker 29.9.3, 2026-11-06: 333 failures, one source port, no packet). A refusal or a
+  missing tag ends the task instead, and an image already on the node starts anyway. Only a
+  new task pulls again: `Drift::PullStuck`. ⚠️ A pull in progress is `Preparing` with no error.
 - **Nothing that installs Docker may connect to it first.** `cluster init` connected at
   the top of its command and could never start on a bare machine.
 - **Upgrading a kernel on Arch or Alpine deletes the running one's modules.** Docker then
