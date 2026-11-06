@@ -357,7 +357,9 @@ more), enrols the node's recovery key and takes the
 install passphrase out. Refused while the printed kit lacks that key, and on a one-node
 house — the disk would open for whoever carries the machine away. When no Tang answers,
 the kit's key is typed at the console or over SSH at boot (`ssh -p 2222`, root's keys,
-the fingerprint it printed). `node add` and `mesh remove` name the disks to bind again.
+the fingerprint it printed). Piped rather than typed, it goes with `printf '%s'`: the final
+newline `echo` adds is read as part of the key, and the disk answers "bad password".
+`node add` and `mesh remove` name the disks to bind again.
 
 ```sh
 ./target/debug/hlb node bind-disk worker-1           # what would change — the key made

@@ -117,6 +117,9 @@ echo "enc3 at home"
 boot_enc3
 at_home3=$(waits_for "$enc3" "$wait_open") || { echo "enc3 did not open at home: the drill proves nothing" >&2; exit 1; }
 echo "  opened alone in ${at_home3} s"
+# This drill cuts enc3's power below, and the TPM counts each cut: the third would hold the
+# next run's "at home" for 16 minutes and read as a broken node.
+lab /lab/vm.sh ssh "$enc3" tpm2_dictionarylockout --clear-lockout
 shut_down enc3 "$enc3"
 
 echo "enc3 with no Tang"
