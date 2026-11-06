@@ -42,3 +42,7 @@ date	hlb	measure	value	note
 2026-11-05	0.4.6	deploy-answers	7	the drill's ask calls
 2026-11-06	0.4.7	restores-read-back	14 of 14	the lab's own backups; restored and counted, never started
 2026-11-06	0.4.7	updates-lag	20 applied, the slowest in 0 d; 13 waiting, the oldest for 1 d	the lab, every update and not a fix's, applied by a person
+2026-11-06	0.4.7	deploy-os-seconds	131	netinst by preseed, no encryption, lab VM
+2026-11-06	0.4.7	deploy-first-app-seconds	67	lab VM, 4096 MB, 2 vCPU, Debian 13 cloud image; librespeed behind Caddy
+2026-11-06	0.4.7	deploy-full-app-seconds	258	lab VM, 4096 MB, 2 vCPU, Debian 13 cloud image; Vikunja, PostgreSQL, Stalwart, PocketID
+2026-11-06	0.4.7	deploy-answers	7	the drill's ask calls
