@@ -2354,13 +2354,26 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
   and Stalwart, pinned to deb1 by its data, stayed Pending on "insufficient resources" until
   `docker service update --force` moved Fluxer's two largest back. Reconciliation reads it now
   (`Drift::NoRoom`, harm broken) and, applied, moves the largest free services a node can take.
-  Tested on fakes: Swarm's own choice of where they land has not been run on the lab.
-- **enc3 held in its initrd after power cuts** — 2026-11-05: 1004 s during the stolen drill, then
-  at least 7 minutes after a power cut, when it was cut again. That second time both Tangs answered
-  200 every 6 s, so the wait is not theirs: the first entry here blamed a Tang, wrongly. It looks
-  like the TPM's dictionary-attack lockout, whose usual recovery time is 1000 s. Not proven:
-  `tpm2_getcap properties-variable` once it opens says. If so, a real node meets it after a few
-  power cuts, and waits 17 minutes with nothing said.
+  Run on the lab's Swarm 2026-11-06 with Stalwart starved on a crowded deb1: it named
+  `fluxer-gateway`, Swarm put it on deb2, and Stalwart ran 30 s after the apply.
+- **A bound disk waits for its TPM after power cuts, and says nothing** — measured 2026-11-06
+  on enc3, which held 16 minutes in its initrd on 2026-11-05 and again on demand. Each power
+  cut counts one failure in the TPM's dictionary lockout, in the initrd as on a running system;
+  a clean stop or reboot counts none. The object Clevis seals is `noda`, the primary it loads
+  it under is not: locked, the load answers `0x921` and Clevis loops, the Tangs answering 200
+  every 6 s, nothing on the console. swtpm allows 3 failures and forgives one per 1000 s: the
+  disk opened 16 min 34 s after the first Tang request. The kit's key still opens it, and
+  `tpm2_dictionarylockout --clear-lockout` from the opened system resets the count with no
+  authorization. The binding has no PIN, so the lockout guards no guess here, and whoever holds
+  the machine can clear it from another OS. Proposed, not built: clear it after each boot of a
+  bound node. A real TPM's numbers are not measured: read `tpm2_getcap properties-variable` on
+  the owner's laptop first. `stolen.sh` clears enc3's count once it opens at home.
+- **A Docker started before the network has no DNS until restarted** — seen on the lab
+  2026-11-06, one boot, unexplained. No DHCP answer for its first minutes, and dockerd asked
+  `[::1]:53` for 54 minutes while `/etc/resolv.conf`, `getent` and `curl` had long worked.
+  Every image it lacked stayed `Preparing`, holding its memory reservation, and tasks failing
+  on deb2 came to wait there too. A restart of Docker cured it. A house cut whole boots its
+  router too, so a real node may meet it; not reproduced, nor tried on bare metal.
 - ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
   2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
   nowhere". The hold records the volume's node before anything stops.

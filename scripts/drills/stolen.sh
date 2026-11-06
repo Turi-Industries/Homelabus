@@ -26,7 +26,7 @@ cd "$(git rev-parse --show-toplevel)"
 record=1
 [[ ${1:-} == --no-record ]] && record=0
 
-hlb_on_deb1=${LAB_HLB:-/root/lab-046/hlb}
+hlb_on_deb1=${LAB_HLB:-/root/lab-047/hlb}
 enc2=10.77.0.19
 enc3=10.77.0.17
 wait_closed=120
@@ -117,6 +117,9 @@ echo "enc3 at home"
 boot_enc3
 at_home3=$(waits_for "$enc3" "$wait_open") || { echo "enc3 did not open at home: the drill proves nothing" >&2; exit 1; }
 echo "  opened alone in ${at_home3} s"
+# This drill cuts enc3's power below, and the TPM counts each cut: the third would hold the
+# next run's "at home" for 16 minutes and read as a broken node.
+lab /lab/vm.sh ssh "$enc3" tpm2_dictionarylockout --clear-lockout
 shut_down enc3 "$enc3"
 
 echo "enc3 with no Tang"
