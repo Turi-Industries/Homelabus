@@ -6881,6 +6881,32 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 .into_iter()
                 .find(|s| s.id == id);
 
+                // Before its first --apply: no row to mark, and no domain to check it
+                // against. The install reads this and does not stop for the step.
+                if !state.installed_apps().await?.iter().any(|(a, _)| a == app) {
+                    if step.is_none() {
+                        eprintln!("no step \"{id}\" in {app}'s guide.");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    state.attest_ahead(app, id, *force).await?;
+                    state
+                        .audit(
+                            "cli",
+                            ACTOR_ROLE,
+                            "guide-verify",
+                            target,
+                            "ok",
+                            Some("attested before its install"),
+                        )
+                        .await?;
+                    println!("\"{id}\" of {app} marked handled, ahead of its install.");
+                    println!(
+                        "\n⚠️  Attestation: nothing could check this yet, Homelabus takes your \
+                         word for it."
+                    );
+                    return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
+                }
+
                 let mut attested = true;
                 let mut overridden = false;
                 if let Some(step) = step {
@@ -12641,10 +12667,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
 
                 println!("{:<20} {:>9}  IMAGE", "SERVICE", "REPLICAS");
                 for s in services {
-                    println!(
-                        "{:<20} {:>4}/{:<4}  {}",
-                        s.name, s.running_replicas, s.desired_replicas, s.image
-                    );
+                    println!("{:<20} {:>9}  {}", s.name, s.replicas_text(), s.image);
                 }
                 Ok(ExitCode::SUCCESS)
             })

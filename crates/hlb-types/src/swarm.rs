@@ -325,12 +325,19 @@ pub fn data_node(
     })
 }
 
+/// Where the `heavy` tier starts, as a node REPORTS its memory. 🔴 Not 8192: a kernel never
+/// reports what is installed — a VM given 4096 MB read 3922, and firmware and a built-in GPU
+/// keep more on real hardware —, so a machine sold as 8 GB stayed `light` and refused
+/// PostgreSQL. Nothing is sold between 6 and 8 GB, so this cuts no real machine in the wrong
+/// half.
+pub const HEAVY_TIER_MIN_MB: u64 = 7168;
+
 /// A node's tier, derived from its memory.
 ///
 /// 🔴 Not cosmetic: this is what stops PostgreSQL landing on a 4 GB node, where it
 /// would work until the day it kills the machine with an OOM.
 pub fn tier_for_memory(memory_mb: u64) -> &'static str {
-    if memory_mb >= 8192 {
+    if memory_mb >= HEAVY_TIER_MIN_MB {
         "heavy"
     } else {
         "light"
@@ -1049,8 +1056,16 @@ mod tests {
         // day of the OOM.
         assert_eq!(tier_for_memory(3900), "light");
         assert_eq!(tier_for_memory(4096), "light");
+        assert_eq!(tier_for_memory(6144), "light");
         assert_eq!(tier_for_memory(8192), "heavy");
         assert_eq!(tier_for_memory(16384), "heavy");
+    }
+
+    #[test]
+    fn a_machine_sold_as_8_gb_is_heavy_whatever_its_firmware_keeps() {
+        assert_eq!(tier_for_memory(7900), "heavy");
+        assert_eq!(tier_for_memory(7168), "heavy");
+        assert_eq!(tier_for_memory(7167), "light");
     }
 
     #[test]

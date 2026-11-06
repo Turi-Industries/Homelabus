@@ -1091,6 +1091,9 @@ impl SwarmOrchestrator {
                 .and_then(|r| r.replicas)
                 .unwrap_or(0) as u64,
             running_replicas: running,
+            global: spec
+                .and_then(|s| s.mode.as_ref())
+                .is_some_and(|m| m.global.is_some()),
             image: spec
                 .and_then(|s| s.task_template.as_ref())
                 .and_then(|t| t.container_spec.as_ref())
@@ -1249,6 +1252,28 @@ impl Orchestrator for SwarmOrchestrator {
         }?;
         self.prune_file_secrets(&spec.name).await;
         Ok(id)
+    }
+
+    async fn reschedule(&self, name: &str) -> Result<()> {
+        let current = self.inspect_whole(name).await?;
+        let version = current
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| Error::Unexpected("service with no version".into()))?;
+        let mut spec = current
+            .spec
+            .ok_or_else(|| Error::Unexpected("service with no spec".into()))?;
+        let template = spec
+            .task_template
+            .as_mut()
+            .ok_or_else(|| Error::Unexpected("service with no task template".into()))?;
+        // What `docker service update --force` changes: nothing else, and the tasks go again.
+        template.force_update = Some(template.force_update.unwrap_or(0) + 1);
+        let opts = UpdateServiceOptionsBuilder::default()
+            .version(version as i32)
+            .build();
+        self.docker.update_service(name, spec, opts, None).await?;
+        Ok(())
     }
 
     async fn update_image(&self, name: &str, image: &str) -> Result<()> {

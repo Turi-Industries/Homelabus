@@ -22,6 +22,9 @@ struct Fake {
     updated: Mutex<Vec<(String, String)>>,
     removed: Mutex<Vec<String>>,
     specs: Mutex<Vec<ServiceSpec>>,
+    nodes: Mutex<Vec<hlb_orchestrator::NodeInfo>>,
+    tasks: Mutex<Vec<hlb_orchestrator::TaskInfo>>,
+    rescheduled: Mutex<Vec<String>>,
 }
 
 impl Fake {
@@ -69,7 +72,11 @@ impl Orchestrator for Fake {
         })
     }
     async fn nodes(&self) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::NodeInfo>> {
-        Ok(Vec::new())
+        Ok(self.nodes.lock().unwrap().clone())
+    }
+    async fn reschedule(&self, n: &str) -> hlb_orchestrator::Result<()> {
+        self.rescheduled.lock().unwrap().push(n.into());
+        Ok(())
     }
     async fn label_node(&self, _: &str, _: &str, _: &str) -> hlb_orchestrator::Result<()> {
         Ok(())
@@ -133,8 +140,7 @@ impl Orchestrator for Fake {
         &self,
         _: Option<&str>,
     ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-        // A fake orchestrator has no tasks: empty is the honest answer.
-        Ok(Vec::new())
+        Ok(self.tasks.lock().unwrap().clone())
     }
 
     async fn logs(
@@ -152,6 +158,7 @@ fn svc(name: &str, image: &str, desired: u64, running: usize) -> ServiceStatus {
         id: "id".into(),
         desired_replicas: desired,
         running_replicas: running,
+        global: false,
         image: image.into(),
         update_state: None,
     }
@@ -1177,6 +1184,7 @@ fn service(name: &str) -> ServiceStatus {
         id: format!("{name}-id"),
         desired_replicas: 1,
         running_replicas: 1,
+        global: false,
         image: "example/any:1".into(),
         update_state: None,
     }
@@ -1260,4 +1268,154 @@ spec:
         hlb_engine::ingress::app_blockers(&Fake::default(), &s, &m).await,
         Vec::<String>::new()
     );
+}
+
+fn node(id: &str, memory_mb: u64, data: &[&str]) -> hlb_orchestrator::NodeInfo {
+    hlb_orchestrator::NodeInfo {
+        id: id.into(),
+        hostname: id.into(),
+        role: hlb_orchestrator::NodeRole::Manager,
+        status: "ready".into(),
+        availability: "active".into(),
+        tier: Some("heavy".into()),
+        protection: None,
+        disk_tangs: Vec::new(),
+        is_leader: false,
+        memory_mb: Some(memory_mb),
+        failure_domain: None,
+        data: data.iter().map(|d| d.to_string()).collect(),
+        ingress: false,
+        addr: None,
+    }
+}
+
+fn task(
+    service: &str,
+    on: Option<&str>,
+    state: &str,
+    err: Option<&str>,
+) -> hlb_orchestrator::TaskInfo {
+    hlb_orchestrator::TaskInfo {
+        id: format!("{service}-task"),
+        service: service.into(),
+        slot: Some(1),
+        node_id: on.map(str::to_string),
+        desired_state: "running".into(),
+        state: state.into(),
+        image: "a/b:1".into(),
+        message: None,
+        err: err.map(str::to_string),
+        updated_at: None,
+    }
+}
+
+const NO_ROOM: &str = "no suitable node (3 nodes not available for new tasks; insufficient \
+                       resources on 1 node; scheduling constraints not satisfied on 1 node)";
+
+/// `mail` pinned to `home` and starved there by `big` and `small`, which could leave, and
+/// `pinned`, which could not; `away` has `away_mib` of memory.
+async fn starved_house(away_mib: u64) -> (State, Fake) {
+    let s = State::in_memory().await.unwrap();
+    for (app, reserve) in [
+        ("mail", "200M"),
+        ("big", "512M"),
+        ("small", "64M"),
+        ("pinned", "512M"),
+    ] {
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(&format!(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: {app} }}\nspec:\n  \
+             image: {{ repo: a/{app}, tag: \"1\" }}\n  swarm:\n    tier: heavy\n    \
+             memory: {{ reserve: {reserve}, limit: 1G }}\n"
+        ))
+        .unwrap();
+        s.upsert_app(app, &m, None).await.unwrap();
+        s.set_app_status(app, "running").await.unwrap();
+    }
+    let f = Fake::with(vec![
+        svc("mail", "a/mail:1", 1, 0),
+        svc("big", "a/big:1", 1, 1),
+        svc("small", "a/small:1", 1, 1),
+        svc("pinned", "a/pinned:1", 1, 1),
+    ]);
+    *f.nodes.lock().unwrap() = vec![
+        node("home", 4096, &["mail", "pinned"]),
+        node("away", away_mib, &[]),
+    ];
+    *f.tasks.lock().unwrap() = vec![
+        task("mail", None, "pending", Some(NO_ROOM)),
+        task("big", Some("home"), "running", None),
+        task("small", Some("home"), "running", None),
+        task("pinned", Some("home"), "running", None),
+    ];
+    (s, f)
+}
+
+#[tokio::test]
+async fn a_pinned_service_starved_of_memory_gets_room_from_what_is_free_to_leave() {
+    let (s, f) = starved_house(4096).await;
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(
+        matches!(&report.drifts[0], Drift::NoRoom { app, moves, .. }
+            if app == "mail" && moves == &["big".to_string()]),
+        "{:?}",
+        report.drifts
+    );
+    assert_eq!(
+        *f.rescheduled.lock().unwrap(),
+        ["big"],
+        "the largest is enough, and never what holds data here"
+    );
+}
+
+#[tokio::test]
+async fn a_starved_service_is_only_said_when_a_preview_reads_it() {
+    let (s, f) = starved_house(4096).await;
+    Reconciler::new(&f, &s).reconcile(false).await.unwrap();
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn nothing_moves_when_no_other_node_could_take_enough() {
+    // 🔴 Restarting a service for nothing is harm: the app stays down either way.
+    let (s, f) = starved_house(100).await;
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    let d = &report.drifts[0];
+    assert!(
+        matches!(d, Drift::NoRoom { moves, .. } if moves.is_empty()),
+        "{d:?}"
+    );
+    assert!(d.refusal().is_some(), "says why nothing was done");
+    assert_eq!(d.harm(), hlb_api::DriftHarm::Broken);
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_service_held_for_a_copy_is_never_moved_to_make_room() {
+    let (s, f) = starved_house(4096).await;
+    s.hold_services(&[("big".to_string(), 1)], "backup copy of big-data", 3600)
+        .await
+        .unwrap();
+    let report = Reconciler::new(&f, &s).reconcile(false).await.unwrap();
+    assert!(
+        report
+            .drifts
+            .iter()
+            .any(|d| matches!(d, Drift::NoRoom { moves, .. }
+            if !moves.contains(&"big".to_string()))),
+        "{:?}",
+        report.drifts
+    );
+}
+
+#[tokio::test]
+async fn a_service_merely_starting_is_still_left_to_converge() {
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![task("mail", Some("home"), "starting", None)];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(
+        matches!(&report.drifts[0], Drift::Converging { .. }),
+        "{:?}",
+        report.drifts
+    );
+    assert!(f.rescheduled.lock().unwrap().is_empty());
 }
