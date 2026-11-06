@@ -2368,12 +2368,16 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
   the machine can clear it from another OS. Proposed, not built: clear it after each boot of a
   bound node. A real TPM's numbers are not measured: read `tpm2_getcap properties-variable` on
   the owner's laptop first. `stolen.sh` clears enc3's count once it opens at home.
-- **A Docker started before the network has no DNS until restarted** — seen on the lab
-  2026-11-06, one boot, unexplained. No DHCP answer for its first minutes, and dockerd asked
-  `[::1]:53` for 54 minutes while `/etc/resolv.conf`, `getent` and `curl` had long worked.
-  Every image it lacked stayed `Preparing`, holding its memory reservation, and tasks failing
-  on deb2 came to wait there too. A restart of Docker cured it. A house cut whole boots its
-  router too, so a real node may meet it; not reproduced, nor tried on bare metal.
+- ✅ **A task whose pull failed stays down after the failure ended** — seen on the lab
+  2026-11-06 as "a Docker with no DNS", which it was not: reproduced and answered the same day on
+  Docker 29.9.3. dockerd's resolver recovers within seconds, and a `docker pull` beside it works.
+  A SWARM task whose pull fails on a name or a timeout stays `Preparing`, and Swarm repeats that
+  one error each second without asking anything again: 333 failures, one source port. A refused
+  connection or a missing tag ends the task, and its replacement recovers alone. A node booted
+  before its network does it, as does any registry silent while a task starts. Restarting Docker
+  cured it; so does a new task. `Drift::PullStuck` reads it, as broken, once the task has been
+  there 5 minutes, and `reconcile --apply` starts a new one: run on the lab's Swarm with a real
+  DNS cut, Caddy back in 20 s. Not tried on bare metal.
 - ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
   2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
   nowhere". The hold records the volume's node before anything stops.

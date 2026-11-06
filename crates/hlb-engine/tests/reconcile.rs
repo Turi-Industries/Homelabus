@@ -1419,3 +1419,107 @@ async fn a_service_merely_starting_is_still_left_to_converge() {
     );
     assert!(f.rescheduled.lock().unwrap().is_empty());
 }
+
+// The error Docker 29.9 kept, word for word, on the lab: the system's resolver had long worked.
+const STALE_PULL: &str = "failed to resolve reference \"docker.io/library/a:1\": failed to do \
+                          request: dial tcp: lookup registry-1.docker.io on [::1]:53: read udp \
+                          [::1]:55781->[::1]:53: read: connection refused";
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+fn preparing_for(service: &str, secs: i64, err: Option<&str>) -> hlb_orchestrator::TaskInfo {
+    hlb_orchestrator::TaskInfo {
+        updated_at: Some(now() - secs),
+        ..task(service, Some("home"), "preparing", err)
+    }
+}
+
+#[tokio::test]
+async fn a_task_repeating_an_old_pull_failure_is_started_again() {
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![preparing_for("mail", 600, Some(STALE_PULL))];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    let d = &report.drifts[0];
+    assert!(
+        matches!(d, Drift::PullStuck { app, error } if app == "mail" && error == STALE_PULL),
+        "{d:?}"
+    );
+    assert_eq!(d.harm(), hlb_api::DriftHarm::Broken);
+    assert_eq!(*f.rescheduled.lock().unwrap(), ["mail"]);
+}
+
+#[tokio::test]
+async fn a_stuck_pull_is_only_said_when_a_preview_reads_it() {
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![preparing_for("mail", 600, Some(STALE_PULL))];
+    let report = Reconciler::new(&f, &s).reconcile(false).await.unwrap();
+    assert!(matches!(&report.drifts[0], Drift::PullStuck { .. }));
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_pull_in_progress_shows_no_error_and_is_left_alone() {
+    // A large image takes as long as it takes: its age alone says nothing.
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![preparing_for("mail", 3600, None)];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(
+        matches!(&report.drifts[0], Drift::Converging { .. }),
+        "{:?}",
+        report.drifts
+    );
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_registry_still_down_is_tried_again_only_once_in_a_while() {
+    // 🔴 Each pass would otherwise restart the service's healthy replicas for nothing: the new
+    // task's own age is the pace, with nothing to store.
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![preparing_for("mail", 60, Some(STALE_PULL))];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(
+        matches!(&report.drifts[0], Drift::Converging { .. }),
+        "{:?}",
+        report.drifts
+    );
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_task_with_no_date_is_not_read_as_old() {
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![task("mail", Some("home"), "preparing", Some(STALE_PULL))];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(matches!(&report.drifts[0], Drift::Converging { .. }));
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_stale_error_on_a_task_swarm_no_longer_wants_changes_nothing() {
+    // Swarm keeps the history of dead tasks, each with its error.
+    let (s, f) = starved_house(4096).await;
+    *f.tasks.lock().unwrap() = vec![hlb_orchestrator::TaskInfo {
+        desired_state: "shutdown".into(),
+        ..preparing_for("mail", 600, Some(STALE_PULL))
+    }];
+    let report = Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(matches!(&report.drifts[0], Drift::Converging { .. }));
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_service_held_for_a_copy_is_never_restarted_for_its_pull() {
+    let (s, f) = starved_house(4096).await;
+    s.hold_services(&[("mail".to_string(), 1)], "backup copy of mail-data", 3600)
+        .await
+        .unwrap();
+    *f.tasks.lock().unwrap() = vec![preparing_for("mail", 600, Some(STALE_PULL))];
+    Reconciler::new(&f, &s).reconcile(true).await.unwrap();
+    assert!(f.rescheduled.lock().unwrap().is_empty());
+}
