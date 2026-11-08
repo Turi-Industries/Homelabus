@@ -108,20 +108,11 @@ step() {
     echo "  $name: $(($(now) - started)) s"
 }
 
-# An app's DNS record is a question for the person, once per app it stops. It can be
-# attested only after an apply has recorded the plan and refused to start, so that
-# refusal is part of the path. `--force` because drill.test resolves nowhere.
+# An app's DNS record is a question for the person, once per app it stops. Attested before
+# the first apply, so no refusal is part of the path. `--force` because drill.test resolves
+# nowhere.
 install_attesting() {
     local app=$1 attest
-    if on "mkdir -p /root/d && cd /root/d && hlb install $app --apply > $app-first.log 2>&1"; then
-        echo "  $app: installed at the first apply"
-        return
-    fi
-    on "grep -q 'prerequisite' /root/d/$app-first.log" || {
-        echo "FAILED: $app, and not on a prerequisite" >&2
-        on "tail -20 /root/d/$app-first.log" >&2
-        exit 1
-    }
     ask attest "$app's DNS record exists" "--force"
     step "$app-attest" "hlb ack $app/dns-record $attest"
     step "$app" "hlb install $app --apply"

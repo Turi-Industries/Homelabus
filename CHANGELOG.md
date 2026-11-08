@@ -3,6 +3,67 @@
 What changed in each release of Homelabus, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) — before 1.0, a minor version may break.
+## [0.4.8] — 2026-11-08
+
+A service Swarm leaves down after a reboot is now read as broken. A pinned service starved on
+the node holding its data reads `NoRoom`, and correcting it moves the largest services another
+node can take, never one holding data. A task whose image pull failed on a name or a timeout
+reads `PullStuck`: Swarm repeats that one failure each second without asking again, whether
+DNS was missing at boot, went down later or the registry fell silent, and correcting it starts
+a new task once the old one is 5 minutes old. Both were found on the lab, the second
+reproduced on a throwaway VM with a real DNS cut.
+
+**Upgrading from 0.4.7:**
+
+- Migration 0058 runs at the first start: 0.4.7 cannot open the state after.
+- Both gaps are only reported unless correction is on: `hlb reconcile --apply`, or the
+  controller started with `--reconcile-apply` (`HLB_RECONCILE_APPLY`). Nothing turns it on by
+  default, so a house left as it was names the broken task and leaves it broken.
+- A machine reporting 7168 MB or more is now `heavy`: an 8 GB machine never reports 8192, and
+  read `light` until now.
+
+### Added
+
+- Give a pinned service room when Swarm leaves it pending (`Drift::NoRoom`)
+- Start again a task repeating an old pull failure (`Drift::PullStuck`)
+- Attest a step with `hlb ack` before the first `--apply`
+
+### Fixed
+
+- Read a machine reporting 7168 MB as `heavy`
+- Print a global service as `2 global` in `hlb ps`, where it read `2/0`
+- Say that the kit's disk key piped over SSH must carry no final newline
+
+## [0.4.7] — 2026-11-05
+
+Rolling back an update now has something sound to go back to. An update's prior copy stops
+what writes SQLite while it copies, so PocketID, Jellyfin, Grafana, ntfy and CrowdSec no longer
+come back from files read live, and it reads every bucket, so Fluxer's objects are no older than
+the update. The recovery drill now holds the new machine to what the house held, since an
+assertion reads settings and passes on a database restored empty: 57 of 57 tables and 14 of 14
+volumes on the lab.
+
+**Upgrading from 0.4.6:**
+
+- No migration: 0.4.6 still opens the state afterwards.
+- Updating an app that holds SQLite now stops it for the length of its copy, on top of the
+  restart the update itself causes.
+- An update is newly refused, before anything stops, for an app with a bucket and no bulky
+  destination, whose S3 key is not in the vault, or whose Garage cannot be reached from where
+  `hlb` runs. Those updates used to pass with the objects as old as the last pass.
+- A copy taken by 0.4.6 still restores as it was read: the restore warns of that, and of no
+  copy taken from here on.
+
+### Fixed
+
+- Stop what writes SQLite for an update's copy, and copy its buckets
+
+### Changed
+
+- Read what the house holds, and hold the recovered machine to it
+- Count only the apps holding data in the catalog's restore row
+- Validate the catalog with hlb 0.4.6
+
 ## [0.4.6] — 2026-11-05
 
 A bare machine, the emergency kit and one destination now bring every app of the lab back:

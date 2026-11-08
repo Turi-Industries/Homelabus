@@ -2345,25 +2345,39 @@ clients — is plan 0‴ above. **MariaDB dumps** now run against a real server
 
 ### 4. The rest, in decreasing order of interest
 
-- **What the first timed deployment found** — 2026-11-04, `scripts/drills/deploy.sh` on
-  0.4.4; the figures are in `docs/measures.tsv`. The README's three commands had never
-  worked on a bare machine.
-  - A DNS record can be attested only after an `--apply` has refused to start: the
-    preview records no plan `hlb ack` can find.
-  - `tier_for_memory` wants 8192 MB, and a VM given 4096 MB reports 3922, so a machine
-    sold as 8 GB stays `light` and refuses PostgreSQL, Stalwart and PocketID. Measure a
-    real one before moving the threshold.
-  - `hlb ps` prints a global service as `2/0`: it has no desired count to read.
-- **A node's reboot can leave a pinned service down** — seen on the lab 2026-11-05. deb2 off, its
-  free services landed on deb1 and stayed, Swarm rebalancing nothing, and Stalwart, pinned to
-  deb1 by its data, stayed Pending on "insufficient resources" until
-  `docker service update --force` moved Fluxer's two largest back. What the house says about
-  it, and what a person is told to do, has not been looked at.
-- **enc3 held 16 minutes in its initrd, once** — the stolen drill, 2026-11-05: Tangs active, it
-  opened only at 15:40:53 of a boot begun at 15:24, about when deb2 powered off for another
-  drill, so a connection to deb2's Tang may have hung the unlock. Not seen again: it opened in
-  22 s on the next run. A timing guess, unproven; if it recurs, read the initrd's clevis from
-  `ssh -p 2222` before anything is shut down.
+- ✅ **What the first timed deployment found** — 2026-11-04, `scripts/drills/deploy.sh` on 0.4.4;
+  the figures are in `docs/measures.tsv`. Answered 2026-11-05: `hlb ack` attests a step before
+  the first `--apply` (`attested_ahead`), a machine reporting 7168 MB is `heavy`
+  (`HEAVY_TIER_MIN_MB`), and `hlb ps` says a global service is global.
+- ✅ **A node's reboot can leave a pinned service down** — seen on the lab 2026-11-05, answered the
+  same day. deb2 off, its free services landed on deb1 and stayed, Swarm rebalancing nothing,
+  and Stalwart, pinned to deb1 by its data, stayed Pending on "insufficient resources" until
+  `docker service update --force` moved Fluxer's two largest back. Reconciliation reads it now
+  (`Drift::NoRoom`, harm broken) and, applied, moves the largest free services a node can take.
+  Run on the lab's Swarm 2026-11-06 with Stalwart starved on a crowded deb1: it named
+  `fluxer-gateway`, Swarm put it on deb2, and Stalwart ran 30 s after the apply.
+- **A bound disk waits for its TPM after power cuts, and says nothing** — measured 2026-11-06
+  on enc3, which held 16 minutes in its initrd on 2026-11-05 and again on demand. Each power
+  cut counts one failure in the TPM's dictionary lockout, in the initrd as on a running system;
+  a clean stop or reboot counts none. The object Clevis seals is `noda`, the primary it loads
+  it under is not: locked, the load answers `0x921` and Clevis loops, the Tangs answering 200
+  every 6 s, nothing on the console. swtpm allows 3 failures and forgives one per 1000 s: the
+  disk opened 16 min 34 s after the first Tang request. The kit's key still opens it, and
+  `tpm2_dictionarylockout --clear-lockout` from the opened system resets the count with no
+  authorization. The binding has no PIN, so the lockout guards no guess here, and whoever holds
+  the machine can clear it from another OS. Proposed, not built: clear it after each boot of a
+  bound node. A real TPM's numbers are not measured: read `tpm2_getcap properties-variable` on
+  the owner's laptop first. `stolen.sh` clears enc3's count once it opens at home.
+- ✅ **A task whose pull failed stays down after the failure ended** — seen on the lab
+  2026-11-06 as "a Docker with no DNS", which it was not: reproduced and answered the same day on
+  Docker 29.9.3. dockerd's resolver recovers within seconds, and a `docker pull` beside it works.
+  A SWARM task whose pull fails on a name or a timeout stays `Preparing`, and Swarm repeats that
+  one error each second without asking anything again: 333 failures, one source port. A refused
+  connection or a missing tag ends the task, and its replacement recovers alone. A node booted
+  before its network does it, as does any registry silent while a task starts. Restarting Docker
+  cured it; so does a new task. `Drift::PullStuck` reads it, as broken, once the task has been
+  there 5 minutes, and `reconcile --apply` starts a new one: run on the lab's Swarm with a real
+  DNS cut, Caddy back in 20 s. Not tried on bare metal.
 - ✅ **A restore stopped halfway could not be retried on NFS** — met on the lab and fixed
   2026-11-05. It left the app at 0 replicas with no data pin, so a second was refused, "runs
   nowhere". The hold records the volume's node before anything stops.

@@ -428,6 +428,8 @@ pub struct ServiceStatus {
     pub id: String,
     pub desired_replicas: u64,
     pub running_replicas: usize,
+    /// In global mode: one task per node, so `desired_replicas` is 0 and means nothing.
+    pub global: bool,
     /// The image the service's SPEC names, with the digest resolved by Swarm.
     ///
     /// ⚠️ Not what runs: it names the new image the moment an update is accepted, while
@@ -437,6 +439,16 @@ pub struct ServiceStatus {
 }
 
 impl ServiceStatus {
+    /// Its replicas as a person reads them. A global service has no count to reach, and read
+    /// `2/0`, which looks like two tasks too many.
+    pub fn replicas_text(&self) -> String {
+        if self.global {
+            format!("{} global", self.running_replicas)
+        } else {
+            format!("{}/{}", self.running_replicas, self.desired_replicas)
+        }
+    }
+
     pub fn is_converged(&self) -> bool {
         self.running_replicas as u64 == self.desired_replicas
     }
@@ -538,6 +550,14 @@ pub trait Orchestrator: Send + Sync {
 
     /// Adjusts an existing service's replica count.
     async fn scale(&self, name: &str, replicas: u64) -> Result<()>;
+
+    /// Has Swarm place a service's tasks again, its spec as it is: how a service leaves a node
+    /// another one needs room on. ⚠️ Swarm chooses where, and it restarts.
+    async fn reschedule(&self, name: &str) -> Result<()> {
+        Err(Error::Unexpected(format!(
+            "{name} cannot be placed again by this orchestrator"
+        )))
+    }
 
     /// Gives a running service new files, and the names it answers on its networks,
     /// under its update policy. Everything else in its spec is kept.
@@ -703,6 +723,23 @@ pub trait Orchestrator: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_global_service_never_reads_as_too_many_replicas() {
+        let mut s = ServiceStatus {
+            name: "agent".into(),
+            id: "id".into(),
+            desired_replicas: 0,
+            running_replicas: 2,
+            global: true,
+            image: "a/b:1".into(),
+            update_state: None,
+        };
+        assert_eq!(s.replicas_text(), "2 global");
+        s.global = false;
+        s.desired_replicas = 3;
+        assert_eq!(s.replicas_text(), "2/3");
+    }
     #[test]
     fn an_update_in_flight_is_not_healthy_while_the_old_task_serves() {
         // 🔴 start-first: the old task runs while the new one starts, and "1/1" was
@@ -724,6 +761,7 @@ mod tests {
             id: "s".into(),
             desired_replicas: 1,
             running_replicas: 1,
+            global: false,
             image: "gitea/gitea:1.27@sha256:new".into(),
             update_state,
         };

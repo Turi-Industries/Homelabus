@@ -293,8 +293,8 @@ sudo ./target/debug/hlb cluster init --endpoint 192.168.1.10 --apply
 ./target/debug/hlb mesh sync --apply         # a node that missed a peer
 ./target/debug/hlb mesh remove old-node      # a machine gone; refused while it is in the Swarm
 printf '%s' '<user>:<token>' | ./target/debug/hlb secret-set registry-ghcr.io --purpose registry
-./target/debug/hlb fleet agent --image ghcr.io/turi-industries/hlb-agent:0.4.6 --apply
-./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.4.6 --apply
+./target/debug/hlb fleet agent --image ghcr.io/turi-industries/hlb-agent:0.4.8 --apply
+./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.4.8 --apply
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the
@@ -357,7 +357,9 @@ more), enrols the node's recovery key and takes the
 install passphrase out. Refused while the printed kit lacks that key, and on a one-node
 house — the disk would open for whoever carries the machine away. When no Tang answers,
 the kit's key is typed at the console or over SSH at boot (`ssh -p 2222`, root's keys,
-the fingerprint it printed). `node add` and `mesh remove` name the disks to bind again.
+the fingerprint it printed). Piped rather than typed, it goes with `printf '%s'`: the final
+newline `echo` adds is read as part of the key, and the disk answers "bad password".
+`node add` and `mesh remove` name the disks to bind again.
 
 ```sh
 ./target/debug/hlb node bind-disk worker-1           # what would change — the key made

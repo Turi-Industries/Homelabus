@@ -16,7 +16,8 @@
 //! - **Restart a failed installation.** It would loop forever on the same error. That
 //!   needs an explicit intervention.
 //! - **Correct a convergence in flight.** If Swarm is starting tasks, it is left to
-//!   finish rather than being given contradictory orders.
+//!   finish rather than being given contradictory orders. What it will never finish is
+//!   no convergence: `NoRoom`, `PullStuck`.
 //! - **Recreate a deleted service.** It did, from the image and the tier alone: no
 //!   volumes, no environment, no probe — the data then landed in the container's
 //!   ephemeral layer, and the report said "1 gap corrected". Rebuilding it whole is the
@@ -25,12 +26,128 @@
 //!   vault AND the app's environment, and the objects come back from a backup: the
 //!   redeploy and the restore do that, and the drift names both.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hlb_orchestrator::Orchestrator;
 use hlb_state::State;
 
 use crate::Error;
+
+/// What a service asks of a node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ask {
+    reserve_mib: u64,
+    tier: String,
+}
+
+/// What `app` and its companions ask of a node. A service declaring no memory reserves
+/// nothing, so moving it would free nothing: it is left out.
+fn service_asks(app: &str, m: &hlb_types::Manifest) -> BTreeMap<String, Ask> {
+    let tier = m.spec.swarm.tier.clone().unwrap_or_else(|| "light".into());
+    let own = m.spec.swarm.memory.map(|mem| {
+        (
+            app.to_string(),
+            Ask {
+                reserve_mib: mem.reserve.mib(),
+                tier: tier.clone(),
+            },
+        )
+    });
+    let companions = m.spec.companions.iter().filter_map(|c| {
+        c.memory.map(|mem| {
+            (
+                c.service(app),
+                Ask {
+                    reserve_mib: mem.reserve.mib(),
+                    tier: c.tier.clone().unwrap_or_else(|| "light".into()),
+                },
+            )
+        })
+    });
+    own.into_iter().chain(companions).collect()
+}
+
+/// The free services to take off `home` so `wanted` MiB can be reserved there, largest first,
+/// each one fitting on another node once those before it have moved. Empty when they cannot
+/// free that much: moving some restarts them for nothing.
+///
+/// Asks for the whole of `wanted`, what `home` has left not counted: Swarm's own count holds
+/// reservations no manifest declares, and one service too many restarts once, where one too
+/// few leaves the app down.
+///
+/// 🔴 Never a service whose data is on a node, or held: restarted elsewhere it starts empty,
+/// or under a copy.
+fn make_room(
+    wanted: u64,
+    home: &hlb_orchestrator::NodeInfo,
+    nodes: &[hlb_orchestrator::NodeInfo],
+    tasks: &[hlb_orchestrator::TaskInfo],
+    asks: &BTreeMap<String, Ask>,
+    held: &BTreeSet<String>,
+) -> Vec<String> {
+    let reserved = |node: &str| -> u64 {
+        tasks
+            .iter()
+            .filter(|t| t.is_alive() && t.node_id.as_deref() == Some(node))
+            .filter_map(|t| asks.get(&t.service))
+            .map(|a| a.reserve_mib)
+            .sum()
+    };
+    let mut others: Vec<(&hlb_orchestrator::NodeInfo, u64)> = nodes
+        .iter()
+        .filter(|n| n.id != home.id && n.status == "ready" && n.availability == "active")
+        .filter_map(|n| Some((n, n.memory_mb?.saturating_sub(reserved(&n.id)))))
+        .collect();
+    let mut movable: Vec<(&str, &Ask)> = tasks
+        .iter()
+        .filter(|t| t.is_alive() && t.node_id.as_deref() == Some(&home.id))
+        .filter(|t| !held.contains(&t.service))
+        .filter(|t| !nodes.iter().any(|n| n.data.contains(&t.service)))
+        .filter_map(|t| Some((t.service.as_str(), asks.get(&t.service)?)))
+        .collect();
+    movable.sort_by(|a, b| b.1.reserve_mib.cmp(&a.1.reserve_mib).then(a.0.cmp(b.0)));
+    movable.dedup_by_key(|m| m.0);
+
+    let (mut moves, mut freed) = (Vec::new(), 0);
+    for (service, ask) in movable {
+        if freed >= wanted {
+            break;
+        }
+        let fits = others.iter_mut().find(|(n, free)| {
+            *free >= ask.reserve_mib
+                && n.tier
+                    .as_deref()
+                    .is_some_and(|t| hlb_types::manifest::tier_admits(t, &ask.tier))
+        });
+        if let Some((_, free)) = fits {
+            *free -= ask.reserve_mib;
+            freed += ask.reserve_mib;
+            moves.push(service.to_string());
+        }
+    }
+    if freed >= wanted {
+        moves
+    } else {
+        Vec::new()
+    }
+}
+
+/// How long a task repeats a pull failure before it is started again. 🔴 Not sooner: while the
+/// registry is still away a new task only fails the same way, and starting one restarts the
+/// service's healthy replicas with it. The new task's own age paces the next try.
+const PULL_STUCK_AFTER_SECS: i64 = 300;
+
+/// The pull failure `task` repeats, once it has done so for long enough.
+///
+/// A pull in progress shows no error, however long it takes, and a refusal or a missing tag ends
+/// the task, which Swarm then replaces: only a failure that leaves the task in `preparing` stays.
+fn repeated_pull_failure(task: &hlb_orchestrator::TaskInfo, now: i64) -> Option<&str> {
+    let since = task.updated_at?;
+    (task.desired_state == "running"
+        && task.state == "preparing"
+        && now - since >= PULL_STUCK_AFTER_SECS)
+        .then_some(task.err.as_deref()?)
+}
 
 /// Where the app's key id is kept: what it signs with.
 fn key_id_secret(app: &str) -> String {
@@ -69,6 +186,23 @@ pub enum Drift {
         running: usize,
         desired: u64,
     },
+    /// Pinned to a node by its data, and that node has no memory left to reserve for it:
+    /// Swarm leaves it pending for good, and rebalances nothing. A reboot does it: what ran on
+    /// the node that went down landed on this one and stayed (Stalwart, on the lab,
+    /// 2026-11-05). `moves`: free services whose leaving makes room, largest first; empty
+    /// when no other node could take them.
+    NoRoom {
+        app: String,
+        node: String,
+        moves: Vec<String>,
+    },
+
+    /// A task whose pull failed on a name or a timeout, in `Preparing` for good: Swarm keeps
+    /// that first error and repeats it each second without asking anything again, so the error
+    /// outlives the outage. A node booted before its network does it, and the task holds its
+    /// memory reservation meanwhile (measured on Docker 29.9, 2026-11-06).
+    PullStuck { app: String, error: String },
+
     /// Stopped on purpose — a restore, a store stopped for its copy — until the hold
     /// is released or lapses.
     Held { app: String, why: String },
@@ -96,10 +230,13 @@ pub enum Drift {
 impl Drift {
     /// Can reconciliation correct this drift on its own?
     pub fn is_correctable(&self) -> bool {
-        matches!(
-            self,
-            Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. }
-        )
+        match self {
+            Self::NoRoom { moves, .. } => !moves.is_empty(),
+            _ => matches!(
+                self,
+                Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } | Self::PullStuck { .. }
+            ),
+        }
     }
 
     /// The command that repairs a drift reconciliation leaves alone, when there is one.
@@ -120,6 +257,8 @@ impl Drift {
             | Self::ImageDiverged { .. }
             | Self::OrphanService { .. }
             | Self::Converging { .. }
+            | Self::NoRoom { .. }
+            | Self::PullStuck { .. }
             | Self::Held { .. }
             | Self::StorageUnread { .. } => None,
         }
@@ -136,7 +275,15 @@ impl Drift {
     /// explain.
     pub fn refusal(&self) -> Option<&'static str> {
         match self {
-            Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } => None,
+            Self::ReplicasDiverged { .. } | Self::ImageDiverged { .. } | Self::PullStuck { .. } => {
+                None
+            }
+            Self::NoRoom { moves, .. } if !moves.is_empty() => None,
+            Self::NoRoom { .. } => Some(
+                "no other node has the memory to take what runs there, and its data keeps it \
+                 on this one: it needs a service stopped or a node added, which is a person's \
+                 choice",
+            ),
             Self::ServiceMissing { .. } => Some(
                 "recreated here it would lack its volumes, its environment and its \
                  probe, and write its data where nothing keeps it: `hlb install <app> \
@@ -191,7 +338,10 @@ impl Drift {
         match self {
             // A missing companion is the silent kind: Immich without its machine
             // learning shows every photo and recognises nobody.
-            Self::ServiceMissing { .. } | Self::StorageLost { .. } => Broken,
+            Self::ServiceMissing { .. }
+            | Self::StorageLost { .. }
+            | Self::NoRoom { .. }
+            | Self::PullStuck { .. } => Broken,
             Self::StorageUnread { .. } => Unknown,
             Self::ReplicasDiverged { .. }
             | Self::ImageDiverged { .. }
@@ -209,6 +359,8 @@ impl Drift {
             | Self::ImageDiverged { app, .. }
             | Self::Converging { app, .. }
             | Self::Held { app, .. }
+            | Self::NoRoom { app, .. }
+            | Self::PullStuck { app, .. }
             | Self::StorageLost { app, .. } => app,
             Self::OrphanService { name } => name,
             Self::StorageUnread { .. } => "garage",
@@ -252,6 +404,19 @@ impl std::fmt::Display for Drift {
                 write!(f, "{app}: converging ({running}/{desired})")
             }
             Self::Held { app, why } => write!(f, "{app}: held stopped — {why}"),
+            Self::NoRoom { app, node, moves } if moves.is_empty() => write!(
+                f,
+                "{app}: stays down, {node} holds its data and has no memory left for it"
+            ),
+            Self::NoRoom { app, node, moves } => write!(
+                f,
+                "{app}: stays down, {node} holds its data and has no memory left for it — moving {} makes room",
+                moves.join(", ")
+            ),
+            Self::PullStuck { app, error } => write!(
+                f,
+                "{app}: stays down, Swarm repeats an old pull failure and will not try again — {error}"
+            ),
             Self::StorageLost { app, buckets, key } => {
                 let lost: Vec<String> = buckets
                     .iter()
@@ -657,6 +822,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             }
         }
 
+        self.unfinishable_drifts(&apps, &mut drifts).await?;
         self.storage_drifts(&storage, &mut drifts).await?;
         self.portal_drifts(&apps, &mut drifts).await?;
 
@@ -671,6 +837,68 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
         }
 
         Ok(drifts)
+    }
+
+    /// Turns each `Converging` Swarm will never finish into what it is. Asked only when one
+    /// exists: a healthy house reads no task for this.
+    async fn unfinishable_drifts(
+        &self,
+        apps: &[(String, String)],
+        drifts: &mut [Drift],
+    ) -> Result<()> {
+        if !drifts.iter().any(|d| matches!(d, Drift::Converging { .. })) {
+            return Ok(());
+        }
+        let (tasks, nodes) = (
+            self.orchestrator.tasks(None).await?,
+            self.orchestrator.nodes().await?,
+        );
+        let mut asks = BTreeMap::new();
+        for (name, _) in apps {
+            asks.extend(service_asks(name, &self.state.app_manifest(name).await?));
+        }
+        let mut held = BTreeSet::new();
+        for t in &tasks {
+            if self.state.held(&t.service).await?.is_some() {
+                held.insert(t.service.clone());
+            }
+        }
+        for d in drifts.iter_mut() {
+            let Drift::Converging { app, .. } = &*d else {
+                continue;
+            };
+            let stale_pull = tasks
+                .iter()
+                .filter(|t| &t.service == app)
+                .find_map(|t| repeated_pull_failure(t, chrono::Utc::now().timestamp()));
+            if let Some(error) = stale_pull {
+                *d = Drift::PullStuck {
+                    app: app.clone(),
+                    error: error.to_string(),
+                };
+                continue;
+            }
+            let starved = tasks.iter().any(|t| {
+                &t.service == app
+                    && t.desired_state == "running"
+                    && t.state == "pending"
+                    && t.err
+                        .iter()
+                        .chain(&t.message)
+                        .any(|m| m.contains("insufficient resources"))
+            });
+            let home = nodes.iter().find(|n| n.data.contains(app));
+            let (true, Some(home), Some(wanted)) = (starved, home, asks.get(app)) else {
+                continue;
+            };
+            let moves = make_room(wanted.reserve_mib, home, &nodes, &tasks, &asks, &held);
+            *d = Drift::NoRoom {
+                app: app.clone(),
+                node: home.hostname.clone(),
+                moves,
+            };
+        }
+        Ok(())
     }
 
     /// Detects and then, when `apply`, corrects what is correctable.
@@ -713,6 +941,19 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
 
             Drift::ImageDiverged { app, expected, .. } => {
                 self.orchestrator.update_image(app, expected).await?;
+                Ok(())
+            }
+
+            Drift::NoRoom { moves, .. } => {
+                for service in moves {
+                    self.orchestrator.reschedule(service).await?;
+                }
+                Ok(())
+            }
+
+            // A new task pulls again; the stuck one never would.
+            Drift::PullStuck { app, .. } => {
+                self.orchestrator.reschedule(app).await?;
                 Ok(())
             }
 
@@ -762,6 +1003,10 @@ mod tests {
             Drift::Held {
                 app: "gitea".into(),
                 why: "restore of gitea-data".into(),
+            },
+            Drift::PullStuck {
+                app: "gitea".into(),
+                error: "lookup registry on [::1]:53".into(),
             },
             Drift::StorageLost {
                 app: "fluxer".into(),

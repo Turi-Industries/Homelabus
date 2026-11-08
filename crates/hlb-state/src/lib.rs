@@ -3900,6 +3900,7 @@ impl State {
     /// 🔴 `blocking` follows the guide: kept as first recorded, a step made blocking
     /// since left an `after-guide` route open before anyone had done it.
     pub async fn add_guide(&self, app: &str, id: &str, title: &str, blocking: bool) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO pending_guides (id, app, title, blocking)
              VALUES (?1, ?2, ?3, ?4)
@@ -3911,6 +3912,38 @@ impl State {
         .bind(app)
         .bind(title)
         .bind(blocking as i64)
+        .execute(&mut *tx)
+        .await?;
+        // Attested before the install: handled from its first row, as the person said.
+        sqlx::query(
+            "UPDATE pending_guides SET verified_at = datetime('now'), forced = a.forced
+             FROM attested_ahead a
+             WHERE a.app = pending_guides.app AND a.id = pending_guides.id
+               AND pending_guides.app = ?1 AND pending_guides.id = ?2",
+        )
+        .bind(app)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM attested_ahead WHERE app = ?1 AND id = ?2")
+            .bind(app)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Marks a manual step handled before its app is installed: `hlb ack` ahead of the first
+    /// `--apply`, which then does not stop for it. `forced`: against its own check.
+    pub async fn attest_ahead(&self, app: &str, id: &str, forced: bool) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO attested_ahead (app, id, forced) VALUES (?1, ?2, ?3)
+             ON CONFLICT(app, id) DO UPDATE SET forced = excluded.forced",
+        )
+        .bind(app)
+        .bind(id)
+        .bind(forced as i64)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -4016,13 +4049,16 @@ impl State {
 
     /// The ids of the manual actions handled for an app — verified or attested.
     pub async fn verified_guides(&self, app: &str) -> Result<Vec<String>> {
-        sqlx::query("SELECT id FROM pending_guides WHERE app = ?1 AND verified_at IS NOT NULL")
-            .bind(app)
-            .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(|r| Ok(r.try_get("id")?))
-            .collect()
+        sqlx::query(
+            "SELECT id FROM pending_guides WHERE app = ?1 AND verified_at IS NOT NULL
+             UNION SELECT id FROM attested_ahead WHERE app = ?1",
+        )
+        .bind(app)
+        .fetch_all(&self.pool)
+        .await?
+        .iter()
+        .map(|r| Ok(r.try_get("id")?))
+        .collect()
     }
 
     /// The blocking actions still unhandled for a given app.
@@ -6706,16 +6742,15 @@ mod tests {
         s.upsert_app("n8n", &manifest("n8n"), None)
             .await
             .expect("app");
-        s.add_guide(
-            "n8n",
-            "cle-de-chiffrement",
-            "Back up the encryption key",
-            true,
+        // Written as the schema of that time takes it: `add_guide` and `verify_guide` touch
+        // what was added since.
+        sqlx::query(
+            "INSERT INTO pending_guides (id, app, title, blocking)
+             VALUES ('cle-de-chiffrement', 'n8n', 'Back up the encryption key', 1)",
         )
+        .execute(&s.pool)
         .await
         .expect("guide");
-        // Written as the schema of that time takes it: `verify_guide` writes columns
-        // added since.
         let handled = sqlx::query(
             "UPDATE pending_guides SET verified_at = datetime('now')
              WHERE app = 'n8n' AND id = 'cle-de-chiffrement'",
@@ -9519,6 +9554,34 @@ steps:
         );
         s.set_leaf_expiry("hlb-controller", None).await.unwrap();
         assert_eq!(s.leaf_expiries().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_step_attested_before_its_install_is_handled_when_the_install_records_it() {
+        let s = State::in_memory().await.unwrap();
+        s.attest_ahead("gitea", "dns-record", true).await.unwrap();
+        // Read by the preflight, before any row of the app exists.
+        assert_eq!(s.verified_guides("gitea").await.unwrap(), ["dns-record"]);
+
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(
+            "apiVersion: hlb/v1\nkind: App\nmetadata: { name: gitea }\n\
+             spec:\n  image: { repo: a/b, tag: \"1\" }\n",
+        )
+        .unwrap();
+        s.upsert_app("gitea", &m, None).await.unwrap();
+        s.add_guide("gitea", "dns-record", "DNS", true)
+            .await
+            .unwrap();
+        s.add_guide("gitea", "other", "Other", true).await.unwrap();
+
+        assert_eq!(
+            s.unverified_blocking("gitea").await.unwrap(),
+            1,
+            "only the other"
+        );
+        let handled = s.verified_guide_ages("gitea").await.unwrap();
+        assert_eq!(handled.len(), 1);
+        assert!(handled[0].2, "forced, as the person said");
     }
 
     #[tokio::test]

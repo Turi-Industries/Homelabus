@@ -3173,6 +3173,7 @@ pub(crate) mod tests {
                 image: "x/y:1".into(),
                 desired_replicas: 1,
                 running_replicas: 1,
+                global: false,
                 update_state: None,
             })
         }
@@ -3222,6 +3223,7 @@ pub(crate) mod tests {
             image: "a/b:1".into(),
             desired_replicas: 0,
             running_replicas: 0,
+            global: false,
             update_state: None,
         }]));
         let drifts: hlb_privd::daemon::DriftState = Default::default();

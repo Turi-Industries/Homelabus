@@ -31,9 +31,11 @@
 //! console may be a cellar away, so `dropbear-initramfs` listens at boot on
 //! [`UNLOCK_PORT`], to root's keys only, each forced to `cryptroot-unlock`: measured on
 //! enc1, the key piped into `ssh -p 2222` opened the disk while Clevis's loop kept
-//! asking the Tangs, and with a Tang up the disk opened alone as before. Dropbear has
-//! its own host key, in clear in the initrd on `/boot`: whoever holds the machine can
-//! copy it and pose as the node at boot — which is why its fingerprint is printed.
+//! asking the Tangs, and with a Tang up the disk opened alone as before. 🔴 Piped with no
+//! terminal, `cryptroot-unlock` hands stdin over whole: a final newline makes a good key
+//! read as "bad password" (enc3, 2026-11-06). Dropbear has its own host key, in clear in
+//! the initrd on `/boot`: whoever holds the machine can copy it and pose as the node at
+//! boot — which is why its fingerprint is printed.
 //!
 //! ## 🔴 A Tang is pinned by its thumbprint
 //!
