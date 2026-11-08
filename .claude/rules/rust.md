@@ -124,6 +124,11 @@ passes while guarding nothing.
 - **`cargo audit` reads `.cargo/audit.toml`**: an ignored advisory carries the reason
   it does not reach Homelabus, and the condition that brings it back. CI runs it; it
   found ten on its first run.
+- **`cargo deny` reads `deny.toml`, and NOT the advisories** — two lists of ignored
+  advisories would drift, so `cargo audit` keeps them. It holds licences (an allow-list
+  of what is used: a licence allowed and met nowhere is removed), bans (system OpenSSL,
+  `serde_yaml`) and sources (crates.io only). Every crate says `publish = false`: a
+  publishable crate's path dependencies count as wildcards and fail the bans.
 - **`sqlx` uses runtime queries**, not compile-time macros: those need `DATABASE_URL` at
   build time. Compile-time SQL checking is therefore **not** in place.
 - **CI runs a newer clippy than a Homebrew toolchain.** `/opt/homebrew/bin/rustc` is
