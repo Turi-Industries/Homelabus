@@ -337,9 +337,25 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
     at: i64,
     catalog: &BTreeMap<String, Manifest>,
 ) -> Result<Checked> {
+    check_apps(state, registry, now, at, catalog, None).await
+}
+
+/// [`check`], for `only` these apps when given: the registries are asked for nothing else,
+/// which an hourly pass over the apps already known to wait spends little of.
+pub async fn check_apps<T: chrono::Datelike + chrono::Timelike>(
+    state: &State,
+    registry: &RegistryClient,
+    now: &T,
+    at: i64,
+    catalog: &BTreeMap<String, Manifest>,
+    only: Option<&std::collections::BTreeSet<String>>,
+) -> Result<Checked> {
     let mut out = Checked::default();
 
     for (app, status) in state.installed_apps().await? {
+        if only.is_some_and(|o| !o.contains(&app)) {
+            continue;
+        }
         // Nothing is proposed for a failed or installing app: there is a more urgent
         // problem to deal with.
         if status != "running" && status != "partial" {

@@ -38,7 +38,7 @@ impl UpdateOutcome {
 ///
 /// `timeout_secs` bounds the observation: beyond it, `Inconclusive` is reported rather
 /// than waiting forever. An unresolved state is **never** reported as successful.
-pub async fn apply<O: Orchestrator>(
+pub async fn apply<O: Orchestrator + ?Sized>(
     orch: &O,
     state: &State,
     candidate: &Candidate,
@@ -152,7 +152,7 @@ async fn status_after_update(state: &State, app: &str) -> Result<Option<&'static
 /// updated has none at all (`nil`), and a switch with no effective change produces none
 /// either. So **reality** is checked first - is the service running the target digest? -
 /// and `UpdateStatus` is only consulted to detect failures.
-async fn watch<O: Orchestrator>(
+async fn watch<O: Orchestrator + ?Sized>(
     orch: &O,
     app: &str,
     target_digest: &str,

@@ -15,6 +15,7 @@ pub mod notify;
 pub mod reconcile;
 pub mod schedule;
 pub mod start;
+pub mod updates;
 
 pub use alerts::{AlertLoop, AlertReport, AlertsState, Measure, Query};
 pub use aliases::{AliasPurgeLoop, PurgeReport};
