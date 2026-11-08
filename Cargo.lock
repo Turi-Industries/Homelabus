@@ -1951,6 +1951,7 @@ version = "0.4.9-dev"
 dependencies = [
  "async-trait",
  "axum",
+ "chrono",
  "clap",
  "futures",
  "hlb-agent",

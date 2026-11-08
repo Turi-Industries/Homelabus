@@ -202,6 +202,11 @@ pub struct Config {
     #[arg(long, default_value = "86400", env = "HLB_UPDATE_WATCH_SECS")]
     pub update_watch_secs: u64,
 
+    /// How often the updates the watch saw are looked at, and those the policy lets go
+    /// alone applied in their window. Only the apps with one waiting are asked again.
+    #[arg(long, default_value = "3600", env = "HLB_UPDATE_APPLY_SECS")]
+    pub update_apply_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1269,7 +1274,7 @@ pub async fn start(
         }
     };
     let catalog = crate::catalog::SharedCatalog::new(catalog);
-    let backup = Some(Arc::new(pass_config) as Arc<dyn crate::backup::BackUpNow>);
+    let backup = Some(Arc::new(pass_config.clone()) as Arc<dyn crate::backup::BackUpNow>);
     // 🔴 The capabilities go to the privileged side, and to the daemon's own loops
     // below: the web side's `AppState` holds none of them, only the door.
     let privd = Privd::new(state.clone())
@@ -1547,6 +1552,54 @@ pub async fn start(
                             );
                         }
                         Err(e) => tracing::warn!("no update watched: {e}"),
+                    }
+                }
+            },
+        )));
+
+        // 🔴 What the policy lets go alone, applied with nobody there — the same pass as
+        // `hlb update apply`, with no override. Past ten minutes, like the watch.
+        let held_apply = held.clone();
+        let notif_apply = notif.clone();
+        let apply_config = pass_config.clone();
+        tracing::info!(interval = cfg.update_apply_secs, "automatic update loop");
+        tasks.push(tokio::spawn(schedule::every_after(
+            Duration::from_secs(600).min(Duration::from_secs(cfg.update_apply_secs)),
+            Duration::from_secs(cfg.update_apply_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_apply.clone();
+                let (notif, config) = (notif_apply.clone(), apply_config.clone());
+                async move {
+                    let (Some(install), Some(catalog), Some(orchestrator)) =
+                        (&held.install, held.privd.catalog.get(), &held.orchestrator)
+                    else {
+                        return;
+                    };
+                    let mut followed = std::collections::BTreeMap::new();
+                    for (app, _) in held.state.installed_apps().await.unwrap_or_default() {
+                        let source = held.state.app_source(&app).await.ok().flatten();
+                        if let Ok(e) = catalog.followed(&app, source.as_deref()) {
+                            followed.insert(app, e.manifest.clone());
+                        }
+                    }
+                    let pass = super::updates::Pass {
+                        state: &held.state,
+                        vault: &install.vault,
+                        registry: &install.registry,
+                        orchestrator: orchestrator.as_ref(),
+                        catalog: &followed,
+                        network: &config.network,
+                        postgres_admin: config.postgres_admin.as_deref(),
+                        mariadb_admin: config.mariadb_admin.as_deref(),
+                        fallback_repo: config.fallback_repo.as_deref(),
+                        scanner: &hlb_updater::run::Trivy,
+                    };
+                    for done in pass.run().await {
+                        tracing::info!(?done, "automatic update");
+                        if let Some(n) = super::updates::notice(&done) {
+                            notif.tell(&n).await;
+                        }
                     }
                 }
             },

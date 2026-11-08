@@ -100,7 +100,7 @@ pub enum Ran {
 }
 
 /// What an update needs besides the candidate.
-pub struct Update<'a, O: Orchestrator> {
+pub struct Update<'a, O: Orchestrator + ?Sized> {
     pub orchestrator: &'a O,
     pub state: &'a State,
     /// The catalog's image for the app, whose signer a frozen manifest may predate.
@@ -114,7 +114,7 @@ pub struct Update<'a, O: Orchestrator> {
     pub now: i64,
 }
 
-impl<O: Orchestrator> Update<'_, O> {
+impl<O: Orchestrator + ?Sized> Update<'_, O> {
     /// Runs one update to its end, or refuses it before anything changed.
     pub async fn run(
         &self,
