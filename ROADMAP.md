@@ -1382,7 +1382,12 @@ reported within 24 hours.
   pool's health and last scrub too (`pool_unhealthy`, `pool_not_scrubbed` past six
   weeks). The scrub stays the distribution's (Debian's monthly timer), read and never
   scheduled; never measured on a spinning disk nor a real pool yet. The
-  UPS: NUT stops apps, then databases, then Swarm, in that order.
+  UPS — done 2026-11-08, held to a real `upsd` 2.8 with `dummy-ups`: NUT read every 15 s
+  (`GET VAR` only), five minutes on battery or under ten of runtime or at low battery stop
+  the apps in waves from the capability graph — those nothing uses first, the databases
+  last — and the mains steady two minutes start them in reverse (`hlb config ups`,
+  `power_stopped`, `ups_unknown`). The machines stay NUT's own `upsmon`'s to shut down:
+  setting it up on each node is an open question, not built. Not yet run on the lab.
 
 **6. The TUI installer.** Gate: a bare machine to the first app, timed.
 - One description of the answers, filled three ways: a Ratatui assistant; a linear

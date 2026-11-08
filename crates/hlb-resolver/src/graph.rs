@@ -146,6 +146,45 @@ impl DependencyGraph {
         o.reverse();
         Ok(o)
     }
+
+    /// The shutdown in waves: each service stops once everything needing it has, and
+    /// the services of one wave stop together — a battery's runtime does not leave time
+    /// to stop twenty apps one after another. Started again, the waves run backwards.
+    ///
+    /// A dependency outside the graph is left out rather than refused: what is stopped is
+    /// what is installed, and a service nobody installed has nothing to wait for.
+    pub fn shutdown_waves(&self) -> Result<Vec<Vec<String>>, GraphError> {
+        let mut waves = Vec::new();
+        let mut stopped: BTreeSet<&str> = BTreeSet::new();
+        while stopped.len() < self.deps.len() {
+            // Whatever nothing still running needs: every app nobody uses goes in the
+            // first wave, the databases once their last consumer is gone.
+            let wave: Vec<&str> = self
+                .deps
+                .keys()
+                .map(String::as_str)
+                .filter(|n| !stopped.contains(n))
+                .filter(|n| {
+                    self.deps
+                        .iter()
+                        .filter(|(other, _)| !stopped.contains(other.as_str()))
+                        .all(|(_, needs)| !needs.contains(*n))
+                })
+                .collect();
+            if wave.is_empty() {
+                return Err(GraphError::Cycle(
+                    self.deps
+                        .keys()
+                        .filter(|k| !stopped.contains(k.as_str()))
+                        .cloned()
+                        .collect(),
+                ));
+            }
+            stopped.extend(wave.iter().copied());
+            waves.push(wave.into_iter().map(String::from).collect());
+        }
+        Ok(waves)
+    }
 }
 
 #[cfg(test)]
@@ -197,6 +236,35 @@ mod tests {
         let order = g.shutdown_order().expect("computable order");
         let pos = |n: &str| order.iter().position(|x| x == n).expect("present");
         assert!(pos("gitea") < pos("postgres"), "apps stop first");
+    }
+
+    #[test]
+    fn the_shutdown_waves_stop_consumers_before_what_they_need() {
+        let app = m(
+            "gitea",
+            "  requires:\n    - kind: database\n      engine: postgres\n    - kind: sso\n      mode: native\n",
+        );
+        // pocket-id needs postgres too: three waves, the apps first.
+        let g = DependencyGraph::from_manifests(&[
+            app,
+            with_db("vikunja"),
+            with_db("pocket-id"),
+            plain("postgres"),
+        ]);
+        assert_eq!(
+            g.shutdown_waves().expect("waves"),
+            vec![
+                vec!["gitea".to_string(), "vikunja".to_string()],
+                vec!["pocket-id".to_string()],
+                vec!["postgres".to_string()],
+            ]
+        );
+        // A dependency nobody installed is nothing to wait for.
+        let alone = DependencyGraph::from_manifests(&[with_db("gitea")]);
+        assert_eq!(
+            alone.shutdown_waves().expect("waves"),
+            vec![vec!["gitea".to_string()]]
+        );
     }
 
     #[test]

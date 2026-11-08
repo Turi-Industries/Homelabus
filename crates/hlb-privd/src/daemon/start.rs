@@ -223,6 +223,11 @@ pub struct Config {
     #[arg(long, default_value = "86400", env = "HLB_DISKS_SECS")]
     pub disks_secs: u64,
 
+    /// How often the UPS is read through NUT, when one is set (`hlb config ups`). Seconds:
+    /// a battery can hold minutes, and the waves that stop the apps take some of them.
+    #[arg(long, default_value = "15", env = "HLB_UPS_SECS")]
+    pub ups_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1690,6 +1695,32 @@ pub async fn start(
                             }
                         }
                         Err(e) => tracing::warn!("no disks read: {e}"),
+                    }
+                }
+            },
+        )));
+
+        // The UPS: on battery long enough, the apps stop in waves before the battery runs
+        // out; the mains back and steady, they start again. Asked at once: a daemon
+        // restarted mid-stop finishes it.
+        let held_power = held.clone();
+        let notif_power = notif.clone();
+        tracing::info!(interval = cfg.ups_secs, "power loop");
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(cfg.ups_secs.max(1)),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_power.clone();
+                let notif = notif_power.clone();
+                async move {
+                    let Some(orchestrator) = &held.orchestrator else {
+                        return;
+                    };
+                    if let Err(e) =
+                        super::power::pass(&held.state, orchestrator.as_ref(), &notif, crate::now())
+                            .await
+                    {
+                        tracing::warn!("power: {e}");
                     }
                 }
             },

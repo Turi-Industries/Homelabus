@@ -24,6 +24,7 @@ pub mod mail_relay;
 pub mod mail_tls;
 pub mod mailbox;
 pub mod pki;
+pub mod power;
 pub mod prune;
 pub mod reconcile;
 pub mod removal;

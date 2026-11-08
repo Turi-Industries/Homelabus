@@ -2034,6 +2034,8 @@
 	"cause_admin_tokens": "Several admin tokens in circulation: each opens everything",
 	"cause_admin_unknown": "No admin token recorded: access cannot be checked from here",
 	"cause_audit_broken": "The audit log was altered: an entry was removed or modified",
+	"cause_power_stopped": "The house ran on its battery: its apps are stopped until the mains come back",
+	"cause_ups_unknown": "The UPS is not read: a power cut would stop no app before the battery runs out",
 	"cause_audit_unreadable": "The audit log could not be read",
 	"cause_account_without_mailbox": [
 		{
@@ -2175,6 +2177,8 @@
 	"reason_host_flaws_unknown": "packages not checked for flaws lately",
 	"reason_firmware_update": "a firmware update waits for a person",
 	"reason_firmware_unknown": "firmware not checked lately",
+	"reason_power_stopped": "stopped for a power cut: they start once the mains are steady",
+	"reason_ups_unknown": "NUT's server does not answer: hlb config ups",
 	"reason_disk_failing": "a disk says it is wearing out: replace it",
 	"reason_disk_unknown": "disks not read lately",
 	"reason_pool_unhealthy": "the redundancy is spent, or files are damaged",

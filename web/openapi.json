@@ -2418,6 +2418,36 @@
             "type": "object"
           },
           {
+            "description": "🔴 The house ran on its battery and its apps were stopped for it: they start again\nonce the mains have been back a while. Still there with the mains back, the start\nfailed or NUT is no longer read.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "power_stopped"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A UPS is set and was not read for five minutes, or ever: an outage would stop no\napp before the battery runs out.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "ups_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 A DNS record the house's mail needs is not what the internet resolves — a\nDKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as\nspam. The subjects are the records' names; `hlb mail dns` prints the lines.",
             "properties": {
               "kind": {
