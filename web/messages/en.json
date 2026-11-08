@@ -1737,6 +1737,38 @@
 			}
 		}
 	],
+	"cause_firmware_update": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine has a firmware update to apply by hand, at the machine",
+				"countPlural=*": "{shown} machines have a firmware update to apply by hand, at the machine"
+			}
+		}
+	],
+	"cause_firmware_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine's firmware was not checked for updates lately",
+				"countPlural=*": "{shown} machines' firmware was not checked for updates lately"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2077,6 +2109,8 @@
 	"reason_flaws_unknown": "images not checked for flaws lately",
 	"reason_host_flaw_exploitable": "runs a fixable flaw, exploited or likely to be",
 	"reason_host_flaws_unknown": "packages not checked for flaws lately",
+	"reason_firmware_update": "a firmware update waits for a person",
+	"reason_firmware_unknown": "firmware not checked lately",
 	"reason_mail_record_wrong": "missing or wrong: mail is refused or filed as spam",
 	"reason_mail_record_unknown": "not read lately",
 	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",

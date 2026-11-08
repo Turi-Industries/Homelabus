@@ -1,0 +1,91 @@
+now=1794157430
+@@remotes
+{
+  "Remotes": [
+    {
+      "Id": "vendor-directory",
+      "Kind": "directory",
+      "Title": "Vendor (Automatic)",
+      "FilenameCache": "/usr/share/fwupd/remotes.d/vendor/firmware",
+      "FilenameCacheSig": "/usr/share/fwupd/remotes.d/vendor/firmware.jcat",
+      "FilenameSource": "/etc/fwupd/remotes.d/vendor-directory.conf",
+      "Flags": 1,
+      "Enabled": true,
+      "ApprovalRequired": false,
+      "AutomaticReports": false,
+      "AutomaticSecurityReports": false,
+      "Priority": 1000,
+      "Mtime": 1793037926,
+      "RefreshInterval": 0
+    },
+    {
+      "Id": "lvfs-embargo",
+      "Kind": "download",
+      "ReportUri": "https://fwupd.org/lvfs/firmware/report",
+      "MetadataUri": "https://cdn.fwupd.org/downloads/firmware-embargo.xml.zst",
+      "MetadataUriSig": "https://cdn.fwupd.org/downloads/firmware-embargo.xml.zst.jcat",
+      "FirmwareBaseUri": "https://fwupd.org/downloads",
+      "Title": "Linux Vendor Firmware Service (embargo)",
+      "PrivacyUri": "https://lvfs.readthedocs.io/en/latest/privacy.html",
+      "FilenameCache": "/var/lib/fwupd/metadata/lvfs-embargo/firmware.xml.zst",
+      "FilenameCacheSig": "/var/lib/fwupd/metadata/lvfs-embargo/firmware.xml.zst.jcat",
+      "FilenameSource": "/etc/fwupd/remotes.d/lvfs-embargo.conf",
+      "Flags": 128,
+      "Enabled": false,
+      "ApprovalRequired": false,
+      "AutomaticReports": false,
+      "AutomaticSecurityReports": false,
+      "Priority": 2,
+      "Mtime": -1,
+      "RefreshInterval": 86400
+    },
+    {
+      "Id": "lvfs-testing",
+      "Kind": "download",
+      "ReportUri": "https://fwupd.org/lvfs/firmware/report",
+      "MetadataUri": "https://cdn.fwupd.org/downloads/firmware-testing.xml.zst",
+      "MetadataUriSig": "https://cdn.fwupd.org/downloads/firmware-testing.xml.zst.jcat",
+      "FirmwareBaseUri": "https://fwupd.org/downloads",
+      "Title": "Linux Vendor Firmware Service (testing)",
+      "PrivacyUri": "https://lvfs.readthedocs.io/en/latest/privacy.html",
+      "FilenameCache": "/var/lib/fwupd/metadata/lvfs-testing/firmware.xml.zst",
+      "FilenameCacheSig": "/var/lib/fwupd/metadata/lvfs-testing/firmware.xml.zst.jcat",
+      "FilenameSource": "/etc/fwupd/remotes.d/lvfs-testing.conf",
+      "Flags": 0,
+      "Enabled": false,
+      "ApprovalRequired": false,
+      "AutomaticReports": false,
+      "AutomaticSecurityReports": false,
+      "Priority": 1,
+      "Mtime": -1,
+      "RefreshInterval": 86400
+    },
+    {
+      "Id": "lvfs",
+      "Kind": "download",
+      "ReportUri": "https://fwupd.org/lvfs/firmware/report",
+      "MetadataUri": "https://cdn.fwupd.org/downloads/firmware.xml.zst",
+      "MetadataUriSig": "https://cdn.fwupd.org/downloads/firmware.xml.zst.jcat",
+      "FirmwareBaseUri": "https://fwupd.org/downloads",
+      "Title": "Linux Vendor Firmware Service",
+      "PrivacyUri": "https://lvfs.readthedocs.io/en/latest/privacy.html",
+      "FilenameCache": "/var/lib/fwupd/metadata/lvfs/firmware.xml.zst",
+      "FilenameCacheSig": "/var/lib/fwupd/metadata/lvfs/firmware.xml.zst.jcat",
+      "FilenameSource": "/etc/fwupd/remotes.d/lvfs.conf",
+      "Flags": 1,
+      "Enabled": true,
+      "ApprovalRequired": false,
+      "AutomaticReports": false,
+      "AutomaticSecurityReports": false,
+      "Priority": 0,
+      "Mtime": -1,
+      "RefreshInterval": 86400
+    }
+  ]
+}
+@@updates
+{
+  "Devices": [
+  ]
+}
+@@end

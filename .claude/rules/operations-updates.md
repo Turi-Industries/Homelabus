@@ -130,6 +130,18 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   back — may stop the next the same way. A node not `active` is never picked: a person
   may be upgrading it.
 
+## Firmware
+
+- **Firmware is read daily and never applied** (`hlb_updater::firmware`, in `hlb-privd`'s
+  flaws pass): a capsule changes what the next boot measures, and a disk the TPM opens
+  then waits for the kit's key — `fwupdmgr update` is a person's, at the machine. fwupd
+  is asked through the reboot probe's host job with every `--no-*`: reading downloads
+  nothing. 🔴 `get-updates` answers `{"Devices": []}`, exit 0, over metadata never
+  downloaded: an empty list is believed only beside LVFS's metadata under a month old,
+  else `firmware_unknown`. A physical machine without fwupd is unread too; a virtual one
+  without it has no firmware of its own. Releases are listed OLDEST first (the dbx's,
+  measured): the newest is picked by version, never by position.
+
 ## Moving an app
 
 - **🔴 A companion moves with its app, before it.** `hlb update` moved the app's image

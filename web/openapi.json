@@ -2328,6 +2328,36 @@
             "type": "object"
           },
           {
+            "description": "fwupd offers a newer firmware for one of a machine's devices — its board, a disk,\nthe Secure Boot dbx. Homelabus never applies one: a capsule changes what the next\nboot measures, so a person runs `fwupdmgr update` at the machine, the emergency\nkit's key at hand (`hlb node verify-boot` first on a disk the TPM opens). The\nsubjects are the hostnames.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "firmware_update"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A machine's firmware was not read for two days, or ever: fwupd absent from a\nphysical machine, or LVFS's metadata never downloaded or a month old — an empty\nlist then says nothing. The subjects are the hostnames.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "firmware_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 A DNS record the house's mail needs is not what the internet resolves — a\nDKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as\nspam. The subjects are the records' names; `hlb mail dns` prints the lines.",
             "properties": {
               "kind": {

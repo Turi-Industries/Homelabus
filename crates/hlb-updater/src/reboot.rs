@@ -49,7 +49,7 @@ const REBOOT_SCRIPT: &str = "sleep 5; systemctl reboot || reboot";
 ///
 /// Exec form all the way: the script reaches the host's `sh` as one argument, never
 /// through a second shell's quoting.
-fn host_job(node: &NodeInfo, name: &str, detached: bool, script: &str) -> ServiceSpec {
+pub(crate) fn host_job(node: &NodeInfo, name: &str, detached: bool, script: &str) -> ServiceSpec {
     let mut command: Vec<String> = ["docker", "run", "--rm"]
         .into_iter()
         .map(String::from)

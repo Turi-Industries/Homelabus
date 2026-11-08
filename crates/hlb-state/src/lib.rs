@@ -16,9 +16,11 @@ use hlb_types::{Guide, Manifest};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+mod firmware;
 mod flaws;
 mod reboots;
 mod roles;
+pub use firmware::{FirmwareUpdate, NodeFirmware};
 pub use flaws::{host_key, Flaw, ImageScan};
 pub use reboots::{NodeReboot, RebootPhase, RebootPolicy, DEFAULT_REBOOT_WINDOW};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
@@ -74,6 +76,13 @@ pub enum Error {
     #[error("unreadable stored domain reading \"{key}\": {source}")]
     StoredDomain {
         key: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("unreadable stored firmware reading of {hostname}: {source}")]
+    StoredFirmware {
+        hostname: String,
         #[source]
         source: serde_json::Error,
     },

@@ -1370,7 +1370,11 @@ reported within 24 hours.
   in 10 min or come back in 30 stops every other until `hlb node upgrade` succeeds
   (`node_reboot_stopped`). ⚠️ "Never while the VPS is relaying" waits for phase 4: there
   is no VPS to ask yet. Still to prove on the lab.
-  `needrestart` without Docker; `fwupd` reports firmware and never applies it.
+  `needrestart` without Docker — written by bootstrap since before phase 5
+  (`/etc/needrestart/conf.d/hlb.conf`, where it is installed); `fwupd` reports firmware
+  and never applies it — read daily since 2026-11-08 (`hlb_updater::firmware`) into the
+  inbox (`firmware_update`, `firmware_unknown`), never measured on a real board's
+  capsule yet.
 - `cargo deny` beside `cargo audit`. Disks: SMART read nightly, a scheduled scrub, an
   alert on reallocated sectors — smartmontools is installed and nothing reads it. The
   UPS: NUT stops apps, then databases, then Swarm, in that order.

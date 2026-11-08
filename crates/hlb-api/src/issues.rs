@@ -141,6 +141,16 @@ pub enum Cause {
     /// ever — its system is one Grype holds no advisories for, or the reading failed. The
     /// subjects are the hostnames.
     HostFlawsUnknown,
+    /// fwupd offers a newer firmware for one of a machine's devices — its board, a disk,
+    /// the Secure Boot dbx. Homelabus never applies one: a capsule changes what the next
+    /// boot measures, so a person runs `fwupdmgr update` at the machine, the emergency
+    /// kit's key at hand (`hlb node verify-boot` first on a disk the TPM opens). The
+    /// subjects are the hostnames.
+    FirmwareUpdate,
+    /// A machine's firmware was not read for two days, or ever: fwupd absent from a
+    /// physical machine, or LVFS's metadata never downloaded or a month old — an empty
+    /// list then says nothing. The subjects are the hostnames.
+    FirmwareUnknown,
     /// 🔴 A DNS record the house's mail needs is not what the internet resolves — a
     /// DKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as
     /// spam. The subjects are the records' names; `hlb mail dns` prints the lines.
