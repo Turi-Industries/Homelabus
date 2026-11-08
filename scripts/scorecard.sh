@@ -156,6 +156,12 @@ row "5 available" "minutes until the vital apps answer from the VPS, the house c
 # applies by itself yet, so it says how long a person took.
 lag=$(measured updates-lag)
 row "6 up to date" "days from an update first seen to applied, on the lab: EVERY update, a security fix is told apart by phase 5, and a person applies them" "${lag:-UNMEASURED — probe: \`scripts/drills/updates.sh\`}" "a patch within 7 days, an exploited CVE at the next window"
+# Phase 5's gate, as two rows written before the phase starts: what a person did not do,
+# and how long an exploited flaw in what runs stays unsaid.
+unattended=$(measured updates-unattended)
+row "6 up to date" "patches the lab applied in their window with nobody there, of those that came out" "${unattended:-UNMEASURED — probe: the controller applies nothing by itself yet}" "every patch, rolled back by itself when it breaks"
+cve=$(measured cve-report-hours)
+row "6 up to date" "hours from a flaw in a running image or package being listed as exploited (KEV) to its alert" "${cve:-UNMEASURED — probe: nothing compares what runs with known flaws yet}" "within 24 hours"
 
 # 7. Simple --------------------------------------------------------------------------
 # No Minimal profile exists before the installer of phase 6: until then the figure is
