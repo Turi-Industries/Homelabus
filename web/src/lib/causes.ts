@@ -70,6 +70,8 @@ export function title(issue: Issue): string {
 			return m.cause_node_load(n);
 		case 'node_reboot_pending':
 			return m.cause_node_reboot_pending(n);
+		case 'node_reboot_stopped':
+			return m.cause_node_reboot_stopped(n);
 		case 'topology':
 			return m.cause_topology({ verdict: topology(c.verdict) });
 		case 'drift':
@@ -224,6 +226,7 @@ export function where(issue: Issue): string {
 		case 'node_swapping':
 		case 'node_load':
 		case 'node_reboot_pending':
+		case 'node_reboot_stopped':
 		case 'host_flaw_exploitable':
 		case 'host_flaws_unknown':
 			return '/nodes';
@@ -307,6 +310,8 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_node_load();
 		case 'node_reboot_pending':
 			return m.reason_node_reboot_pending();
+		case 'node_reboot_stopped':
+			return m.reason_node_reboot_stopped();
 		case 'drift':
 			return m.reason_drift();
 		case 'exposure_unknown':

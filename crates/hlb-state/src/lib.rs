@@ -17,8 +17,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 mod flaws;
+mod reboots;
 mod roles;
 pub use flaws::{host_key, Flaw, ImageScan};
+pub use reboots::{NodeReboot, RebootPhase, RebootPolicy, DEFAULT_REBOOT_WINDOW};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
 
 /// What a row of `backup_runs` backed up — its `kind`.
@@ -3130,7 +3132,7 @@ impl State {
             .await
     }
 
-    async fn setting(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) async fn setting(&self, key: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT value FROM settings WHERE key = ?1")
             .bind(key)
             .fetch_optional(&self.pool)
@@ -3138,7 +3140,7 @@ impl State {
         Ok(row.map(|r| r.try_get("value")).transpose()?)
     }
 
-    async fn put_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
+    pub(crate) async fn put_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
         match value {
             Some(v) => {
                 sqlx::query(

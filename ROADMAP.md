@@ -267,6 +267,10 @@ exported — Homelabus never bills.
   it knows neither, and its own release chain was compromised in March 2026.
 - **No UPS yet**: the ordered shutdown is built and proven against NUT's `dummy-ups`.
 - **One pull request per step, merged by Claude** once CI is green.
+- **A reboot that stops apps is each house's choice**, off by default: the only node, a
+  manager the others are no majority without, one keeping data — the lab's deb1 — waits
+  for a person unless the house accepts that downtime in its window (`hlb config reboots
+  --accept-downtime`). "Ça dépend des personnes, chacun choisit."
 
 #### The phases
 
@@ -1356,7 +1360,16 @@ reported within 24 hours.
   or likely to be (EPSS), and the component is exposed; the rest in a weekly digest; no
   fix, never an alert.
 - Planned reboots under a lock, one node at a time: drained, rebooted, waited healthy,
-  in the window, never while the house is degraded or the VPS is relaying.
+  in the window, never while the house is degraded or the VPS is relaying. Built
+  2026-11-08 (`hlb_updater::reboot`, `hlb-privd`'s `daemon::reboots`): the nodes are
+  asked hourly in the window (`daily 03:00-05:00` in the house's zone by default) through
+  a job entering the host's namespaces — no SSH; one waiting is drained, rebooted, and
+  put back once Swarm sees it ready AND its uptime says it booted since. Degraded means
+  another node not ready or not active (`maintenance` refuses). The lock is a row of the
+  state, which outlives the daemon rebooted with its node; a reboot that does not drain
+  in 10 min or come back in 30 stops every other until `hlb node upgrade` succeeds
+  (`node_reboot_stopped`). ⚠️ "Never while the VPS is relaying" waits for phase 4: there
+  is no VPS to ask yet. Still to prove on the lab.
   `needrestart` without Docker; `fwupd` reports firmware and never applies it.
 - `cargo deny` beside `cargo audit`. Disks: SMART read nightly, a scheduled scrub, an
   alert on reallocated sectors — smartmontools is installed and nothing reads it. The

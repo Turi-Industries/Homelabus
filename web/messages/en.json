@@ -1608,6 +1608,22 @@
 			}
 		}
 	],
+	"cause_node_reboot_stopped": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine was not rebooted on its own: none will be until hlb node upgrade succeeds on it",
+				"countPlural=*": "{shown} machines were not rebooted on their own: none will be until hlb node upgrade succeeds on them"
+			}
+		}
+	],
 	"cause_topology": "Resilience — {verdict}",
 	"cause_drift": [
 		{
@@ -2053,6 +2069,7 @@
 	"reason_node_swapping": "short of memory",
 	"reason_node_load": "overloaded",
 	"reason_node_reboot_pending": "a reboot is pending",
+	"reason_node_reboot_stopped": "its automatic reboot stopped: hlb node upgrade",
 	"reason_drift": "differs from its declaration",
 	"reason_assertion_broken": "does not hold what its manifest says",
 	"reason_assertion_unknown": "settings not read lately",

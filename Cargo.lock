@@ -2098,6 +2098,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hlb-bootstrap",
+ "hlb-notify",
  "hlb-orchestrator",
  "hlb-registry",
  "hlb-state",

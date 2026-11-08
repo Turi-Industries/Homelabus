@@ -340,6 +340,21 @@ kernel asks for it:
 ./target/debug/hlb node prune                        # the images no container uses
 ```
 
+A kernel installed is not a kernel running. The controller asks every node, inside the
+house's window, whether one waits for a reboot, and reboots it on its own — drained first,
+one at a time, put back once it proves it booted. A node whose reboot stops applications
+(the only node, a manager the others are no majority without, one keeping data, the one
+Homelabus runs on) is left to a person unless the house accepts that downtime. One that
+does not drain or come back stops every automatic reboot, in the inbox, until `node
+upgrade` succeeds on it:
+
+```sh
+./target/debug/hlb config reboots                    # the rule, and a reboot under way
+./target/debug/hlb config reboots --window "sun 02:00-04:00" --apply
+./target/debug/hlb config reboots --accept-downtime --apply   # a single-node house
+./target/debug/hlb config reboots --never --apply
+```
+
 Each machine's protection level — what a stolen one would give up — is read from its
 firmware, TPM and systemd, never declared: `node check`, `cluster init` and `node add`
 show it, the last two label the node, and `cluster status` lists it. A, a verified boot

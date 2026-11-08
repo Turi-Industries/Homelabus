@@ -241,6 +241,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
             ));
         }
     }
+    out.extend(reboot_stopped(&s.state).await?);
     let topology = crate::api::topology_now(s).await;
     out.push((
         Cause::Topology {
@@ -341,6 +342,24 @@ async fn certificates(state: &hlb_state::State, now: i64) -> Vec<Finding> {
         .collect()
 }
 
+/// A node the house's own reboot gave up on. Draining and rebooting are not a line: the
+/// reboot is under way, and the node's reading says it waits for one.
+async fn reboot_stopped(state: &hlb_state::State) -> Result<Vec<Finding>, hlb_state::Error> {
+    Ok(state
+        .node_reboot()
+        .await?
+        .filter(|r| r.phase == hlb_state::RebootPhase::Stopped)
+        .map(|r| {
+            (
+                Cause::NodeRebootStopped,
+                Attention::Critical,
+                Some(r.hostname),
+            )
+        })
+        .into_iter()
+        .collect())
+}
+
 /// The cause an alert rule says again, if it says one: `Some(None)` for a rule that is
 /// its own line, `None` for a name this function was never told about.
 ///
@@ -364,6 +383,28 @@ fn restated(rule: &str) -> Option<Option<Cause>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_reboot_given_up_is_a_line_and_one_under_way_is_not() {
+        use hlb_state::RebootPhase;
+        let st = hlb_state::State::in_memory().await.expect("state");
+        assert!(reboot_stopped(&st).await.expect("read").is_empty());
+        st.begin_node_reboot("n1", "deb2", RebootPhase::Draining, true, 10)
+            .await
+            .expect("begin");
+        assert!(reboot_stopped(&st).await.expect("read").is_empty());
+        st.set_node_reboot_phase("n1", RebootPhase::Stopped, 20, Some("did not move"))
+            .await
+            .expect("stop");
+        assert_eq!(
+            reboot_stopped(&st).await.expect("read"),
+            vec![(
+                Cause::NodeRebootStopped,
+                Attention::Critical,
+                Some("deb2".to_string())
+            )]
+        );
+    }
 
     #[test]
     fn every_rule_is_decided() {

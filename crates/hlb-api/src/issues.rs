@@ -81,6 +81,10 @@ pub enum Cause {
     NodeLoad,
     /// Security fixes installed and waiting for a reboot.
     NodeRebootPending,
+    /// 🔴 A node the house rebooted on its own did not drain, reboot or come back:
+    /// no machine reboots on its own until `hlb node upgrade <host>` succeeds on it.
+    /// The subject is the hostname.
+    NodeRebootStopped,
     /// What the topology says about surviving the loss of a failure domain.
     Topology {
         verdict: TopologyVerdict,
