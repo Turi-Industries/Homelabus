@@ -19,6 +19,7 @@
 
 pub mod apply;
 pub mod catalog;
+pub mod firmware;
 pub mod flaws;
 pub mod grype;
 pub mod host;

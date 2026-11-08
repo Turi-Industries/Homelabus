@@ -1741,6 +1741,38 @@
 			}
 		}
 	],
+	"cause_firmware_update": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine a une mise à jour de firmware à appliquer à la main, sur la machine",
+				"countPlural=*": "{shown} machines ont une mise à jour de firmware à appliquer à la main, sur la machine"
+			}
+		}
+	],
+	"cause_firmware_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Le firmware de {shown} machine n'a pas été vérifié récemment",
+				"countPlural=*": "Le firmware de {shown} machines n'a pas été vérifié récemment"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2081,6 +2113,8 @@
 	"reason_flaws_unknown": "images non vérifiées récemment",
 	"reason_host_flaw_exploitable": "fait tourner une faille corrigeable, exploitée ou susceptible de l'être",
 	"reason_host_flaws_unknown": "paquets non vérifiés récemment",
+	"reason_firmware_update": "une mise à jour de firmware attend une personne",
+	"reason_firmware_unknown": "firmware non vérifié récemment",
 	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",

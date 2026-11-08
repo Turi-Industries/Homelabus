@@ -1,4 +1,5 @@
-//! The flaws in what runs — the apps' images and the machines' own packages — as the
+//! The flaws in what runs — the apps' images and the machines' own packages, and the
+//! firmware fwupd offers — as the
 //! privileged side's daily pass read them: the inbox's lines. That pass decides what is said aloud and stores it; this side reads the state
 //! and runs no Grype — the inbox is polled.
 
@@ -72,6 +73,20 @@ pub async fn findings(state: &State, now: i64) -> Vec<Finding> {
                 Attention::Notice,
                 Some(host.to_string()),
             ));
+        }
+    }
+    // Each machine's firmware, by the same rule: the last good reading's offers, and
+    // unknown once it is two days old — a physical machine without fwupd never read.
+    for f in state.node_firmware().await.unwrap_or_default() {
+        if !f.updates.is_empty() {
+            out.push((
+                Cause::FirmwareUpdate,
+                Attention::Notice,
+                Some(f.hostname.clone()),
+            ));
+        }
+        if f.read_at.is_none_or(|r| now - r > STALE_AFTER_S) {
+            out.push((Cause::FirmwareUnknown, Attention::Notice, Some(f.hostname)));
         }
     }
     out
@@ -154,6 +169,49 @@ spec:
             .await
             .expect("gone");
         assert!(findings(&s, 2_000).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_firmware_offered_or_not_read_is_in_the_inbox() {
+        let s = State::in_memory().await.expect("state");
+        let unknown = (
+            Cause::FirmwareUnknown,
+            Attention::Notice,
+            Some("deb1".into()),
+        );
+        // 🔴 A physical machine without fwupd was never read: unknown, never current.
+        s.record_firmware("deb1", 1_000, Err("fwupd is not installed"))
+            .await
+            .expect("failed");
+        assert_eq!(findings(&s, 1_000).await, vec![unknown.clone()]);
+
+        s.record_firmware("deb1", 2_000, Ok(&[]))
+            .await
+            .expect("read");
+        assert!(findings(&s, 2_000).await.is_empty());
+        let dbx = hlb_state::FirmwareUpdate {
+            device: "UEFI dbx".into(),
+            version: "20250902".into(),
+            latest: "20260707".into(),
+            urgency: None,
+        };
+        s.record_firmware("deb1", 3_000, Ok(&[dbx]))
+            .await
+            .expect("read");
+        let offered = (
+            Cause::FirmwareUpdate,
+            Attention::Notice,
+            Some("deb1".into()),
+        );
+        assert_eq!(findings(&s, 3_000).await, vec![offered.clone()]);
+        // A failed night keeps what was offered, and ages it.
+        s.record_firmware("deb1", 4_000, Err("the node is down"))
+            .await
+            .expect("failed");
+        assert_eq!(
+            findings(&s, 3_001 + STALE_AFTER_S).await,
+            vec![offered, unknown]
+        );
     }
 
     #[tokio::test]

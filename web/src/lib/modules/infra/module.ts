@@ -16,7 +16,7 @@ export const module: Module = {
 		{ path: '/storage', label: m.page_infra_storage, reads: ['/api/nodes'] }
 	],
 	details: ['/nodes/[address]'],
-	causes: ['node_unreachable', 'node_disk_full', 'node_disk_filling', 'node_swapping', 'node_load', 'node_reboot_pending', 'node_reboot_stopped', 'host_flaw_exploitable', 'host_flaws_unknown', 'topology', 'drift', 'deadman_absent', 'deadman_silent', 'admin_tokens', 'admin_unknown', 'audit_broken', 'audit_unreadable'],
+	causes: ['node_unreachable', 'node_disk_full', 'node_disk_filling', 'node_swapping', 'node_load', 'node_reboot_pending', 'node_reboot_stopped', 'host_flaw_exploitable', 'host_flaws_unknown', 'firmware_update', 'firmware_unknown', 'topology', 'drift', 'deadman_absent', 'deadman_silent', 'admin_tokens', 'admin_unknown', 'audit_broken', 'audit_unreadable'],
 	search: {
 		path: '/api/nodes',
 		entries: (nodes) =>

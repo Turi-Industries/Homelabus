@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hlb_notify::Notification;
 use hlb_orchestrator::NodeInfo;
 use hlb_state::{host_key, Flaw, State};
+use hlb_updater::firmware;
 use hlb_updater::flaws::{alerting, distinct, exposed, images, line};
 use hlb_updater::grype::{Finding, Grype};
 
@@ -125,7 +126,11 @@ pub async fn read(state: &State, grype: &Grype<'_>, at: i64) -> hlb_state::Resul
             for node in &nodes {
                 kept.insert(host_key(&node.hostname));
                 read_host(state, grype, node, at, &mut out).await?;
+                read_firmware(state, grype, node, at).await?;
             }
+            state
+                .keep_node_firmware(&nodes.iter().map(|n| n.hostname.clone()).collect())
+                .await?;
         }
         Err(e) => {
             // What was read before stays, ageing until the inbox says it is not known.
@@ -198,6 +203,38 @@ async fn read_host(
         flaws: distinct(&all).into_iter().cloned().collect(),
     });
     Ok(())
+}
+
+/// Reads what fwupd offers `node`'s firmware, for the inbox. Nothing is applied: a
+/// firmware update is a person's, at the machine.
+async fn read_firmware(
+    state: &State,
+    grype: &Grype<'_>,
+    node: &NodeInfo,
+    at: i64,
+) -> hlb_state::Result<()> {
+    let reading = if node.is_ready() {
+        match grype
+            .orchestrator
+            .run_job(&firmware::job(node), firmware::JOB_TIMEOUT_S)
+            .await
+        {
+            Ok(out) => firmware::read(&out),
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        Err(format!("the node is {}", node.status))
+    };
+    if let Err(why) = &reading {
+        tracing::warn!(node = %node.hostname, "its firmware was not read: {why}");
+    }
+    state
+        .record_firmware(
+            &node.hostname,
+            at,
+            reading.as_deref().map_err(String::as_str),
+        )
+        .await
 }
 
 /// What to say of a reading: an alert per app with a flaw not said yet, and the digest
