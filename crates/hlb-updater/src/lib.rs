@@ -348,29 +348,28 @@ pub struct Checked {
 ///
 /// `catalog` is the image each app's catalog manifest names. Read-only: nothing is
 /// modified, nothing is deployed.
-/// `now` is the local time the maintenance windows are read in, `at` the same instant in
-/// Unix seconds, which maturation counts in.
-pub async fn check<T: chrono::Datelike + chrono::Timelike>(
+/// `at` is the instant in Unix seconds: maturation counts in it, and the maintenance
+/// windows read it on the house's clock.
+pub async fn check(
     state: &State,
     registry: &RegistryClient,
-    now: &T,
     at: i64,
     catalog: &BTreeMap<String, Manifest>,
 ) -> Result<Checked> {
-    check_apps(state, registry, now, at, catalog, None).await
+    check_apps(state, registry, at, catalog, None).await
 }
 
 /// [`check`], for `only` these apps when given: the registries are asked for nothing else,
 /// which an hourly pass over the apps already known to wait spends little of.
-pub async fn check_apps<T: chrono::Datelike + chrono::Timelike>(
+pub async fn check_apps(
     state: &State,
     registry: &RegistryClient,
-    now: &T,
     at: i64,
     catalog: &BTreeMap<String, Manifest>,
     only: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<Checked> {
     let mut out = Checked::default();
+    let zone = state.timezone().await?;
 
     for (app, status) in state.installed_apps().await? {
         if only.is_some_and(|o| !o.contains(&app)) {
@@ -388,7 +387,7 @@ pub async fn check_apps<T: chrono::Datelike + chrono::Timelike>(
             out.held.push((app.clone(), why));
             theirs = None;
         }
-        match candidate(state, registry, now, at, &app, &m, theirs).await {
+        match candidate(state, registry, zone.as_deref(), at, &app, &m, theirs).await {
             Ok(Some(c)) => match catalog
                 .get(&app)
                 .and_then(|cat| policy::held_by_catalog(&c, &m, cat))
@@ -411,9 +410,9 @@ pub async fn watch(
     registry: &RegistryClient,
     catalog: &BTreeMap<String, Manifest>,
 ) -> Result<Checked> {
-    let now = chrono::Utc::now();
-    let checked = check(state, registry, &now, now.timestamp(), catalog).await?;
-    note_seen(state, &checked, now.timestamp()).await?;
+    let at = chrono::Utc::now().timestamp();
+    let checked = check(state, registry, at, catalog).await?;
+    note_seen(state, &checked, at).await?;
     Ok(checked)
 }
 
@@ -428,6 +427,17 @@ pub async fn note_seen(state: &State, checked: &Checked, at: i64) -> Result<()> 
     Ok(())
 }
 
+/// Is a manifest's maintenance window open at `at`? 🔴 Read on the house's clock (`hlb
+/// config timezone`), never the process's: hlb-privd runs in a container whose clock is
+/// UTC, and a Paris "sun 03:00-05:00" opened an hour or two late, on the wrong day near
+/// midnight. With no window declared, an update can be applied at any time.
+fn window_open(window: Option<&str>, zone: Option<&str>, at: i64) -> Result<bool> {
+    Ok(match window {
+        Some(w) => MaintenanceWindow::parse(w)?.is_open_at(&hlb_notify::local_datetime(zone, at)),
+        None => true,
+    })
+}
+
 /// What a candidate would run that does not run yet. Its `to_digest` is the image it runs
 /// already when only its companions move, and it is not proposed.
 fn proposed_digests(c: &Candidate) -> Vec<&str> {
@@ -439,10 +449,10 @@ fn proposed_digests(c: &Candidate) -> Vec<&str> {
 }
 
 /// The update one app has, if any: its own image, its companions', or both.
-async fn candidate<T: chrono::Datelike + chrono::Timelike>(
+async fn candidate(
     state: &State,
     registry: &RegistryClient,
-    now: &T,
+    zone: Option<&str>,
     at: i64,
     app: &str,
     m: &Manifest,
@@ -466,11 +476,7 @@ async fn candidate<T: chrono::Datelike + chrono::Timelike>(
         maturity = maturity.or_younger(c.maturity);
     }
 
-    let in_window = match &m.spec.update.window {
-        Some(w) => MaintenanceWindow::parse(w)?.is_open_at(now),
-        // With no declared window, the update can be applied at any time.
-        None => true,
-    };
+    let in_window = window_open(m.spec.update.window.as_deref(), zone, at)?;
 
     Ok(Some(Candidate {
         app: app.to_string(),
@@ -673,6 +679,16 @@ pub fn authorize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_maintenance_window_is_read_on_the_house_s_clock() {
+        // Sunday 2026-11-08 23:30 UTC is Monday 00:30 in Paris.
+        let at = 1_794_180_600;
+        let monday = Some("mon 00:00-01:00");
+        assert!(window_open(monday, Some("Europe/Paris"), at).expect("window"));
+        assert!(!window_open(monday, None, at).expect("window"));
+        assert!(window_open(None, Some("Europe/Paris"), at).expect("no window"));
+    }
 
     #[test]
     fn what_is_proposed_is_what_would_change_and_not_what_already_runs() {

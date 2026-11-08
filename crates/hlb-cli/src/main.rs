@@ -11388,8 +11388,6 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             rt.block_on(async {
                 let state = open_state(&cli).await?;
                 let registry = hlb_registry::RegistryClient::new();
-                let now = chrono::Local::now().naive_local();
-
                 if let UpdateCmd::Policy { app, automatic } = cmd {
                     return update_policy(&state, app.as_deref(), automatic.as_deref()).await;
                 }
@@ -11468,7 +11466,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
                 }
                 let at = chrono::Utc::now().timestamp();
-                let checked = hlb_updater::check(&state, &registry, &now, at, &catalog).await?;
+                let checked = hlb_updater::check(&state, &registry, at, &catalog).await?;
                 hlb_updater::note_seen(&state, &checked, at).await?;
                 for (app, why) in &checked.unreadable {
                     eprintln!("✗ {app}: its registry could not be read — {why}");

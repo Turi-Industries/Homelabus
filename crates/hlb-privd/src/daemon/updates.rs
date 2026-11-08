@@ -68,16 +68,8 @@ impl Pass<'_> {
         let checked = if apps.is_empty() {
             hlb_updater::Checked::default()
         } else {
-            let local = chrono::Local::now().naive_local();
-            match hlb_updater::check_apps(
-                self.state,
-                self.registry,
-                &local,
-                at,
-                self.catalog,
-                Some(&apps),
-            )
-            .await
+            match hlb_updater::check_apps(self.state, self.registry, at, self.catalog, Some(&apps))
+                .await
             {
                 Ok(c) => c,
                 Err(e) => {
