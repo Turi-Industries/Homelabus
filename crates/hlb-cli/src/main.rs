@@ -3187,7 +3187,7 @@ fn fmt_age(d: std::time::Duration) -> String {
     } else if s < 172_800 {
         format!("{} h", s / 3600)
     } else {
-        format!("{} j", s / 86400)
+        format!("{} d", s / 86400)
     }
 }
 
@@ -12713,6 +12713,15 @@ fn verified_column(age: Option<i64>, last_failed: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_age_reads_in_english() {
+        let day = std::time::Duration::from_secs(86_400);
+        // "3 j" survived from the French original, past the word list: one letter is no
+        // word. The lab's restores drill reads the unit, and counted no app read back.
+        assert_eq!(super::fmt_age(day * 3), "3 d");
+        assert_eq!(super::fmt_age(day), "24 h");
+    }
+
     use super::*;
 
     #[test]
