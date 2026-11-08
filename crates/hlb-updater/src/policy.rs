@@ -38,7 +38,10 @@ impl Jump {
                 Self::Patch
             };
         }
-        if t.major != f.major {
+        // 🔴 Below 1.0 the second number is the one that breaks (SemVer §4, Cargo's
+        // rule), and below 0.1 every release may: `hlb-caddy` 0.2.1 → 0.4.8 went alone on
+        // the lab (2026-11-08), read as a minor an exploited flaw may take.
+        if t.major != f.major || (f.major == 0 && (t.minor != f.minor || f.minor == Some(0))) {
             Self::Major
         } else if t.minor != f.minor {
             Self::Minor
@@ -310,6 +313,14 @@ mod tests {
             "another flavour"
         );
         assert_eq!(Jump::between("17-alpine", "17-bookworm"), Jump::Major);
+    }
+
+    #[test]
+    fn below_one_the_second_number_is_the_major() {
+        assert_eq!(Jump::between("0.2.1", "0.4.8"), Jump::Major);
+        assert_eq!(Jump::between("0.2.1", "0.2.5"), Jump::Patch);
+        assert_eq!(Jump::between("0.0.1", "0.0.2"), Jump::Major);
+        assert_eq!(Jump::between("0.9.3", "1.0.0"), Jump::Major);
     }
 
     #[test]
