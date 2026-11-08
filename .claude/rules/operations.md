@@ -215,6 +215,15 @@ monitoring, updates and routes have their own `operations-*.md`.
   HELD (`restore::stop_held`, 30 days, `power: …`), and while stopped every pass puts
   down again what something else started: a backup's copy or a restore ending starts its
   services and releases their hold. `hlb config ups --off` mid-stop starts the apps.
+- **Each node's `upsmon` is a secondary Homelabus writes** (`hlb_bootstrap::nut`, `hlb
+  config ups --shutdown-user`), never over a NUT a person set up: the machine serving
+  the UPS runs the primary, which cuts the power after the secondaries are down —
+  rewritten, the UPS would have nobody to cut it. Measured on `nut-client` 2.8.0: a
+  secondary at `OB LB` waits HOSTSYNC (15 s) for the primary's FSD, then runs its
+  `SHUTDOWNCMD`. 🔴 upsd takes a quoted password with a space, and `upsmon` sends it
+  BARE (`ERR INVALID-ARGUMENT`): proved quoted, the account would fail on every node in
+  silence. `check_login` signs in exactly as upsmon does, and `unusable` refuses a space,
+  a quote, a backslash or `#` first. NUT's `LIST CLIENT` is the proof each node signed in.
 - **NUT 2.8's `dummy-ups` reads its `.dev` file ONCE** (`mode dummy-once`): a status
   changes with `upsrw -s ups.status=…` (`tests/live_nut.rs`, its Dockerfile beside it).
 

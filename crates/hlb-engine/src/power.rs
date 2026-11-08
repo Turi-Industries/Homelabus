@@ -30,21 +30,23 @@ pub enum Decision {
     Start,
 }
 
-/// Reads the UPS `ups` on the NUT server `server` (`host` or `host:port`).
-pub async fn read(server: &str, ups: &str) -> Result<UpsReading, String> {
-    let address = if server.contains(':') {
+/// `host` or `host:port`, NUT's port when none is said.
+fn address(server: &str) -> String {
+    if server.contains(':') {
         server.to_string()
     } else {
         format!("{server}:{NUT_PORT}")
-    };
+    }
+}
+
+/// Sends `ask` — ending with `LOGOUT` — and returns every line answered before NUT's
+/// goodbye.
+async fn exchange(server: &str, ask: &str) -> Result<Vec<String>, String> {
+    let address = address(server);
     let talk = async {
         let mut stream = tokio::net::TcpStream::connect(&address)
             .await
             .map_err(|e| format!("NUT's server at {address} does not answer: {e}"))?;
-        let ask = format!(
-            "GET VAR {ups} ups.status\nGET VAR {ups} battery.runtime\n\
-             GET VAR {ups} battery.charge\nLOGOUT\n"
-        );
         stream
             .write_all(ask.as_bytes())
             .await
@@ -63,10 +65,79 @@ pub async fn read(server: &str, ups: &str) -> Result<UpsReading, String> {
         }
         Ok::<_, String>(answers)
     };
-    let answers = tokio::time::timeout(READ_TIMEOUT, talk)
+    tokio::time::timeout(READ_TIMEOUT, talk)
         .await
-        .map_err(|_| format!("NUT's server at {address} did not answer in 5 s"))??;
-    parse(ups, &answers)
+        .map_err(|_| format!("NUT's server at {address} did not answer in 5 s"))?
+}
+
+/// Reads the UPS `ups` on the NUT server `server` (`host` or `host:port`).
+pub async fn read(server: &str, ups: &str) -> Result<UpsReading, String> {
+    let ask = format!(
+        "GET VAR {ups} ups.status\nGET VAR {ups} battery.runtime\n\
+         GET VAR {ups} battery.charge\nLOGOUT\n"
+    );
+    parse(ups, &exchange(server, &ask).await?)
+}
+
+/// Signs in as `user` and attaches to `ups` the way a node's `upsmon` will, then leaves:
+/// the account is proved here once, before it is written on every node — a typo there
+/// is a machine that never shuts down, with nothing said.
+///
+/// 🔴 Sent as `upsmon` sends it, unquoted: upsd takes a quoted password with a space,
+/// and `upsmon` 2.8.0 sends it bare and is refused (`ERR INVALID-ARGUMENT`) — proved
+/// quoted, the account would fail on every node. [`unusable`] refuses such a word first.
+/// ⚠️ The password crosses the network in clear, as `upsmon`'s own does.
+pub async fn check_login(
+    server: &str,
+    ups: &str,
+    user: &str,
+    password: &str,
+) -> Result<(), String> {
+    if let Some(why) = unusable(user).or_else(|| unusable(password)) {
+        return Err(why);
+    }
+    let ask = format!("USERNAME {user}\nPASSWORD {password}\nLOGIN {ups}\nLOGOUT\n");
+    let answers = exchange(server, &ask).await?;
+    let refused = answers.iter().find_map(|l| l.strip_prefix("ERR "));
+    match refused {
+        None if answers.len() >= 3 && answers.iter().take(3).all(|l| l.starts_with("OK")) => Ok(()),
+        None => Err(format!("NUT's server answered {answers:?} to a sign-in")),
+        Some(e) => Err(match e.split_whitespace().next() {
+            Some("ACCESS-DENIED") => format!(
+                "NUT refused {user} on {ups}: a wrong password, or an account without \
+                 `upsmon secondary` in upsd.users"
+            ),
+            Some("UNKNOWN-UPS") => format!("NUT's server knows no UPS named {ups}"),
+            _ => format!("NUT refused the sign-in: {e}"),
+        }),
+    }
+}
+
+/// The addresses attached to `ups` — every machine's `upsmon`, once it runs.
+pub async fn clients(server: &str, ups: &str) -> Result<Vec<String>, String> {
+    let answers = exchange(server, &format!("LIST CLIENT {ups}\nLOGOUT\n")).await?;
+    if let Some(e) = answers.iter().find_map(|l| l.strip_prefix("ERR ")) {
+        return Err(format!("NUT did not list the clients of {ups}: {e}"));
+    }
+    let prefix = format!("CLIENT {ups} ");
+    Ok(answers
+        .iter()
+        .filter_map(|l| l.strip_prefix(&prefix).map(|a| a.trim().to_string()))
+        .collect())
+}
+
+/// Why `upsmon` could not sign in with this word, if it could not: it sends it as is,
+/// so a space, a quote, a backslash or a `#` changes what upsd reads.
+pub fn unusable(word: &str) -> Option<String> {
+    let bad = word.is_empty()
+        || word
+            .chars()
+            .any(|c| !c.is_ascii_graphic() || matches!(c, '"' | '\'' | '\\' | '#'));
+    bad.then(|| {
+        "NUT's upsmon sends its account unquoted: a user or password may hold no space, \
+         quote, backslash or #, nor any letter outside ASCII — change it in upsd.users"
+            .to_string()
+    })
 }
 
 /// The three answers, in the order asked.

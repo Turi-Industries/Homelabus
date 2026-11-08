@@ -36,6 +36,7 @@ pub mod distro;
 pub mod docker;
 pub mod host;
 pub mod mesh;
+pub mod nut;
 pub mod observe;
 pub mod preflight;
 pub mod preseed;

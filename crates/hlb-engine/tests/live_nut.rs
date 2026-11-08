@@ -94,3 +94,26 @@ async fn the_mains_wait_and_a_low_battery_stops() {
 
     set_status("OL").await;
 }
+
+#[tokio::test]
+#[ignore = "needs the dummy NUT server running (see the module's comment)"]
+async fn the_account_a_node_signs_in_with_is_proved_as_upsmon_sends_it() {
+    use hlb_engine::power::{check_login, clients};
+    check_login(&server(), "house", "monitor", "mon-pass.2")
+        .await
+        .expect("the account signs in");
+    let wrong = check_login(&server(), "house", "monitor", "nope")
+        .await
+        .expect_err("a wrong password");
+    assert!(wrong.contains("refused"), "{wrong}");
+    // upsd takes it quoted, upsmon 2.8.0 sends it bare: refused before it is sent.
+    let spaced = check_login(&server(), "house", "monitor", "mon pass")
+        .await
+        .expect_err("a space");
+    assert!(spaced.contains("unquoted"), "{spaced}");
+    // Nobody signed in once the check left.
+    assert!(clients(&server(), "house")
+        .await
+        .expect("listed")
+        .is_empty());
+}
