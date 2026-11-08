@@ -133,6 +133,7 @@ pub mod outage;
 pub mod palette;
 pub mod roles;
 pub mod rotation;
+pub mod updates;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

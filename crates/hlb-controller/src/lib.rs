@@ -40,5 +40,6 @@ pub mod runbook;
 pub mod signin;
 pub mod throughput;
 pub mod timeline;
+pub mod updates;
 
 pub use agents::{AgentStatus, ClusterHealth};

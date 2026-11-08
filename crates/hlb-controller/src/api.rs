@@ -1738,6 +1738,8 @@ pub fn api() -> OpenApiRouter<Arc<AppState>> {
         .routes(routes!(manifest_versions))
         .routes(routes!(crate::actions::install_app))
         .routes(routes!(crate::actions::upgrade_app))
+        .routes(routes!(crate::updates::approve))
+        .routes(routes!(crate::updates::updates))
         .routes(routes!(crate::actions::resize))
         .routes(routes!(crate::actions::backup_run))
         .routes(routes!(crate::actions::destination))

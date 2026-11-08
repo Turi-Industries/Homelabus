@@ -172,6 +172,9 @@ pub async fn seed_from(
         }])
         .await?;
 
+    // --- Updates waiting, one per thing a person may be asked ------------------------
+    updates(state, now).await?;
+
     // --- Scheduled jobs: each declared one ran fine two days ago ------------------
     for (app, _) in state.installed_apps().await? {
         let m = state.app_manifest(&app).await?;
@@ -937,4 +940,136 @@ async fn backed_up(
             .await?;
     }
     Ok(())
+}
+
+/// One update per answer the updates page gives: a click with its notes, a major by
+/// hand, a patch going on alone, one approved, one rolled back while nobody was there.
+/// Each moves from the tag its frozen manifest runs, so a catalog moving on moves them.
+async fn updates(state: &State, now: i64) -> Result<(), Box<dyn std::error::Error>> {
+    use hlb_api::updates::{
+        ReleaseNote, UpdateJump, UpdateMove, UpdateReach, UpdateRefusal, UpdateWho, UpdateWhy,
+    };
+    let beyond = |jump, reach| UpdateWhy::BeyondReach {
+        jump,
+        reach,
+        by_house: false,
+    };
+    let cases = [
+        (
+            "gitea",
+            1,
+            UpdateWho::OneClick,
+            Some(beyond(UpdateJump::Minor, UpdateReach::Patch)),
+            true,
+        ),
+        (
+            "immich",
+            0,
+            UpdateWho::Manual,
+            Some(UpdateWhy::Major),
+            false,
+        ),
+        ("jellyfin", 1, UpdateWho::Automatic, None, false),
+        (
+            "vaultwarden",
+            2,
+            UpdateWho::OneClick,
+            Some(beyond(UpdateJump::Patch, UpdateReach::None)),
+            false,
+        ),
+        (
+            "seafile",
+            2,
+            UpdateWho::OneClick,
+            Some(beyond(UpdateJump::Patch, UpdateReach::None)),
+            false,
+        ),
+    ];
+    for (app, at, who, why, notes) in cases {
+        let from = state.app_manifest(app).await?.spec.image.tag;
+        let to = bump(&from, at);
+        // GitHub's shape for a release page; gitea's manifest names no source today.
+        let notes = notes.then(|| {
+            vec![ReleaseNote {
+                tag: format!("v{}", to.trim_start_matches('v')),
+                url: format!(
+                    "https://github.com/go-gitea/gitea/releases/tag/v{}",
+                    to.trim_start_matches('v')
+                ),
+            }]
+        });
+        state
+            .record_update_decision(&hlb_state::UpdateDecision {
+                app: app.into(),
+                digest: format!("sha256:{:0<64}", app.len()),
+                from_tag: from,
+                kind: UpdateMove::Version.as_stored().into(),
+                to_tag: Some(to),
+                who: who.as_stored().into(),
+                why: why.map(|w| serde_json::to_string(&w)).transpose()?,
+                notes: notes.map(|n| serde_json::to_string(&n)).transpose()?,
+                decided_at: now - 1_200,
+                refused: None,
+                refused_at: None,
+                approved_by: None,
+                approved_at: None,
+            })
+            .await?;
+    }
+    let digest = |app: &str| format!("sha256:{:0<64}", app.len());
+    state
+        .approve_update("vaultwarden", &digest("vaultwarden"), ADMIN, now - 3_600)
+        .await?;
+    state
+        .approve_update("seafile", &digest("seafile"), ADMIN, now - 2 * 86_400)
+        .await?;
+    let rolled = UpdateRefusal::RolledBack {
+        reason: "task: non-zero exit (1)".into(),
+    };
+    state
+        .refuse_update(
+            "seafile",
+            &digest("seafile"),
+            &serde_json::to_string(&rolled)?,
+            now - 86_400,
+        )
+        .await?;
+    Ok(())
+}
+
+/// `tag` with its `at`-th number moved on and the ones after it zeroed: `28.2` at 1 is
+/// `28.3`, `v3.3.1` at 0 is `v4.0.0`. A tag that is no version stays as it is.
+fn bump(tag: &str, at: usize) -> String {
+    let (v, rest) = match tag.strip_prefix('v') {
+        Some(r) => ("v", r),
+        None => ("", tag),
+    };
+    let Ok(mut parts) = rest
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return tag.to_string();
+    };
+    let Some(n) = parts.get_mut(at) else {
+        return tag.to_string();
+    };
+    *n += 1;
+    for p in parts.iter_mut().skip(at + 1) {
+        *p = 0;
+    }
+    let joined: Vec<String> = parts.iter().map(u64::to_string).collect();
+    format!("{v}{}", joined.join("."))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_demo_update_moves_the_number_it_names() {
+        assert_eq!(super::bump("28.2", 1), "28.3");
+        assert_eq!(super::bump("v3.3.1", 0), "v4.0.0");
+        assert_eq!(super::bump("14.0.9", 2), "14.0.10");
+        assert_eq!(super::bump("latest", 0), "latest");
+        assert_eq!(super::bump("12.4", 2), "12.4");
+    }
 }

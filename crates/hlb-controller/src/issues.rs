@@ -197,6 +197,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
             out.push((Cause::JobFailed, Attention::Notice, Some(run.app)));
         }
     }
+    out.extend(crate::updates::findings(&s.state).await);
     let now = crate::auth::now();
     out.extend(crate::mail_queue::findings(&s.state, now).await);
     for (app, _, _, blocking) in s.state.pending_guides().await? {
