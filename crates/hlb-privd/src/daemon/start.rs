@@ -93,8 +93,20 @@ pub struct Config {
     #[arg(long, default_value = "60", env = "HLB_RECONCILE_SECS")]
     pub reconcile_secs: u64,
 
-    /// Correct the detected gaps. Without this flag: detection only.
-    #[arg(long, env = "HLB_RECONCILE_APPLY")]
+    /// Correct the detected gaps; `--reconcile-apply=false` only reports them.
+    ///
+    /// On by default since 0.4.9: off, `hlb fleet controller` deployed a daemon that named
+    /// a service Swarm left pending or a pull stuck after a reboot, and left it down. What
+    /// it corrects is narrow (`Drift::is_correctable`), and a held service is never touched.
+    #[arg(
+        long,
+        env = "HLB_RECONCILE_APPLY",
+        default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
     pub reconcile_apply: bool,
 
     /// Heartbeat file, to be placed OUTSIDE the cluster.
@@ -1916,4 +1928,35 @@ async fn read_pem(path: &std::path::Path) -> Result<String, StartError> {
             path: path.to_path_buf(),
             source,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Daemon {
+        #[command(flatten)]
+        config: super::Config,
+    }
+
+    fn reconcile_apply(args: &[&str]) -> bool {
+        let argv = std::iter::once("hlb-privd").chain(args.iter().copied());
+        Daemon::try_parse_from(argv)
+            .expect("the daemon's flags parse")
+            .config
+            .reconcile_apply
+    }
+
+    #[test]
+    fn reconciliation_corrects_unless_told_not_to() {
+        assert!(
+            reconcile_apply(&[]),
+            "a daemon deployed with no flag corrects"
+        );
+        // The bare flag of the documented command lines still parses.
+        assert!(reconcile_apply(&["--reconcile-apply"]));
+        assert!(!reconcile_apply(&["--reconcile-apply=false"]));
+        assert!(!reconcile_apply(&["--reconcile-apply", "no"]));
+    }
 }

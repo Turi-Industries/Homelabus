@@ -220,7 +220,7 @@ token per mailbox.
 ./target/debug/hlb-controller \
   --listen 127.0.0.1:8420 \
   --agent-service hlb-agent --agent-poll-secs 60 \
-  --reconcile-secs 60 --reconcile-apply \
+  --reconcile-secs 60 \
   --backup-repo hlb-repo --backup-check-secs 600 \
   --heartbeat /mnt/nas/hlb-heartbeat
 ```
