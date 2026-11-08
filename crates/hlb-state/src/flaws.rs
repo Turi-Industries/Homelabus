@@ -2,7 +2,9 @@
 //! about them.
 //!
 //! Stored per DIGEST, not per app: PostgreSQL's image serves several apps' databases and
-//! is read once. An app's flaws are those of the digests its frozen manifest runs.
+//! is read once. An app's flaws are those of the digests its frozen manifest runs. A
+//! machine's own packages are read the same way, under [`host_key`] in place of a
+//! digest — and said under that key in `flaw_alerts`, where an app's name goes.
 
 use std::collections::BTreeSet;
 
@@ -40,7 +42,20 @@ pub struct ImageScan {
     pub error: Option<String>,
 }
 
+/// Where a machine's reading is kept, and its alerts: `host:deb1`. A digest starts
+/// `sha256:` and an app's name holds no colon, so the key names neither.
+pub fn host_key(hostname: &str) -> String {
+    format!("{HOST}{hostname}")
+}
+
+const HOST: &str = "host:";
+
 impl ImageScan {
+    /// The machine this reading is of, if it is one.
+    pub fn host(&self) -> Option<&str> {
+        self.digest.strip_prefix(HOST)
+    }
+
     /// The flaws stored are today's: read, and not failed since.
     pub fn is_current(&self) -> bool {
         match (self.read_at, self.failed_at) {
@@ -144,6 +159,28 @@ impl State {
             })
         })
         .transpose()
+    }
+
+    /// The last reading of every machine, by hostname.
+    pub async fn host_scans(&self) -> Result<Vec<ImageScan>> {
+        let rows = sqlx::query(
+            "SELECT digest, image, read_at, failed_at, error FROM image_scans
+             WHERE substr(digest, 1, 5) = ?1 ORDER BY digest",
+        )
+        .bind(HOST)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(ImageScan {
+                    digest: r.try_get("digest")?,
+                    image: r.try_get("image")?,
+                    read_at: r.try_get("read_at")?,
+                    failed_at: r.try_get("failed_at")?,
+                    error: r.try_get("error")?,
+                })
+            })
+            .collect()
     }
 
     /// The flaws the last good reading of `digest` found.
@@ -380,5 +417,27 @@ mod tests {
         s.set_flaw_digest_sent(5).await.expect("sent");
         s.set_flaw_digest_sent(7).await.expect("sent");
         assert_eq!(s.flaw_digest_sent().await.expect("r"), Some(7));
+    }
+
+    #[tokio::test]
+    async fn a_machine_is_read_beside_the_images_and_listed_apart() {
+        let s = State::in_memory().await.expect("state");
+        s.record_image_scan("sha256:pg", "pg", 100, Ok(&[]))
+            .await
+            .expect("image");
+        s.record_image_scan(
+            &host_key("deb1"),
+            "Debian 12",
+            100,
+            Ok(&[flaw("CVE-1", "linux")]),
+        )
+        .await
+        .expect("host");
+        let hosts = s.host_scans().await.expect("hosts");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].host(), Some("deb1"));
+        assert_eq!(s.image_flaws(&host_key("deb1")).await.expect("r").len(), 1);
+        let pg = s.image_scan("sha256:pg").await.expect("r").expect("one");
+        assert_eq!(pg.host(), None);
     }
 }

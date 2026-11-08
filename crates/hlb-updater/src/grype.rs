@@ -139,7 +139,7 @@ pub fn parse(lines: &[String]) -> std::result::Result<Vec<Finding>, String> {
     }
 }
 
-fn tail(lines: &[String]) -> String {
+pub(crate) fn tail(lines: &[String]) -> String {
     let start = lines.len().saturating_sub(3);
     let said = lines[start..].join(" | ");
     if said.is_empty() {
@@ -197,13 +197,18 @@ fn sbom_job(image: &str, file: &str, network: &str, node: Option<&str>) -> Servi
 }
 
 fn scan_job(image: &str, file: &str, network: &str, node: Option<&str>) -> ServiceSpec {
-    job("grype", image, network, node)
-        .mount(DB_VOLUME, DB_DIR)
+    grype_reading(job("grype", image, network, node), &format!("sbom:{file}"))
+}
+
+/// Grype's reading of `input` (`sbom:<file>`, `purl:<file>`) in `job`, its database kept
+/// in its volume — on the node `job` is held to, or it is fetched again.
+pub(crate) fn grype_reading(job: ServiceSpec, input: &str) -> ServiceSpec {
+    job.mount(DB_VOLUME, DB_DIR)
         .env(vec![("GRYPE_DB_CACHE_DIR".into(), DB_DIR.into())])
         .file(TEMPLATE_PATH, TEMPLATE)
         .command([
             "/grype".to_string(),
-            format!("sbom:{file}"),
+            input.to_string(),
             "--only-fixed".to_string(),
             "-o".to_string(),
             "template".to_string(),
@@ -213,8 +218,17 @@ fn scan_job(image: &str, file: &str, network: &str, node: Option<&str>) -> Servi
         ])
 }
 
+/// A Grype job's report, or why it is none.
+pub(crate) fn report(o: &JobOutcome) -> std::result::Result<Vec<Finding>, String> {
+    if o.succeeded {
+        parse(&o.output)
+    } else {
+        Err(format!("Grype failed: {}", tail(&o.output)))
+    }
+}
+
 impl Grype<'_> {
-    async fn run(&self, spec: &ServiceSpec) -> std::result::Result<JobOutcome, String> {
+    pub(crate) async fn run(&self, spec: &ServiceSpec) -> std::result::Result<JobOutcome, String> {
         self.orchestrator
             .run_job(spec, JOB_TIMEOUT_S)
             .await
@@ -230,14 +244,7 @@ impl Grype<'_> {
         };
         let node = self.orchestrator.local_node().await.ok().flatten();
         let node = node.as_deref();
-        let read = |o: &JobOutcome| {
-            if o.succeeded {
-                parse(&o.output)
-            } else {
-                Err(format!("Grype failed: {}", tail(&o.output)))
-            }
-        };
-        if let Ok(found) = read(
+        if let Ok(found) = report(
             &self
                 .run(&scan_job(image, &file, self.network, node))
                 .await?,
@@ -250,7 +257,7 @@ impl Grype<'_> {
         if !listed.succeeded {
             return Err(format!("Syft failed: {}", tail(&listed.output)));
         }
-        read(
+        report(
             &self
                 .run(&scan_job(image, &file, self.network, node))
                 .await?,

@@ -1693,6 +1693,38 @@
 			}
 		}
 	],
+	"cause_host_flaw_exploitable": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine fait tourner une faille exploitée ou susceptible de l'être, corrigée par une mise à jour du système",
+				"countPlural=*": "{shown} machines font tourner une faille exploitée ou susceptible de l'être, corrigée par une mise à jour du système"
+			}
+		}
+	],
+	"cause_host_flaws_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Les paquets de {shown} machine n'ont pas été vérifiés récemment",
+				"countPlural=*": "Les paquets de {shown} machines n'ont pas été vérifiés récemment"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2030,6 +2062,8 @@
 	"reason_assertion_unknown": "réglages non relus récemment",
 	"reason_flaw_exploitable": "fait tourner une faille corrigeable, exploitée ou susceptible de l'être",
 	"reason_flaws_unknown": "images non vérifiées récemment",
+	"reason_host_flaw_exploitable": "fait tourner une faille corrigeable, exploitée ou susceptible de l'être",
+	"reason_host_flaws_unknown": "paquets non vérifiés récemment",
 	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",

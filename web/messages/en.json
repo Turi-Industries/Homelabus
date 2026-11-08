@@ -1689,6 +1689,38 @@
 			}
 		}
 	],
+	"cause_host_flaw_exploitable": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine runs a flaw exploited or likely to be, which a system upgrade fixes",
+				"countPlural=*": "{shown} machines run a flaw exploited or likely to be, which a system upgrade fixes"
+			}
+		}
+	],
+	"cause_host_flaws_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine's packages were not checked for flaws lately",
+				"countPlural=*": "{shown} machines' packages were not checked for flaws lately"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2026,6 +2058,8 @@
 	"reason_assertion_unknown": "settings not read lately",
 	"reason_flaw_exploitable": "runs a fixable flaw, exploited or likely to be",
 	"reason_flaws_unknown": "images not checked for flaws lately",
+	"reason_host_flaw_exploitable": "runs a fixable flaw, exploited or likely to be",
+	"reason_host_flaws_unknown": "packages not checked for flaws lately",
 	"reason_mail_record_wrong": "missing or wrong: mail is refused or filed as spam",
 	"reason_mail_record_unknown": "not read lately",
 	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",

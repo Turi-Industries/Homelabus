@@ -407,7 +407,13 @@ mod tests {
         assert!(!issues
             .iter()
             .any(|i| matches!(&i.cause, Cause::Alert { rule, .. } if rule == "backup-absent")));
-        assert!(issues.len() < 30, "{} lines", issues.len());
+        // One line a cause, whatever the count of causes the demonstration grows to: a
+        // ceiling on lines was raised by each new cause and said nothing more.
+        let mut causes: Vec<String> = issues.iter().map(|i| format!("{:?}", i.cause)).collect();
+        let lines = causes.len();
+        causes.sort();
+        causes.dedup();
+        assert_eq!(causes.len(), lines, "a cause on two lines: {causes:?}");
     }
 
     #[tokio::test]

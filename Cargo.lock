@@ -2097,6 +2097,7 @@ version = "0.4.9-dev"
 dependencies = [
  "async-trait",
  "chrono",
+ "hlb-bootstrap",
  "hlb-orchestrator",
  "hlb-registry",
  "hlb-state",

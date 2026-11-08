@@ -110,6 +110,10 @@ export function title(issue: Issue): string {
 			return m.cause_flaw_exploitable(n);
 		case 'flaws_unknown':
 			return m.cause_flaws_unknown(n);
+		case 'host_flaw_exploitable':
+			return m.cause_host_flaw_exploitable(n);
+		case 'host_flaws_unknown':
+			return m.cause_host_flaws_unknown(n);
 		case 'mail_record_wrong':
 			return m.cause_mail_record_wrong(n);
 		case 'mail_record_unknown':
@@ -220,6 +224,8 @@ export function where(issue: Issue): string {
 		case 'node_swapping':
 		case 'node_load':
 		case 'node_reboot_pending':
+		case 'host_flaw_exploitable':
+		case 'host_flaws_unknown':
 			return '/nodes';
 		case 'topology':
 			return '/resilience';
@@ -335,6 +341,10 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_flaw_exploitable();
 		case 'flaws_unknown':
 			return m.reason_flaws_unknown();
+		case 'host_flaw_exploitable':
+			return m.reason_host_flaw_exploitable();
+		case 'host_flaws_unknown':
+			return m.reason_host_flaws_unknown();
 		case 'mail_record_wrong':
 			return m.reason_mail_record_wrong();
 		case 'mail_record_unknown':

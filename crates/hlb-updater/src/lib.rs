@@ -21,6 +21,7 @@ pub mod apply;
 pub mod catalog;
 pub mod flaws;
 pub mod grype;
+pub mod host;
 pub mod policy;
 pub mod run;
 pub mod scan;

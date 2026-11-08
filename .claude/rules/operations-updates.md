@@ -93,6 +93,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   The inbox says it per app (`flaw_exploitable`, critical, from `flaw_alerts`) and an
   image with no good reading for two days (`flaws_unknown`) — 🔴 one running by its tag
   alone included: no digest to read is not clean.
+- **A machine's own packages are read by the same rule, and 🔴 a system Grype holds no
+  advisories for reads CLEAN.** Measured 2026-11-08 on old images: openSUSE Leap 15.5
+  gave 0 fixable flaws, Arch 5 from sources not its own, where Debian 12.8 gave 97 and
+  Rocky 9.3 517; on CachyOS Syft names no package by a purl at all. `hlb_updater::host`
+  reads `/etc/os-release` in a job, then Syft mounts the package database ALONE — never
+  `/`, which holds the vault — and Grype reads the purls on the node keeping its
+  database; only `READ_BY_GRYPE`'s systems are read, a derivative (Mint) included in
+  none. Any other is `host_flaws_unknown`, a package without a purl refuses the list.
+  Every machine counts as reached: a kernel flaw is reached through any app.
 - **An exploited flaw in what runs makes its update urgent** (`hlb_updater::flaws::exploited`,
   KEV only, not EPSS): the hourly pass skips maturity (audited `update-before-maturity`)
   and raises the MANIFEST's reach to a minor — a pinned manifest too. The house's own
