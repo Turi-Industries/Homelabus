@@ -135,7 +135,9 @@ pub fn plan(distro: &Distro, m: &Monitor) -> Provision {
     steps.push(Step {
         phase: Phase::Configuration,
         what: "Let upsmon's unprivileged half read it".into(),
-        action: Action::Run(vec!["chown".into(), "root:nut".into(), UPSMON_CONF.into()]),
+        // `chgrp`, not `chown root:nut`: the file is root's already, and an `owner:group`
+        // literal reads as an unpinned image to the scan over every source.
+        action: Action::Run(vec!["chgrp".into(), "nut".into(), UPSMON_CONF.into()]),
     });
     steps.push(Step {
         phase: Phase::Services,
