@@ -13,6 +13,7 @@ pub mod flaws;
 pub mod mail_dns;
 pub mod mail_queue;
 pub mod notify;
+pub mod reboots;
 pub mod reconcile;
 pub mod schedule;
 pub mod start;

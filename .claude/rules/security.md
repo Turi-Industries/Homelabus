@@ -202,7 +202,8 @@ the outside, which is the whole problem.
   the node, and the timer fires at the same hour on every node — the whole cluster,
   managers included, restarts at once. Same for Ubuntu's `needrestart`. No unattended
   reboot either: a reboot drains nothing. `hlb node upgrade` does both, one node at a
-  time.
+  time — and the controller's own reboot (`hlb_updater::reboot`) drains first, in the
+  house's window, the reason this was refused being gone.
 - **Probe what a package installs, not its name.** `wireguard-tools` installs `wg`,
   `ca-certificates` no binary at all, and `restic` refuses `--version`: probed by name,
   each read as missing on every run. `dpkg-query` succeeds on a REMOVED package whose

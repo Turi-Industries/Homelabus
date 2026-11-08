@@ -191,6 +191,26 @@ pub async fn seed_from(
             .await?;
     }
 
+    // A reboot the house gave up on in the night: small-02's services did not leave it.
+    let at = now - 5 * 3_600;
+    state
+        .begin_node_reboot(
+            "demo-small-02",
+            "small-02",
+            hlb_state::RebootPhase::Draining,
+            true,
+            at - 600,
+        )
+        .await?;
+    state
+        .set_node_reboot_phase(
+            "demo-small-02",
+            hlb_state::RebootPhase::Stopped,
+            at,
+            Some("1 service(s) still ran on small-02 after 10 min: not rebooted"),
+        )
+        .await?;
+
     // --- Mail records: the RSA key never published, the rest in place ------------
     {
         use hlb_api::mail_dns::{MailRecord, Purpose, RecordState};

@@ -1612,6 +1612,22 @@
 			}
 		}
 	],
+	"cause_node_reboot_stopped": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine n’a pas pu redémarrer seule : aucune ne le fera avant qu’hlb node upgrade y réussisse",
+				"countPlural=*": "{shown} machines n’ont pas pu redémarrer seules : aucune ne le fera avant qu’hlb node upgrade y réussisse"
+			}
+		}
+	],
 	"cause_topology": "Résilience — {verdict}",
 	"cause_drift": [
 		{
@@ -2057,6 +2073,7 @@
 	"reason_node_swapping": "à court de mémoire",
 	"reason_node_load": "surchargée",
 	"reason_node_reboot_pending": "un redémarrage attend",
+	"reason_node_reboot_stopped": "son redémarrage automatique s’est arrêté : hlb node upgrade",
 	"reason_drift": "s'écarte de sa déclaration",
 	"reason_assertion_broken": "ne tient pas ce que dit son manifeste",
 	"reason_assertion_unknown": "réglages non relus récemment",

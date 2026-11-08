@@ -1096,6 +1096,30 @@ enum ConfigCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// When a machine waiting for a reboot — a kernel installed, not yet running — is
+    /// rebooted on its own, drained first, one at a time. Without an option: the rule,
+    /// and the reboot under way or given up on.
+    ///
+    /// 🔴 A machine whose reboot stops applications — the only one, a manager the others
+    /// are no majority without, one keeping data, the one Homelabus runs on — waits for
+    /// a person unless the house accepts that downtime in its window.
+    Reboots {
+        /// `daily 03:00-05:00` (the default), `sun 02:00-04:00`, `sat,sun 01:00-03:00`,
+        /// in the house's time zone.
+        #[arg(long, conflicts_with = "never")]
+        window: Option<String>,
+        /// No machine reboots on its own; `hlb node upgrade` stays a person's.
+        #[arg(long)]
+        never: bool,
+        /// Reboot a machine whose applications stop meanwhile too, in the window.
+        #[arg(long, conflicts_with = "refuse_downtime")]
+        accept_downtime: bool,
+        /// Leave such a machine to a person (the default).
+        #[arg(long)]
+        refuse_downtime: bool,
+        #[arg(long)]
+        apply: bool,
+    },
     /// How the installation is reached from outside: its domain, its certificates, the
     /// machine the router forwards to. Without an option: what is set, and what is
     /// missing.
@@ -3684,6 +3708,87 @@ async fn node_protection(
     Ok(ExitCode::SUCCESS)
 }
 
+/// `hlb config reboots`: the house's rule for rebooting its machines on their own.
+async fn config_reboots(
+    cli: &Cli,
+    window: Option<&str>,
+    never: bool,
+    accept_downtime: bool,
+    refuse_downtime: bool,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let state = open_state(cli).await?;
+    let mut policy = state.reboot_policy().await?;
+    let describe = |p: &hlb_state::RebootPolicy| {
+        let when = match &p.window {
+            Some(w) => format!("in the window {w}"),
+            None => "never on their own".to_string(),
+        };
+        let downtime = if p.accept_downtime {
+            "a machine whose applications stop meanwhile included"
+        } else {
+            "a machine whose applications would stop is left to a person"
+        };
+        format!("Machines waiting for a reboot are rebooted {when}; {downtime}.")
+    };
+    if window.is_none() && !never && !accept_downtime && !refuse_downtime {
+        println!("{}", describe(&policy));
+        let zone = state.timezone().await?;
+        println!(
+            "  The window is read in {}.",
+            zone.as_deref()
+                .unwrap_or("UTC (hlb config timezone sets the house's)")
+        );
+        if let Some(r) = state.node_reboot().await? {
+            let detail = r.detail.as_deref().unwrap_or("");
+            match r.phase {
+                hlb_state::RebootPhase::Stopped => {
+                    println!("🔴 {} was not rebooted: {detail}", r.hostname);
+                    println!(
+                        "   No machine reboots on its own until hlb node upgrade {} succeeds on it.",
+                        r.hostname
+                    );
+                }
+                phase => println!("  {} is being rebooted ({phase:?}).", r.hostname),
+            }
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if never {
+        policy.window = None;
+    } else if let Some(w) = window {
+        if let Err(e) = hlb_updater::MaintenanceWindow::parse(w) {
+            eprintln!("🔴 {e}.");
+            return Ok(ExitCode::FAILURE);
+        }
+        policy.window = Some(w.trim().to_string());
+    }
+    if accept_downtime {
+        policy.accept_downtime = true;
+    } else if refuse_downtime {
+        policy.accept_downtime = false;
+    }
+    if !apply {
+        println!("Would set: {}", describe(&policy));
+        println!("Rerun with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    state.set_reboot_policy(&policy).await?;
+    let detail = describe(&policy);
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "config-reboots",
+            "reboots",
+            "ok",
+            Some(&detail),
+        )
+        .await?;
+    println!("✓ {detail}");
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Upgrades one node whole, drained, and reboots it when its kernel asks for it.
 ///
 /// The order is the point: drain, wait until its tasks have actually LEFT, upgrade,
@@ -3729,6 +3834,17 @@ async fn node_upgrade(
         }
         Maintenance::Refused(why) => {
             eprintln!("🔴 {why}.");
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    // 🔴 The daemon's own reboot drains and reboots by itself: two hands on one node, or
+    // on two, is the outage maintenance one at a time exists to avoid.
+    if let Some(r) = state.node_reboot().await? {
+        if r.phase != hlb_state::RebootPhase::Stopped {
+            eprintln!(
+                "🔴 Homelabus is rebooting {} on its own ({:?}): wait until it is back.",
+                r.hostname, r.phase
+            );
             return Ok(ExitCode::FAILURE);
         }
     }
@@ -3907,6 +4023,8 @@ async fn node_upgrade(
         return Ok(ExitCode::FAILURE);
     }
     orch.set_node_availability(&target.id, "active").await?;
+    // A reboot the daemon gave up on this node blocked every other: a person took it over.
+    let cleared = state.clear_node_reboot(&target.id).await?;
     state
         .audit(
             "cli",
@@ -3914,9 +4032,12 @@ async fn node_upgrade(
             "node-upgrade",
             &target.hostname,
             "ok",
-            None,
+            cleared.then_some("its stopped automatic reboot cleared"),
         )
         .await?;
+    if cleared {
+        println!("✓ machines reboot on their own again.");
+    }
     println!("✓ {} upgraded and back in service.", target.hostname);
     println!("  Swarm does not move services back on its own: they return as they are");
     println!("  redeployed or rescheduled.");
@@ -10209,6 +10330,24 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 println!("✓ Time zone {zone}.");
                 Ok(ExitCode::SUCCESS)
             })
+        }
+
+        Command::Config(ConfigCmd::Reboots {
+            window,
+            never,
+            accept_downtime,
+            refuse_downtime,
+            apply,
+        }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(config_reboots(
+                &cli,
+                window.as_deref(),
+                *never,
+                *accept_downtime,
+                *refuse_downtime,
+                *apply,
+            ))
         }
 
         Command::Config(ConfigCmd::Exposure {

@@ -212,6 +212,11 @@ pub struct Config {
     #[arg(long, default_value = "86400", env = "HLB_FLAWS_SECS")]
     pub flaws_secs: u64,
 
+    /// How often a node's reboot is moved on — drained, rebooted, put back. The nodes
+    /// are asked whether one waits for a reboot only inside the house's window, hourly.
+    #[arg(long, default_value = "300", env = "HLB_REBOOTS_SECS")]
+    pub reboots_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1650,6 +1655,45 @@ pub async fn start(
                             }
                         }
                         Err(e) => tracing::warn!("no image flaws read: {e}"),
+                    }
+                }
+            },
+        )));
+
+        // 🔴 A kernel installed is not a kernel running: each node waiting for a reboot
+        // is drained, rebooted and put back, one at a time, inside the house's window.
+        // Where it stands is in the state, not here: this daemon may run on that node.
+        let held_reboots = held.clone();
+        let notif_reboots = notif.clone();
+        let last_probe = std::sync::Arc::new(tokio::sync::Mutex::new(None::<i64>));
+        tracing::info!(interval = cfg.reboots_secs, "node reboot loop");
+        tasks.push(tokio::spawn(schedule::every_after(
+            Duration::from_secs(600).min(Duration::from_secs(cfg.reboots_secs)),
+            Duration::from_secs(cfg.reboots_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_reboots.clone();
+                let notif = notif_reboots.clone();
+                let last_probe = last_probe.clone();
+                async move {
+                    let Some(orchestrator) = &held.orchestrator else {
+                        return;
+                    };
+                    let mut last = last_probe.lock().await;
+                    match super::reboots::pass(
+                        &held.state,
+                        orchestrator.as_ref(),
+                        &mut last,
+                        crate::now(),
+                    )
+                    .await
+                    {
+                        Ok(said) => {
+                            for n in &said {
+                                notif.tell(n).await;
+                            }
+                        }
+                        Err(e) => tracing::warn!("no node reboot looked at: {e}"),
                     }
                 }
             },

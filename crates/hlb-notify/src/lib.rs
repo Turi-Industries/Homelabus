@@ -181,19 +181,38 @@ pub fn local_hour(zone: Option<&str>, unix_s: i64) -> u32 {
 /// `(hour, minute)` at `unix_s` in the zone, as [`local_hour`] reads it.
 pub fn local_time(zone: Option<&str>, unix_s: i64) -> (u32, u32) {
     use chrono::Timelike;
+    let t = local_datetime(zone, unix_s);
+    (t.hour(), t.minute())
+}
+
+/// The date and time at `unix_s` in the zone, as [`local_hour`] reads it: what a
+/// maintenance window naming a weekday is matched against.
+pub fn local_datetime(zone: Option<&str>, unix_s: i64) -> chrono::NaiveDateTime {
     let utc = chrono::DateTime::from_timestamp(unix_s, 0).unwrap_or_default();
     match zone.and_then(|z| z.parse::<chrono_tz::Tz>().ok()) {
-        Some(tz) => {
-            let t = utc.with_timezone(&tz);
-            (t.hour(), t.minute())
-        }
-        None => (utc.hour(), utc.minute()),
+        Some(tz) => utc.with_timezone(&tz).naive_local(),
+        None => utc.naive_utc(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_local_day_is_the_zone_s_not_utc_s() {
+        use chrono::{Datelike, Timelike, Weekday};
+        // Sunday 2026-11-08 23:30 UTC is already Monday 00:30 in Paris.
+        let at = 1_794_180_600;
+        let utc = local_datetime(None, at);
+        assert_eq!((utc.weekday(), utc.hour()), (Weekday::Sun, 23));
+        let paris = local_datetime(Some("Europe/Paris"), at);
+        assert_eq!(
+            (paris.weekday(), paris.hour(), paris.minute()),
+            (Weekday::Mon, 0, 30)
+        );
+        assert_eq!(local_time(Some("Europe/Paris"), at), (0, 30));
+    }
 
     #[test]
     fn only_important_and_above_are_pushed() {

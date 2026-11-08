@@ -112,6 +112,24 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   installed image's own `reference()` — the OLD digest — and a version by its tag alone,
   which may name another build by the switch.
 
+## Rebooting a node
+
+- **A kernel installed is not a kernel running, and a node that is "ready" has not
+  necessarily rebooted.** Swarm sees a node ready again seconds after the command, before
+  it goes down: `hlb_updater::reboot` proves the reboot by the node's own uptime, read
+  past two minutes, then puts it back. The host is reached by a job entering its
+  namespaces (`docker run --privileged --pid=host … nsenter -t 1`, the probe and the
+  reboot in exec form) — the privileged side has no node's SSH key.
+- **🔴 The node the daemon runs on is never drained.** The daemon is pinned there by the
+  state it holds: drained, it stops, and nothing puts the node back. It counts as
+  downtime, like the only node, a manager without majority, or one keeping data — each
+  left to a person unless `hlb config reboots --accept-downtime`. Where a reboot stands
+  is a row of the state (`node_reboots`), written BEFORE the command, for the same reason.
+- **A reboot given up blocks every other**, until `hlb node upgrade` succeeds on that
+  node: whatever stopped it — a service that would not move, a node that did not come
+  back — may stop the next the same way. A node not `active` is never picked: a person
+  may be upgrading it.
+
 ## Moving an app
 
 - **🔴 A companion moves with its app, before it.** `hlb update` moved the app's image

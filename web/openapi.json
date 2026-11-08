@@ -1981,6 +1981,21 @@
             "type": "object"
           },
           {
+            "description": "🔴 A node the house rebooted on its own did not drain, reboot or come back:\nno machine reboots on its own until `hlb node upgrade <host>` succeeds on it.\nThe subject is the hostname.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "node_reboot_stopped"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "What the topology says about surviving the loss of a failure domain.",
             "properties": {
               "kind": {

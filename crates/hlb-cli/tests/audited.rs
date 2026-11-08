@@ -289,31 +289,26 @@ impl Source {
 
 /// `State`'s methods that write: their SQL inserts, updates or deletes, or they call
 /// one that does — a private helper holding the SQL hid `verify_guide` from the scan.
+///
+/// Every file of the crate, at every visibility: read from `lib.rs` alone and by four
+/// spellings of a method's head, the scan lost `put_setting` the day it became
+/// `pub(crate)` for a module beside it, and every setting written through it with it.
 fn state_writers() -> BTreeSet<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hlb-state/src/lib.rs");
-    let raw = std::fs::read_to_string(path).expect("hlb-state");
-    // Its tests write too, and are nobody's verb.
-    let raw = raw.split("\n#[cfg(test)]").next().unwrap_or_default();
-    // Every method of the impl, public or not, and its body up to the next one.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../hlb-state/src");
+    // Every method of the impls, public or not, and its body up to the next one.
     let mut methods: Vec<(String, String)> = Vec::new();
-    for line in raw.lines() {
-        let head = [
-            "    pub async fn ",
-            "    pub fn ",
-            "    async fn ",
-            "    fn ",
-        ]
-        .iter()
-        .find_map(|m| line.strip_prefix(m));
-        match head {
-            Some(rest) => methods.push((
-                rest.chars().take_while(|c| ident(*c)).collect(),
-                String::new(),
-            )),
-            None => {
-                if let Some((_, body)) = methods.last_mut() {
-                    body.push_str(line);
-                    body.push('\n');
+    for path in scan::rust_files(&dir) {
+        let raw = std::fs::read_to_string(path).expect("hlb-state");
+        // Its tests write too, and are nobody's verb.
+        let raw = raw.split("\n#[cfg(test)]").next().unwrap_or_default();
+        for line in raw.lines() {
+            match method_name(line) {
+                Some(name) => methods.push((name, String::new())),
+                None => {
+                    if let Some((_, body)) = methods.last_mut() {
+                        body.push_str(line);
+                        body.push('\n');
+                    }
                 }
             }
         }
@@ -338,6 +333,25 @@ fn state_writers() -> BTreeSet<String> {
             return out;
         }
     }
+}
+
+/// The name of the method a line of an `impl` opens, whatever its visibility.
+fn method_name(line: &str) -> Option<String> {
+    let mut rest = line.strip_prefix("    ")?;
+    if let Some(r) = rest.strip_prefix("pub") {
+        rest = match r.strip_prefix('(') {
+            Some(r) => r.split_once(')')?.1,
+            None => r,
+        }
+        .trim_start();
+    }
+    let rest = rest.strip_prefix("async ").unwrap_or(rest);
+    let name: String = rest
+        .strip_prefix("fn ")?
+        .chars()
+        .take_while(|c| ident(*c))
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Every leaf of every `Subcommand` enum: (`Enum::Variant`, takes `--apply`).
@@ -430,6 +444,11 @@ fn every_verb_that_changes_something_is_audited() {
         writers.len()
     );
     assert!(leaves.len() > 120, "only {} verbs read", leaves.len());
+    // A private helper, a `pub(crate)` one and a method in a module beside `lib.rs`:
+    // each a shape the scan once missed.
+    for shape in ["put_setting", "set_reboot_policy", "record_image_scan"] {
+        assert!(writers.contains(shape), "{shape} not read as writing");
+    }
 
     let mut changing = 0;
     let mut audited = 0;

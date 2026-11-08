@@ -23,6 +23,7 @@ pub mod flaws;
 pub mod grype;
 pub mod host;
 pub mod policy;
+pub mod reboot;
 pub mod run;
 pub mod scan;
 pub mod window;
