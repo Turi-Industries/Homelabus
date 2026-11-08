@@ -5,6 +5,9 @@ paths:
   - "crates/hlb-engine/**/*.rs"
   - "crates/hlb-types/**/*.rs"
   - "crates/hlb-bootstrap/**/*.rs"
+  - "crates/hlb-updater/src/disks.rs"
+  - "crates/hlb-privd/src/daemon/disks.rs"
+  - "crates/hlb-controller/src/disks.rs"
 ---
 
 # Storage
@@ -101,6 +104,35 @@ stayed healthy.
 - **A package with no matching binary needs its own probe.** Nothing is called
   `nfs-server`. Probing by the package name reports it missing on every machine that has
   it, and a plan offering to install what is already there stops being read.
+
+## Disks and scrubs
+
+- **Read daily, nothing repaired, nothing scheduled** (`hlb_updater::disks`, `hlb-privd`'s
+  `daemon::disks`, `HLB_DISKS_SECS`): `smartctl` and `zpool status` through the reboot
+  probe's host job — a raw device opens only in the host's namespaces. One compact JSON
+  line per disk (`--json=c`): pretty-printed, an ATA disk's attributes run to hundreds of
+  lines, and a job's log is read back to 2,000.
+- **A count that MOVES is the alarm, not a count that is there.** A disk may come with
+  reallocated sectors and keep them for years; one gaining some is going. Each reading
+  is compared with the one before (`disks::carry`), a disk followed by its SERIAL —
+  `/dev/sdX` is assigned at boot —, the growth dated (`grew_at`), said at once and kept
+  in the inbox two weeks (`disk_failing`, critical). SMART's verdict and NVMe's critical
+  warning count as failing for as long as they say so. ⚠️ The ATA reading is held to
+  smartctl's documented JSON, not to a measured disk: only NVMe ones were at hand.
+- **🔴 A disk unread is not a disk healthy.** A physical machine without smartmontools,
+  one where `smartctl` finds no disk (a controller it cannot see through), a disk the
+  scan lists and nothing opens (`# /dev/sdb … open failed`, kept with its reason): all
+  `disk_unknown`. A virtual machine's disks are files on its host: none found there is
+  no fault. A disk answering no SMART at all (a USB bridge passing nothing) is listed
+  and said nothing of — nothing a person could do would make it answer.
+- **The scrub is the distribution's; what is read is whether it ran.** Debian's
+  `zfsutils-linux` scrubs the second Sunday of each month, and two second Sundays can be
+  37 days apart: `pool_not_scrubbed` waits SIX weeks. Alpine ships no timer and says so
+  until a person schedules one. ZFS writes the scrub's end in local time, as `ctime`
+  does: read under `LC_ALL=C`, with the offset `date +%z` gives. A resilver takes the
+  `scan:` line's place, so the last scrub is unknown until the next. A pool not ONLINE,
+  or holding files it could not repair, is `pool_unhealthy` and said when it turns.
+  Not yet measured on a real pool.
 
 ## Pointing an installation at a pool
 

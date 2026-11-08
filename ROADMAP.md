@@ -1377,8 +1377,11 @@ reported within 24 hours.
   capsule yet.
 - `cargo deny` beside `cargo audit` — done 2026-11-08: licences, bans and sources in CI's
   "Dependencies" job, the advisories left to `cargo audit`'s one list. Disks: SMART read
-  nightly, a scheduled scrub, an
-  alert on reallocated sectors — smartmontools is installed and nothing reads it. The
+  daily since 2026-11-08 (`hlb_updater::disks`): a disk failing, or an error counter that
+  GREW, said at once and in the inbox (`disk_failing`), one unread `disk_unknown`; each
+  pool's health and last scrub too (`pool_unhealthy`, `pool_not_scrubbed` past six
+  weeks). The scrub stays the distribution's (Debian's monthly timer), read and never
+  scheduled; never measured on a spinning disk nor a real pool yet. The
   UPS: NUT stops apps, then databases, then Swarm, in that order.
 
 **6. The TUI installer.** Gate: a bare machine to the first app, timed.

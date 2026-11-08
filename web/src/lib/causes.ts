@@ -120,6 +120,14 @@ export function title(issue: Issue): string {
 			return m.cause_firmware_update(n);
 		case 'firmware_unknown':
 			return m.cause_firmware_unknown(n);
+		case 'disk_failing':
+			return m.cause_disk_failing(n);
+		case 'disk_unknown':
+			return m.cause_disk_unknown(n);
+		case 'pool_unhealthy':
+			return m.cause_pool_unhealthy(n);
+		case 'pool_not_scrubbed':
+			return m.cause_pool_not_scrubbed(n);
 		case 'mail_record_wrong':
 			return m.cause_mail_record_wrong(n);
 		case 'mail_record_unknown':
@@ -235,7 +243,12 @@ export function where(issue: Issue): string {
 		case 'host_flaws_unknown':
 		case 'firmware_update':
 		case 'firmware_unknown':
+		case 'disk_failing':
+		case 'disk_unknown':
 			return '/nodes';
+		case 'pool_unhealthy':
+		case 'pool_not_scrubbed':
+			return '/storage';
 		case 'topology':
 			return '/resilience';
 		case 'drift':
@@ -360,6 +373,14 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_firmware_update();
 		case 'firmware_unknown':
 			return m.reason_firmware_unknown();
+		case 'disk_failing':
+			return m.reason_disk_failing();
+		case 'disk_unknown':
+			return m.reason_disk_unknown();
+		case 'pool_unhealthy':
+			return m.reason_pool_unhealthy();
+		case 'pool_not_scrubbed':
+			return m.reason_pool_not_scrubbed();
 		case 'mail_record_wrong':
 			return m.reason_mail_record_wrong();
 		case 'mail_record_unknown':

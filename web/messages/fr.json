@@ -1773,6 +1773,70 @@
 			}
 		}
 	],
+	"cause_disk_failing": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine a un disque qui s'use ou lâche",
+				"countPlural=*": "{shown} machines ont un disque qui s'use ou lâche"
+			}
+		}
+	],
+	"cause_disk_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Les disques de {shown} machine n'ont pas été lus récemment",
+				"countPlural=*": "Les disques de {shown} machines n'ont pas été lus récemment"
+			}
+		}
+	],
+	"cause_pool_unhealthy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} pool de stockage est dégradé ou contient des fichiers abîmés",
+				"countPlural=*": "{shown} pools de stockage sont dégradés ou contiennent des fichiers abîmés"
+			}
+		}
+	],
+	"cause_pool_not_scrubbed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} pool de stockage n'a pas été vérifié de bout en bout récemment",
+				"countPlural=*": "{shown} pools de stockage n'ont pas été vérifiés de bout en bout récemment"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2115,6 +2179,10 @@
 	"reason_host_flaws_unknown": "paquets non vérifiés récemment",
 	"reason_firmware_update": "une mise à jour de firmware attend une personne",
 	"reason_firmware_unknown": "firmware non vérifié récemment",
+	"reason_disk_failing": "un disque dit qu'il s'use : remplacez-le",
+	"reason_disk_unknown": "disques non lus récemment",
+	"reason_pool_unhealthy": "la redondance est épuisée, ou des fichiers sont abîmés",
+	"reason_pool_not_scrubbed": "aucun scrub depuis six semaines : zpool scrub",
 	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",

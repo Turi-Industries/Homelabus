@@ -217,6 +217,12 @@ pub struct Config {
     #[arg(long, default_value = "300", env = "HLB_REBOOTS_SECS")]
     pub reboots_secs: u64,
 
+    /// How often every machine's disks and ZFS pools are read: SMART's verdict, the
+    /// error counters, a pool's health and its last scrub. Once a day: a disk says it is
+    /// wearing out days ahead, rarely hours.
+    #[arg(long, default_value = "86400", env = "HLB_DISKS_SECS")]
+    pub disks_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1655,6 +1661,35 @@ pub async fn start(
                             }
                         }
                         Err(e) => tracing::warn!("no image flaws read: {e}"),
+                    }
+                }
+            },
+        )));
+
+        // Every machine's disks and pools: a disk failing or an error counter growing is
+        // said when it happens, what stays wrong stays in the inbox. Past ten minutes.
+        let held_disks = held.clone();
+        let notif_disks = notif.clone();
+        tracing::info!(interval = cfg.disks_secs, "disks loop");
+        tasks.push(tokio::spawn(schedule::every_after(
+            Duration::from_secs(600).min(Duration::from_secs(cfg.disks_secs)),
+            Duration::from_secs(cfg.disks_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_disks.clone();
+                let notif = notif_disks.clone();
+                async move {
+                    let Some(orchestrator) = &held.orchestrator else {
+                        return;
+                    };
+                    match super::disks::pass(&held.state, orchestrator.as_ref(), crate::now()).await
+                    {
+                        Ok(said) => {
+                            for n in &said {
+                                notif.tell(n).await;
+                            }
+                        }
+                        Err(e) => tracing::warn!("no disks read: {e}"),
                     }
                 }
             },

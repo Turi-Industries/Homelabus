@@ -151,6 +151,24 @@ pub enum Cause {
     /// physical machine, or LVFS's metadata never downloaded or a month old — an empty
     /// list then says nothing. The subjects are the hostnames.
     FirmwareUnknown,
+    /// 🔴 A disk says it is failing — SMART's verdict, an NVMe critical warning — or one of
+    /// its error counters (reallocated, pending, unreadable sectors; NVMe media errors)
+    /// grew in the last two weeks: it says so before it goes, rarely long before. The
+    /// subjects are the hostnames.
+    DiskFailing,
+    /// A machine's disks were not read for two days, or ever, or one would not open:
+    /// smartmontools absent from a physical machine, disks behind a controller `smartctl`
+    /// cannot see through. A disk unread is not a disk healthy. The subjects are the
+    /// hostnames.
+    DiskUnknown,
+    /// 🔴 A ZFS pool is not ONLINE — a disk gone, the redundancy spent — or holds files it
+    /// could not repair. The subjects are `host/pool`.
+    PoolUnhealthy,
+    /// A ZFS pool's last scrub is older than six weeks, or none is on record: nothing
+    /// read every block, so a disk's silent corruption waits for the day its twin fails.
+    /// Debian's `zfsutils-linux` scrubs monthly; elsewhere `zpool scrub` is a person's.
+    /// The subjects are `host/pool`.
+    PoolNotScrubbed,
     /// 🔴 A DNS record the house's mail needs is not what the internet resolves — a
     /// DKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as
     /// spam. The subjects are the records' names; `hlb mail dns` prints the lines.

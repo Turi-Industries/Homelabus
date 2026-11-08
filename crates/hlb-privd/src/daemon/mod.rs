@@ -8,6 +8,7 @@
 pub mod alerts;
 pub mod aliases;
 pub mod assertions;
+pub mod disks;
 pub mod domain;
 pub mod flaws;
 pub mod mail_dns;

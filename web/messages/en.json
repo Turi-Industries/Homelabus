@@ -1769,6 +1769,70 @@
 			}
 		}
 	],
+	"cause_disk_failing": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine has a disk wearing out or failing",
+				"countPlural=*": "{shown} machines have a disk wearing out or failing"
+			}
+		}
+	],
+	"cause_disk_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} machine's disks were not read lately",
+				"countPlural=*": "{shown} machines' disks were not read lately"
+			}
+		}
+	],
+	"cause_pool_unhealthy": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} storage pool is degraded or holds damaged files",
+				"countPlural=*": "{shown} storage pools are degraded or hold damaged files"
+			}
+		}
+	],
+	"cause_pool_not_scrubbed": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} storage pool was not checked end to end lately",
+				"countPlural=*": "{shown} storage pools were not checked end to end lately"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -2111,6 +2175,10 @@
 	"reason_host_flaws_unknown": "packages not checked for flaws lately",
 	"reason_firmware_update": "a firmware update waits for a person",
 	"reason_firmware_unknown": "firmware not checked lately",
+	"reason_disk_failing": "a disk says it is wearing out: replace it",
+	"reason_disk_unknown": "disks not read lately",
+	"reason_pool_unhealthy": "the redundancy is spent, or files are damaged",
+	"reason_pool_not_scrubbed": "no scrub for six weeks: zpool scrub",
 	"reason_mail_record_wrong": "missing or wrong: mail is refused or filed as spam",
 	"reason_mail_record_unknown": "not read lately",
 	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",

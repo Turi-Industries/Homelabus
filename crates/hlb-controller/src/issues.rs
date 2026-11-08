@@ -242,6 +242,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
         }
     }
     out.extend(reboot_stopped(&s.state).await?);
+    out.extend(crate::disks::findings(&s.state, now).await);
     let topology = crate::api::topology_now(s).await;
     out.push((
         Cause::Topology {
