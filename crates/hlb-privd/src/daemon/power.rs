@@ -45,8 +45,15 @@ pub async fn pass(
         // The UPS turned off while the apps were down for it: nothing would ever read the
         // mains back, and they would stay down for good.
         if let Some(stop) = stop {
-            start_waves(state, orchestrator, notif, &stop, now, "no UPS is read any more")
-                .await?;
+            start_waves(
+                state,
+                orchestrator,
+                notif,
+                &stop,
+                now,
+                "no UPS is read any more",
+            )
+            .await?;
         }
         return Ok(());
     };
@@ -172,7 +179,10 @@ async fn keep_down(state: &State, o: &dyn Orchestrator, stop: &PowerStop) -> hlb
         }
         tracing::warn!(
             "power: {} came back while the house is on battery; stopped again",
-            up.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join(", ")
+            up.iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         if let Err(e) = restore::stop_held(o, state, &up, &why, HOLD_SECS).await {
             tracing::warn!("power: {e}");
@@ -212,7 +222,14 @@ async fn start_waves(
     };
     tracing::info!("power: {detail}");
     state
-        .audit(ACTOR, Role::Admin, "power-start", "house", outcome, Some(&detail))
+        .audit(
+            ACTOR,
+            Role::Admin,
+            "power-start",
+            "house",
+            outcome,
+            Some(&detail),
+        )
         .await?;
     let minutes = (crate::now() - stop.started_at).max(0) / 60;
     let title = if late.is_empty() {
@@ -224,7 +241,10 @@ async fn start_waves(
         .tell(&Notification::important(
             SUBJECT,
             title,
-            &format!("{detail}. They were stopped {minutes} min ({}).", stop.reason),
+            &format!(
+                "{detail}. They were stopped {minutes} min ({}).",
+                stop.reason
+            ),
         ))
         .await;
     Ok(())
@@ -432,7 +452,11 @@ mod tests {
 
     /// The apps nothing uses, then Gitea, then the database Gitea writes to.
     fn waves() -> Vec<Vec<(String, u64)>> {
-        vec![wave(&["ntfy", "vikunja"]), wave(&["gitea"]), wave(&["postgres"])]
+        vec![
+            wave(&["ntfy", "vikunja"]),
+            wave(&["gitea"]),
+            wave(&["postgres"]),
+        ]
     }
 
     async fn setup() -> (Arc<State>, Notifier) {

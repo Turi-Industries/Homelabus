@@ -1120,6 +1120,36 @@ enum ConfigCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// The UPS the house reads through NUT, and when its apps stop for the power: on
+    /// battery a while, or with little runtime left, they stop in waves — those nothing
+    /// uses first, the databases last — and start again once the mains are steady.
+    /// Without an option: the rule, a reading now, and a stop under way.
+    ///
+    /// NUT is only read (`GET VAR`, no account). The machines themselves are shut down
+    /// by NUT's own `upsmon` at low battery, where it is set up: by then nothing writes.
+    Ups {
+        /// NUT's server, `host` or `host:port` (3493 when left out).
+        #[arg(long, conflicts_with = "off")]
+        server: Option<String>,
+        /// The UPS's name on that server: `upsc -l <server>` lists them.
+        #[arg(long, conflicts_with = "off")]
+        ups: Option<String>,
+        /// Seconds on battery before the apps stop (300): most outages are shorter.
+        #[arg(long, conflicts_with = "off")]
+        after: Option<u32>,
+        /// Stop at once when the UPS says less runtime than this is left, in seconds
+        /// (600): the time the waves take.
+        #[arg(long, conflicts_with = "off")]
+        runtime: Option<u32>,
+        /// Seconds the mains must be back before the apps start again (120).
+        #[arg(long, conflicts_with = "off")]
+        steady: Option<u32>,
+        /// Read no UPS. Apps stopped for the power start again.
+        #[arg(long)]
+        off: bool,
+        #[arg(long)]
+        apply: bool,
+    },
     /// How the installation is reached from outside: its domain, its certificates, the
     /// machine the router forwards to. Without an option: what is set, and what is
     /// missing.
@@ -3786,6 +3816,141 @@ async fn config_reboots(
         )
         .await?;
     println!("✓ {detail}");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What `hlb config ups` changes, each left out keeping what is set.
+struct UpsChange<'a> {
+    server: Option<&'a str>,
+    ups: Option<&'a str>,
+    after: Option<u32>,
+    runtime: Option<u32>,
+    steady: Option<u32>,
+    off: bool,
+}
+
+impl UpsChange<'_> {
+    fn is_empty(&self) -> bool {
+        self.server.is_none()
+            && self.ups.is_none()
+            && self.after.is_none()
+            && self.runtime.is_none()
+            && self.steady.is_none()
+            && !self.off
+    }
+}
+
+/// `hlb config ups`: the UPS read, and when the apps stop for the power.
+async fn config_ups(
+    cli: &Cli,
+    change: UpsChange<'_>,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let state = open_state(cli).await?;
+    let mut policy = state.ups_policy().await?;
+    let describe = |p: &hlb_state::UpsPolicy| match &p.server {
+        None => {
+            "No UPS is read: a power cut stops nothing before the battery runs out.".to_string()
+        }
+        Some(server) => format!(
+            "The UPS {} on {server} is read every 15 s. The apps stop after {} min on \
+             battery, or at once under {} min of runtime or at low battery; they start \
+             again once the mains have been back {} min.",
+            p.ups,
+            p.after_s / 60,
+            p.runtime_s / 60,
+            p.steady_s / 60
+        ),
+    };
+    // What the server says now, from this machine: the daemon reads it from its own.
+    let read_now = |p: &hlb_state::UpsPolicy| {
+        let server = p.server.clone();
+        let ups = p.ups.clone();
+        async move {
+            let server = server?;
+            Some(match hlb_engine::power::read(&server, &ups).await {
+                Ok(r) => {
+                    let runtime = r
+                        .runtime_s
+                        .map(|s| format!(", {} min of runtime", s / 60))
+                        .unwrap_or_default();
+                    let charge = r.charge.map(|c| format!(", {c} %")).unwrap_or_default();
+                    format!("  Read now: {}{runtime}{charge}.", r.status)
+                }
+                Err(e) => format!("⚠️ Not read from here: {e}."),
+            })
+        }
+    };
+    if change.is_empty() {
+        println!("{}", describe(&policy));
+        if let Some(line) = read_now(&policy).await {
+            println!("{line}");
+        }
+        if let Some(u) = state.ups_state().await? {
+            if let Some(e) = u.error.filter(|_| u.failed_at.is_some()) {
+                println!("⚠️ The daemon's last reading failed: {e}.");
+            }
+        }
+        if let Some(stop) = state.power_stop().await? {
+            let services: usize = stop.waves.iter().map(Vec::len).sum();
+            println!(
+                "🔴 {services} services in {} waves are stopped for the power ({:?}): {}.",
+                stop.waves.len(),
+                stop.phase,
+                stop.reason
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if change.off {
+        policy.server = None;
+    }
+    if let Some(server) = change.server {
+        let server = server.trim();
+        let bad = server.is_empty()
+            || server.contains(char::is_whitespace)
+            || server
+                .rsplit_once(':')
+                .is_some_and(|(_, port)| port.parse::<u16>().is_err());
+        if bad {
+            eprintln!("🔴 {server:?} is not a server: host or host:port.");
+            return Ok(ExitCode::FAILURE);
+        }
+        policy.server = Some(server.to_string());
+    }
+    if let Some(ups) = change.ups {
+        if ups.trim().is_empty() || ups.contains(char::is_whitespace) {
+            eprintln!("🔴 {ups:?} is not a UPS name: `upsc -l` lists them.");
+            return Ok(ExitCode::FAILURE);
+        }
+        policy.ups = ups.trim().to_string();
+    }
+    if let Some(s) = change.after {
+        policy.after_s = i64::from(s);
+    }
+    if let Some(s) = change.runtime {
+        policy.runtime_s = i64::from(s);
+    }
+    if let Some(s) = change.steady {
+        policy.steady_s = i64::from(s);
+    }
+    let detail = describe(&policy);
+    if !apply {
+        println!("Would set: {detail}");
+        if let Some(line) = read_now(&policy).await {
+            println!("{line}");
+        }
+        println!("Rerun with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    state.set_ups_policy(&policy).await?;
+    state
+        .audit("cli", ACTOR_ROLE, "config-ups", "ups", "ok", Some(&detail))
+        .await?;
+    println!("✓ {detail}");
+    if let Some(line) = read_now(&policy).await {
+        println!("{line}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -10346,6 +10511,30 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 *never,
                 *accept_downtime,
                 *refuse_downtime,
+                *apply,
+            ))
+        }
+
+        Command::Config(ConfigCmd::Ups {
+            server,
+            ups,
+            after,
+            runtime,
+            steady,
+            off,
+            apply,
+        }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(config_ups(
+                &cli,
+                UpsChange {
+                    server: server.as_deref(),
+                    ups: ups.as_deref(),
+                    after: *after,
+                    runtime: *runtime,
+                    steady: *steady,
+                    off: *off,
+                },
                 *apply,
             ))
         }

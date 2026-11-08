@@ -194,6 +194,30 @@ monitoring, updates and routes have their own `operations-*.md`.
   details written by humans: commas and quotes are the norm. And the line ending is
   CRLF, or Excel merges rows.
 
+## The power
+
+- **NUT is READ, never driven** (`hlb_engine::power`, `hlb-privd`'s `daemon::power`,
+  `HLB_UPS_SECS`): `GET VAR`, which `upsd` answers without an account. The machines are
+  shut down by NUT's own `upsmon` at low battery; what Homelabus adds is that nothing
+  writes by then. 🔴 A UPS NUT lost (`DRIVER-NOT-CONNECTED`, `DATA-STALE`) is an error,
+  never "on the mains", and an unreadable UPS decides nothing — no app stops on a server
+  that does not answer, none starts again (`ups_unknown` after five minutes).
+- **The waves come from the capability graph, consumers first**
+  (`DependencyGraph::shutdown_waves`): every app nothing uses in wave one — ntfy among
+  them, so the stop is said BEFORE the first wave — the databases once their last
+  consumer is gone. A service at 0 replicas (a person's stop) is left out: started after
+  the power, it would undo that person's decision. Started again in reverse, each wave
+  given 180 s to run before the next.
+- **🔴 The stop is written BEFORE anything stops** (`power_stop`: waves and replicas):
+  the battery may run out mid-wave, and Swarm says 0 by the time the daemon is back. A
+  stop begun is always finished, from the row; a wave that does not stop whole is said
+  and passed — waiting on it spends the battery the next ones need. Each service is
+  HELD (`restore::stop_held`, 30 days, `power: …`), and while stopped every pass puts
+  down again what something else started: a backup's copy or a restore ending starts its
+  services and releases their hold. `hlb config ups --off` mid-stop starts the apps.
+- **NUT 2.8's `dummy-ups` reads its `.dev` file ONCE** (`mode dummy-once`): a status
+  changes with `upsrw -s ups.status=…` (`tests/live_nut.rs`, its Dockerfile beside it).
+
 ## Invariants, encoded in tests
 
 If one of these tests fails, the code is usually wrong, not the test.

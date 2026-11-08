@@ -1716,13 +1716,9 @@ pub async fn start(
                     let Some(orchestrator) = &held.orchestrator else {
                         return;
                     };
-                    if let Err(e) = super::power::pass(
-                        &held.state,
-                        orchestrator.as_ref(),
-                        &notif,
-                        crate::now(),
-                    )
-                    .await
+                    if let Err(e) =
+                        super::power::pass(&held.state, orchestrator.as_ref(), &notif, crate::now())
+                            .await
                     {
                         tracing::warn!("power: {e}");
                     }

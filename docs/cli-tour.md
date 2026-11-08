@@ -355,6 +355,18 @@ upgrade` succeeds on it:
 ./target/debug/hlb config reboots --never --apply
 ```
 
+A UPS is read through NUT, never driven: on battery five minutes, or under ten of
+runtime, or at low battery, the apps stop in waves — those nothing uses first, the
+databases last — and start again in the reverse order once the mains have been back two
+minutes. The machines themselves are shut down by NUT's own `upsmon`, where it is set up:
+
+```sh
+./target/debug/hlb config ups                          # the rule, a reading now, a stop
+./target/debug/hlb config ups --server nut.lan --ups house --apply
+./target/debug/hlb config ups --after 120 --runtime 900 --apply
+./target/debug/hlb config ups --off --apply            # apps stopped for it start again
+```
+
 Each machine's protection level — what a stolen one would give up — is read from its
 firmware, TPM and systemd, never declared: `node check`, `cluster init` and `node add`
 show it, the last two label the node, and `cluster status` lists it. A, a verified boot
