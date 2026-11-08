@@ -16,7 +16,9 @@ use hlb_types::{Guide, Manifest};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+mod flaws;
 mod roles;
+pub use flaws::{Flaw, ImageScan};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
 
 /// What a row of `backup_runs` backed up — its `kind`.
