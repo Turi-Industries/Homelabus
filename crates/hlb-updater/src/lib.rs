@@ -19,6 +19,7 @@
 
 pub mod apply;
 pub mod catalog;
+pub mod run;
 pub mod scan;
 pub mod window;
 

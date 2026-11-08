@@ -551,3 +551,274 @@ async fn a_companion_that_does_not_start_leaves_its_app_alone() {
     assert_eq!(m.spec.companions[0].image.tag, "1.0");
     assert_eq!(m.spec.image.digest.as_deref(), Some("sha256:previous"));
 }
+
+// ---- One update, from the scan to the recorded run ---------------------------------------
+
+use hlb_updater::run::{Actor, Overrides, Progress, Ran, Refusal, Scanner, Update};
+use hlb_updater::scan::{Report, Verdict};
+use hlb_updater::BackupProvider;
+
+/// A scanner answering the same verdict for every image.
+struct Scans(Verdict);
+
+#[async_trait]
+impl Scanner for Scans {
+    async fn audit(
+        &self,
+        image: &str,
+        _: Option<&hlb_types::ImageSigner>,
+    ) -> hlb_updater::Result<Report> {
+        Ok(Report {
+            image: image.into(),
+            vulnerabilities: self.0.clone(),
+            signature: Verdict::Clean,
+        })
+    }
+}
+
+/// A copy that succeeds or fails, and counts what it was asked.
+struct Copy(Result<String, String>, Mutex<usize>);
+
+#[async_trait]
+impl BackupProvider for Copy {
+    async fn snapshot(&self, _: &str) -> Result<String, String> {
+        *self.1.lock().unwrap() += 1;
+        self.0.clone()
+    }
+}
+
+fn critical() -> Verdict {
+    Verdict::Findings {
+        critical: 1,
+        high: 0,
+        detail: "CVE-2026-0001".into(),
+    }
+}
+
+async fn run(
+    o: &Fake,
+    s: &State,
+    c: &Candidate,
+    scanned: Verdict,
+    backup: Option<&dyn BackupProvider>,
+    overrides: Overrides,
+) -> (Ran, Vec<Progress>) {
+    let scanner = Scans(scanned);
+    let update = Update {
+        orchestrator: o,
+        state: s,
+        in_catalog: None,
+        backup,
+        scanner: &scanner,
+        overrides,
+        actor: Actor {
+            name: "controller",
+            role: hlb_types::Role::Admin,
+        },
+        now: 0,
+    };
+    let mut said = Vec::new();
+    let ran = update
+        .run(c, &mut |p| said.push(p))
+        .await
+        .expect("the pass runs");
+    (ran, said)
+}
+
+/// 🔴 Scanned before it runs: a critical finding refuses the update with nothing
+/// switched, and the refusal is in the audit log for whoever was not watching.
+#[tokio::test]
+async fn a_critical_finding_refuses_the_update_before_anything_switches() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+
+    let (ran, _) = run(&o, &s, &candidate(), critical(), None, Overrides::default()).await;
+
+    assert!(
+        matches!(ran, Ran::Refused(Refusal::Vulnerable { .. })),
+        "{ran:?}"
+    );
+    assert!(o.pushed.lock().unwrap().is_empty(), "nothing switched");
+    let audit = s.audit_for("gitea", 5).await.unwrap();
+    assert_eq!(audit[0].action, "update-refused");
+    assert_eq!(audit[0].actor, "controller");
+    assert!(s.unnotified_update_runs().await.unwrap().is_empty());
+}
+
+/// Overriding a finding is a decision the audit log keeps, and the update then runs.
+#[tokio::test]
+async fn a_forced_finding_is_recorded_and_the_update_runs() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let forced = Overrides {
+        force_vulnerable: true,
+        ..Overrides::default()
+    };
+
+    let (ran, said) = run(&o, &s, &candidate(), critical(), None, forced).await;
+
+    assert!(
+        matches!(ran, Ran::Switched(UpdateOutcome::Applied { .. })),
+        "{ran:?}"
+    );
+    assert!(said.contains(&Progress::VulnerableForced));
+    let actions: Vec<String> = s
+        .audit_for("gitea", 5)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.action)
+        .collect();
+    assert!(
+        actions.contains(&"update-forced".to_string()),
+        "{actions:?}"
+    );
+}
+
+#[tokio::test]
+async fn outside_its_window_an_update_waits_with_nothing_switched() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let c = Candidate {
+        in_window: false,
+        ..candidate()
+    };
+
+    let (ran, _) = run(&o, &s, &c, Verdict::Clean, None, Overrides::default()).await;
+
+    assert_eq!(ran, Ran::Refused(Refusal::OutsideWindow));
+    assert!(o.pushed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_immature_image_waits_unless_a_person_says_otherwise() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let c = Candidate {
+        maturity: hlb_updater::Maturity::Young { ready_at: 86_400 },
+        ..candidate()
+    };
+
+    let (ran, _) = run(&o, &s, &c, Verdict::Clean, None, Overrides::default()).await;
+    assert!(
+        matches!(ran, Ran::Refused(Refusal::Immature { .. })),
+        "{ran:?}"
+    );
+    assert!(o.pushed.lock().unwrap().is_empty());
+
+    let early = Overrides {
+        before_maturity: true,
+        ..Overrides::default()
+    };
+    let (ran, _) = run(&o, &s, &c, Verdict::Clean, None, early).await;
+    assert!(matches!(ran, Ran::Switched(_)), "{ran:?}");
+    let audit = s.audit_for("gitea", 5).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "update-before-maturity"));
+}
+
+/// 🔴 No copy, no switch: a migration an image rollback cannot undo is undone by the
+/// copy taken first, or not at all.
+#[tokio::test]
+async fn a_failed_copy_abandons_the_update_before_the_switch() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let c = Candidate {
+        needs_backup: true,
+        ..candidate()
+    };
+    let copy = Copy(Err("destination unreachable".into()), Mutex::new(0));
+
+    let (ran, _) = run(
+        &o,
+        &s,
+        &c,
+        Verdict::Clean,
+        Some(&copy),
+        Overrides::default(),
+    )
+    .await;
+
+    assert_eq!(
+        ran,
+        Ran::Refused(Refusal::CopyFailed {
+            error: "destination unreachable".into()
+        })
+    );
+    assert!(o.pushed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_update_owing_a_copy_with_nowhere_to_put_it_is_an_error() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let c = Candidate {
+        needs_backup: true,
+        ..candidate()
+    };
+    let scanner = Scans(Verdict::Clean);
+    let update = Update {
+        orchestrator: &o,
+        state: &s,
+        in_catalog: None,
+        backup: None,
+        scanner: &scanner,
+        overrides: Overrides::default(),
+        actor: Actor {
+            name: "controller",
+            role: hlb_types::Role::Admin,
+        },
+        now: 0,
+    };
+
+    let err = update.run(&c, &mut |_| {}).await.expect_err("refused");
+    assert!(
+        matches!(err, hlb_updater::Error::BackupRequired { .. }),
+        "{err}"
+    );
+    assert!(o.pushed.lock().unwrap().is_empty());
+}
+
+/// Copied first, then switched, then recorded: the run is what the controller notifies.
+#[tokio::test]
+async fn a_switched_update_is_copied_first_and_recorded() {
+    let o = Fake::returning(vec![status("gitea/gitea:1.25@sha256:update", None, 1)]);
+    let s = state_with_gitea().await;
+    let c = Candidate {
+        needs_backup: true,
+        ..candidate()
+    };
+    let copy = Copy(Ok("0123456789".into()), Mutex::new(0));
+
+    let (ran, said) = run(
+        &o,
+        &s,
+        &c,
+        Verdict::Clean,
+        Some(&copy),
+        Overrides::default(),
+    )
+    .await;
+
+    assert!(
+        matches!(ran, Ran::Switched(UpdateOutcome::Applied { .. })),
+        "{ran:?}"
+    );
+    assert_eq!(*copy.1.lock().unwrap(), 1);
+    let copied = said
+        .iter()
+        .position(|p| matches!(p, Progress::Copied { .. }))
+        .expect("copied");
+    let switching = said
+        .iter()
+        .position(|p| matches!(p, Progress::Switching { .. }))
+        .expect("switched");
+    assert!(copied < switching, "{said:?}");
+
+    let runs = s.unnotified_update_runs().await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].from_image, "gitea/gitea:1.24@sha256:previous");
+    assert_eq!(runs[0].to_image, "gitea/gitea:1.25@sha256:update");
+    let audit = s.audit_for("gitea", 5).await.unwrap();
+    assert_eq!(audit[0].action, "update-applied");
+    assert_eq!(audit[0].actor, "controller");
+}

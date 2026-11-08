@@ -11287,211 +11287,99 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         force_vulnerable,
                         before_maturity,
                     } => {
+                        use hlb_updater::run::{Progress, Ran, Refusal};
+
                         let Some(c) = candidates.iter().find(|c| &c.app == app) else {
                             println!("Nothing to update for \"{app}\".");
                             return Ok(ExitCode::SUCCESS);
                         };
-
-                        // 🔴 Scan BEFORE deploying, not after. A critical image deployed
-                        // and then flagged has already run. And the digest that will run:
-                        // a rebuild was scanned as the installed image's own reference,
-                        // its OLD digest, and a tag alone may name another build by now.
-                        let installed = state.app_manifest(app).await?.spec.image;
-                        let named = match &c.kind {
-                            hlb_updater::UpdateKind::NewVersion { to_tag } => {
-                                format!("{}:{to_tag}", installed.repo)
-                            }
-                            hlb_updater::UpdateKind::Catalog { repo, tag } => {
-                                format!("{repo}:{tag}")
-                            }
-                            hlb_updater::UpdateKind::DigestOnly
-                            | hlb_updater::UpdateKind::Companions => {
-                                format!("{}:{}", installed.repo, installed.tag)
-                            }
-                        };
-                        let target = format!("{named}@{}", c.to_digest);
-
-                        // Each image against its own publisher's signer: one identity for
-                        // every image refused all but one publisher's, so none was set.
-                        let in_catalog = catalog.get(app.as_str()).map(|m| &m.spec.image);
-                        let mut reports = Vec::new();
-                        for (image, signer) in c.to_verify(&installed, in_catalog) {
-                            reports
-                                .push(hlb_updater::audit_signed_by(&image, signer.as_ref()).await?);
-                        }
-                        let blocks = reports.iter().any(|r| r.blocks());
-                        let described = reports
-                            .iter()
-                            .map(|r| r.describe())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-
-                        println!("{described}\n");
-
-                        if blocks && !force_vulnerable {
-                            eprintln!("🔴 Update REFUSED.");
-                            eprintln!();
-                            eprintln!("   Overriding is sometimes legitimate — an urgent fix in");
-                            eprintln!("   an image that still carries other CVEs. But it must be");
-                            eprintln!("   a decision, not a default:");
-                            eprintln!("     hlb update apply {app} --force-vulnerable");
-                            state
-                                .audit(
-                                    "cli",
-                                    ACTOR_ROLE,
-                                    "update-refused",
-                                    app,
-                                    "refused",
-                                    Some(&described),
-                                )
-                                .await?;
-                            return Ok(ExitCode::FAILURE);
-                        }
-                        if blocks {
-                            eprintln!("⚠️  Critical vulnerabilities ignored on request.");
-                            state
-                                .audit(
-                                    "cli",
-                                    ACTOR_ROLE,
-                                    "update-forced",
-                                    app,
-                                    "ok",
-                                    Some(&described),
-                                )
-                                .await?;
-                        }
-
-                        if !c.in_window && !force_window {
-                            eprintln!(
-                                "\"{app}\" is outside its maintenance window.\n\
-                                 --force-window to override."
-                            );
-                            return Ok(ExitCode::FAILURE);
-                        }
-
-                        // 🔴 No backup available, no update.
                         let vault = open_vault(&cli)?;
                         let provider = build_backup_provider(&cli, app, &state, &vault).await?;
-                        match hlb_updater::authorize(
-                            c,
-                            provider
+                        let orch = SwarmOrchestrator::connect().await?;
+                        let update = hlb_updater::run::Update {
+                            orchestrator: &orch,
+                            state: &state,
+                            in_catalog: catalog.get(app.as_str()).map(|m| &m.spec.image),
+                            backup: provider
                                 .as_ref()
                                 .map(|p| p as &dyn hlb_updater::BackupProvider),
-                            *force_window,
-                            *before_maturity,
-                            at,
-                        ) {
-                            Err(e @ hlb_updater::Error::Immature { .. }) => {
-                                eprintln!("✗ {e}.");
+                            scanner: &hlb_updater::run::Trivy,
+                            overrides: hlb_updater::run::Overrides {
+                                force_window: *force_window,
+                                force_vulnerable: *force_vulnerable,
+                                before_maturity: *before_maturity,
+                            },
+                            actor: hlb_updater::run::Actor {
+                                name: "cli",
+                                role: ACTOR_ROLE,
+                            },
+                            now: at,
+                        };
+                        let ran = update
+                            .run(c, &mut |p| match p {
+                                Progress::Scanned { described } => println!("{described}\n"),
+                                Progress::VulnerableForced => {
+                                    eprintln!("⚠️  Critical vulnerabilities ignored on request.")
+                                }
+                                Progress::BeforeMaturity { why } => {
+                                    eprintln!("⚠️  Applied before maturity: {why}.")
+                                }
+                                Progress::NoCopyOwed => println!(
+                                    "no backup first: {app} holds nothing to copy, or asks for none."
+                                ),
+                                Progress::CopyStarted => print!("backup first… "),
+                                Progress::Copied { snapshot } => {
+                                    println!("✓ {}", &snapshot[..8.min(snapshot.len())])
+                                }
+                                Progress::Switching { describe } => println!("{describe}…"),
+                            })
+                            .await?;
+
+                        match ran {
+                            Ran::Refused(Refusal::Vulnerable { .. }) => {
+                                eprintln!("🔴 Update REFUSED.");
+                                eprintln!();
+                                eprintln!("   Overriding is sometimes legitimate — an urgent fix in");
+                                eprintln!("   an image that still carries other CVEs. But it must be");
+                                eprintln!("   a decision, not a default:");
+                                eprintln!("     hlb update apply {app} --force-vulnerable");
+                                Ok(ExitCode::FAILURE)
+                            }
+                            Ran::Refused(Refusal::OutsideWindow) => {
+                                eprintln!(
+                                    "\"{app}\" is outside its maintenance window.\n\
+                                     --force-window to override."
+                                );
+                                Ok(ExitCode::FAILURE)
+                            }
+                            Ran::Refused(Refusal::Immature { why }) => {
+                                eprintln!("✗ \"{app}\": {why} - update refused.");
                                 eprintln!(
                                     "   An urgent fix may not wait — a decision, not a default:"
                                 );
                                 eprintln!("     hlb update apply {app} --before-maturity");
-                                return Ok(ExitCode::FAILURE);
+                                Ok(ExitCode::FAILURE)
                             }
-                            other => other?,
-                        }
-                        if let Some(why) = c.maturity.refusal(at) {
-                            eprintln!("⚠️  Applied before maturity: {why}.");
-                            state
-                                .audit(
-                                    "cli",
-                                    ACTOR_ROLE,
-                                    "update-before-maturity",
-                                    app,
-                                    "ok",
-                                    Some(&why),
-                                )
-                                .await?;
-                        }
-
-                        if !c.needs_backup {
-                            println!(
-                                "no backup first: {app} holds nothing to copy, or asks for none."
-                            );
-                        } else if let Some(p) = &provider {
-                            use hlb_updater::BackupProvider;
-                            print!("backup first… ");
-                            match p.snapshot(app).await {
-                                Ok(id) => println!("✓ {}", &id[..8.min(id.len())]),
-                                Err(e) => {
-                                    eprintln!("✗");
-                                    eprintln!("  {e}");
-                                    eprintln!("  update abandoned: no backup, no switchover.");
-                                    return Ok(ExitCode::FAILURE);
-                                }
+                            Ran::Refused(Refusal::CopyFailed { error }) => {
+                                eprintln!("✗");
+                                eprintln!("  {error}");
+                                eprintln!("  update abandoned: no backup, no switchover.");
+                                Ok(ExitCode::FAILURE)
                             }
-                        }
-
-                        let orch = SwarmOrchestrator::connect().await?;
-                        println!("{}…", c.describe());
-                        let from = installed.reference();
-                        let outcome = hlb_updater::apply(&orch, &state, c, 180).await?;
-
-                        // Every outcome is recorded, success included: the controller
-                        // notifies each, and an update said nowhere is silence.
-                        let (recorded, detail) = match &outcome {
-                            hlb_updater::UpdateOutcome::Applied { .. } => {
-                                (hlb_state::UpdateRunOutcome::Applied, String::new())
-                            }
-                            hlb_updater::UpdateOutcome::RolledBack { reason } => {
-                                (hlb_state::UpdateRunOutcome::RolledBack, reason.clone())
-                            }
-                            hlb_updater::UpdateOutcome::Paused => {
-                                (hlb_state::UpdateRunOutcome::Paused, String::new())
-                            }
-                            hlb_updater::UpdateOutcome::Inconclusive => {
-                                (hlb_state::UpdateRunOutcome::Inconclusive, String::new())
-                            }
-                        };
-                        let to = target.clone();
-                        let with: Vec<String> = c
-                            .companions
-                            .iter()
-                            .map(|m| format!("{} → {}", m.name, m.to.reference()))
-                            .collect();
-                        let detail = match (with.is_empty(), detail.is_empty()) {
-                            (true, _) => detail,
-                            (false, true) => format!("with {}", with.join(", ")),
-                            (false, false) => format!("with {}; {detail}", with.join(", ")),
-                        };
-                        state
-                            .record_update_run(&hlb_state::UpdateRun {
-                                id: 0,
-                                app: app.clone(),
-                                ran_at: chrono::Utc::now().timestamp(),
-                                from_image: from,
-                                to_image: to.clone(),
-                                outcome: recorded,
-                                detail: detail.clone(),
-                            })
-                            .await?;
-                        state
-                            .audit(
-                                "cli",
-                                ACTOR_ROLE,
-                                &format!("update-{}", recorded.as_str()),
-                                app,
-                                if outcome.is_success() { "ok" } else { "failed" },
-                                Some(&to),
-                            )
-                            .await?;
-
-                        match outcome {
-                            hlb_updater::UpdateOutcome::Applied { digest } => {
+                            Ran::Switched(hlb_updater::UpdateOutcome::Applied { digest }) => {
                                 println!("✓ applied — {}", &digest[..23.min(digest.len())]);
                                 Ok(ExitCode::SUCCESS)
                             }
-                            hlb_updater::UpdateOutcome::RolledBack { reason } => {
+                            Ran::Switched(hlb_updater::UpdateOutcome::RolledBack { reason }) => {
                                 eprintln!("↩ Swarm rolled back: {reason}");
                                 eprintln!("  the service is still running its previous version.");
                                 Ok(ExitCode::FAILURE)
                             }
-                            hlb_updater::UpdateOutcome::Paused => {
+                            Ran::Switched(hlb_updater::UpdateOutcome::Paused) => {
                                 eprintln!("⏸ switchover paused — intervention needed.");
                                 Ok(ExitCode::FAILURE)
                             }
-                            hlb_updater::UpdateOutcome::Inconclusive => {
+                            Ran::Switched(hlb_updater::UpdateOutcome::Inconclusive) => {
                                 eprintln!("? undetermined outcome within the allotted time.");
                                 eprintln!("  check with hlb ps before re-running.");
                                 Ok(ExitCode::FAILURE)
