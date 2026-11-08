@@ -852,6 +852,53 @@ pub struct UpdatePolicy {
     /// [`MIN_MATURATION_DAYS`].
     #[serde(default = "default_maturation")]
     pub maturation_days: u32,
+    /// How far an update goes with nobody there, in its window. Absent: patches, or none
+    /// on the `pin` channel. Never beyond what the channel proposes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic: Option<Automatic>,
+    /// Tags the catalog holds back for every house: a release found broken after it was
+    /// published. Read from the catalog's manifest, never the frozen one — a hold must
+    /// reach houses that installed before it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold: Vec<String>,
+}
+
+impl UpdatePolicy {
+    /// What applies with nobody there when the manifest does not say.
+    pub fn automatic(&self) -> Automatic {
+        self.automatic.unwrap_or(match self.channel {
+            UpdateChannel::Pin => Automatic::None,
+            _ => Automatic::Patch,
+        })
+    }
+}
+
+/// The largest jump an update makes with nobody there. Anything larger waits for a
+/// person: a click for a minor, the migration guide for a major.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Automatic {
+    None,
+    Patch,
+    Minor,
+}
+
+impl Automatic {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Patch => "patch",
+            Self::Minor => "minor",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::None, Self::Patch, Self::Minor]
+            .into_iter()
+            .find(|a| a.as_str() == s)
+    }
 }
 
 /// The floor under `maturationDays`.
@@ -870,6 +917,8 @@ impl Default for UpdatePolicy {
             watch_upstream: None,
             window: None,
             maturation_days: MIN_MATURATION_DAYS,
+            automatic: None,
+            hold: Vec::new(),
         }
     }
 }

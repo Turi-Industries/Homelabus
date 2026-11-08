@@ -19,6 +19,7 @@
 
 pub mod apply;
 pub mod catalog;
+pub mod policy;
 pub mod run;
 pub mod scan;
 pub mod window;
@@ -352,7 +353,13 @@ pub async fn check<T: chrono::Datelike + chrono::Timelike>(
             theirs = None;
         }
         match candidate(state, registry, now, at, &app, &m, theirs).await {
-            Ok(Some(c)) => out.candidates.push(c),
+            Ok(Some(c)) => match catalog
+                .get(&app)
+                .and_then(|cat| policy::held_by_catalog(&c, &m, cat))
+            {
+                Some(why) => out.held.push((app.clone(), why)),
+                None => out.candidates.push(c),
+            },
             Ok(None) => {}
             Err(e) => out.unreadable.push((app, e.to_string())),
         }

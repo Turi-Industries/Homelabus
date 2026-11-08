@@ -939,6 +939,15 @@ enum UpdateCmd {
         #[arg(long)]
         before_maturity: bool,
     },
+    /// How far updates go with nobody there: patches by default, a minor with a click, a
+    /// major by hand. Shows the settings without `--automatic`.
+    Policy {
+        /// The app to set; the whole house without it.
+        app: Option<String>,
+        /// none, patch or minor — or `manifest` to give the decision back.
+        #[arg(long)]
+        automatic: Option<String>,
+    },
     /// Scan an image without applying anything: CVEs and signature.
     Scan {
         /// Full image, e.g. gitea/gitea:1.25
@@ -2678,6 +2687,69 @@ async fn build_backup_provider(
         app,
     )
     .await?)
+}
+
+/// `hlb update policy`: shows how far updates go alone, or sets it for an app or the house.
+async fn update_policy(
+    state: &State,
+    app: Option<&str>,
+    automatic: Option<&str>,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let Some(automatic) = automatic else {
+        let settings = state.update_automatic_settings().await?;
+        let house = settings.iter().find(|(a, _)| a.is_empty()).map(|(_, a)| *a);
+        match house {
+            Some(a) => println!("the house: up to {} alone", a.as_str()),
+            None => println!("the house: as each manifest says (patches, none on `pin`)"),
+        }
+        for (name, _) in state.installed_apps().await? {
+            let manifest = state.app_manifest(&name).await?;
+            let own = settings.iter().find(|(a, _)| *a == name).map(|(_, a)| *a);
+            let (reach, whose) = match (own, house) {
+                (Some(a), _) => (a, "set for it"),
+                (None, Some(a)) => (a, "the house"),
+                (None, None) => (manifest.spec.update.automatic(), "its manifest"),
+            };
+            println!("  {name:<16} {:<6} ({whose})", reach.as_str());
+        }
+        println!(
+            "
+A major move is always by hand, whatever is set."
+        );
+        return Ok(ExitCode::SUCCESS);
+    };
+    let value = match automatic {
+        "manifest" => None,
+        other => Some(
+            hlb_types::Automatic::parse(other)
+                .ok_or_else(|| format!("--automatic {other}: none, patch, minor, or manifest"))?,
+        ),
+    };
+    if let Some(app) = app {
+        if state.app_manifest(app).await.is_err() {
+            return Err(format!("\"{app}\" is not installed").into());
+        }
+    }
+    state.set_update_automatic(app, value).await?;
+    let target = app.unwrap_or("house");
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "update-policy",
+            target,
+            "ok",
+            Some(value.map_or("manifest", hlb_types::Automatic::as_str)),
+        )
+        .await?;
+    match value {
+        Some(a) => println!(
+            "✓ {target}: up to {} alone, a major always by hand.",
+            a.as_str()
+        ),
+        None => println!("✓ {target}: back to what is set above it, or the manifest."),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// The declared destinations.
@@ -11179,6 +11251,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 let registry = hlb_registry::RegistryClient::new();
                 let now = chrono::Local::now().naive_local();
 
+                if let UpdateCmd::Policy { app, automatic } = cmd {
+                    return update_policy(&state, app.as_deref(), automatic.as_deref()).await;
+                }
+
                 if matches!(cmd, UpdateCmd::Lag) {
                     print!(
                         "{}",
@@ -11244,6 +11320,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     // Handled above.
                     UpdateCmd::Scan { .. } => unreachable!(),
                     UpdateCmd::Lag => unreachable!(),
+                    UpdateCmd::Policy { .. } => unreachable!(),
                     UpdateCmd::Check => {
                         if candidates.is_empty() && checked.unreadable.is_empty() {
                             if !checked.held.is_empty() {
@@ -11268,6 +11345,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 ""
                             };
                             println!("  • {}  [{when}{backup_dir}]", c.describe());
+                            let installed = state.app_manifest(&c.app).await?;
+                            let house = state.update_automatic(&c.app).await?;
+                            match hlb_updater::policy::decide(c, &installed, house) {
+                                hlb_updater::policy::Decision::Automatic => {
+                                    println!("      applies itself in its window")
+                                }
+                                hlb_updater::policy::Decision::OneClick { why } => {
+                                    println!("      waits for a person: {why}")
+                                }
+                                hlb_updater::policy::Decision::Manual { why } => {
+                                    println!("      by hand: {why}")
+                                }
+                            }
                             if let Some(why) = c.maturity.refusal(at) {
                                 println!("      not yet: {why}");
                             }

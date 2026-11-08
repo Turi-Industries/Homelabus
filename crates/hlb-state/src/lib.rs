@@ -5127,6 +5127,60 @@ impl State {
             .collect()
     }
 
+    /// How far `app` updates with nobody there, as the owner set it: the app's own
+    /// setting, else the house's. `None`: the manifest decides.
+    pub async fn update_automatic(&self, app: &str) -> Result<Option<hlb_types::Automatic>> {
+        let row: Option<String> = sqlx::query_scalar(
+            "SELECT automatic FROM update_automatic WHERE app IN (?1, '')
+             ORDER BY app = '' LIMIT 1",
+        )
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.as_deref().and_then(hlb_types::Automatic::parse))
+    }
+
+    /// Sets how far updates go alone, for `app` or the whole house (`None`); `automatic`
+    /// `None` gives the decision back to the app's setting, the house's, or the manifest.
+    pub async fn set_update_automatic(
+        &self,
+        app: Option<&str>,
+        automatic: Option<hlb_types::Automatic>,
+    ) -> Result<()> {
+        let app = app.unwrap_or("");
+        match automatic {
+            Some(a) => {
+                sqlx::query(
+                    "INSERT INTO update_automatic (app, automatic) VALUES (?1, ?2)
+                     ON CONFLICT (app) DO UPDATE SET automatic = excluded.automatic",
+                )
+                .bind(app)
+                .bind(a.as_str())
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM update_automatic WHERE app = ?1")
+                    .bind(app)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Every setting the owner made: `""` is the house's.
+    pub async fn update_automatic_settings(&self) -> Result<Vec<(String, hlb_types::Automatic)>> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT app, automatic FROM update_automatic ORDER BY app")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(app, a)| hlb_types::Automatic::parse(&a).map(|a| (app, a)))
+            .collect())
+    }
+
     /// Records an update's outcome, to be notified. `id` is ignored: the row's own is
     /// returned.
     pub async fn record_update_run(&self, run: &UpdateRun) -> Result<i64> {
@@ -5562,6 +5616,35 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn an_app_s_own_update_setting_wins_over_the_house_s() {
+        use hlb_types::Automatic;
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(s.update_automatic("gitea").await.expect("read"), None);
+        s.set_update_automatic(None, Some(Automatic::None))
+            .await
+            .expect("house");
+        s.set_update_automatic(Some("gitea"), Some(Automatic::Minor))
+            .await
+            .expect("app");
+        assert_eq!(
+            s.update_automatic("gitea").await.expect("read"),
+            Some(Automatic::Minor)
+        );
+        assert_eq!(
+            s.update_automatic("immich").await.expect("read"),
+            Some(Automatic::None)
+        );
+        s.set_update_automatic(Some("gitea"), None)
+            .await
+            .expect("cleared");
+        assert_eq!(
+            s.update_automatic("gitea").await.expect("read"),
+            Some(Automatic::None)
+        );
+        assert_eq!(s.update_automatic_settings().await.expect("all").len(), 1);
+    }
+
     #[tokio::test]
     async fn a_service_held_again_keeps_what_it_is_to_be_given_back() {
         let s = State::in_memory().await.expect("state");

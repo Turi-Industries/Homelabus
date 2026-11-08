@@ -36,10 +36,10 @@ pub use capability::{
     CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier, VolumeCopy,
 };
 pub use manifest::{
-    ApiVersion, AuthRoute, Companion, CompanionVolume, Criticality, ExposePolicy, Healthcheck,
-    Image, ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute, Period, Process,
-    RecoveryLogin, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, Tmpfs, Ulimit, UpdateChannel,
-    UpdatePolicy,
+    ApiVersion, AuthRoute, Automatic, Companion, CompanionVolume, Criticality, ExposePolicy,
+    Healthcheck, Image, ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute,
+    Period, Process, RecoveryLogin, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, Tmpfs, Ulimit,
+    UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -913,6 +913,36 @@ pub fn validate_with_guide(m: &Manifest, g: &Guide) -> Result<()> {
                 String::from(mem.limit)
             )));
         }
+    }
+    // A declaration nobody reads: the channel never proposes what `automatic` would apply.
+    let reach = match m.spec.update.channel {
+        UpdateChannel::Pin => Automatic::None,
+        UpdateChannel::Patch => Automatic::Patch,
+        UpdateChannel::Minor | UpdateChannel::Latest => Automatic::Minor,
+    };
+    if let Some(a) = m.spec.update.automatic.filter(|a| *a > reach) {
+        return Err(Error::Validation(format!(
+            "{}: update.automatic is {} but the {} channel never proposes it — raise the \
+             channel, or lower automatic",
+            m.metadata.name,
+            a.as_str(),
+            serde_json::to_value(m.spec.update.channel)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default()
+        )));
+    }
+    if let Some(t) = m
+        .spec
+        .update
+        .hold
+        .iter()
+        .find(|t| t.trim().is_empty() || t.contains(char::is_whitespace))
+    {
+        return Err(Error::Validation(format!(
+            "{}: update.hold — \"{t}\" is not a tag",
+            m.metadata.name
+        )));
     }
     if m.spec.update.maturation_days < manifest::MIN_MATURATION_DAYS {
         return Err(Error::Validation(format!(
@@ -3417,6 +3447,30 @@ spec:
             .unwrap_err()
             .to_string()
             .contains("latest"));
+    }
+
+    #[test]
+    fn automatic_never_reaches_past_what_the_channel_proposes() {
+        let y = format!("{BASE}  update: {{ channel: patch, automatic: minor }}\n");
+        let err = validate(&manifest(&y)).unwrap_err().to_string();
+        assert!(err.contains("update.automatic"), "{err}");
+        let y = format!("{BASE}  update: {{ channel: pin, automatic: patch }}\n");
+        assert!(validate(&manifest(&y)).is_err());
+        let y = format!("{BASE}  update: {{ channel: minor, automatic: minor }}\n");
+        validate(&manifest(&y)).expect("minor proposes minors");
+        let y = format!("{BASE}  update: {{ channel: pin, automatic: none }}\n");
+        validate(&manifest(&y)).expect("pin applies nothing");
+    }
+
+    #[test]
+    fn a_held_tag_is_a_tag() {
+        let y = format!("{BASE}  update: {{ hold: [\"1.2 3\"] }}\n");
+        assert!(validate(&manifest(&y))
+            .unwrap_err()
+            .to_string()
+            .contains("update.hold"));
+        let y = format!("{BASE}  update: {{ hold: [\"1.2.3\"] }}\n");
+        validate(&manifest(&y)).expect("a tag");
     }
 
     #[test]
