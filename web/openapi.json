@@ -2358,6 +2358,66 @@
             "type": "object"
           },
           {
+            "description": "🔴 A disk says it is failing — SMART's verdict, an NVMe critical warning — or one of\nits error counters (reallocated, pending, unreadable sectors; NVMe media errors)\ngrew in the last two weeks: it says so before it goes, rarely long before. The\nsubjects are the hostnames.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "disk_failing"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A machine's disks were not read for two days, or ever, or one would not open:\nsmartmontools absent from a physical machine, disks behind a controller `smartctl`\ncannot see through. A disk unread is not a disk healthy. The subjects are the\nhostnames.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "disk_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "🔴 A ZFS pool is not ONLINE — a disk gone, the redundancy spent — or holds files it\ncould not repair. The subjects are `host/pool`.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pool_unhealthy"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A ZFS pool's last scrub is older than six weeks, or none is on record: nothing\nread every block, so a disk's silent corruption waits for the day its twin fails.\nDebian's `zfsutils-linux` scrubs monthly; elsewhere `zpool scrub` is a person's.\nThe subjects are `host/pool`.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pool_not_scrubbed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 A DNS record the house's mail needs is not what the internet resolves — a\nDKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as\nspam. The subjects are the records' names; `hlb mail dns` prints the lines.",
             "properties": {
               "kind": {
