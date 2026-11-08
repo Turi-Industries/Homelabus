@@ -93,8 +93,9 @@ impl Pass<'_> {
         let mut due = Vec::new();
         for c in &checked.candidates {
             keep.insert(c.app.clone());
-            match self.decide(c, at).await {
-                Ok(true) if c.in_window && c.maturity.refusal(at).is_none() => due.push(c),
+            let urgent = self.urgent(&c.app).await;
+            match self.decide(c, urgent, at).await {
+                Ok(true) if due_now(c, urgent, at) => due.push((c, urgent)),
                 // Waiting for its window, its maturity or a person: the ordinary case.
                 Ok(_) => {}
                 Err(e) => tracing::warn!(app = %c.app, "its update could not be decided: {e}"),
@@ -102,8 +103,8 @@ impl Pass<'_> {
         }
 
         let mut done = Vec::new();
-        for c in due {
-            let d = self.one(c, at).await;
+        for (c, urgent) in due {
+            let d = self.one(c, urgent, at).await;
             if let Some(refused) = refusal(&d) {
                 let json = serde_json::to_string(&refused).unwrap_or_default();
                 if let Err(e) = self
@@ -136,10 +137,30 @@ impl Pass<'_> {
         done
     }
 
+    /// Does what `app` runs carry a flaw exploited in the wild? Its update then waits for
+    /// no maturity, and goes alone as far as a minor. Unreadable is not urgent: the
+    /// ordinary guards hold.
+    async fn urgent(&self, app: &str) -> bool {
+        let Ok(m) = self.state.app_manifest(app).await else {
+            return false;
+        };
+        match hlb_updater::flaws::exploited(self.state, &m).await {
+            Ok(true) => {
+                tracing::info!(app, "runs an exploited flaw: its update is urgent");
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                tracing::warn!(app, "its flaws could not be read: {e}");
+                false
+            }
+        }
+    }
+
     /// Decides who applies `c` and records it, the release notes read for the person
     /// who will approve it. `true` when it goes on with nobody: automatic, or approved
     /// since its last refusal.
-    async fn decide(&self, c: &Candidate, at: i64) -> Result<bool, String> {
+    async fn decide(&self, c: &Candidate, urgent: bool, at: i64) -> Result<bool, String> {
         use hlb_api::updates::{ReleaseNote, UpdateMove, UpdateWho};
         let installed = self
             .state
@@ -152,7 +173,7 @@ impl Pass<'_> {
             .update_automatic(&c.app)
             .await
             .map_err(|e| e.to_string())?;
-        let mut decision = decide(c, &installed, house);
+        let mut decision = decide(c, &installed, house, urgent);
         let mut notes = None;
         if let (Some(github), Some(to)) = (notes_source(&installed, catalog), notes_target(c)) {
             let read = self.registry.release_notes(github, &c.from_tag, to).await;
@@ -210,7 +231,7 @@ impl Pass<'_> {
         Ok(recorded.is_some_and(|w| w.who != UpdateWho::Manual && w.needs().is_none()))
     }
 
-    async fn one(&self, c: &Candidate, at: i64) -> Done {
+    async fn one(&self, c: &Candidate, urgent: bool, at: i64) -> Done {
         let app = c.app.as_str();
         let s3 = match self.state.buckets_to_backup(app).await {
             Ok(b) if b.is_empty() => None,
@@ -240,7 +261,11 @@ impl Pass<'_> {
             in_catalog: self.catalog.get(app).map(|m| &m.spec.image),
             backup: provider.as_ref().map(|p| p as &dyn BackupProvider),
             scanner: self.scanner,
-            overrides: Overrides::default(),
+            // The skip is audited by the run (`update-before-maturity`).
+            overrides: Overrides {
+                before_maturity: urgent,
+                ..Overrides::default()
+            },
             actor: Actor {
                 name: "controller",
                 role: hlb_types::Role::Admin,
@@ -264,6 +289,13 @@ impl Pass<'_> {
             Err(e) => failed(c, e),
         }
     }
+}
+
+/// Whether an update decided to go alone goes this pass: in its window, and mature — or
+/// urgent, which waits for no maturity. 🔴 The window holds even then: it is when the
+/// house can lose the app for a while.
+fn due_now(c: &Candidate, urgent: bool, at: i64) -> bool {
+    c.in_window && (urgent || c.maturity.refusal(at).is_none())
 }
 
 /// What the inbox says the pass refused. `None` for a switch that applied, and for a
@@ -361,6 +393,33 @@ pub fn notice(d: &Done) -> Option<hlb_notify::Notification> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_urgent_update_waits_for_its_window_and_for_no_maturity() {
+        use hlb_updater::Maturity;
+        let c = |in_window, maturity| Candidate {
+            app: "gitea".into(),
+            kind: UpdateKind::NewVersion {
+                to_tag: "1.24.4".into(),
+            },
+            from_tag: "1.24.3".into(),
+            from_digest: Some("sha256:old".into()),
+            to_digest: "sha256:new".into(),
+            in_window,
+            needs_backup: false,
+            maturity,
+            companions: Vec::new(),
+        };
+        let young = Maturity::Young { ready_at: 2_000 };
+        assert!(!due_now(&c(true, young), false, 1_000));
+        assert!(due_now(&c(true, young), true, 1_000));
+        assert!(due_now(&c(true, Maturity::Undated), true, 1_000));
+        assert!(
+            !due_now(&c(false, young), true, 1_000),
+            "outside its window"
+        );
+        assert!(due_now(&c(true, Maturity::Mature), false, 1_000));
+    }
 
     #[test]
     fn a_switch_is_said_by_its_run_and_a_refusal_here() {

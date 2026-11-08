@@ -11371,12 +11371,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("  • {}  [{when}{backup_dir}]", c.describe());
                             let installed = state.app_manifest(&c.app).await?;
                             let house = state.update_automatic(&c.app).await?;
+                            let exploited =
+                                hlb_updater::flaws::exploited(&state, &installed).await?;
+                            if exploited {
+                                println!("      urgent: what runs carries an exploited flaw");
+                            }
                             match hlb_updater::policy::judge(
                                 &registry,
                                 c,
                                 &installed,
                                 catalog.get(c.app.as_str()),
                                 house,
+                                exploited,
                             )
                             .await
                             {
@@ -11390,7 +11396,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                     println!("      by hand: {why}")
                                 }
                             }
-                            if let Some(why) = c.maturity.refusal(at) {
+                            if let Some(why) = c.maturity.refusal(at).filter(|_| !exploited) {
                                 println!("      not yet: {why}");
                             }
                         }

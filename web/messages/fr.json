@@ -1661,6 +1661,38 @@
 			}
 		}
 	],
+	"cause_flaw_exploitable": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "{shown} application joignable depuis internet fait tourner une faille exploitée ou susceptible de l'être",
+				"countPlural=*": "{shown} applications joignables depuis internet font tourner une faille exploitée ou susceptible de l'être"
+			}
+		}
+	],
+	"cause_flaws_unknown": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Les images de {shown} application n'ont pas été vérifiées récemment",
+				"countPlural=*": "Les images de {shown} applications n'ont pas été vérifiées récemment"
+			}
+		}
+	],
 	"cause_mail_record_wrong": [
 		{
 			"declarations": [
@@ -1996,6 +2028,8 @@
 	"reason_drift": "s'écarte de sa déclaration",
 	"reason_assertion_broken": "ne tient pas ce que dit son manifeste",
 	"reason_assertion_unknown": "réglages non relus récemment",
+	"reason_flaw_exploitable": "fait tourner une faille corrigeable, exploitée ou susceptible de l'être",
+	"reason_flaws_unknown": "images non vérifiées récemment",
 	"reason_mail_record_wrong": "manquant ou faux : le mail est refusé ou classé en spam",
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",

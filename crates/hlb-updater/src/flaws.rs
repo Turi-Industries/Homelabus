@@ -9,11 +9,34 @@
 use std::collections::BTreeMap;
 
 use hlb_state::Flaw;
-use hlb_types::{ExposePolicy, Manifest};
+use hlb_types::{ExposePolicy, Image, Manifest};
 
 /// The chance of exploitation within thirty days past which a flaw is said at once. One
 /// in ten: PostgreSQL's one alert (OpenSSL's CVE-2025-15467) reads 0.75, its next 0.03.
 pub const EPSS_ALERT: f64 = 0.1;
+
+/// The images an app runs: its own and its companions'. The daily pass reads each by
+/// digest, and the inbox asks of each whether it was read lately — one list, or the two
+/// would disagree on what "every image" means.
+pub fn images(m: &Manifest) -> Vec<&Image> {
+    std::iter::once(&m.spec.image)
+        .chain(m.spec.companions.iter().map(|c| &c.image))
+        .collect()
+}
+
+/// Does what `m` runs carry a flaw exploited in the wild, as the last good reading of each
+/// of its images found? Its update then skips maturity and the manifest's reach
+/// (`policy::decide`). Whether the move carries the fix is not known before it is
+/// scanned: a release made in the days after a flaw is listed exploited is the likely
+/// one, and maturity guards against a bad release — a smaller harm than a known attack.
+pub async fn exploited(state: &hlb_state::State, m: &Manifest) -> hlb_state::Result<bool> {
+    for d in images(m).iter().filter_map(|i| i.digest.as_ref()) {
+        if state.image_flaws(d).await?.iter().any(|f| f.exploited) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Is `f` worth saying today?
 pub fn alerting(f: &Flaw) -> bool {
@@ -130,6 +153,33 @@ spec:
         assert!(!exposed("gitea", &private, &[]));
         let mail = manifest("  security: { publishedPorts: [25] }");
         assert!(exposed("gitea", &mail, &row(false)), "a port of its node");
+    }
+
+    #[tokio::test]
+    async fn only_an_exploited_flaw_in_a_companion_or_the_app_makes_it_urgent() {
+        let s = hlb_state::State::in_memory().await.expect("state");
+        let m = manifest(
+            r#"  companions:
+    - name: cache
+      image: { repo: valkey/valkey, tag: "8", digest: "sha256:cache" }"#,
+        );
+        assert!(!exploited(&s, &m).await.expect("read"), "never read");
+        s.record_image_scan(
+            "sha256:cache",
+            "valkey",
+            1,
+            Ok(&[flaw("A", false, Some(0.9))]),
+        )
+        .await
+        .expect("read");
+        assert!(
+            !exploited(&s, &m).await.expect("read"),
+            "likely is not exploited"
+        );
+        s.record_image_scan("sha256:cache", "valkey", 2, Ok(&[flaw("A", true, None)]))
+            .await
+            .expect("read");
+        assert!(exploited(&s, &m).await.expect("read"));
     }
 
     #[test]

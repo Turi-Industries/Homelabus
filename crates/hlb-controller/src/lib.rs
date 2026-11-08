@@ -19,6 +19,7 @@ pub mod error;
 pub mod export;
 pub mod exposure;
 pub mod extract;
+pub mod flaws;
 // Empty outside tests: its one module is gated where the source scans can see it.
 mod fake_mail;
 pub mod health;

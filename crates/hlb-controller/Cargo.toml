@@ -31,6 +31,8 @@ hlb-api.workspace = true
 hlb-bitwarden.workspace = true
 hlb-state.workspace = true
 hlb-privd.workspace = true
+# Which images an app runs, as the daily flaws pass reads them.
+hlb-updater.workspace = true
 hlb-engine.workspace = true
 # The day a catalog card counts an app's maintained months from.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

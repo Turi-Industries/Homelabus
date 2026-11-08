@@ -106,6 +106,10 @@ export function title(issue: Issue): string {
 			return m.cause_assertion_broken(n);
 		case 'assertion_unknown':
 			return m.cause_assertion_unknown(n);
+		case 'flaw_exploitable':
+			return m.cause_flaw_exploitable(n);
+		case 'flaws_unknown':
+			return m.cause_flaws_unknown(n);
 		case 'mail_record_wrong':
 			return m.cause_mail_record_wrong(n);
 		case 'mail_record_unknown':
@@ -168,7 +172,11 @@ export function where(issue: Issue): string {
 		case 'job_failed':
 		case 'assertion_broken':
 		case 'assertion_unknown':
+		case 'flaws_unknown':
 			return one ? `/apps/${one}` : '/apps';
+		// The fix is an update: the page that lists them, and applies one.
+		case 'flaw_exploitable':
+			return '/updates';
 		// No page lists the records or the queue, whose subjects are names and domains,
 		// not apps: Stalwart's is where its mail is, and the CLI says the rest —
 		// `hlb mail dns`, `hlb mail queue`.
@@ -323,6 +331,10 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_assertion_broken();
 		case 'assertion_unknown':
 			return m.reason_assertion_unknown();
+		case 'flaw_exploitable':
+			return m.reason_flaw_exploitable();
+		case 'flaws_unknown':
+			return m.reason_flaws_unknown();
 		case 'mail_record_wrong':
 			return m.reason_mail_record_wrong();
 		case 'mail_record_unknown':

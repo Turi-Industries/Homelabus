@@ -1743,6 +1743,7 @@ dependencies = [
  "hlb-secrets",
  "hlb-state",
  "hlb-types",
+ "hlb-updater",
  "hlb-users",
  "jsonschema",
  "reqwest",
