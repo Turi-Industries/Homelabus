@@ -11347,7 +11347,15 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("  • {}  [{when}{backup_dir}]", c.describe());
                             let installed = state.app_manifest(&c.app).await?;
                             let house = state.update_automatic(&c.app).await?;
-                            match hlb_updater::policy::decide(c, &installed, house) {
+                            match hlb_updater::policy::judge(
+                                &registry,
+                                c,
+                                &installed,
+                                catalog.get(c.app.as_str()),
+                                house,
+                            )
+                            .await
+                            {
                                 hlb_updater::policy::Decision::Automatic => {
                                     println!("      applies itself in its window")
                                 }

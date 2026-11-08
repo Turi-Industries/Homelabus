@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: oauth2-proxy
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: OAuth2 Proxy
   category: platform
   homepage: https://oauth2-proxy.github.io/oauth2-proxy/
@@ -34,6 +34,7 @@ spec:
     # running/failed state is what `wait_healthy` counts.
   update:
     channel: minor
+    notes: { github: oauth2-proxy/oauth2-proxy }
   env:
     OAUTH2_PROXY_PROVIDER: "oidc"
     OAUTH2_PROXY_OIDC_ISSUER_URL: "{{ oidc.issuer }}"

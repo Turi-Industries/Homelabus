@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: crowdsec
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: CrowdSec
   category: platform
   homepage: https://crowdsec.net
@@ -99,3 +99,4 @@ spec:
     # The detection scenarios move fast; staying on an old version amounts to no
     # longer detecting the recent attacks.
     channel: minor
+    notes: { github: crowdsecurity/crowdsec }

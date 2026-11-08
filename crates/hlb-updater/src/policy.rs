@@ -135,6 +135,62 @@ pub fn decide(c: &Candidate, installed: &Manifest, house: Option<Automatic>) -> 
     }
 }
 
+/// [`decide`], then the release notes between what runs and the target, when the manifest
+/// says where they are — the catalog's manifest first, which may name them since. They only
+/// ever take the automatic path away: a warning, or notes that could not be read, leave the
+/// update to a person.
+pub async fn judge(
+    registry: &hlb_registry::RegistryClient,
+    c: &Candidate,
+    installed: &Manifest,
+    catalog: Option<&Manifest>,
+    house: Option<Automatic>,
+) -> Decision {
+    let decision = decide(c, installed, house);
+    if !decision.is_automatic() {
+        return decision;
+    }
+    let Some(notes) = catalog
+        .and_then(|m| m.spec.update.notes.as_ref())
+        .or(installed.spec.update.notes.as_ref())
+    else {
+        return decision;
+    };
+    let to = match &c.kind {
+        UpdateKind::NewVersion { to_tag } => to_tag,
+        UpdateKind::Catalog { tag, .. } => tag,
+        // The same tag rebuilt has no release of its own.
+        UpdateKind::DigestOnly | UpdateKind::Companions => return decision,
+    };
+    guarded(
+        decision,
+        registry
+            .release_notes(&notes.github, &c.from_tag, to)
+            .await
+            .map(|read| hlb_registry::notes::warning(&read, to)),
+    )
+}
+
+/// The automatic path, kept only when the notes were read and warn of nothing.
+fn guarded(
+    decision: Decision,
+    notes: Result<Option<hlb_registry::notes::Warning>, hlb_registry::Error>,
+) -> Decision {
+    use hlb_registry::notes::Warning;
+    match notes {
+        Ok(None) => decision,
+        Ok(Some(Warning::Says { tag, word })) => Decision::OneClick {
+            why: format!("the notes of {tag} say \"{word}\": read them first"),
+        },
+        Ok(Some(Warning::TargetMissing { tag })) => Decision::OneClick {
+            why: format!("no release notes found for {tag}: nobody read what it changes"),
+        },
+        Err(e) => Decision::OneClick {
+            why: format!("its release notes could not be read ({e})"),
+        },
+    }
+}
+
 /// Why the catalog holds the candidate back, if it does: its target tag, or a companion's,
 /// is in the catalog manifest's `update.hold`.
 pub fn held_by_catalog(c: &Candidate, installed: &Manifest, catalog: &Manifest) -> Option<String> {
@@ -277,6 +333,36 @@ spec:
         assert!(matches!(
             decide(&other, &m, Some(Automatic::Minor)),
             Decision::Manual { .. }
+        ));
+    }
+
+    /// 🔴 Notes nobody could read are not notes that say nothing.
+    #[test]
+    fn notes_only_ever_take_the_automatic_path_away() {
+        use hlb_registry::notes::Warning;
+        assert_eq!(guarded(Decision::Automatic, Ok(None)), Decision::Automatic);
+        let says = Warning::Says {
+            tag: "v1.24.5".into(),
+            word: "breaking",
+        };
+        assert!(matches!(
+            guarded(Decision::Automatic, Ok(Some(says))),
+            Decision::OneClick { .. }
+        ));
+        let missing = Warning::TargetMissing {
+            tag: "1.24.5".into(),
+        };
+        assert!(matches!(
+            guarded(Decision::Automatic, Ok(Some(missing))),
+            Decision::OneClick { .. }
+        ));
+        let unread = hlb_registry::Error::Registry {
+            status: 403,
+            detail: "rate limit".into(),
+        };
+        assert!(matches!(
+            guarded(Decision::Automatic, Err(unread)),
+            Decision::OneClick { .. }
         ));
     }
 

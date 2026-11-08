@@ -861,6 +861,18 @@ pub struct UpdatePolicy {
     /// reach houses that installed before it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hold: Vec<String>,
+    /// Where the app's release notes are read before an update applies alone: one saying
+    /// *breaking* or *migration* waits for a person. Absent: nothing is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<ReleaseNotes>,
+}
+
+/// Where an app publishes its release notes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReleaseNotes {
+    /// `owner/repository`, whose GitHub releases are tagged like the image.
+    pub github: String,
 }
 
 impl UpdatePolicy {
@@ -919,6 +931,7 @@ impl Default for UpdatePolicy {
             maturation_days: MIN_MATURATION_DAYS,
             automatic: None,
             hold: Vec::new(),
+            notes: None,
         }
     }
 }

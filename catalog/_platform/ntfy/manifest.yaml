@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: ntfy
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: ntfy
   category: platform
   homepage: https://ntfy.sh
@@ -75,6 +75,7 @@ spec:
       test: ["CMD-SHELL", "wget -qO- http://localhost/v1/health | grep -q true"]
   update:
     channel: minor
+    notes: { github: binwiederhier/ntfy }
   assertions:
     - id: closed-to-strangers
       holds: nobody reads the alerts without an account

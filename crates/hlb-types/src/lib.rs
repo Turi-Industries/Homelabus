@@ -38,8 +38,8 @@ pub use capability::{
 pub use manifest::{
     ApiVersion, AuthRoute, Automatic, Companion, CompanionVolume, Criticality, ExposePolicy,
     Healthcheck, Image, ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute,
-    Period, Process, RecoveryLogin, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec, Tmpfs, Ulimit,
-    UpdateChannel, UpdatePolicy,
+    Period, Process, RecoveryLogin, ReleaseNotes, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec,
+    Tmpfs, Ulimit, UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -943,6 +943,20 @@ pub fn validate_with_guide(m: &Manifest, g: &Guide) -> Result<()> {
             "{}: update.hold — \"{t}\" is not a tag",
             m.metadata.name
         )));
+    }
+    if let Some(n) = &m.spec.update.notes {
+        let shape = n.github.split('/').count() == 2
+            && n.github.split('/').all(|p| {
+                !p.is_empty()
+                    && p.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            });
+        if !shape {
+            return Err(Error::Validation(format!(
+                "{}: update.notes.github — \"{}\": owner/repository",
+                m.metadata.name, n.github
+            )));
+        }
     }
     if m.spec.update.maturation_days < manifest::MIN_MATURATION_DAYS {
         return Err(Error::Validation(format!(
@@ -3460,6 +3474,19 @@ spec:
         validate(&manifest(&y)).expect("minor proposes minors");
         let y = format!("{BASE}  update: {{ channel: pin, automatic: none }}\n");
         validate(&manifest(&y)).expect("pin applies nothing");
+    }
+
+    #[test]
+    fn release_notes_name_a_repository() {
+        let y = format!("{BASE}  update: {{ notes: {{ github: go-gitea/gitea }} }}\n");
+        validate(&manifest(&y)).expect("owner/repository");
+        let y = format!(
+            "{BASE}  update: {{ notes: {{ github: \"https://github.com/go-gitea/gitea\" }} }}\n"
+        );
+        assert!(validate(&manifest(&y))
+            .unwrap_err()
+            .to_string()
+            .contains("update.notes"));
     }
 
     #[test]
