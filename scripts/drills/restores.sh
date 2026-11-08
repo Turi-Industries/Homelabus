@@ -16,7 +16,7 @@ cd "$(git rev-parse --show-toplevel)"
 record=1
 [[ ${1:-} == --no-record ]] && record=0
 
-hlb_on_deb1=${LAB_HLB:-/root/lab-047/hlb}
+hlb_on_deb1=${LAB_HLB:-/root/lab-048/hlb}
 hlb() {
     docker exec -i hlb-lab /lab/vm.sh ssh deb1 \
         "cd /root; HLB_STATE=/var/lib/homelabus/hlb.db HLB_MASTER_KEY=/root/hlb-master.key $hlb_on_deb1 $*"
@@ -29,11 +29,16 @@ read -r good held < <(hlb backup status | awk -F'  +' '
     /^[a-z]/ && NR > 1 {
         if ($2 == "-" && $3 == "-") next
         held++
+        if ($3 == "-") next
         split($3, age, " ")
-        recent = (age[2] == "s" || age[2] == "min" || age[2] == "h" || (age[2] == "d" && age[1] <= 30))
-        if (recent) good++
+        # 🔴 hlb up to 0.4.8 wrote days as "j": read as no unit, 14 apps verified three
+        # days before counted 0. A unit not known here stops the drill rather than count.
+        if (age[2] == "j") age[2] = "d"
+        if (age[2] != "s" && age[2] != "min" && age[2] != "h" && age[2] != "d") { bad = $3; exit }
+        if (age[2] != "d" || age[1] <= 30) good++
     }
-    END { print good + 0, held + 0 }')
+    END { if (bad != "") print "unit", bad; else print good + 0, held + 0 }')
+[[ $good != unit ]] || { echo "an age backup status gives in no known unit: $held" >&2; exit 1; }
 # 🔴 Nothing read is not "0 of 0": a change of the table's shape would pass as an empty house.
 ((held > 0)) || { echo "no app with data read from backup status" >&2; exit 1; }
 

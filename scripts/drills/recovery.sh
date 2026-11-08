@@ -37,7 +37,7 @@ record=1
 # .13 is the lab's: dnsmasq pins .11 to .19 by MAC, and .13 holds no mesh peer.
 vm=drill
 ip=10.77.0.13
-hlb_on_deb1=${LAB_HLB:-/root/lab-047/hlb}
+hlb_on_deb1=${LAB_HLB:-/root/lab-048/hlb}
 state=/var/lib/homelabus/hlb.db
 key=/var/lib/homelabus/hlb-master.key
 kit=/root/drill-kit.txt
