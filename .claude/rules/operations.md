@@ -207,7 +207,9 @@ monitoring, updates and routes have their own `operations-*.md`.
   them, so the stop is said BEFORE the first wave — the databases once their last
   consumer is gone. A service at 0 replicas (a person's stop) is left out: started after
   the power, it would undo that person's decision. Started again in reverse, each wave
-  given 180 s to run before the next.
+  given 180 s to run before the next. 🔴 Nothing that changes the house BEGINS while a
+  stop is under way (`power::under_way`): the hourly update pass ran mid-stop on the lab
+  (2026-11-08) and dumped Mealie towards a stopped PostgreSQL; a planned reboot waits too.
 - **🔴 The stop is written BEFORE anything stops** (`power_stop`: waves and replicas):
   the battery may run out mid-wave, and Swarm says 0 by the time the daemon is back. A
   stop begun is always finished, from the row; a wave that does not stop whole is said
