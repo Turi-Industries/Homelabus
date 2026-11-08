@@ -433,9 +433,14 @@ mod tests {
         }
         async fn tasks(
             &self,
-            _: Option<&str>,
+            n: Option<&str>,
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-            Ok(Vec::new())
+            match n {
+                Some(n) if self.lost.contains(n) => {
+                    Err(hlb_orchestrator::Error::NotFound(n.into()))
+                }
+                _ => Ok(Vec::new()),
+            }
         }
         async fn logs(
             &self,

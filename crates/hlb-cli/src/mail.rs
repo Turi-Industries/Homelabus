@@ -449,12 +449,8 @@ async fn migrate(cli: &Cli, state: &hlb_state::State, apply: bool) -> Result<Exi
     // Kept in the state: in Swarm alone, reconciliation starts it again within a minute,
     // and the final pass stops on counters that moved.
     crate::remember_replicas(cli, app, 0).await?;
-    for _ in 0..120 {
-        if orch.status(app).await?.running_replicas == 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    // Its store is copied next: the task must have exited, not merely been told to.
+    hlb_orchestrator::wait_stopped(&orch, app, std::time::Duration::from_secs(120)).await?;
     let restart = || async {
         state.set_app_replicas(app, decided).await?;
         orch.scale(app, replicas).await?;
