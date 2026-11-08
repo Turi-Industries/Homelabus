@@ -2283,6 +2283,36 @@
             "type": "object"
           },
           {
+            "description": "🔴 A machine's own system — its packages, its kernel — runs a flaw a fix exists\nfor, exploited in the wild or likely to be. The subjects are the hostnames;\n`hlb node upgrade <host>` installs the fix.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "host_flaw_exploitable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A machine's packages were not read against the flaws known today for two days, or\never — its system is one Grype holds no advisories for, or the reading failed. The\nsubjects are the hostnames.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "host_flaws_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 A DNS record the house's mail needs is not what the internet resolves — a\nDKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as\nspam. The subjects are the records' names; `hlb mail dns` prints the lines.",
             "properties": {
               "kind": {

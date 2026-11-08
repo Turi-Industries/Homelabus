@@ -144,6 +144,53 @@ pub async fn seed_from(
             .await?;
     }
 
+    // The machines: one quiet, one running the kernel's exploited flaw, one whose
+    // system Grype holds no advisories for — never read, so never clean.
+    let kernel = hlb_state::Flaw {
+        id: "CVE-2024-1086".into(),
+        package: "linux-image-6.1.0-18-amd64".into(),
+        severity: "High".into(),
+        version: "6.1.76-1".into(),
+        fixed_in: "6.1.85-1".into(),
+        exploited: true,
+        epss: Some(0.82),
+        first_seen: now - 6 * 3_600,
+    };
+    for (host, system, read) in [
+        (
+            "swarm-heavy",
+            "Debian GNU/Linux 12 (bookworm)",
+            Ok(Vec::new()),
+        ),
+        (
+            "small-01",
+            "Debian GNU/Linux 12 (bookworm)",
+            Ok(vec![kernel]),
+        ),
+        (
+            "small-02",
+            "Arch Linux",
+            Err("Grype holds no advisories for Arch Linux: its packages would read clean"),
+        ),
+    ] {
+        let key = hlb_state::host_key(host);
+        let said: std::collections::BTreeSet<String> = match &read {
+            Ok(flaws) => flaws.iter().map(|f| f.id.clone()).collect(),
+            Err(_) => Default::default(),
+        };
+        state
+            .record_image_scan(
+                &key,
+                system,
+                now - 6 * 3_600,
+                read.as_deref().map_err(|e| *e),
+            )
+            .await?;
+        state
+            .set_alerted_flaws(&key, &said, now - 6 * 3_600)
+            .await?;
+    }
+
     // --- Mail records: the RSA key never published, the rest in place ------------
     {
         use hlb_api::mail_dns::{MailRecord, Purpose, RecordState};

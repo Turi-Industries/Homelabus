@@ -4,11 +4,15 @@
 //! What is said: at once, a flaw a fix exists for, exploited or likely to be, in an app
 //! the internet reaches — once, until it is gone; weekly, the rest, counted per app, and
 //! every image that could not be read. An image unread is never an image clean.
+//!
+//! Every machine's own packages too (`hlb_updater::host`), by the same rule — each counts
+//! as reached: its apps are, and a kernel flaw is reached through any of them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use hlb_notify::Notification;
-use hlb_state::{Flaw, State};
+use hlb_orchestrator::NodeInfo;
+use hlb_state::{host_key, Flaw, State};
 use hlb_updater::flaws::{alerting, distinct, exposed, images, line};
 use hlb_updater::grype::{Finding, Grype};
 
@@ -20,9 +24,25 @@ pub const DIGEST_EVERY_S: i64 = 7 * 86_400;
 pub struct Read {
     /// Each app, with the flaws of the images it runs.
     pub apps: Vec<AppFlaws>,
-    /// Images read, and those that could not be: `(image, why)`.
+    /// Each machine, with the flaws of its own packages.
+    pub hosts: Vec<HostFlaws>,
+    /// Images and machines read, and those that could not be: `(what, why)`.
     pub read: usize,
     pub unread: Vec<(String, String)>,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct HostFlaws {
+    pub host: String,
+    /// Each flaw once, at its worst, from the last good reading.
+    pub flaws: Vec<Flaw>,
+}
+
+impl HostFlaws {
+    /// What is said at once: a machine is always reached.
+    pub fn alerts(&self) -> Vec<&Flaw> {
+        self.flaws.iter().filter(|f| alerting(f)).collect()
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -99,9 +119,26 @@ pub async fn read(state: &State, grype: &Grype<'_>, at: i64) -> hlb_state::Resul
             }
         }
     }
-    state
-        .keep_image_scans(&digests.keys().cloned().collect())
-        .await?;
+    let mut kept: BTreeSet<String> = digests.keys().cloned().collect();
+    match grype.orchestrator.nodes().await {
+        Ok(nodes) => {
+            for node in &nodes {
+                kept.insert(host_key(&node.hostname));
+                read_host(state, grype, node, at, &mut out).await?;
+            }
+        }
+        Err(e) => {
+            // What was read before stays, ageing until the inbox says it is not known.
+            for scan in state.host_scans().await? {
+                kept.insert(scan.digest.clone());
+            }
+            out.unread.push((
+                "every machine".into(),
+                format!("the nodes could not be listed: {e}"),
+            ));
+        }
+    }
+    state.keep_image_scans(&kept).await?;
 
     let published = state.published_ingress().await?;
     for (app, m) in &manifests {
@@ -117,6 +154,50 @@ pub async fn read(state: &State, grype: &Grype<'_>, at: i64) -> hlb_state::Resul
         });
     }
     Ok(out)
+}
+
+/// Reads what `node` itself runs. One that is not ready is not waited for: the job would
+/// wait the whole timeout for a node that cannot take it.
+async fn read_host(
+    state: &State,
+    grype: &Grype<'_>,
+    node: &NodeInfo,
+    at: i64,
+    out: &mut Read,
+) -> hlb_state::Result<()> {
+    let key = host_key(&node.hostname);
+    let what = format!("machine {}", node.hostname);
+    let (system, found) = if node.is_ready() {
+        let r = grype.host_findings(node).await;
+        (r.system, r.found)
+    } else {
+        let before = state.image_scan(&key).await?.map(|s| s.image);
+        (
+            before.unwrap_or_else(|| node.hostname.clone()),
+            Err(format!("the node is {}", node.status)),
+        )
+    };
+    match found {
+        Ok(found) => {
+            let flaws: Vec<Flaw> = found.into_iter().map(|f| stored(f, at)).collect();
+            state
+                .record_image_scan(&key, &system, at, Ok(&flaws))
+                .await?;
+            out.read += 1;
+        }
+        Err(why) => {
+            state
+                .record_image_scan(&key, &system, at, Err(&why))
+                .await?;
+            out.unread.push((what, why));
+        }
+    }
+    let all = state.image_flaws(&key).await?;
+    out.hosts.push(HostFlaws {
+        host: node.hostname.clone(),
+        flaws: distinct(&all).into_iter().cloned().collect(),
+    });
+    Ok(())
 }
 
 /// What to say of a reading: an alert per app with a flaw not said yet, and the digest
@@ -136,8 +217,28 @@ pub async fn judge(state: &State, r: &Read, at: i64) -> hlb_state::Result<Vec<No
         }
         state.set_alerted_flaws(&a.app, &now, at).await?;
     }
+    for h in &r.hosts {
+        let key = host_key(&h.host);
+        let now: BTreeSet<String> = h.alerts().iter().map(|f| f.id.clone()).collect();
+        let before = state.alerted_flaws(&key).await?;
+        let new: Vec<&Flaw> = h
+            .alerts()
+            .into_iter()
+            .filter(|f| !before.contains(&f.id))
+            .collect();
+        if let Some(n) = host_alert(&h.host, &new) {
+            said.push(n);
+        }
+        state.set_alerted_flaws(&key, &now, at).await?;
+    }
     state
-        .keep_flaw_alerts(&r.apps.iter().map(|a| a.app.clone()).collect())
+        .keep_flaw_alerts(
+            &r.apps
+                .iter()
+                .map(|a| a.app.clone())
+                .chain(r.hosts.iter().map(|h| host_key(&h.host)))
+                .collect(),
+        )
         .await?;
     let due = state
         .flaw_digest_sent()
@@ -170,6 +271,24 @@ pub fn alert(app: &str, new: &[&Flaw]) -> Option<Notification> {
     ))
 }
 
+/// The alert for the machine `host`'s new flaws, if any.
+pub fn host_alert(host: &str, new: &[&Flaw]) -> Option<Notification> {
+    if new.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = new.iter().map(|f| format!("- {}", line(f))).collect();
+    Some(Notification::important(
+        &format!("flaw:{}", host_key(host)),
+        &format!("The machine {host}: a flaw with a fix, exploited or likely to be"),
+        &format!(
+            "{host}'s own system runs:\n{}\n\n\
+             `hlb node upgrade {host} --apply` installs the fix, one node at a time, \
+             and reboots it if the kernel moved.",
+            lines.join("\n")
+        ),
+    ))
+}
+
 /// The weekly digest: each app's fixable flaws counted, what is worth an alert but not
 /// reachable, and every image that could not be read. `None` when there is nothing.
 pub fn digest(r: &Read) -> Option<Notification> {
@@ -189,6 +308,16 @@ pub fn digest(r: &Read) -> Option<Notification> {
         }
         lines.push(l);
     }
+    for h in r.hosts.iter().filter(|h| !h.flaws.is_empty()) {
+        let worth = h.alerts().len();
+        let mut l = format!("- machine {}: {} fixable", h.host, h.flaws.len());
+        if worth > 0 {
+            l.push_str(&format!(
+                ", {worth} exploited or likely to be (said when found)"
+            ));
+        }
+        lines.push(l);
+    }
     for (image, why) in &r.unread {
         lines.push(format!("- {image}: NOT READ ({why})"));
     }
@@ -199,8 +328,8 @@ pub fn digest(r: &Read) -> Option<Notification> {
         "flaws-digest",
         "This week's flaws with a fix",
         &format!(
-            "{} image(s) read.\n{}\n\nAn update usually carries the fix: \
-             `hlb update check`.",
+            "{} image(s) and machine(s) read.\n{}\n\nAn update usually carries the fix: \
+             `hlb update check` for an app, `hlb node upgrade` for a machine.",
             r.read,
             lines.join("\n")
         ),
@@ -245,6 +374,7 @@ mod tests {
                 ),
                 app("vikunja", false, vec![flaw("CVE-K", true, None)]),
             ],
+            hosts: Vec::new(),
             read: 2,
             unread: Vec::new(),
         };
@@ -278,6 +408,7 @@ mod tests {
         let s = State::in_memory().await.expect("state");
         let with = |f: Vec<Flaw>| Read {
             apps: vec![app("gitea", true, f)],
+            hosts: Vec::new(),
             read: 1,
             unread: Vec::new(),
         };
@@ -303,6 +434,7 @@ mod tests {
     fn an_image_not_read_is_in_the_digest_never_clean() {
         let r = Read {
             apps: vec![app("gitea", true, vec![])],
+            hosts: Vec::new(),
             read: 0,
             unread: vec![(
                 "gitea/gitea:1.25@sha256:x".into(),
@@ -317,6 +449,7 @@ mod tests {
         );
         let nothing = Read {
             apps: vec![app("gitea", true, vec![])],
+            hosts: Vec::new(),
             read: 1,
             unread: Vec::new(),
         };
@@ -341,5 +474,68 @@ spec:
         let i = images(&m);
         assert_eq!(i.len(), 2);
         assert_eq!(i[1].digest, None);
+    }
+
+    fn host(name: &str, flaws: Vec<Flaw>) -> HostFlaws {
+        HostFlaws {
+            host: name.into(),
+            flaws,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_machine_s_exploited_flaw_is_said_once_and_its_fix_named() {
+        let s = State::in_memory().await.expect("state");
+        s.set_flaw_digest_sent(0).await.expect("sent");
+        let r = Read {
+            apps: Vec::new(),
+            hosts: vec![host(
+                "deb1",
+                vec![flaw("CVE-K", true, None), flaw("CVE-L", false, Some(0.01))],
+            )],
+            read: 1,
+            unread: Vec::new(),
+        };
+        let said = judge(&s, &r, 1).await.expect("judge");
+        assert_eq!(said.len(), 1);
+        assert_eq!(said[0].subject, "flaw:host:deb1");
+        assert!(said[0].body.contains("CVE-K") && !said[0].body.contains("CVE-L"));
+        assert!(
+            said[0].body.contains("hlb node upgrade deb1"),
+            "{}",
+            said[0].body
+        );
+        assert!(
+            judge(&s, &r, 2).await.expect("judge").is_empty(),
+            "said once"
+        );
+        // An app's alerts and a machine's are kept apart, and neither forgets the other.
+        assert_eq!(
+            s.alerted_flaws(&host_key("deb1")).await.expect("r").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_machine_not_read_is_in_the_digest_never_clean() {
+        let r = Read {
+            apps: Vec::new(),
+            hosts: vec![
+                host("deb1", vec![flaw("A", false, None)]),
+                host("deb2", vec![]),
+            ],
+            read: 1,
+            unread: vec![(
+                "machine deb2".into(),
+                "Grype holds no advisories for Arch Linux: its packages would read clean".into(),
+            )],
+        };
+        let d = digest(&r).expect("a digest");
+        assert!(d.body.contains("- machine deb1: 1 fixable\n"), "{}", d.body);
+        assert!(
+            d.body.contains("machine deb2: NOT READ (Grype holds"),
+            "{}",
+            d.body
+        );
     }
 }

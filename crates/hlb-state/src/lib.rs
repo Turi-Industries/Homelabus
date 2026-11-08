@@ -18,7 +18,7 @@ use sqlx::{Row, SqlitePool};
 
 mod flaws;
 mod roles;
-pub use flaws::{Flaw, ImageScan};
+pub use flaws::{host_key, Flaw, ImageScan};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
 
 /// What a row of `backup_runs` backed up — its `kind`.

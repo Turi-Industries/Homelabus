@@ -1,5 +1,5 @@
-//! The flaws in what runs, as the privileged side's daily pass read them: the inbox's
-//! lines. That pass decides what is said aloud and stores it; this side reads the state
+//! The flaws in what runs — the apps' images and the machines' own packages — as the
+//! privileged side's daily pass read them: the inbox's lines. That pass decides what is said aloud and stores it; this side reads the state
 //! and runs no Grype — the inbox is polled.
 
 use hlb_api::issues::{Cause, Finding};
@@ -48,6 +48,30 @@ pub async fn findings(state: &State, now: i64) -> Vec<Finding> {
         }
         if unread {
             out.push((Cause::FlawsUnknown, Attention::Notice, Some(app)));
+        }
+    }
+    // A machine is known by its last reading: the daily pass records one for every node
+    // it lists, a failure included.
+    for scan in state.host_scans().await.unwrap_or_default() {
+        let Some(host) = scan.host() else { continue };
+        if !state
+            .alerted_flaws(&scan.digest)
+            .await
+            .unwrap_or_default()
+            .is_empty()
+        {
+            out.push((
+                Cause::HostFlawExploitable,
+                Attention::Critical,
+                Some(host.to_string()),
+            ));
+        }
+        if scan.read_at.is_none_or(|r| now - r > STALE_AFTER_S) {
+            out.push((
+                Cause::HostFlawsUnknown,
+                Attention::Notice,
+                Some(host.to_string()),
+            ));
         }
     }
     out
@@ -130,5 +154,41 @@ spec:
             .await
             .expect("gone");
         assert!(findings(&s, 2_000).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_machine_said_exploitable_or_not_read_is_in_the_inbox() {
+        let s = State::in_memory().await.expect("state");
+        let key = hlb_state::host_key("deb1");
+        // 🔴 A machine never read well — its system unknown to Grype — is unknown.
+        s.record_image_scan(&key, "Arch Linux", 1_000, Err("no advisories"))
+            .await
+            .expect("failed");
+        let unknown = (
+            Cause::HostFlawsUnknown,
+            Attention::Notice,
+            Some("deb1".into()),
+        );
+        assert_eq!(findings(&s, 1_000).await, vec![unknown.clone()]);
+
+        s.record_image_scan(&key, "Debian 12", 2_000, Ok(&[]))
+            .await
+            .expect("read");
+        assert!(findings(&s, 2_000).await.is_empty());
+        let said: BTreeSet<String> = ["CVE-2024-1086".to_string()].into();
+        s.set_alerted_flaws(&key, &said, 2_000).await.expect("said");
+        assert_eq!(
+            findings(&s, 2_000).await,
+            vec![(
+                Cause::HostFlawExploitable,
+                Attention::Critical,
+                Some("deb1".into())
+            )]
+        );
+        assert_eq!(
+            findings(&s, 2_001 + STALE_AFTER_S).await.last(),
+            Some(&unknown),
+            "stale"
+        );
     }
 }

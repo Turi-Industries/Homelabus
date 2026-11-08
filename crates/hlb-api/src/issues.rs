@@ -129,6 +129,14 @@ pub enum Cause {
     /// An image an app runs was not read against the flaws known today for two days, or
     /// ever: an image unread is not an image clean. The subjects are the apps.
     FlawsUnknown,
+    /// 🔴 A machine's own system — its packages, its kernel — runs a flaw a fix exists
+    /// for, exploited in the wild or likely to be. The subjects are the hostnames;
+    /// `hlb node upgrade <host>` installs the fix.
+    HostFlawExploitable,
+    /// A machine's packages were not read against the flaws known today for two days, or
+    /// ever — its system is one Grype holds no advisories for, or the reading failed. The
+    /// subjects are the hostnames.
+    HostFlawsUnknown,
     /// 🔴 A DNS record the house's mail needs is not what the internet resolves — a
     /// DKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as
     /// spam. The subjects are the records' names; `hlb mail dns` prints the lines.

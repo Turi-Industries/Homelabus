@@ -1350,8 +1350,9 @@ reported within 24 hours.
   KEV-exploited at the next window. Guards: notes saying *breaking* or *migration* stop
   the automatic path; the catalog can hold a version back for everyone; `hlb` records
   when it first saw a tag (GHCR and Quay date nothing).
-- CVEs: an SBOM (Syft) at each deploy, compared daily without pulling again; the host by
-  `debsecan --only-fixed`. An alert only when a fix exists, the flaw is exploited (KEV)
+- CVEs: an SBOM (Syft) at each deploy, compared daily without pulling again; each
+  machine's own packages by the same two — not `debsecan`, Debian's alone and blind to
+  KEV and EPSS (2026-11-08). An alert only when a fix exists, the flaw is exploited (KEV)
   or likely to be (EPSS), and the component is exposed; the rest in a weekly digest; no
   fix, never an alert.
 - Planned reboots under a lock, one node at a time: drained, rebooted, waited healthy,
