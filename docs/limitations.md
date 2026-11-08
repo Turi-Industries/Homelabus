@@ -58,8 +58,12 @@ Written against parsed output and unit tests, never run on a machine that has on
 
 ### Deliberate choices
 
-- **Reconciliation does not correct by default**: `--reconcile-apply` must be asked for.
-  A system that over-corrects is more dangerous than one that corrects nothing.
+- **Reconciliation corrects only what it can undo**: a replica count or an image changed
+  outside Homelabus, a task stuck on an old pull failure, a pinned service starved of
+  room. A missing service, an orphan, lost storage and anything held are reported with
+  their reason, never touched. Correction is on by default since 0.4.9 — off, a reboot
+  left a service down behind a report nobody read — and `--reconcile-apply=false`
+  (`HLB_RECONCILE_APPLY=false`) brings back reports alone.
 - **`Verify::Exec`** is reported as unverified, never as successful.
 - **Without a configured repository, any update requiring a backup is refused.** Same if
   the app has no known volume: "nothing to back up" never means "backup succeeded".
