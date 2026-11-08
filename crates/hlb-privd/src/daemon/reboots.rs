@@ -153,6 +153,10 @@ async fn start(
     last_probe: &mut Option<i64>,
     now: i64,
 ) -> hlb_state::Result<Vec<Notification>> {
+    // A reboot under way finishes; none begins on the battery.
+    if super::power::under_way(state).await {
+        return Ok(Vec::new());
+    }
     let policy = state.reboot_policy().await?;
     let zone = state.timezone().await?;
     match reboot::due(&policy, zone.as_deref(), now, *last_probe) {
