@@ -11274,8 +11274,30 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 } = cmd
                 {
                     println!("Analysing {image}…\n");
-                    let r =
-                        hlb_updater::audit(image, identity.as_deref(), issuer.as_deref()).await?;
+                    let orch = SwarmOrchestrator::connect().await?;
+                    let grype = hlb_updater::grype::Grype {
+                        orchestrator: &orch,
+                        network: &cli.platform_network,
+                    };
+                    // The digest the tag names now: a scan reads one build, never a tag.
+                    let pinned = if image.contains('@') {
+                        image.clone()
+                    } else {
+                        let d = registry
+                            .resolve_digest(&hlb_registry::ImageRef::parse(image))
+                            .await?;
+                        format!("{image}@{d}")
+                    };
+                    let r = hlb_updater::ScanReport {
+                        image: pinned.clone(),
+                        vulnerabilities: grype.vulnerabilities(&pinned, None).await,
+                        signature: hlb_updater::scan::verify_signature(
+                            &pinned,
+                            identity.as_deref(),
+                            issuer.as_deref(),
+                        )
+                        .await,
+                    };
                     println!("{}", r.describe());
 
                     if r.unchecked() > 0 {
@@ -11284,8 +11306,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             "⚠️  {} NOT performed.",
                             hlb_api::plural(r.unchecked() as u64, "check", "checks")
                         );
-                        println!("   Install trivy and cosign so they count:");
-                        println!("     brew install trivy cosign   # or your distro's package");
+                        // The scan runs as a Swarm job; only the signature needs a binary.
+                        println!("   The scan needs the Swarm and the image's digest");
+                        println!("   (`repo:tag@sha256:…`); a signature needs cosign:");
+                        println!("     brew install cosign   # or your distro's package");
                     }
                     return Ok::<_, Box<dyn std::error::Error>>(if r.blocks() {
                         ExitCode::FAILURE
@@ -11401,7 +11425,10 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             backup: provider
                                 .as_ref()
                                 .map(|p| p as &dyn hlb_updater::BackupProvider),
-                            scanner: &hlb_updater::run::Trivy,
+                            scanner: &hlb_updater::grype::Grype {
+                                orchestrator: &orch,
+                                network: &cli.platform_network,
+                            },
                             overrides: hlb_updater::run::Overrides {
                                 force_window: *force_window,
                                 force_vulnerable: *force_vulnerable,

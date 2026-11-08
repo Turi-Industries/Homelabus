@@ -86,6 +86,10 @@ the outside, which is the whole problem.
   dangerous, you can enumerate what is useful.
 - **A missing scanner is not a green light.** `NotChecked` is distinct from `Clean`:
   treating "trivy absent" as "nothing found" disables the check while looking like it ran.
+  Trivy was looked for on the PATH and was on no node of the lab: every update there
+  read "not checked". Grype and Syft run as Swarm jobs from pinned images now
+  (`hlb_updater::grype`); a job that fails, or a report cut at the log's ceiling, is
+  still `NotChecked`.
 - **`sshd` SILENTLY ignores `authorized_keys`** if it is group-readable, or if `~/.ssh`
   is. The key looks installed and nothing works.
 - **CrowdSec only goes where the client's own address is seen.** Behind another proxy

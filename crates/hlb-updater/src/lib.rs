@@ -19,13 +19,14 @@
 
 pub mod apply;
 pub mod catalog;
+pub mod grype;
 pub mod policy;
 pub mod run;
 pub mod scan;
 pub mod window;
 
 pub use apply::{apply, UpdateOutcome};
-pub use scan::{audit, audit_signed_by, Report as ScanReport, Verdict};
+pub use scan::{Report as ScanReport, Verdict};
 pub use window::MaintenanceWindow;
 
 use std::collections::BTreeMap;
@@ -204,6 +205,22 @@ impl Candidate {
                     .iter()
                     .map(|m| (m.to.reference(), m.to.signed_by.clone())),
             )
+            .collect()
+    }
+
+    /// What each image [`Candidate::to_verify`] names replaces, in its order: what runs
+    /// now, by digest — a scan compares the two. `None` when nothing pinned runs before it.
+    pub fn replaced(&self, installed: &hlb_types::manifest::Spec) -> Vec<Option<String>> {
+        let pinned = |i: &Image| i.is_pinned().then(|| i.reference());
+        let own = (self.kind != UpdateKind::Companions).then(|| pinned(&installed.image));
+        own.into_iter()
+            .chain(self.companions.iter().map(|m| {
+                installed
+                    .companions
+                    .iter()
+                    .find(|c| c.name == m.name)
+                    .and_then(|c| pinned(&c.image))
+            }))
             .collect()
     }
 
@@ -756,6 +773,58 @@ mod tests {
         // The companions alone: the app's own image does not start again.
         c.kind = UpdateKind::Companions;
         assert_eq!(c.to_verify(&installed, Some(&catalog)).len(), 1);
+    }
+
+    #[test]
+    fn each_image_checked_is_compared_with_what_it_replaces() {
+        let m: Manifest = serde_yaml_ng::from_str(
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: gitea }
+spec:
+  image: { repo: acme/gitea, tag: "1.24", digest: "sha256:old" }
+  companions:
+    - name: ml
+      image: { repo: acme/ml, tag: "1.0", digest: "sha256:ml-old" }
+    - name: cache
+      image: { repo: acme/cache, tag: "1" }
+"#,
+        )
+        .expect("manifest");
+        let mut c = candidate(false);
+        for (name, digest) in [
+            ("ml", "sha256:ml"),
+            ("cache", "sha256:c"),
+            ("gone", "sha256:g"),
+        ] {
+            c.companions.push(CompanionMove {
+                name: name.into(),
+                service: format!("gitea-{name}"),
+                to: image(&format!("acme/{name}"), "2", Some(digest)),
+                maturity: Maturity::Mature,
+            });
+        }
+        // Aligned with `to_verify`; an image running by its tag alone, or a companion
+        // new to the app, has nothing to compare with.
+        assert_eq!(
+            c.replaced(&m.spec),
+            [
+                Some("acme/gitea:1.24@sha256:old".to_string()),
+                Some("acme/ml:1.0@sha256:ml-old".to_string()),
+                None,
+                None,
+            ]
+        );
+        assert_eq!(
+            c.replaced(&m.spec).len(),
+            c.to_verify(&m.spec.image, None).len()
+        );
+        c.kind = UpdateKind::Companions;
+        assert_eq!(
+            c.replaced(&m.spec)[0].as_deref(),
+            Some("acme/ml:1.0@sha256:ml-old")
+        );
     }
 
     async fn installed(requires: &str, update: &str) -> (State, Manifest) {
