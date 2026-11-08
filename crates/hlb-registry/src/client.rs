@@ -40,6 +40,16 @@ impl RegistryClient {
         }
     }
 
+    /// The notes of every release of `github` after `from` up to `to`: see [`crate::notes`].
+    pub async fn release_notes(
+        &self,
+        github: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<crate::notes::Notes>> {
+        crate::notes::between(&self.http, github, from, to).await
+    }
+
     /// Resolves a tag to a digest, without downloading the image — or, for a reference
     /// already pinned, says whether that digest is still published.
     pub async fn resolve_digest(&self, image: &ImageRef) -> Result<String> {

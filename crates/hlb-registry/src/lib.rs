@@ -8,6 +8,7 @@
 //! (`tag` + `channel`) while a deployment is always pinned.
 
 pub mod client;
+pub mod notes;
 pub mod reference;
 pub mod version;
 

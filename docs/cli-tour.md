@@ -106,7 +106,17 @@ by the controller, success included:
 ./target/debug/hlb update lag                # from first seen to applied, and what still waits
 ./target/debug/hlb update apply gitea        # backup, then the switch Swarm rolls back on failure
 ./target/debug/hlb update apply gitea --before-maturity   # an urgent fix; audited
+./target/debug/hlb update policy                          # how far each app updates alone
+./target/debug/hlb update policy --automatic none         # the whole house: nothing alone
+./target/debug/hlb update policy gitea --automatic minor  # one app further; a major never
 ```
+
+Who applies an update depends on how far it moves: a patch applies itself in its window, a
+minor waits for a person's click, a major — or a tag like `latest`, which can carry
+anything — for a person with its migration guide. A manifest says how far its app goes
+alone (`update.automatic`, patches by default, nothing on `pin`), and the house's setting
+wins over it. A release the catalog found broken is held back for every house
+(`update.hold`), whatever it says.
 
 A companion the catalog moved — Immich's machine learning — moves with its app and
 before it, in the same `update apply`; one that does not come up leaves the app as it

@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: grafana
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: Grafana
   category: platform
   homepage: https://grafana.com
@@ -49,6 +49,7 @@ spec:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
   update:
     channel: minor
+    notes: { github: grafana/grafana }
   env:
     # 🔴 Without it Grafana starts on admin/admin, on a page anyone on the network
     # reaches before you do.

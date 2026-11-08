@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: victoria-metrics
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: VictoriaMetrics
   category: platform
   homepage: https://victoriametrics.com
@@ -45,3 +45,4 @@ spec:
     # The storage format changes between major versions and the migration cannot be
     # reversed by a simple image rollback.
     channel: minor
+    notes: { github: VictoriaMetrics/VictoriaMetrics }
