@@ -1282,6 +1282,43 @@ impl State {
         Ok(())
     }
 
+    /// Records that an update is pushing `image` to `service`, for `secs` at most:
+    /// reconciliation leaves the service's image alone meanwhile. Written BEFORE the push,
+    /// or the first pass after it may already have taken the image back.
+    pub async fn begin_switch(&self, service: &str, image: &str, secs: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO image_switches (service, image, until)
+             VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER) + ?3)
+             ON CONFLICT(service) DO UPDATE SET image = excluded.image, until = excluded.until",
+        )
+        .bind(service)
+        .bind(image)
+        .bind(secs)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn end_switch(&self, service: &str) -> Result<()> {
+        sqlx::query("DELETE FROM image_switches WHERE service = ?1")
+            .bind(service)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The image an update is switching `service` to, while the switch lasts.
+    pub async fn switching(&self, service: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT image FROM image_switches
+             WHERE service = ?1 AND until > CAST(strftime('%s','now') AS INTEGER)",
+        )
+        .bind(service)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.try_get("image")).transpose()?)
+    }
+
     /// Why `service` is held, while the hold lasts.
     pub async fn held(&self, service: &str) -> Result<Option<String>> {
         let row = sqlx::query(

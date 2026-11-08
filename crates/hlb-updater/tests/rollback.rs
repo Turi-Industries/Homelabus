@@ -22,6 +22,10 @@ struct Fake {
     /// The reading `tasks` answers from: the last one `status` returned.
     current: Mutex<Option<Step>>,
     pushed: Mutex<Vec<(String, String)>>,
+    /// The state, when a test reads what it says at each push.
+    state: Option<State>,
+    /// What `State::switching` said of the service at each push.
+    switching: Mutex<Vec<Option<String>>>,
 }
 
 impl Fake {
@@ -30,7 +34,14 @@ impl Fake {
             script: Mutex::new(states),
             current: Mutex::new(None),
             pushed: Mutex::new(Vec::new()),
+            state: None,
+            switching: Mutex::new(Vec::new()),
         }
+    }
+
+    fn reading(mut self, state: &State) -> Self {
+        self.state = Some(state.clone());
+        self
     }
 }
 
@@ -44,6 +55,10 @@ impl Orchestrator for Fake {
     }
     async fn update_image(&self, n: &str, i: &str) -> hlb_orchestrator::Result<()> {
         self.pushed.lock().unwrap().push((n.into(), i.into()));
+        if let Some(s) = &self.state {
+            let seen = s.switching(n).await.unwrap();
+            self.switching.lock().unwrap().push(seen);
+        }
         Ok(())
     }
     async fn scale(&self, _: &str, _: u64) -> hlb_orchestrator::Result<()> {
@@ -822,4 +837,63 @@ async fn a_switched_update_is_copied_first_and_recorded() {
     let audit = s.audit_for("gitea", 5).await.unwrap();
     assert_eq!(audit[0].action, "update-applied");
     assert_eq!(audit[0].actor, "controller");
+}
+
+/// 🔴 Reconciliation reads the frozen manifest, which moves only once the new image is
+/// proved: Caddy 0.4.8 was put back five seconds into its switch on the lab (2026-11-08).
+/// The switch is on record from before the push until the outcome is frozen.
+#[tokio::test]
+async fn a_switch_is_on_record_while_it_is_watched_and_only_then() {
+    for (script, applied) in [
+        (
+            status(
+                "gitea/gitea:1.25@sha256:update",
+                Some(UpdateState::Completed),
+                1,
+            ),
+            true,
+        ),
+        (
+            status(
+                "gitea/gitea:1.24@sha256:previous",
+                Some(UpdateState::RollbackCompleted),
+                1,
+            ),
+            false,
+        ),
+    ] {
+        let s = state_with_gitea().await;
+        let o = Fake::returning(vec![script]).reading(&s);
+
+        let out = apply(&o, &s, &candidate(), 10).await.expect("update");
+        assert_eq!(out.is_success(), applied, "{out:?}");
+        assert_eq!(
+            *o.switching.lock().unwrap(),
+            [Some("gitea/gitea:1.25@sha256:update".to_string())],
+            "recorded before the push"
+        );
+        assert_eq!(s.switching("gitea").await.unwrap(), None, "{out:?}");
+    }
+}
+
+/// A companion's switch is on record too, and ended before its app's begins.
+#[tokio::test]
+async fn a_companion_switch_is_on_record_and_ended() {
+    let s = State::in_memory().await.unwrap();
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_COMPANION).unwrap();
+    s.upsert_app("gitea", &m, None).await.unwrap();
+    let o = Fake::returning(vec![
+        status("acme/ml:1.1@sha256:ml-update", None, 1),
+        status("gitea/gitea:1.25@sha256:update", None, 1),
+    ])
+    .reading(&s);
+
+    assert!(apply(&o, &s, &with_companion(), 5)
+        .await
+        .unwrap()
+        .is_success());
+    let seen = o.switching.lock().unwrap().clone();
+    assert!(seen.iter().all(Option::is_some), "{seen:?}");
+    assert_eq!(s.switching("gitea-ml").await.unwrap(), None);
+    assert_eq!(s.switching("gitea").await.unwrap(), None);
 }

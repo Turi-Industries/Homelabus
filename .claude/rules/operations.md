@@ -108,6 +108,13 @@ monitoring, updates and routes have their own `operations-*.md`.
   back onto a volume half written. `restore::stop` holds what it stops
   (`State::hold_services`, `Drift::Held`), `restore::start` releases it whatever
   happened; a hold lapses after a day, for a process that died holding it.
+- **🔴 An update owns its service until it has frozen the outcome.** The manifest moves
+  only once the new image is proved running, so a pass mid-switch read the new image as
+  drift and put the old one back: Caddy 0.4.8, five seconds in, on the lab (2026-11-08),
+  and the update ended "inconclusive". `hlb_updater::apply` records the switch BEFORE the
+  push (`State::begin_switch`, the watch's timeout plus a minute) and ends it after
+  freezing; meanwhile the gap is `Drift::Switching`, refused. A switch whose updater died
+  lapses, and the unproved image goes back.
 - **Reconciliation does not recreate a deleted service.** It did, from the image and the
   tier alone — no volume, no environment, no probe — and reported "1 gap corrected". The
   drift is reported with its refusal; `hlb install <app> --apply` redeploys a service
