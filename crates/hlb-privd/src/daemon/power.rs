@@ -32,6 +32,18 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 
 const SUBJECT: &str = "power";
 
+/// Whether the apps are down for the power, or going down or coming back: what changes the
+/// house on its own waits meanwhile. 🔴 The hourly update pass ran mid-stop on the lab
+/// (2026-11-08) and dumped Mealie towards a PostgreSQL the waves had stopped; had its copy
+/// worked, it would have started the app again on the battery.
+pub async fn under_way(state: &State) -> bool {
+    match state.power_stop().await {
+        Ok(stop) => stop.is_some(),
+        // Unread is not "on the mains": the next pass asks again.
+        Err(_) => true,
+    }
+}
+
 /// One pass: reads the UPS, records the reading, and stops, keeps down or starts the waves.
 pub async fn pass(
     state: &State,
@@ -433,9 +445,14 @@ mod tests {
         }
         async fn tasks(
             &self,
-            _: Option<&str>,
+            n: Option<&str>,
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-            Ok(Vec::new())
+            match n {
+                Some(n) if self.lost.contains(n) => {
+                    Err(hlb_orchestrator::Error::NotFound(n.into()))
+                }
+                _ => Ok(Vec::new()),
+            }
         }
         async fn logs(
             &self,
@@ -562,6 +579,25 @@ mod tests {
         keep_down(&state, &o, &stop).await.expect("keep down");
         assert_eq!(o.desired("gitea"), 0);
         assert!(state.held("gitea").await.expect("held").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_stop_under_way_holds_the_passes_until_the_apps_run_again() {
+        let (state, notif) = setup().await;
+        let o = Fake::running(&["ntfy", "vikunja", "gitea", "postgres"]);
+        assert!(!under_way(&state).await, "on the mains, nothing waits");
+        let stop = recorded(&state).await;
+        assert!(under_way(&state).await, "recorded before the first wave");
+        let reason = stop.reason.clone();
+        stop_waves(&state, &o, &notif, &policy(), &reason, Some(stop), 1000)
+            .await
+            .expect("stop");
+        assert!(under_way(&state).await, "stopped");
+        let stop = state.power_stop().await.expect("read").expect("a stop");
+        start_waves(&state, &o, &notif, &stop, 2000, "the mains are back")
+            .await
+            .expect("start");
+        assert!(!under_way(&state).await, "every app runs again");
     }
 
     #[tokio::test]

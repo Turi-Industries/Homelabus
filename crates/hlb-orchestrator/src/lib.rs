@@ -721,6 +721,34 @@ pub trait Orchestrator: Send + Sync {
     async fn logs(&self, service: &str, rows: u32) -> Result<Vec<LogLine>>;
 }
 
+/// Waits until no task of `service` still runs, polling every two seconds: `false` when
+/// one still does at `timeout`.
+///
+/// 🔴 Never `status().running_replicas`: a scale to zero sets each task's desired state
+/// at once, so it counts 0 while the container runs its stop for seconds more — a wave
+/// of the power stopped its databases beside the apps writing to them (lab, 2026-11-08).
+pub async fn wait_stopped<O: Orchestrator + ?Sized>(
+    o: &O,
+    service: &str,
+    timeout: std::time::Duration,
+) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if !o
+            .tasks(Some(service))
+            .await?
+            .iter()
+            .any(TaskInfo::still_runs)
+        {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

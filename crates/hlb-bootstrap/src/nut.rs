@@ -11,6 +11,11 @@ use crate::provision::{Action, Phase, Provision, Step};
 
 pub const NUT_CONF: &str = "/etc/nut/nut.conf";
 pub const UPSMON_CONF: &str = "/etc/nut/upsmon.conf";
+/// What upsmon runs at low battery: waits for the apps' containers, then powers off.
+pub const SHUTDOWN_SCRIPT: &str = "/etc/nut/hlb-shutdown";
+
+/// How long the machine waits for the apps' containers to end before it powers off anyway.
+pub const CONTAINERS_WAIT_S: u32 = 60;
 
 /// The first line of every file written here: what is rewritten, and what is a person's.
 pub const MARK: &str = "# Written by Homelabus (hlb config ups): rewritten by it.";
@@ -80,8 +85,32 @@ pub fn refusal(
     None
 }
 
-/// The two files.
-pub fn files(m: &Monitor) -> [(String, String, u32); 2] {
+/// 🔴 At a SUDDEN low battery (a worn battery says it within seconds of the cut) upsmon
+/// reached its shutdown while Homelabus's waves still ran: the machines went down before
+/// the databases' wave (lab, 2026-11-08), and systemd stopped those containers unordered.
+/// Waits, bounded, until no task container runs here but Homelabus's own (`hlb-…`, which
+/// stop last of all), then powers off. A Docker that does not answer lists nothing: the
+/// machine goes down at once.
+fn shutdown_script() -> String {
+    const BODY: &str = r#"PATH=/usr/sbin:/usr/bin:/sbin:/bin
+waited=0
+while [ "$waited" -lt WAIT ]; do
+	left=$(docker ps --filter label=com.docker.swarm.service.name \
+		--format '{{.Label "com.docker.swarm.service.name"}}' 2>/dev/null | grep -v '^hlb-')
+	[ -z "$left" ] && break
+	sleep 2
+	waited=$((waited + 2))
+done
+exec /sbin/shutdown -h +0
+"#;
+    format!(
+        "#!/bin/sh\n{MARK}\n{}",
+        BODY.replace("WAIT", &CONTAINERS_WAIT_S.to_string())
+    )
+}
+
+/// The three files.
+pub fn files(m: &Monitor) -> [(String, String, u32); 3] {
     let q = |w: &str| format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\""));
     [
         (NUT_CONF.into(), format!("{MARK}\nMODE=netclient\n"), 0o644),
@@ -93,7 +122,7 @@ pub fn files(m: &Monitor) -> [(String, String, u32); 2] {
                  # low, or when the UPS's primary orders every machine down.\n\
                  MONITOR {} 1 {} {} secondary\n\
                  MINSUPPLIES 1\n\
-                 SHUTDOWNCMD \"/sbin/shutdown -h +0\"\n",
+                 SHUTDOWNCMD \"{SHUTDOWN_SCRIPT}\"\n",
                 q(&format!("{}@{}", m.ups, m.server)),
                 q(&m.user),
                 q(&m.password),
@@ -101,6 +130,7 @@ pub fn files(m: &Monitor) -> [(String, String, u32); 2] {
             // Read by upsmon's unprivileged half too, when it reloads.
             0o640,
         ),
+        (SHUTDOWN_SCRIPT.into(), shutdown_script(), 0o755),
     ]
 }
 
@@ -181,7 +211,7 @@ pub fn unplan() -> Provision {
             step(
                 Phase::Configuration,
                 "Remove the account upsmon signed in with",
-                &["rm", "-f", UPSMON_CONF],
+                &["rm", "-f", UPSMON_CONF, SHUTDOWN_SCRIPT],
             ),
         ],
         notes: Vec::new(),
@@ -217,7 +247,7 @@ mod tests {
             refusal(&debian(), Some(DEBIAN_NUT_CONF), Some(DEBIAN_UPSMON)),
             None
         );
-        let [(_, nut, _), (_, upsmon, _)] = files(&monitor());
+        let [(_, nut, _), (_, upsmon, _), _] = files(&monitor());
         assert_eq!(refusal(&debian(), Some(&nut), Some(&upsmon)), None);
     }
 
@@ -241,8 +271,42 @@ mod tests {
     }
 
     #[test]
+    fn at_low_battery_the_machine_waits_for_the_apps_then_powers_off() {
+        let [_, (_, upsmon, _), (path, script, mode)] = files(&monitor());
+        assert!(upsmon.contains(&format!("SHUTDOWNCMD \"{SHUTDOWN_SCRIPT}\"")));
+        assert_eq!((path.as_str(), mode), (SHUTDOWN_SCRIPT, 0o755));
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(
+            script.contains(&format!("-lt {CONTAINERS_WAIT_S} ]")),
+            "bounded"
+        );
+        assert!(
+            script.contains("grep -v '^hlb-'"),
+            "its own daemon stops last"
+        );
+        assert!(script.trim_end().ends_with("exec /sbin/shutdown -h +0"));
+        let check = std::process::Command::new("sh")
+            .args(["-n", "-c", &script])
+            .output()
+            .expect("sh");
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        // Taken away with upsmon.
+        let removed = unplan()
+            .steps
+            .iter()
+            .map(Step::describe)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(removed.contains(SHUTDOWN_SCRIPT), "{removed}");
+    }
+
+    #[test]
     fn upsmon_is_a_secondary_and_its_password_never_shown() {
-        let [(nut_path, nut, nut_mode), (path, upsmon, mode)] = files(&monitor());
+        let [(nut_path, nut, nut_mode), (path, upsmon, mode), _] = files(&monitor());
         assert_eq!((nut_path.as_str(), nut_mode), (NUT_CONF, 0o644));
         assert!(nut.contains("\nMODE=netclient\n"));
         assert_eq!((path.as_str(), mode), (UPSMON_CONF, 0o640));

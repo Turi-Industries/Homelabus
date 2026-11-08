@@ -322,15 +322,11 @@ pub async fn restart<O: hlb_orchestrator::Orchestrator + ?Sized>(
 ) -> crate::Result<()> {
     let replicas = orch.status(service).await?.desired_replicas.max(1);
     orch.scale(service, 0).await?;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     // Scaled to zero is asked, not done: its RocksDB is held until the task exits.
-    while orch.status(service).await?.running_replicas > 0 {
-        if tokio::time::Instant::now() > deadline {
-            return Err(crate::Error::Submission(format!(
-                "{service} did not stop within 120 s; it is left at 0 replicas"
-            )));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    if !hlb_orchestrator::wait_stopped(orch, service, std::time::Duration::from_secs(120)).await? {
+        return Err(crate::Error::Submission(format!(
+            "{service} did not stop within 120 s; it is left at 0 replicas"
+        )));
     }
     orch.scale(service, replicas).await?;
     orch.wait_healthy(service, 180).await?;

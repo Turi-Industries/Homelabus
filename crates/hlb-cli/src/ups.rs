@@ -123,14 +123,28 @@ pub async fn run(
     };
 
     let orch = SwarmOrchestrator::connect().await?;
-    let nodes: Vec<String> = orch
+    let all: Vec<_> = orch
         .nodes()
         .await?
         .into_iter()
-        .map(|n| n.hostname)
-        .filter(|h| only.is_none_or(|o| o == h))
+        .filter(|n| only.is_none_or(|o| o == n.hostname))
         .collect();
-    if nodes.is_empty() {
+    let mut refused = 0;
+    let mut nodes = Vec::new();
+    for n in all {
+        // 🔴 One machine off must not keep the others from shutting down at low battery:
+        // reaching it failed the whole command (the lab's powered-off VMs, 2026-11-08).
+        if n.status == "ready" {
+            nodes.push(n.hostname);
+        } else {
+            println!(
+                "\n{}: 🔴 {} — `hlb config ups --shutdown --node {}` once it is back.",
+                n.hostname, n.status, n.hostname
+            );
+            refused += 1;
+        }
+    }
+    if nodes.is_empty() && refused == 0 {
         eprintln!(
             "🔴 No node {} in the cluster — see `hlb cluster status`.",
             only.unwrap_or("at all")
@@ -139,7 +153,6 @@ pub async fn run(
     }
     let dir = tempfile::tempdir()?;
     let mut planned = Vec::new();
-    let mut refused = 0;
     for host in &nodes {
         let Some(runner) =
             crate::reach_node(state, &vault, host, None, None, None, dir.path()).await?
@@ -150,7 +163,11 @@ pub async fn run(
             refused += 1;
             continue;
         };
-        match node_plan(runner.as_ref(), monitor.as_ref()).await? {
+        let plan = match node_plan(runner.as_ref(), monitor.as_ref()).await {
+            Ok(plan) => plan,
+            Err(e) => Err(format!("not reached: {e}")),
+        };
+        match plan {
             Ok(p) if p.is_empty() => println!("\n{host}: nothing of Homelabus's here."),
             Ok(p) => {
                 println!("\n{host}:");
@@ -208,7 +225,8 @@ pub async fn run(
             }
         }
     }
-    if what == Shutdown::Remove && only.is_none() && failed == 0 {
+    // A node left alone keeps its upsmon, and the account it signs in with.
+    if what == Shutdown::Remove && only.is_none() && failed + refused == 0 {
         state.forget_secret(SECRET).await?;
     }
     if monitor.is_some() {

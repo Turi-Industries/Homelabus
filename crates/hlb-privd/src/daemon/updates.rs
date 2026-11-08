@@ -58,6 +58,10 @@ impl Pass<'_> {
     /// rollback in a row says more about the cluster than about the apps.
     pub async fn run(&self) -> Vec<Done> {
         let at = crate::now();
+        if super::power::under_way(self.state).await {
+            tracing::info!("no automatic update: the apps are down for the power");
+            return Vec::new();
+        }
         let apps = match waiting(self.state, at).await {
             Ok(a) => a,
             Err(e) => {

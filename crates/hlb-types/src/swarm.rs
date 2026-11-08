@@ -586,6 +586,15 @@ impl TaskInfo {
         self.desired_state == "running" && self.state == "running"
     }
 
+    /// Does this task's container still run, whatever Swarm now wants of it?
+    ///
+    /// ⚠️ The desired state alone: a scale to zero turns it to `shutdown` or `remove`
+    /// at once, while the container runs its stop — writing — for seconds more. What
+    /// waits for a stop asks this, never [`Self::is_alive`].
+    pub fn still_runs(&self) -> bool {
+        matches!(self.state.as_str(), "running" | "starting")
+    }
+
     /// Did this task fail?
     ///
     /// Distinct from "not alive": a deliberately stopped task (an update, a
@@ -619,6 +628,31 @@ pub fn why_not_running(tasks: &[TaskInfo]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_task_told_to_stop_still_runs_until_its_container_exits() {
+        // Read on the lab right after `docker service scale librespeed=0`, for 2 s:
+        // "Remove / Running".
+        let task = |desired: &str, state: &str| super::TaskInfo {
+            id: "t".into(),
+            service: "postgres".into(),
+            slot: Some(1),
+            node_id: None,
+            desired_state: desired.into(),
+            state: state.into(),
+            image: "postgres".into(),
+            message: None,
+            err: None,
+            updated_at: None,
+        };
+        let stopping = task("remove", "running");
+        assert!(!stopping.is_alive(), "no longer counted among the replicas");
+        assert!(stopping.still_runs(), "yet its container still writes");
+        assert!(task("shutdown", "starting").still_runs());
+        for ended in ["complete", "shutdown", "failed", "rejected", "orphaned"] {
+            assert!(!task("shutdown", ended).still_runs(), "{ended}");
+        }
+    }
+
     #[test]
     fn every_tier_a_node_is_given_is_one_a_manifest_may_name() {
         for mb in [0, 1024, 4096, 8191, 8192, 65536] {

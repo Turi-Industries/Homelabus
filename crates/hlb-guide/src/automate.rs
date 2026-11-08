@@ -440,14 +440,13 @@ async fn restart_service<O: Orchestrator + ?Sized>(orch: &O, service: &str) -> R
         .desired_replicas
         .max(1);
     orch.scale(service, 0).await.map_err(e)?;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
-    while orch.status(service).await.map_err(e)?.running_replicas > 0 {
-        if tokio::time::Instant::now() > deadline {
-            return Err(format!(
-                "{service} did not stop within 120 s; it is left at 0 replicas"
-            ));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    if !hlb_orchestrator::wait_stopped(orch, service, std::time::Duration::from_secs(120))
+        .await
+        .map_err(e)?
+    {
+        return Err(format!(
+            "{service} did not stop within 120 s; it is left at 0 replicas"
+        ));
     }
     orch.scale(service, replicas).await.map_err(e)?;
     orch.wait_healthy(service, 180).await.map_err(e)?;

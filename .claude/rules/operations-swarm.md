@@ -21,6 +21,13 @@ Most of these fail behind a healthy task.
 - **A dead Swarm task is not a stopped task.** `desired_state` AND `state` decide whether
   it lives; but a deliberately stopped task (update, scale-down) is not a failure —
   counted as one, the dashboard blinks on every normal deploy and you stop looking at it.
+- **🔴 A task told to stop is not stopped.** A scale to zero turns each task's desired
+  state to `remove` at once, while its container runs its stop for seconds more ("Remove
+  / Running", lab 2026-11-08): `running_replicas` reads 0 at once. Every wait for a stop
+  trusted it — the power's waves stopped PostgreSQL in the same second as its apps, and
+  a restore or a stopped copy began beside a process still writing.
+  `hlb_orchestrator::wait_stopped` reads the tasks' own state (`TaskInfo::still_runs`);
+  `hlb-types/tests/stop_wait.rs` refuses the field compared with zero.
 - **Anti-affinity is about HARDWARE, never `node.id`.** Two VMs on one server are two
   Swarm nodes and **one** point of failure: two replicas "across two nodes" protect
   nothing. The domain is declared at `hlb node add` (label `hlb.failureDomain`) —

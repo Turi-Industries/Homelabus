@@ -931,17 +931,12 @@ pub async fn stop_held(
     let deadline = tokio::time::Instant::now() + STOP_TIMEOUT;
     for (s, _) in services {
         // Scaled to zero is asked, not done: the task still writes until it exits.
-        while o
-            .status(s)
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if !hlb_orchestrator::wait_stopped(o, s, left)
             .await
             .map_err(|e| e.to_string())?
-            .running_replicas
-            > 0
         {
-            if tokio::time::Instant::now() > deadline {
-                return Err(format!("{s} still runs after {} s", STOP_TIMEOUT.as_secs()));
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            return Err(format!("{s} still runs after {} s", STOP_TIMEOUT.as_secs()));
         }
     }
     Ok(())
