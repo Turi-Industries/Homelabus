@@ -169,6 +169,13 @@ pub enum Cause {
     /// Debian's `zfsutils-linux` scrubs monthly; elsewhere `zpool scrub` is a person's.
     /// The subjects are `host/pool`.
     PoolNotScrubbed,
+    /// 🔴 The house ran on its battery and its apps were stopped for it: they start again
+    /// once the mains have been back a while. Still there with the mains back, the start
+    /// failed or NUT is no longer read.
+    PowerStopped,
+    /// A UPS is set and was not read for five minutes, or ever: an outage would stop no
+    /// app before the battery runs out.
+    UpsUnknown,
     /// 🔴 A DNS record the house's mail needs is not what the internet resolves — a
     /// DKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as
     /// spam. The subjects are the records' names; `hlb mail dns` prints the lines.

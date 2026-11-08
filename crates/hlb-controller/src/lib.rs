@@ -35,6 +35,7 @@ pub mod mutes;
 pub mod openapi;
 pub mod passkey;
 pub mod portal;
+pub mod power;
 pub mod promql;
 pub mod recovery;
 pub mod roles;

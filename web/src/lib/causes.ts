@@ -102,6 +102,10 @@ export function title(issue: Issue): string {
 			return m.cause_admin_unknown();
 		case 'audit_broken':
 			return m.cause_audit_broken();
+		case 'power_stopped':
+			return m.cause_power_stopped();
+		case 'ups_unknown':
+			return m.cause_ups_unknown();
 		case 'audit_unreadable':
 			return m.cause_audit_unreadable();
 		case 'assertion_broken':
@@ -245,6 +249,8 @@ export function where(issue: Issue): string {
 		case 'firmware_unknown':
 		case 'disk_failing':
 		case 'disk_unknown':
+		case 'power_stopped':
+		case 'ups_unknown':
 			return '/nodes';
 		case 'pool_unhealthy':
 		case 'pool_not_scrubbed':
@@ -375,6 +381,10 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_firmware_unknown();
 		case 'disk_failing':
 			return m.reason_disk_failing();
+		case 'power_stopped':
+			return m.reason_power_stopped();
+		case 'ups_unknown':
+			return m.reason_ups_unknown();
 		case 'disk_unknown':
 			return m.reason_disk_unknown();
 		case 'pool_unhealthy':

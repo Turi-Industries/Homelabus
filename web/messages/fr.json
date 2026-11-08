@@ -2038,6 +2038,8 @@
 	"cause_admin_tokens": "Plusieurs jetons admin en circulation : chacun ouvre tout",
 	"cause_admin_unknown": "Aucun jeton admin enregistré : l'accès ne peut pas être vérifié d'ici",
 	"cause_audit_broken": "Le journal a été altéré : une entrée a été supprimée ou modifiée",
+	"cause_power_stopped": "La maison a tourné sur batterie : ses apps sont arrêtées jusqu'au retour du secteur",
+	"cause_ups_unknown": "L'onduleur n'est pas lu : une coupure n'arrêterait aucune app avant que la batterie ne s'épuise",
 	"cause_audit_unreadable": "Le journal n'a pas pu être relu",
 	"cause_account_without_mailbox": [
 		{
@@ -2179,6 +2181,8 @@
 	"reason_host_flaws_unknown": "paquets non vérifiés récemment",
 	"reason_firmware_update": "une mise à jour de firmware attend une personne",
 	"reason_firmware_unknown": "firmware non vérifié récemment",
+	"reason_power_stopped": "arrêtées pour une coupure de courant : elles repartent une fois le secteur stable",
+	"reason_ups_unknown": "le serveur NUT ne répond pas : hlb config ups",
 	"reason_disk_failing": "un disque dit qu'il s'use : remplacez-le",
 	"reason_disk_unknown": "disques non lus récemment",
 	"reason_pool_unhealthy": "la redondance est épuisée, ou des fichiers sont abîmés",
