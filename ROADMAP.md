@@ -28,7 +28,7 @@ goals added, and eight phases to get there. **Measured** the same day:
 | 3. never stolen — **widened**: trust no provider (registrar, DNS host, VPS, storage), encrypt everything | CI actions pinned by commit (0 unpinned), images by digest (enforced), one `cargo audit` exception; no release is signed. **No real node's disk is encrypted yet** (`node preseed --encrypt` installs one LUKS under a one-time passphrase that `node bind-disk` replaces with the TPM AND a Tang, measured on the lab; `hlb storage encrypt` puts a storage node's datasets under a key of its own, unlocked before Docker, measured on the lab 2026-10-30); the vault's key is sealed to the machine's TPM by `hlb secrets-seal` (2026-10-28), a `0600` file until then; no catalog variable carries a secret through the environment — `catalog validate` refuses one (2026-10-28); no DNSSEC, nothing watches the registrar. Backups are already encrypted before they leave |
 | 4. no Rust | **0 of 12** apps went in without Rust in the same commit; of the last 12 commits completing an app, 8 touched Rust. No production code branches on an app's name |
 | 5. always available — the vital apps reachable while the house is down, or moving | no notion of a site, of an app's criticality, of a relay: the way in is a port forward on the house's router. Every service runs `replicas: 1` |
-| 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Trivy at update time only |
+| 6. always up to date without breaking — OS, CVEs, apps | `hlb-updater` chains registry watch, channel, maturity, window, backup, deploy, health check and rollback — and **the controller never calls it**: nothing updates without `hlb update apply`. CVEs are looked at by Grype (a Swarm job, since 2026-11-08) at update time only |
 | 7. simple and beautiful for whoever runs it — install, dashboard, docs | 8 modules and 34 pages in the shell; the README (731 lines) announces 1,690 tests and says mail never ran; `docs/` holds the CLI tour and the journal |
 
 **Who it is for** (corrected by the owner the same day): not households only —
@@ -1053,7 +1053,8 @@ and what needs real hardware or a public domain to be measured.
     workflow at the release's tag), and cosign 3.1.4's `verify` takes that bundle from
     the OCI referrers as it takes a signature — `signedBy` declared, the same check,
     six of six clean and a wrong workflow refused. Left: the migrator, a constant in `stalwart_migrate.rs` no update moves;
-    cosign missing on the machine still reads as "not checked", as Trivy does.
+    cosign missing on the machine still reads as "not checked", as Trivy did — Grype and
+    Syft run as pinned Swarm jobs since 2026-11-08, cosign could too.
   - ✅ PKfail — 2026-10-30: the platform key's certificate is read from efivarfs
     (`od` of `PK`, readable by anyone) and a subject or issuer saying "DO NOT TRUST" or
     "DO NOT SHIP" — Binarly's markers for the test keys ~900 boards shipped — is

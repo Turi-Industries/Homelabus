@@ -567,6 +567,7 @@ impl Scanner for Scans {
         &self,
         image: &str,
         _: Option<&hlb_types::ImageSigner>,
+        _: Option<&str>,
     ) -> hlb_updater::Result<Report> {
         Ok(Report {
             image: image.into(),

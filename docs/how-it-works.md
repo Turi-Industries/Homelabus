@@ -262,7 +262,7 @@ controller — and `cargo clippy --all-targets` stays at zero warnings.
 | `hlb-platform` | Isolated PostgreSQL and MariaDB provisioning |
 | `hlb-ingress` | Caddyfile, CrowdSec, forward-auth, ACME wildcard |
 | `hlb-registry` | Digest resolution, version policy |
-| `hlb-updater` | Release watch, windows, rollback, Trivy + cosign |
+| `hlb-updater` | Release watch, windows, rollback, Syft + Grype (as Swarm jobs) + cosign |
 | `hlb-backup` | restic, PITR, SQLite, DR drills, replication, failover, what proves a destination out of reach |
 | `hlb-backup-run` | The one backup pass the CLI and the controller both run, restores of what it took, destination proofs, and the emergency kit |
 | `hlb-identity` | PocketID: OIDC provisioning and human sign-in (PKCE) |

@@ -32,20 +32,16 @@ pub struct Actor<'a> {
     pub role: Role,
 }
 
-/// Checks an image before it runs. A trait so a test, or another scanner, stands in.
+/// Checks an image before it runs, against the one it `replacing`, when one runs. A
+/// trait so a test stands in; `crate::grype::Grype` is the one that runs.
 #[async_trait::async_trait]
 pub trait Scanner: Send + Sync {
-    async fn audit(&self, image: &str, signer: Option<&ImageSigner>) -> Result<Report>;
-}
-
-/// The scan `hlb update` has always run: vulnerabilities, then the publisher's signature.
-pub struct Trivy;
-
-#[async_trait::async_trait]
-impl Scanner for Trivy {
-    async fn audit(&self, image: &str, signer: Option<&ImageSigner>) -> Result<Report> {
-        crate::scan::audit_signed_by(image, signer).await
-    }
+    async fn audit(
+        &self,
+        image: &str,
+        signer: Option<&ImageSigner>,
+        replacing: Option<&str>,
+    ) -> Result<Report>;
 }
 
 /// What happened so far, said as it happens: the switch alone can take minutes.
@@ -122,15 +118,26 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
         progress: &mut (dyn FnMut(Progress) + Send),
     ) -> Result<Ran> {
         let app = c.app.as_str();
-        let installed = self.state.app_manifest(app).await?.spec.image;
+        let installed = self.state.app_manifest(app).await?.spec;
 
         // 🔴 Scan BEFORE deploying, not after. A critical image deployed and then flagged
         // has already run. And the digest that will run: a rebuild was scanned as the
         // installed image's own reference, its OLD digest, and a tag alone may name another
         // build by now. Each image against its own publisher's signer.
+        // Against what runs now: what the move brings, not what both carry.
         let mut reports = Vec::new();
-        for (image, signer) in c.to_verify(&installed, self.in_catalog) {
-            reports.push(self.scanner.audit(&image, signer.as_ref()).await?);
+        let replaced = c.replaced(&installed);
+        for (i, (image, signer)) in c
+            .to_verify(&installed.image, self.in_catalog)
+            .into_iter()
+            .enumerate()
+        {
+            let before = replaced.get(i).cloned().flatten();
+            reports.push(
+                self.scanner
+                    .audit(&image, signer.as_ref(), before.as_deref())
+                    .await?,
+            );
         }
         let blocks = reports.iter().any(Report::blocks);
         let described = reports
@@ -196,7 +203,7 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
         progress(Progress::Switching {
             describe: c.describe(),
         });
-        let from = installed.reference();
+        let from = installed.image.reference();
         let outcome = apply(self.orchestrator, self.state, c, SWITCH_TIMEOUT_SECS).await?;
 
         // Every outcome is recorded, success included: the controller notifies each, and an
@@ -207,7 +214,7 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
             UpdateOutcome::Paused => (UpdateRunOutcome::Paused, String::new()),
             UpdateOutcome::Inconclusive => (UpdateRunOutcome::Inconclusive, String::new()),
         };
-        let to = target(c, &installed);
+        let to = target(c, &installed.image);
         let with: Vec<String> = c
             .companions
             .iter()

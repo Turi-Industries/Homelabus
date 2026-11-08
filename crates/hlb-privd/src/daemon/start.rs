@@ -1593,7 +1593,10 @@ pub async fn start(
                         postgres_admin: config.postgres_admin.as_deref(),
                         mariadb_admin: config.mariadb_admin.as_deref(),
                         fallback_repo: config.fallback_repo.as_deref(),
-                        scanner: &hlb_updater::run::Trivy,
+                        scanner: &hlb_updater::grype::Grype {
+                            orchestrator: orchestrator.as_ref(),
+                            network: &config.network,
+                        },
                     };
                     for done in pass.run().await {
                         tracing::info!(?done, "automatic update");

@@ -103,8 +103,9 @@ To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 - **The agent, controller and Caddy images are signed** the same way. They carry an SBOM
   and their build provenance.
 - **Every app image is pinned by digest.** A deployment never falls back to a tag. An
-  update waits until the new build is at least a week old, is scanned by Trivy and backed up
-  before it switches, and is rolled back if the app does not come up.
+  update waits until the new build is at least a week old, is scanned by Grype and backed up
+  before it switches — refused when it brings a critical or exploited flaw the running
+  image did not carry — and is rolled back if the app does not come up.
 - **An image whose publisher signs it is held to that signer.** The catalog names the
   GitHub workflow that signs Vikunja, Stalwart and Meilisearch (`signedBy`); an update
   to a digest it did not sign — unsigned, or signed by anyone else — is refused. Most

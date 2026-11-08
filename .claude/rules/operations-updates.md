@@ -75,6 +75,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   Immich's machine-learning companion ran as `immich-server@` a digest that existed for
   neither. Each image is matched by repository and tag, the companions' included
   (`State::set_image_digest`).
+- **🔴 A scan judges what the move BRINGS, not what the image carries.** Measured
+  2026-11-08 with Grype: PostgreSQL 17.6 carries 33 critical flaws a Debian update fixes,
+  as does nearly every image on a distribution — "any critical blocks" would have refused
+  almost every update, the very ones fixing them, once a scanner actually ran. An update
+  is refused for a critical or KEV-exploited flaw the running image (`Candidate::replaced`)
+  did not carry; with no image to compare, for an exploited one only. ⚠️ A base past its
+  end of life reads clean of what its distribution stopped tracking: Alpine 3.18 → 3.20
+  "brought" three OpenSSL flaws both carry. Grype's database is 3.2 GB unpacked, in
+  `hlb-grype-db` on the node `hlb` talks to — twice Trivy's.
 - **A security scan reads the digest that will run.** A rebuild was scanned as the
   installed image's own `reference()` — the OLD digest — and a version by its tag alone,
   which may name another build by the switch.
