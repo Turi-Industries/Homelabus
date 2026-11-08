@@ -207,6 +207,11 @@ pub struct Config {
     #[arg(long, default_value = "3600", env = "HLB_UPDATE_APPLY_SECS")]
     pub update_apply_secs: u64,
 
+    /// How often every running image is read against the flaws known today. Once a day:
+    /// the gate is an exploited flaw reported within 24 hours.
+    #[arg(long, default_value = "86400", env = "HLB_FLAWS_SECS")]
+    pub flaws_secs: u64,
+
     /// How often every node's unused images are removed. Once a day: an update leaves
     /// its previous image on every node that ran it, on the root disk.
     #[arg(long, default_value = "86400", env = "HLB_PRUNE_SECS")]
@@ -1603,6 +1608,48 @@ pub async fn start(
                         if let Some(n) = super::updates::notice(&done) {
                             notif.tell(&n).await;
                         }
+                    }
+                }
+            },
+        )));
+
+        // Every running image read against today's flaws, from the package list kept for
+        // its digest: an exploited flaw in what the internet reaches is said within the
+        // day, the rest weekly. Past ten minutes, like the watch.
+        let held_flaws = held.clone();
+        let notif_flaws = notif.clone();
+        let network_flaws = cfg.platform_network.clone();
+        tracing::info!(interval = cfg.flaws_secs, "image flaws loop");
+        tasks.push(tokio::spawn(schedule::every_after(
+            Duration::from_secs(600).min(Duration::from_secs(cfg.flaws_secs)),
+            Duration::from_secs(cfg.flaws_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held_flaws.clone();
+                let (notif, network) = (notif_flaws.clone(), network_flaws.clone());
+                async move {
+                    let Some(orchestrator) = &held.orchestrator else {
+                        return;
+                    };
+                    let grype = hlb_updater::grype::Grype {
+                        orchestrator: orchestrator.as_ref(),
+                        network: &network,
+                    };
+                    let at = crate::now();
+                    let said = match super::flaws::read(&held.state, &grype, at).await {
+                        Ok(r) => {
+                            tracing::info!(read = r.read, unread = r.unread.len(), "image flaws");
+                            super::flaws::judge(&held.state, &r, at).await
+                        }
+                        Err(e) => Err(e),
+                    };
+                    match said {
+                        Ok(said) => {
+                            for n in &said {
+                                notif.tell(n).await;
+                            }
+                        }
+                        Err(e) => tracing::warn!("no image flaws read: {e}"),
                     }
                 }
             },

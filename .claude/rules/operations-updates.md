@@ -84,6 +84,12 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   end of life reads clean of what its distribution stopped tracking: Alpine 3.18 → 3.20
   "brought" three OpenSSL flaws both carry. Grype's database is 3.2 GB unpacked, in
   `hlb-grype-db` on the node `hlb` talks to — twice Trivy's.
+- **What runs is read daily, by its package list, and said by what it risks.** Grype re-reads
+  the list Syft made once per digest (`hlb-privd`'s `daemon::flaws`, `HLB_FLAWS_SECS`): no
+  pull. At once only fix ∧ (KEV ∨ EPSS ≥ 0.1) ∧ reachable from the internet — PostgreSQL
+  17.6's 159 fixable flaws hold one —, once per flaw until it is gone; the rest, and every
+  image NOT READ, in a weekly digest. A failed reading keeps the last good one
+  (`ImageScan::is_current`); an ingress never applied counts as exposed.
 - **A security scan reads the digest that will run.** A rebuild was scanned as the
   installed image's own `reference()` — the OLD digest — and a version by its tag alone,
   which may name another build by the switch.
