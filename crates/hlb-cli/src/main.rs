@@ -19,6 +19,7 @@ mod seal;
 mod sources;
 mod storage;
 mod termix;
+mod ups;
 mod verify_boot;
 
 /// The catalog's YAML, carried in the binary by `build.rs`.
@@ -1147,6 +1148,20 @@ enum ConfigCmd {
         /// Read no UPS. Apps stopped for the power start again.
         #[arg(long)]
         off: bool,
+        /// Set NUT's upsmon on every node, signed in as this account of the NUT server's
+        /// `upsd.users` (`upsmon secondary`), its password on standard input: each
+        /// machine then shuts down at low battery. A NUT set up by hand is left alone.
+        #[arg(long, conflicts_with_all = ["shutdown", "no_shutdown"])]
+        shutdown_user: Option<String>,
+        /// Set it again with the account kept: a node added since, a server changed.
+        #[arg(long, conflicts_with = "no_shutdown")]
+        shutdown: bool,
+        /// Remove upsmon where Homelabus set it.
+        #[arg(long)]
+        no_shutdown: bool,
+        /// Only this node, for the three above.
+        #[arg(long)]
+        node: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -3827,16 +3842,19 @@ struct UpsChange<'a> {
     runtime: Option<u32>,
     steady: Option<u32>,
     off: bool,
+    shutdown: Option<ups::Shutdown<'a>>,
+    node: Option<&'a str>,
 }
 
 impl UpsChange<'_> {
-    fn is_empty(&self) -> bool {
-        self.server.is_none()
-            && self.ups.is_none()
-            && self.after.is_none()
-            && self.runtime.is_none()
-            && self.steady.is_none()
-            && !self.off
+    /// Changes the rule the power loop reads.
+    fn policy(&self) -> bool {
+        self.server.is_some()
+            || self.ups.is_some()
+            || self.after.is_some()
+            || self.runtime.is_some()
+            || self.steady.is_some()
+            || self.off
     }
 }
 
@@ -3881,11 +3899,16 @@ async fn config_ups(
             })
         }
     };
-    if change.is_empty() {
+    if change.node.is_some() && change.shutdown.is_none() {
+        eprintln!("🔴 --node names where upsmon is set: with --shutdown-user, --shutdown or --no-shutdown.");
+        return Ok(ExitCode::FAILURE);
+    }
+    if !change.policy() && change.shutdown.is_none() {
         println!("{}", describe(&policy));
         if let Some(line) = read_now(&policy).await {
             println!("{line}");
         }
+        println!("{}", ups::describe(&state, &policy).await?);
         if let Some(u) = state.ups_state().await? {
             if let Some(e) = u.error.filter(|_| u.failed_at.is_some()) {
                 println!("⚠️ The daemon's last reading failed: {e}.");
@@ -3934,24 +3957,44 @@ async fn config_ups(
     if let Some(s) = change.steady {
         policy.steady_s = i64::from(s);
     }
-    let detail = describe(&policy);
-    if !apply {
-        println!("Would set: {detail}");
-        if let Some(line) = read_now(&policy).await {
-            println!("{line}");
+    // 🔴 The nodes' upsmon signs in to the server and UPS named: changed here, each
+    // node is pointed at the new one too, or it watches a UPS nobody reads.
+    let moved = {
+        let before = state.ups_policy().await?;
+        policy.server.is_some() && (before.server != policy.server || before.ups != policy.ups)
+    };
+    let shutdown = match change.shutdown {
+        Some(s) => Some(s),
+        None if moved && state.secret(ups::SECRET).await?.is_some() => Some(ups::Shutdown::Again),
+        None => None,
+    };
+    if change.policy() {
+        let detail = describe(&policy);
+        if !apply {
+            println!("Would set: {detail}");
+            if let Some(line) = read_now(&policy).await {
+                println!("{line}");
+            }
+        } else {
+            state.set_ups_policy(&policy).await?;
+            state
+                .audit("cli", ACTOR_ROLE, "config-ups", "ups", "ok", Some(&detail))
+                .await?;
+            println!("✓ {detail}");
+            if let Some(line) = read_now(&policy).await {
+                println!("{line}");
+            }
         }
-        println!("Rerun with --apply.");
-        return Ok(ExitCode::SUCCESS);
     }
-    state.set_ups_policy(&policy).await?;
-    state
-        .audit("cli", ACTOR_ROLE, "config-ups", "ups", "ok", Some(&detail))
-        .await?;
-    println!("✓ {detail}");
-    if let Some(line) = read_now(&policy).await {
-        println!("{line}");
+    match shutdown {
+        Some(what) => ups::run(cli, &state, &policy, what, change.node, apply).await,
+        None => {
+            if !apply {
+                println!("Rerun with --apply.");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
-    Ok(ExitCode::SUCCESS)
 }
 
 /// Upgrades one node whole, drained, and reboots it when its kernel asks for it.
@@ -10522,9 +10565,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             runtime,
             steady,
             off,
+            shutdown_user,
+            shutdown,
+            no_shutdown,
+            node,
             apply,
         }) => {
             let rt = tokio::runtime::Runtime::new()?;
+            let what = match (shutdown_user, shutdown, no_shutdown) {
+                (Some(user), _, _) => Some(ups::Shutdown::Set(user.as_str())),
+                (None, true, _) => Some(ups::Shutdown::Again),
+                (None, false, true) => Some(ups::Shutdown::Remove),
+                (None, false, false) => None,
+            };
             rt.block_on(config_ups(
                 &cli,
                 UpsChange {
@@ -10534,6 +10587,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     runtime: *runtime,
                     steady: *steady,
                     off: *off,
+                    shutdown: what,
+                    node: node.as_deref(),
                 },
                 *apply,
             ))

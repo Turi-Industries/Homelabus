@@ -1386,8 +1386,9 @@ reported within 24 hours.
   (`GET VAR` only), five minutes on battery or under ten of runtime or at low battery stop
   the apps in waves from the capability graph — those nothing uses first, the databases
   last — and the mains steady two minutes start them in reverse (`hlb config ups`,
-  `power_stopped`, `ups_unknown`). The machines stay NUT's own `upsmon`'s to shut down:
-  setting it up on each node is an open question, not built. Not yet run on the lab.
+  `power_stopped`, `ups_unknown`). Each machine is shut down by NUT's own `upsmon`, a
+  secondary Homelabus writes on every node (`--shutdown-user`, decided by the owner
+  2026-11-08), held to a real `nut-client` 2.8.0. Not yet run on the lab.
 
 **6. The TUI installer.** Gate: a bare machine to the first app, timed.
 - One description of the answers, filled three ways: a Ratatui assistant; a linear

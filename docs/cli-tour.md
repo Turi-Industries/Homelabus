@@ -367,6 +367,17 @@ minutes. The machines themselves are shut down by NUT's own `upsmon`, where it i
 ./target/debug/hlb config ups --off --apply            # apps stopped for it start again
 ```
 
+Each machine shuts down at low battery through NUT's own `upsmon`, a secondary signed in
+with an account of the NUT server's `upsd.users` (`upsmon secondary`). The account is
+proved against the server first, kept in the vault, and a NUT someone set up — the
+machine serving the UPS above all — is left alone:
+
+```sh
+echo 'its-password' | ./target/debug/hlb config ups --shutdown-user monitor --apply
+./target/debug/hlb config ups --shutdown --node deb3 --apply   # a node added since
+./target/debug/hlb config ups --no-shutdown --apply
+```
+
 Each machine's protection level — what a stolen one would give up — is read from its
 firmware, TPM and systemd, never declared: `node check`, `cluster init` and `node add`
 show it, the last two label the node, and `cluster status` lists it. A, a verified boot
