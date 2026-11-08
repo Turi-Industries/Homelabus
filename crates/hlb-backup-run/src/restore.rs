@@ -905,8 +905,20 @@ pub async fn stop(
     services: &[(String, u64)],
     why: &str,
 ) -> Result<(), String> {
+    stop_held(o, state, services, why, HOLD_SECS).await
+}
+
+/// [`stop`], held `hold_secs` rather than a day: a stop for the power lasts as long as
+/// the outage, and [`start`] releases it whenever that ends.
+pub async fn stop_held(
+    o: &dyn Orchestrator,
+    state: &State,
+    services: &[(String, u64)],
+    why: &str,
+    hold_secs: i64,
+) -> Result<(), String> {
     state
-        .hold_services(services, why, HOLD_SECS)
+        .hold_services(services, why, hold_secs)
         .await
         .map_err(|e| format!("holding services stopped: {e}"))?;
     for (s, replicas) in services {
