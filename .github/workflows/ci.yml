@@ -154,6 +154,32 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  deny:
+    name: Dependencies
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # Embark's own build, by its version and its digest, as cargo-audit's above.
+      - name: Install cargo-deny
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name="cargo-deny-$VERSION-x86_64-unknown-linux-musl"
+          curl -fsSLo "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          install "$RUNNER_TEMP/$name/cargo-deny" ~/.cargo/bin/
+      # Licences, bans and sources (deny.toml); advisories stay cargo audit's, with
+      # their one list of ignores.
+      - name: cargo deny
+        run: cargo deny check licenses bans sources
+
   msrv:
     name: Minimum supported Rust version
     runs-on: ubuntu-26.04

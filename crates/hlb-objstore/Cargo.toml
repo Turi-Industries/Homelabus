@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 description = "Garage admin client: buckets and isolated keys; the S3 calls that prove a destination cannot be erased."
 
 [dependencies]

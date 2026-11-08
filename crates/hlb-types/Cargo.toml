@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 description = "Shared types: manifests, capabilities, state. The single source of truth for the schema."
 
 [dependencies]

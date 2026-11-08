@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 description = "Alert rules, scrape configuration and the deadman switch."
 
 [dependencies]
