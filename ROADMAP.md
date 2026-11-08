@@ -258,6 +258,16 @@ exported — Homelabus never bills.
   releases; CI pins `install.sh` by the sum written in `hlb.env`, which checks the
   binary's signature by Homelabus's release workflow.
 
+#### Decided by the owner, 2026-11-08
+
+- **Phase 5 before phase 4**: it needs no hardware, phase 4 a VPS and a router. Proven
+  on the lab; SMART, firmware and the UPS again on real hardware when there is some.
+- **Syft and Grype for the CVEs**, run as images pinned by digest in a job: Grype's
+  database carries KEV and EPSS, so no feed of our own to fetch and trust. Trivy goes —
+  it knows neither, and its own release chain was compromised in March 2026.
+- **No UPS yet**: the ordered shutdown is built and proven against NUT's `dummy-ups`.
+- **One pull request per step, merged by Claude** once CI is green.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
