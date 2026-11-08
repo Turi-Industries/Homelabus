@@ -225,7 +225,10 @@ monitoring, updates and routes have their own `operations-*.md`.
   `SHUTDOWNCMD`. 🔴 upsd takes a quoted password with a space, and `upsmon` sends it
   BARE (`ERR INVALID-ARGUMENT`): proved quoted, the account would fail on every node in
   silence. `check_login` signs in exactly as upsmon does, and `unusable` refuses a space,
-  a quote, a backslash or `#` first. NUT's `LIST CLIENT` is the proof each node signed in.
+  a quote, a backslash or `#` first. NUT's `LIST CLIENT` is the proof each node signed in. 🔴 A SUDDEN low battery (a worn one says
+  it seconds after the cut) reached upsmon's shutdown before the databases' wave (lab,
+  2026-11-08): its `SHUTDOWNCMD` is `/etc/nut/hlb-shutdown`, which waits up to 60 s for every
+  task container but Homelabus's own (`hlb-…`) to end, then powers off.
 - **NUT 2.8's `dummy-ups` reads its `.dev` file ONCE** (`mode dummy-once`): a status
   changes with `upsrw -s ups.status=…` (`tests/live_nut.rs`, its Dockerfile beside it).
 
