@@ -338,6 +338,7 @@ impl Privd {
                     .await;
                 serde_json::to_value(acted)?
             }
+            Intent::ApproveUpdate(i) => serde_json::to_value(apps::approve_update(self, i).await)?,
             Intent::CatalogChanges(hlb_api::intent::CatalogChanges { app }) => {
                 serde_json::to_value(apps::catalog_changes(self, &app).await)?
             }

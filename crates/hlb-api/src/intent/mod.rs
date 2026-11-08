@@ -47,6 +47,7 @@ pub enum Intent {
     Swarm(Swarm),
     Install(Install),
     Upgrade(Upgrade),
+    ApproveUpdate(ApproveUpdate),
     CatalogChanges(CatalogChanges),
     AttestGuide(AttestGuide),
     Remove(Remove),
@@ -129,6 +130,7 @@ asks! {
     Swarm => Option<SwarmView>,
     Install => Acted,
     Upgrade => Acted,
+    ApproveUpdate => Acted,
     CatalogChanges => Vec<String>,
     AttestGuide => ActionResult,
     Remove => ActionResult,
@@ -257,6 +259,18 @@ pub struct Install {
 #[serde(deny_unknown_fields)]
 pub struct Upgrade {
     pub app: String,
+    pub apply: bool,
+}
+
+/// Approve an app's waiting update, for the privileged side's pass to apply in its
+/// window — the copy first, the scan, the switch, as with nobody there. Not the switch
+/// itself: it takes minutes, more than a request should wait.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproveUpdate {
+    pub app: String,
+    /// Who approves, as the audit log names them.
+    pub by: String,
     pub apply: bool,
 }
 

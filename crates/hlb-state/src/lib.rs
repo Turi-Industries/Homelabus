@@ -231,6 +231,57 @@ pub struct UpdateLags {
     pub waiting: Vec<UpdateLag>,
 }
 
+/// Who applies one waiting update, as the privileged side's pass last decided
+/// ([`State::record_update_decision`]). `why`, `notes` and `refused` are JSON the state
+/// does not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateDecision {
+    pub app: String,
+    /// The digest it moves to: an approval or a refusal holds for this one alone.
+    pub digest: String,
+    pub from_tag: String,
+    /// `rebuild`, `version`, `catalog` or `companions`.
+    pub kind: String,
+    pub to_tag: Option<String>,
+    /// `automatic`, `one-click` or `manual`.
+    pub who: String,
+    pub why: Option<String>,
+    pub notes: Option<String>,
+    pub decided_at: i64,
+    /// The automatic path's last refusal of this digest, and when.
+    pub refused: Option<String>,
+    pub refused_at: Option<i64>,
+    pub approved_by: Option<String>,
+    pub approved_at: Option<i64>,
+}
+
+impl UpdateDecision {
+    /// As the web side shows it. `None` for a row this version cannot read — a value a
+    /// later version wrote — rather than a guess at it.
+    pub fn waiting(&self) -> Option<hlb_api::updates::WaitingUpdate> {
+        use hlb_api::updates::{UpdateMove, UpdateWho};
+        fn json<T: serde::de::DeserializeOwned>(
+            v: &Option<String>,
+        ) -> serde_json::Result<Option<T>> {
+            v.as_deref().map(serde_json::from_str).transpose()
+        }
+        Some(hlb_api::updates::WaitingUpdate {
+            app: self.app.clone(),
+            from_tag: self.from_tag.clone(),
+            moves: UpdateMove::from_stored(&self.kind)?,
+            to_tag: self.to_tag.clone(),
+            who: UpdateWho::from_stored(&self.who)?,
+            why: json(&self.why).ok()?,
+            notes: json(&self.notes).ok()?,
+            decided_at: self.decided_at,
+            refused: json(&self.refused).ok()?,
+            refused_at: self.refused_at,
+            approved_by: self.approved_by.clone(),
+            approved_at: self.approved_at,
+        })
+    }
+}
+
 /// A service stopped on purpose ([`State::hold_services`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceHold {
@@ -4153,6 +4204,24 @@ fn civil_date(epoch: i64) -> String {
 /// How many characters of a fingerprint name a session.
 pub const SESSION_REFERENCE_LEN: usize = 8;
 
+fn update_decision_of(r: &sqlx::sqlite::SqliteRow) -> Result<UpdateDecision> {
+    Ok(UpdateDecision {
+        app: r.try_get("app")?,
+        digest: r.try_get("digest")?,
+        from_tag: r.try_get("from_tag")?,
+        kind: r.try_get("kind")?,
+        to_tag: r.try_get("to_tag")?,
+        who: r.try_get("who")?,
+        why: r.try_get("why")?,
+        notes: r.try_get("notes")?,
+        decided_at: r.try_get("decided_at")?,
+        refused: r.try_get("refused")?,
+        refused_at: r.try_get("refused_at")?,
+        approved_by: r.try_get("approved_by")?,
+        approved_at: r.try_get("approved_at")?,
+    })
+}
+
 fn session_reference(fingerprint: &str) -> String {
     fingerprint.chars().take(SESSION_REFERENCE_LEN).collect()
 }
@@ -5181,6 +5250,114 @@ impl State {
             .collect())
     }
 
+    /// Records who applies `d.app`'s waiting update. The approval and the refusal are kept
+    /// while the digest is the same, and cleared when a newer one is proposed: a click is
+    /// for the image a person looked at.
+    pub async fn record_update_decision(&self, d: &UpdateDecision) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO update_decisions
+                 (app, digest, from_tag, kind, to_tag, who, why, notes, decided_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (app) DO UPDATE SET
+                 refused = CASE WHEN digest = excluded.digest THEN refused END,
+                 refused_at = CASE WHEN digest = excluded.digest THEN refused_at END,
+                 approved_by = CASE WHEN digest = excluded.digest THEN approved_by END,
+                 approved_at = CASE WHEN digest = excluded.digest THEN approved_at END,
+                 digest = excluded.digest, from_tag = excluded.from_tag,
+                 kind = excluded.kind, to_tag = excluded.to_tag, who = excluded.who,
+                 why = excluded.why, notes = excluded.notes,
+                 decided_at = excluded.decided_at",
+        )
+        .bind(&d.app)
+        .bind(&d.digest)
+        .bind(&d.from_tag)
+        .bind(&d.kind)
+        .bind(&d.to_tag)
+        .bind(&d.who)
+        .bind(&d.why)
+        .bind(&d.notes)
+        .bind(d.decided_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every waiting update's decision, by app.
+    pub async fn update_decisions(&self) -> Result<Vec<UpdateDecision>> {
+        let rows = sqlx::query(
+            "SELECT app, digest, from_tag, kind, to_tag, who, why, notes, decided_at,
+                    refused, refused_at, approved_by, approved_at
+             FROM update_decisions ORDER BY app",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(update_decision_of).collect()
+    }
+
+    /// `app`'s waiting update's decision, if one waits.
+    pub async fn update_decision(&self, app: &str) -> Result<Option<UpdateDecision>> {
+        Ok(self
+            .update_decisions()
+            .await?
+            .into_iter()
+            .find(|d| d.app == app))
+    }
+
+    /// Forgets every decision but those of `keep`: an update applied, or no longer
+    /// proposed, waits for nobody.
+    pub async fn keep_update_decisions(
+        &self,
+        keep: &std::collections::BTreeSet<String>,
+    ) -> Result<()> {
+        for d in self.update_decisions().await? {
+            if !keep.contains(&d.app) {
+                sqlx::query("DELETE FROM update_decisions WHERE app = ?1")
+                    .bind(&d.app)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The automatic path refused `digest` of `app`'s update: a person's again.
+    pub async fn refuse_update(
+        &self,
+        app: &str,
+        digest: &str,
+        refused: &str,
+        at: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE update_decisions SET refused = ?3, refused_at = ?4
+             WHERE app = ?1 AND digest = ?2",
+        )
+        .bind(app)
+        .bind(digest)
+        .bind(refused)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// A person approves `digest` of `app`'s update, for the pass to apply in its window.
+    /// `false` when that digest no longer waits: a newer one was proposed meanwhile, and
+    /// nobody approved that one.
+    pub async fn approve_update(&self, app: &str, digest: &str, by: &str, at: i64) -> Result<bool> {
+        let r = sqlx::query(
+            "UPDATE update_decisions SET approved_by = ?3, approved_at = ?4
+             WHERE app = ?1 AND digest = ?2",
+        )
+        .bind(app)
+        .bind(digest)
+        .bind(by)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
     /// Records an update's outcome, to be notified. `id` is ignored: the row's own is
     /// returned.
     pub async fn record_update_run(&self, run: &UpdateRun) -> Result<i64> {
@@ -5643,6 +5820,87 @@ mod tests {
             Some(Automatic::None)
         );
         assert_eq!(s.update_automatic_settings().await.expect("all").len(), 1);
+    }
+
+    /// 🔴 A click is for the image a person looked at: a newer digest clears it, and a
+    /// refusal after it takes the update back to a person.
+    #[tokio::test]
+    async fn an_approval_holds_for_one_digest_and_until_its_next_refusal() {
+        let s = State::in_memory().await.expect("state");
+        let decided = |digest: &str, at: i64| UpdateDecision {
+            app: "gitea".into(),
+            digest: digest.into(),
+            from_tag: "1.24.3".into(),
+            kind: "version".into(),
+            to_tag: Some("1.25.0".into()),
+            who: "one-click".into(),
+            why: None,
+            notes: None,
+            decided_at: at,
+            refused: None,
+            refused_at: None,
+            approved_by: None,
+            approved_at: None,
+        };
+        s.record_update_decision(&decided("sha256:a", 10))
+            .await
+            .expect("decided");
+        assert!(!s
+            .approve_update("gitea", "sha256:other", "alice", 11)
+            .await
+            .expect("approve"));
+        assert!(s
+            .approve_update("gitea", "sha256:a", "alice", 11)
+            .await
+            .expect("approve"));
+        // The next hour's pass decides the same digest again: the click stays.
+        s.record_update_decision(&decided("sha256:a", 20))
+            .await
+            .expect("again");
+        let d = s
+            .update_decision("gitea")
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(d.waiting().expect("read").approved(), "{d:?}");
+        assert_eq!(d.approved_by.as_deref(), Some("alice"));
+
+        s.refuse_update("gitea", "sha256:a", r#"{"kind":"paused"}"#, 30)
+            .await
+            .expect("refused");
+        let d = s
+            .update_decision("gitea")
+            .await
+            .expect("read")
+            .expect("row");
+        let w = d.waiting().expect("read");
+        assert!(!w.approved() && w.needs().is_some(), "{d:?}");
+        s.approve_update("gitea", "sha256:a", "alice", 31)
+            .await
+            .expect("again");
+        let d = s
+            .update_decision("gitea")
+            .await
+            .expect("read")
+            .expect("row");
+        let w = d.waiting().expect("read");
+        assert!(w.approved() && w.needs().is_none(), "{d:?}");
+
+        // A newer image: nobody looked at it.
+        s.record_update_decision(&decided("sha256:b", 40))
+            .await
+            .expect("newer");
+        let d = s
+            .update_decision("gitea")
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(!d.waiting().expect("read").approved() && d.refused.is_none());
+
+        s.keep_update_decisions(&Default::default())
+            .await
+            .expect("kept none");
+        assert!(s.update_decisions().await.expect("read").is_empty());
     }
 
     #[tokio::test]

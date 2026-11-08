@@ -78,6 +78,7 @@ impl Intent {
             | Intent::Swarm(_)
             | Intent::Install(_)
             | Intent::Upgrade(_)
+            | Intent::ApproveUpdate(_)
             | Intent::CatalogChanges(_)
             | Intent::AttestGuide(_)
             | Intent::BackUp(_)

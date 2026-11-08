@@ -2285,5 +2285,91 @@
 	"catalog_step_uninstall": "désinstallation",
 	"catalog_outcome_passed": "réussie",
 	"catalog_outcome_failed": "en échec",
-	"catalog_outcome_not_run": "pas lancée"
+	"catalog_outcome_not_run": "pas lancée",
+	"page_apps_updates": "Mises à jour",
+	"cause_update_needs_approval": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une mise à jour de {shown} application attend votre accord",
+				"countPlural=*": "Des mises à jour de {shown} applications attendent votre accord"
+			}
+		}
+	],
+	"cause_update_needs_hands": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une mise à jour majeure de {shown} application s'applique à la main",
+				"countPlural=*": "Des mises à jour majeures de {shown} applications s'appliquent à la main"
+			}
+		}
+	],
+	"cause_update_refused": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "Une mise à jour de {shown} application a été refusée en votre absence",
+				"countPlural=*": "Des mises à jour de {shown} applications ont été refusées en votre absence"
+			}
+		}
+	],
+	"reason_update_needs_approval": "une mise à jour attend votre accord",
+	"reason_update_needs_hands": "une mise à jour majeure, à la main : hlb update apply",
+	"reason_update_refused": "sa mise à jour a été refusée en votre absence",
+	"updates_title": "Mises à jour en attente",
+	"updates_intro": "Les correctifs s'appliquent d'eux-mêmes dans la fenêtre de maintenance de chaque application, après une sauvegarde. Une mise à jour mineure attend votre accord, une fois ses notes lues ; le même passage l'applique ensuite dans sa fenêtre. Une majeure s'applique à la main, avec son guide de migration.",
+	"updates_none": "Aucune mise à jour n'attend : chaque application fait tourner ce que son canal propose.",
+	"updates_moves_to": "{from} → {to}",
+	"updates_moves_rebuild": "{tag}, reconstruite par son éditeur",
+	"updates_moves_companions": "{tag}, ses compagnons changent",
+	"updates_who_automatic": "S'applique d'elle-même dans sa fenêtre",
+	"updates_who_one_click": "Attend votre accord",
+	"updates_who_manual": "À la main : hlb update apply {app}",
+	"updates_jump_patch": "corrective",
+	"updates_jump_minor": "mineure",
+	"updates_jump_major": "majeure",
+	"updates_reach_none": "rien",
+	"updates_reach_patch": "les correctifs",
+	"updates_reach_minor": "les correctifs et les mineures",
+	"updates_why_major": "une mise à jour majeure : son guide de migration d'abord",
+	"updates_why_beyond_house": "une mise à jour {jump}, et la maison n'applique seule que {reach}",
+	"updates_why_beyond_manifest": "une mise à jour {jump}, et son manifeste n'applique seul que {reach}",
+	"updates_why_notes_say": "les notes de {tag} disent « {word} » : lisez-les d'abord",
+	"updates_why_notes_missing": "aucune note de version trouvée pour {tag} : personne n'a lu ce qu'elle change",
+	"updates_why_notes_unreadable": "ses notes de version n'ont pas pu être lues",
+	"updates_notes": "Notes :",
+	"updates_refused_vulnerable": "Son analyse l'a refusée : rien n'a basculé.",
+	"updates_refused_copy_failed": "La sauvegarde due d'abord a échoué : rien n'a basculé.",
+	"updates_refused_failed": "Elle n'a pas pu démarrer.",
+	"updates_refused_rolled_back": "Swarm l'a annulée : la version précédente tourne.",
+	"updates_refused_paused": "La bascule s'est mise en pause : regardez-la avant toute chose.",
+	"updates_refused_inconclusive": "Aucun résultat dans le temps imparti : vérifiez avec hlb ps.",
+	"updates_approved": "Approuvée par {by}, {at}",
+	"updates_mark_waiting": "en attente",
+	"updates_mark_refused": "refusée",
+	"updates_approve": "Approuver",
+	"updates_approve_again": "Approuver à nouveau",
+	"updates_approve_title": "Approuver la mise à jour de {app}"
 }

@@ -90,9 +90,9 @@ pub enum Decision {
     /// In its window, with nobody there.
     Automatic,
     /// A person's click, from the inbox or `hlb update apply`.
-    OneClick { why: String },
+    OneClick { why: Why },
     /// A person, with the migration guide: never from a click.
-    Manual { why: String },
+    Manual { why: Why },
 }
 
 impl Decision {
@@ -101,18 +101,75 @@ impl Decision {
     }
 }
 
+/// Why a candidate waits for a person. A value, not a sentence: the interface words it
+/// in the person's language, the command line through [`std::fmt::Display`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Why {
+    /// A new major, another image, or a tag no version reads: its migration guide first.
+    Major,
+    /// Further than the house — or the manifest, when the house says nothing — lets an
+    /// update go alone.
+    BeyondReach {
+        jump: Jump,
+        reach: Automatic,
+        by_house: bool,
+    },
+    /// A release on the way says it breaks something, or migrates data.
+    NotesSay { tag: String, word: String },
+    /// The target's notes are not among the releases: nobody read what it changes.
+    NotesMissing { tag: String },
+    /// The notes could not be read.
+    NotesUnreadable { error: String },
+}
+
+impl std::fmt::Display for Why {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Major => write!(f, "a major move: its migration guide first"),
+            Self::BeyondReach {
+                jump,
+                reach,
+                by_house,
+            } => write!(
+                f,
+                "a {} move, and {} applies {} alone",
+                jump.as_str(),
+                if *by_house {
+                    "the house"
+                } else {
+                    "the manifest"
+                },
+                match reach {
+                    Automatic::None => "nothing".to_string(),
+                    a => format!("up to a {}", a.as_str()),
+                }
+            ),
+            Self::NotesSay { tag, word } => {
+                write!(f, "the notes of {tag} say \"{word}\": read them first")
+            }
+            Self::NotesMissing { tag } => {
+                write!(
+                    f,
+                    "no release notes found for {tag}: nobody read what it changes"
+                )
+            }
+            Self::NotesUnreadable { error } => {
+                write!(f, "its release notes could not be read ({error})")
+            }
+        }
+    }
+}
+
 /// Decides who applies `c`. `house` is the owner's setting for this app, or for the whole
 /// house, and wins over the manifest's either way: the house is theirs.
 pub fn decide(c: &Candidate, installed: &Manifest, house: Option<Automatic>) -> Decision {
     let jump = Jump::of(c, installed);
     if jump == Jump::Major {
-        return Decision::Manual {
-            why: "a major move: its migration guide first".into(),
-        };
+        return Decision::Manual { why: Why::Major };
     }
-    let (reach, whose) = match house {
-        Some(a) => (a, "the house"),
-        None => (installed.spec.update.automatic(), "the manifest"),
+    let (reach, by_house) = match house {
+        Some(a) => (a, true),
+        None => (installed.spec.update.automatic(), false),
     };
     let reached = match reach {
         Automatic::None => false,
@@ -123,22 +180,37 @@ pub fn decide(c: &Candidate, installed: &Manifest, house: Option<Automatic>) -> 
         Decision::Automatic
     } else {
         Decision::OneClick {
-            why: format!(
-                "a {} move, and {whose} applies {} alone",
-                jump.as_str(),
-                match reach {
-                    Automatic::None => "nothing".to_string(),
-                    a => format!("up to a {}", a.as_str()),
-                }
-            ),
+            why: Why::BeyondReach {
+                jump,
+                reach,
+                by_house,
+            },
         }
     }
 }
 
+/// The repository whose releases say what `c` changes — the catalog's manifest first,
+/// which may name it since the app was installed.
+pub fn notes_source<'a>(installed: &'a Manifest, catalog: Option<&'a Manifest>) -> Option<&'a str> {
+    catalog
+        .and_then(|m| m.spec.update.notes.as_ref())
+        .or(installed.spec.update.notes.as_ref())
+        .map(|n| n.github.as_str())
+}
+
+/// The tag whose notes are read up to. `None` for the same tag rebuilt, or companions
+/// alone: no release of their own.
+pub fn notes_target(c: &Candidate) -> Option<&str> {
+    match &c.kind {
+        UpdateKind::NewVersion { to_tag } => Some(to_tag),
+        UpdateKind::Catalog { tag, .. } => Some(tag),
+        UpdateKind::DigestOnly | UpdateKind::Companions => None,
+    }
+}
+
 /// [`decide`], then the release notes between what runs and the target, when the manifest
-/// says where they are — the catalog's manifest first, which may name them since. They only
-/// ever take the automatic path away: a warning, or notes that could not be read, leave the
-/// update to a person.
+/// says where they are. They only ever take the automatic path away: a warning, or notes
+/// that could not be read, leave the update to a person.
 pub async fn judge(
     registry: &hlb_registry::RegistryClient,
     c: &Candidate,
@@ -150,45 +222,38 @@ pub async fn judge(
     if !decision.is_automatic() {
         return decision;
     }
-    let Some(notes) = catalog
-        .and_then(|m| m.spec.update.notes.as_ref())
-        .or(installed.spec.update.notes.as_ref())
-    else {
+    let (Some(github), Some(to)) = (notes_source(installed, catalog), notes_target(c)) else {
         return decision;
-    };
-    let to = match &c.kind {
-        UpdateKind::NewVersion { to_tag } => to_tag,
-        UpdateKind::Catalog { tag, .. } => tag,
-        // The same tag rebuilt has no release of its own.
-        UpdateKind::DigestOnly | UpdateKind::Companions => return decision,
     };
     guarded(
         decision,
         registry
-            .release_notes(&notes.github, &c.from_tag, to)
+            .release_notes(github, &c.from_tag, to)
             .await
-            .map(|read| hlb_registry::notes::warning(&read, to)),
+            .map(|read| hlb_registry::notes::warning(&read, to))
+            .map_err(|e| e.to_string()),
     )
 }
 
 /// The automatic path, kept only when the notes were read and warn of nothing.
-fn guarded(
+pub fn guarded(
     decision: Decision,
-    notes: Result<Option<hlb_registry::notes::Warning>, hlb_registry::Error>,
+    notes: Result<Option<hlb_registry::notes::Warning>, String>,
 ) -> Decision {
     use hlb_registry::notes::Warning;
-    match notes {
-        Ok(None) => decision,
-        Ok(Some(Warning::Says { tag, word })) => Decision::OneClick {
-            why: format!("the notes of {tag} say \"{word}\": read them first"),
-        },
-        Ok(Some(Warning::TargetMissing { tag })) => Decision::OneClick {
-            why: format!("no release notes found for {tag}: nobody read what it changes"),
-        },
-        Err(e) => Decision::OneClick {
-            why: format!("its release notes could not be read ({e})"),
-        },
+    if !decision.is_automatic() {
+        return decision;
     }
+    let why = match notes {
+        Ok(None) => return decision,
+        Ok(Some(Warning::Says { tag, word })) => Why::NotesSay {
+            tag,
+            word: word.to_string(),
+        },
+        Ok(Some(Warning::TargetMissing { tag })) => Why::NotesMissing { tag },
+        Err(error) => Why::NotesUnreadable { error },
+    };
+    Decision::OneClick { why }
 }
 
 /// Why the catalog holds the candidate back, if it does: its target tag, or a companion's,
@@ -317,7 +382,11 @@ spec:
         let Decision::OneClick { why } = decide(&p, &m, Some(Automatic::None)) else {
             panic!("the house stopped it");
         };
-        assert!(why.contains("the house"), "{why}");
+        assert!(
+            matches!(why, Why::BeyondReach { by_house: true, .. }),
+            "{why}"
+        );
+        assert!(why.to_string().contains("the house"), "{why}");
         assert_eq!(
             decide(&moving_to("1.25.0"), &m, Some(Automatic::Minor)),
             Decision::Automatic
@@ -356,14 +425,15 @@ spec:
             guarded(Decision::Automatic, Ok(Some(missing))),
             Decision::OneClick { .. }
         ));
-        let unread = hlb_registry::Error::Registry {
-            status: 403,
-            detail: "rate limit".into(),
-        };
         assert!(matches!(
-            guarded(Decision::Automatic, Err(unread)),
-            Decision::OneClick { .. }
+            guarded(Decision::Automatic, Err("rate limit".into())),
+            Decision::OneClick {
+                why: Why::NotesUnreadable { .. }
+            }
         ));
+        // What already waits for a person is left as it is.
+        let manual = Decision::Manual { why: Why::Major };
+        assert_eq!(guarded(manual.clone(), Err("x".into())), manual);
     }
 
     #[test]

@@ -47,6 +47,15 @@ pub enum Cause {
     /// sent, and learns otherwise from a bounce days later. The subjects are the
     /// recipients' domains; `hlb mail queue` says what the last attempt was told.
     MailWaiting,
+    /// An update waits for a click, after its notes are read: a minor, or what the
+    /// notes stopped from applying itself. The subjects are the apps.
+    UpdateNeedsApproval,
+    /// A major waits for a person, with its migration guide: `hlb update apply`.
+    UpdateNeedsHands,
+    /// 🔴 The automatic path, or an approved update, was refused or rolled back while
+    /// nobody was there; it is not tried again until a person looks. The subjects are
+    /// the apps.
+    UpdateRefused,
 
     // --- Data -----------------------------------------------------------------
     /// 🔴 Running, and nothing protects its data.

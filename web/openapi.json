@@ -1746,6 +1746,51 @@
             "type": "object"
           },
           {
+            "description": "An update waits for a click, after its notes are read: a minor, or what the\nnotes stopped from applying itself. The subjects are the apps.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "update_needs_approval"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A major waits for a person, with its migration guide: `hlb update apply`.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "update_needs_hands"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "🔴 The automatic path, or an approved update, was refused or rolled back while\nnobody was there; it is not tried again until a person looks. The subjects are\nthe apps.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "update_refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 Running, and nothing protects its data.",
             "properties": {
               "kind": {
@@ -5998,6 +6043,22 @@
         ],
         "description": "What a successful sign-up returns."
       },
+      "ReleaseNote": {
+        "description": "One release's notes, to read before approving.",
+        "properties": {
+          "tag": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "url"
+        ],
+        "type": "object"
+      },
       "Replicas": {
         "description": "Live replicas over the wanted total: see [`AppDetail::replicas`].",
         "properties": {
@@ -7137,6 +7198,271 @@
         ],
         "type": "string"
       },
+      "UpdateJump": {
+        "description": "How far an update moves what runs.",
+        "enum": [
+          "patch",
+          "minor",
+          "major"
+        ],
+        "type": "string"
+      },
+      "UpdateMove": {
+        "description": "What moves.",
+        "enum": [
+          "rebuild",
+          "version",
+          "catalog",
+          "companions"
+        ],
+        "type": "string"
+      },
+      "UpdateNeed": {
+        "description": "What a waiting update needs from a person.",
+        "enum": [
+          "approval",
+          "hands",
+          "look"
+        ],
+        "type": "string"
+      },
+      "UpdateReach": {
+        "description": "How far updates go alone.",
+        "enum": [
+          "none",
+          "patch",
+          "minor"
+        ],
+        "type": "string"
+      },
+      "UpdateRefusal": {
+        "description": "What stopped the automatic path, or an approved update, from applying. The text a\nvalue carries is the tool's own (the scan, the backup, Swarm), shown as received.",
+        "oneOf": [
+          {
+            "description": "Critical vulnerabilities, or a signature that is not the publisher's.",
+            "properties": {
+              "described": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "vulnerable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "described",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The copy owed before the switch failed: nothing switched.",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "copy_failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It could not even start.",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Swarm rolled the switch back: the previous version runs.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rolled_back"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The switch paused: a person looks.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "paused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "No outcome within the time allotted.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "inconclusive"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "UpdateWho": {
+        "description": "Who applies an update.",
+        "enum": [
+          "automatic",
+          "one_click",
+          "manual"
+        ],
+        "type": "string"
+      },
+      "UpdateWhy": {
+        "description": "Why an update waits for a person.",
+        "oneOf": [
+          {
+            "description": "A new major, another image, or a tag no version reads.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "major"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Further than the house — or the manifest, when the house says nothing — lets an\nupdate go alone.",
+            "properties": {
+              "by_house": {
+                "type": "boolean"
+              },
+              "jump": {
+                "$ref": "#/components/schemas/UpdateJump"
+              },
+              "kind": {
+                "enum": [
+                  "beyond_reach"
+                ],
+                "type": "string"
+              },
+              "reach": {
+                "$ref": "#/components/schemas/UpdateReach"
+              }
+            },
+            "required": [
+              "by_house",
+              "jump",
+              "kind",
+              "reach"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A release on the way says it breaks something or migrates data; `word` is the\none found, as the notes wrote it.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "notes_say"
+                ],
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              },
+              "word": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tag",
+              "word"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The target's notes are not among the releases.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "notes_missing"
+                ],
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "tag"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The notes could not be read; `error` as the server was told.",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "notes_unreadable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "UptimeSample": {
         "description": "One day's WORST recorded state for a service — `state: None` means no sample was\never taken that day, distinct from `Operational`: \"an empty series is not a zero\nseries.\"",
         "properties": {
@@ -7336,6 +7662,118 @@
           "name",
           "path",
           "sqlite"
+        ],
+        "type": "object"
+      },
+      "WaitingUpdate": {
+        "description": "One update waiting.",
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "approved": {
+            "description": "Approved since its last refusal: the pass applies it in its window.",
+            "type": "boolean"
+          },
+          "approved_at": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "approved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decided_at": {
+            "description": "Seconds since the epoch: when the pass last decided.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "from_tag": {
+            "type": "string"
+          },
+          "moves": {
+            "$ref": "#/components/schemas/UpdateMove"
+          },
+          "needs": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UpdateNeed",
+                "description": "Who must act on it: the automatic path's refusal is a person's again."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "description": "The releases between what runs and the target; `null` when the manifest names\nno source for them, or they could not be read.",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseNote"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "refused": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UpdateRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refused_at": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "to_tag": {
+            "description": "The tag it moves to; `null` for a rebuild or companions alone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "who": {
+            "$ref": "#/components/schemas/UpdateWho"
+          },
+          "why": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UpdateWhy",
+                "description": "`null` when it applies itself."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "app",
+          "approved",
+          "approved_at",
+          "approved_by",
+          "decided_at",
+          "from_tag",
+          "moves",
+          "needs",
+          "notes",
+          "refused",
+          "refused_at",
+          "to_tag",
+          "who",
+          "why"
         ],
         "type": "object"
       },
@@ -8814,6 +9252,66 @@
           }
         },
         "summary": "Changes an application's replica count.",
+        "x-hlb-preview": true,
+        "x-hlb-requires": "operate"
+      }
+    },
+    "/api/apps/{name}/update/approve": {
+      "post": {
+        "description": "What is approved is the image the decision named — a newer one proposed since needs\nits own click. A major is refused: it is applied by hand, with its migration guide.",
+        "operationId": "approve",
+        "parameters": [
+          {
+            "description": "🔴 Absent or `false` = **preview**. That is the default, and it changes nothing.",
+            "in": "query",
+            "name": "apply",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            },
+            "description": "Nothing waits to be approved: the body's `blockers` say why"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "Approves an app's waiting update, for the hourly pass to apply in its window.",
         "x-hlb-preview": true,
         "x-hlb-requires": "operate"
       }
@@ -11483,6 +11981,38 @@
           }
         },
         "summary": "The cluster's topology, grouped by failure domain.",
+        "x-hlb-requires": "read"
+      }
+    },
+    "/api/updates": {
+      "get": {
+        "operationId": "updates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WaitingUpdate"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Refused or failed: the status says which, the body says why, in a sentence for a person."
+          }
+        },
+        "summary": "Every update waiting, by app: who applies it, why a person is needed, and its notes.",
         "x-hlb-requires": "read"
       }
     },

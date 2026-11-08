@@ -38,6 +38,12 @@ export function title(issue: Issue): string {
 			return m.cause_job_failed(n);
 		case 'mail_waiting':
 			return m.cause_mail_waiting(n);
+		case 'update_needs_approval':
+			return m.cause_update_needs_approval(n);
+		case 'update_needs_hands':
+			return m.cause_update_needs_hands(n);
+		case 'update_refused':
+			return m.cause_update_refused(n);
 		case 'never_backed_up':
 			return m.cause_never_backed_up(n);
 		case 'no_backup_destination':
@@ -180,6 +186,10 @@ export function where(issue: Issue): string {
 		case 'guide_blocking':
 		case 'guide_pending':
 			return '/todo';
+		case 'update_needs_approval':
+		case 'update_needs_hands':
+		case 'update_refused':
+			return '/updates';
 		case 'never_backed_up':
 		case 'no_fresh_copy':
 		case 'one_fresh_copy':
@@ -259,6 +269,12 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_job_failed();
 		case 'mail_waiting':
 			return m.reason_mail_waiting();
+		case 'update_needs_approval':
+			return m.reason_update_needs_approval();
+		case 'update_needs_hands':
+			return m.reason_update_needs_hands();
+		case 'update_refused':
+			return m.reason_update_refused();
 		case 'never_backed_up':
 			return m.reason_never_backed_up();
 		case 'no_fresh_copy':

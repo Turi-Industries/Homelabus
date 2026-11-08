@@ -360,7 +360,7 @@ pub async fn upgrade_app(
 ///
 /// Logged as a failure: not knowing what to do is a result, and keeping quiet about it
 /// would leave a screen with no explanation.
-async fn action_error(
+pub(crate) async fn action_error(
     s: &AppState,
     identity: &crate::auth::Identity,
     action: &str,

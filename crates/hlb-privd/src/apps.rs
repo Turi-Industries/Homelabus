@@ -3,7 +3,7 @@
 //! Each is re-derived here from the catalog and the state: the web side names the app
 //! and the domains a person chose, never a manifest, an image or a plan.
 
-use hlb_api::intent::{Acted, AttestGuide, Install, Remove, Upgrade};
+use hlb_api::intent::{Acted, ApproveUpdate, AttestGuide, Install, Remove, Upgrade};
 use hlb_api::{ActionResult, ActionStep, StepState};
 use hlb_orchestrator::Orchestrator;
 
@@ -304,6 +304,105 @@ pub(crate) async fn catalog_changes(p: &Privd, app: &str) -> Vec<String> {
         &entry.guide,
     ));
     changes
+}
+
+/// Approves an app's waiting update, as the hourly pass last decided it — read from the
+/// state, never by asking a registry again: what is approved is the digest the person
+/// was shown. The pass applies it in its window, through every guard it keeps with
+/// nobody there; the switch is never claimed done here.
+pub(crate) async fn approve_update(p: &Privd, i: ApproveUpdate) -> Acted {
+    use hlb_api::updates::UpdateNeed;
+    let ApproveUpdate { app, by, apply } = i;
+    let row = match p.state.update_decision(&app).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return Acted::Unplannable(format!(
+                "no update of \"{app}\" waits: none was seen, or it was applied — `hlb \
+                 update check` asks the registries now"
+            ))
+        }
+        Err(e) => return Acted::Unplannable(e.to_string()),
+    };
+    let Some(w) = row.waiting() else {
+        return Acted::Unplannable(format!(
+            "the decision about \"{app}\" was written by a newer hlb: `hlb update check`"
+        ));
+    };
+    let to = match &w.to_tag {
+        Some(t) => t.clone(),
+        None => format!("{} rebuilt", w.from_tag),
+    };
+    let mut blockers = Vec::new();
+    match w.needs() {
+        Some(UpdateNeed::Hands) => blockers.push(format!(
+            "a major move is applied by hand, with its migration guide: `hlb update apply {app}`"
+        )),
+        None if w.approved() => {
+            blockers.push("already approved: it applies in its maintenance window".into())
+        }
+        None => blockers.push(
+            "it applies itself in its maintenance window: there is nothing to approve".into(),
+        ),
+        Some(UpdateNeed::Approval | UpdateNeed::Look) => {}
+    }
+    let mut warnings = Vec::new();
+    if let Some(hlb_api::updates::UpdateRefusal::Vulnerable { .. }) = &w.refused {
+        warnings.push(format!(
+            "its scan refused it, and refuses it again unless the image changed: `hlb update \
+             apply {app} --force-vulnerable` overrides it, as a decision"
+        ));
+    }
+
+    let applied = apply
+        && blockers.is_empty()
+        && match p
+            .state
+            .approve_update(&app, &row.digest, &by, crate::now())
+            .await
+        {
+            Ok(true) => true,
+            Ok(false) => {
+                return Acted::Unplannable(format!(
+                    "a newer image of \"{app}\" was proposed meanwhile: read it, then approve \
+                     that one"
+                ))
+            }
+            Err(e) => return Acted::Unplannable(e.to_string()),
+        };
+    let step = |description: String, done: bool| ActionStep {
+        description,
+        state: if done {
+            StepState::Done
+        } else {
+            StepState::Planned
+        },
+        error: None,
+    };
+    Acted::Planned(ActionResult {
+        applied,
+        summary: format!("approve {app}'s update from {} to {to}", w.from_tag),
+        steps: vec![
+            step(
+                format!("approved, for {} only", short(&row.digest)),
+                applied,
+            ),
+            step(
+                "applied in its maintenance window by the hourly pass: the copy its data owes \
+                 first, the scan, then the switch — or refused, and said"
+                    .into(),
+                false,
+            ),
+        ],
+        cli_command: format!("hlb update apply {app}"),
+        blockers,
+        warnings,
+        confirmation_required: None,
+    })
+}
+
+/// A digest as a person compares it: its algorithm and twelve characters.
+fn short(digest: &str) -> &str {
+    &digest[..digest.len().min("sha256:".len() + 12)]
 }
 
 /// Brings an installed app to its catalog manifest; what would strand data is refused

@@ -2281,5 +2281,91 @@
 	"catalog_step_uninstall": "removal",
 	"catalog_outcome_passed": "passed",
 	"catalog_outcome_failed": "failed",
-	"catalog_outcome_not_run": "not run"
+	"catalog_outcome_not_run": "not run",
+	"page_apps_updates": "Updates",
+	"cause_update_needs_approval": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "An update of {shown} application waits for your approval",
+				"countPlural=*": "Updates of {shown} applications wait for your approval"
+			}
+		}
+	],
+	"cause_update_needs_hands": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "A major update of {shown} application is applied by hand",
+				"countPlural=*": "Major updates of {shown} applications are applied by hand"
+			}
+		}
+	],
+	"cause_update_refused": [
+		{
+			"declarations": [
+				"input count",
+				"input shown",
+				"local countPlural = count: plural"
+			],
+			"selectors": [
+				"countPlural"
+			],
+			"match": {
+				"countPlural=one": "An update of {shown} application was refused while nobody was there",
+				"countPlural=*": "Updates of {shown} applications were refused while nobody was there"
+			}
+		}
+	],
+	"reason_update_needs_approval": "an update waits for your approval",
+	"reason_update_needs_hands": "a major update, applied by hand: hlb update apply",
+	"reason_update_refused": "its update was refused while nobody was there",
+	"updates_title": "Updates waiting",
+	"updates_intro": "Patches apply themselves in each application's maintenance window, after a backup. A minor update waits for your approval once you have read its notes; the same pass then applies it in its window. A major one is applied by hand, with its migration guide.",
+	"updates_none": "No update waits: every application runs what its channel offers.",
+	"updates_moves_to": "{from} → {to}",
+	"updates_moves_rebuild": "{tag}, rebuilt by its publisher",
+	"updates_moves_companions": "{tag}, its companions move",
+	"updates_who_automatic": "Applies itself in its window",
+	"updates_who_one_click": "Waits for your approval",
+	"updates_who_manual": "By hand: hlb update apply {app}",
+	"updates_jump_patch": "patch",
+	"updates_jump_minor": "minor",
+	"updates_jump_major": "major",
+	"updates_reach_none": "nothing",
+	"updates_reach_patch": "patches",
+	"updates_reach_minor": "patches and minor updates",
+	"updates_why_major": "a major update: its migration guide first",
+	"updates_why_beyond_house": "a {jump} update, and the house applies {reach} alone",
+	"updates_why_beyond_manifest": "a {jump} update, and its manifest applies {reach} alone",
+	"updates_why_notes_say": "the notes of {tag} say “{word}”: read them first",
+	"updates_why_notes_missing": "no release notes found for {tag}: nobody read what it changes",
+	"updates_why_notes_unreadable": "its release notes could not be read",
+	"updates_notes": "Notes:",
+	"updates_refused_vulnerable": "Its scan refused it: nothing switched.",
+	"updates_refused_copy_failed": "The backup owed first failed: nothing switched.",
+	"updates_refused_failed": "It could not start.",
+	"updates_refused_rolled_back": "Swarm rolled it back: the previous version runs.",
+	"updates_refused_paused": "The switch paused: look at it before anything else.",
+	"updates_refused_inconclusive": "No outcome within the time allotted: check with hlb ps.",
+	"updates_approved": "Approved by {by}, {at}",
+	"updates_mark_waiting": "waiting",
+	"updates_mark_refused": "refused",
+	"updates_approve": "Approve",
+	"updates_approve_again": "Approve again",
+	"updates_approve_title": "Approve {app}'s update"
 }
