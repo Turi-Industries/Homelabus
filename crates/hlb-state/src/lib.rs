@@ -19,11 +19,13 @@ use sqlx::{Row, SqlitePool};
 mod disks;
 mod firmware;
 mod flaws;
+mod power;
 mod reboots;
 mod roles;
 pub use disks::{Disk, NodeDisks, ZPool};
 pub use firmware::{FirmwareUpdate, NodeFirmware};
 pub use flaws::{host_key, Flaw, ImageScan};
+pub use power::{PowerPhase, PowerStop, UpsPolicy, UpsReading, UpsState};
 pub use reboots::{NodeReboot, RebootPhase, RebootPolicy, DEFAULT_REBOOT_WINDOW};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
 
@@ -81,6 +83,9 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("unreadable stored power stop: {0}")]
+    StoredPower(#[source] serde_json::Error),
 
     #[error("unreadable stored disk reading of {hostname}: {source}")]
     StoredDisks {
