@@ -162,13 +162,23 @@ impl std::fmt::Display for Why {
 
 /// Decides who applies `c`. `house` is the owner's setting for this app, or for the whole
 /// house, and wins over the manifest's either way: the house is theirs.
-pub fn decide(c: &Candidate, installed: &Manifest, house: Option<Automatic>) -> Decision {
+///
+/// `exploited`: what runs carries a flaw exploited in the wild. The manifest's reach is
+/// then raised to a minor — a fix waiting a week for a click is a week of the flaw —,
+/// never the house's, nor past a major.
+pub fn decide(
+    c: &Candidate,
+    installed: &Manifest,
+    house: Option<Automatic>,
+    exploited: bool,
+) -> Decision {
     let jump = Jump::of(c, installed);
     if jump == Jump::Major {
         return Decision::Manual { why: Why::Major };
     }
     let (reach, by_house) = match house {
         Some(a) => (a, true),
+        None if exploited => (Automatic::Minor, false),
         None => (installed.spec.update.automatic(), false),
     };
     let reached = match reach {
@@ -217,8 +227,9 @@ pub async fn judge(
     installed: &Manifest,
     catalog: Option<&Manifest>,
     house: Option<Automatic>,
+    exploited: bool,
 ) -> Decision {
-    let decision = decide(c, installed, house);
+    let decision = decide(c, installed, house, exploited);
     if !decision.is_automatic() {
         return decision;
     }
@@ -343,9 +354,12 @@ spec:
     #[test]
     fn a_patch_applies_itself_a_minor_waits_for_a_click_a_major_for_a_person() {
         let m = manifest("{ channel: minor }");
-        assert_eq!(decide(&moving_to("1.24.4"), &m, None), Decision::Automatic);
+        assert_eq!(
+            decide(&moving_to("1.24.4"), &m, None, false),
+            Decision::Automatic
+        );
         assert!(matches!(
-            decide(&moving_to("1.25.0"), &m, None),
+            decide(&moving_to("1.25.0"), &m, None, false),
             Decision::OneClick { .. }
         ));
         let catalog_major = Candidate {
@@ -356,7 +370,7 @@ spec:
             ..moving_to("")
         };
         assert!(matches!(
-            decide(&catalog_major, &m, None),
+            decide(&catalog_major, &m, None, false),
             Decision::Manual { .. }
         ));
     }
@@ -365,12 +379,12 @@ spec:
     fn pin_applies_nothing_alone_unless_the_manifest_says_otherwise() {
         let pinned = manifest("{ channel: pin }");
         assert!(matches!(
-            decide(&moving_to("1.24.4"), &pinned, None),
+            decide(&moving_to("1.24.4"), &pinned, None, false),
             Decision::OneClick { .. }
         ));
         let minor_alone = manifest("{ channel: minor, automatic: minor }");
         assert_eq!(
-            decide(&moving_to("1.25.0"), &minor_alone, None),
+            decide(&moving_to("1.25.0"), &minor_alone, None, false),
             Decision::Automatic
         );
     }
@@ -379,7 +393,7 @@ spec:
     fn the_house_wins_over_the_manifest_both_ways() {
         let m = manifest("{ channel: minor }");
         let p = moving_to("1.24.4");
-        let Decision::OneClick { why } = decide(&p, &m, Some(Automatic::None)) else {
+        let Decision::OneClick { why } = decide(&p, &m, Some(Automatic::None), false) else {
             panic!("the house stopped it");
         };
         assert!(
@@ -388,7 +402,7 @@ spec:
         );
         assert!(why.to_string().contains("the house"), "{why}");
         assert_eq!(
-            decide(&moving_to("1.25.0"), &m, Some(Automatic::Minor)),
+            decide(&moving_to("1.25.0"), &m, Some(Automatic::Minor), false),
             Decision::Automatic
         );
         // Never a major, whatever the house says.
@@ -400,7 +414,31 @@ spec:
             ..moving_to("")
         };
         assert!(matches!(
-            decide(&other, &m, Some(Automatic::Minor)),
+            decide(&other, &m, Some(Automatic::Minor), false),
+            Decision::Manual { .. }
+        ));
+    }
+
+    #[test]
+    fn an_exploited_flaw_raises_the_manifests_reach_and_never_the_houses() {
+        let pinned = manifest("{ channel: pin }");
+        assert_eq!(
+            decide(&moving_to("1.25.0"), &pinned, None, true),
+            Decision::Automatic
+        );
+        // The owner said no: theirs, exploited or not.
+        assert!(matches!(
+            decide(&moving_to("1.24.4"), &pinned, Some(Automatic::None), true),
+            Decision::OneClick { .. }
+        ));
+        let major = Candidate {
+            kind: UpdateKind::NewVersion {
+                to_tag: "2.0.0".into(),
+            },
+            ..moving_to("")
+        };
+        assert!(matches!(
+            decide(&major, &pinned, None, true),
             Decision::Manual { .. }
         ));
     }

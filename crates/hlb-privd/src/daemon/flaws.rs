@@ -9,8 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hlb_notify::Notification;
 use hlb_state::{Flaw, State};
-use hlb_types::{Image, Manifest};
-use hlb_updater::flaws::{alerting, distinct, exposed, line};
+use hlb_updater::flaws::{alerting, distinct, exposed, images, line};
 use hlb_updater::grype::{Finding, Grype};
 
 /// How often the digest goes out.
@@ -44,14 +43,6 @@ impl AppFlaws {
     }
 }
 
-/// The images an app runs, by digest: its own and its companions'. One running by its
-/// tag alone has no digest to read, and is said so.
-fn images(m: &Manifest) -> Vec<&Image> {
-    std::iter::once(&m.spec.image)
-        .chain(m.spec.companions.iter().map(|c| &c.image))
-        .collect()
-}
-
 fn stored(f: Finding, at: i64) -> Flaw {
     Flaw {
         id: f.id,
@@ -78,6 +69,7 @@ pub async fn read(state: &State, grype: &Grype<'_>, at: i64) -> hlb_state::Resul
     let mut digests: BTreeMap<String, String> = BTreeMap::new();
     for m in manifests.values() {
         for i in images(m) {
+            // One running by its tag alone has no digest to read, and is said so.
             match &i.digest {
                 Some(d) => {
                     digests.insert(d.clone(), i.reference());
@@ -218,6 +210,7 @@ pub fn digest(r: &Read) -> Option<Notification> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hlb_types::Manifest;
 
     fn flaw(id: &str, exploited: bool, epss: Option<f64>) -> Flaw {
         Flaw {

@@ -261,6 +261,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
     // --- Security -----------------------------------------------------------------
     out.extend(certificates(&s.state, now).await);
     out.extend(crate::assertions::findings(&s.state, now).await);
+    out.extend(crate::flaws::findings(&s.state, now).await);
     out.extend(crate::mail_dns::findings(&s.state, now).await);
     out.extend(crate::domain::findings(&s.state, now).await);
     for (route, cause) in crate::exposure::findings(&s.state).await {

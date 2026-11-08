@@ -108,6 +108,42 @@ pub async fn seed_from(
         state.record_assertions(&app, &results).await?;
     }
 
+    // --- Flaws, as this morning's pass read them ----------------------------------
+    // Jellyfin, public, running OpenSSL's exploited flaw — the critical line —,
+    // Seafile's images never read — the `unknown` one —, the rest read and quiet.
+    for (app, _) in state.installed_apps().await? {
+        if app == "seafile" {
+            continue;
+        }
+        let m = state.app_manifest(&app).await?;
+        let flaws: Vec<hlb_state::Flaw> = (app == "jellyfin")
+            .then(|| hlb_state::Flaw {
+                id: "CVE-2025-15467".into(),
+                package: "libssl3".into(),
+                severity: "High".into(),
+                version: "3.0.17-1~deb12u2".into(),
+                fixed_in: "3.0.18-1~deb12u1".into(),
+                exploited: true,
+                epss: Some(0.75),
+                first_seen: now - 6 * 3_600,
+            })
+            .into_iter()
+            .collect();
+        for i in hlb_updater::flaws::images(&m) {
+            let digest = i
+                .digest
+                .clone()
+                .unwrap_or_else(|| format!("sha256:{:0<64}", app.len()));
+            state
+                .record_image_scan(&digest, &i.reference(), now - 6 * 3_600, Ok(&flaws))
+                .await?;
+        }
+        let said: std::collections::BTreeSet<String> = flaws.iter().map(|f| f.id.clone()).collect();
+        state
+            .set_alerted_flaws(&app, &said, now - 6 * 3_600)
+            .await?;
+    }
+
     // --- Mail records: the RSA key never published, the rest in place ------------
     {
         use hlb_api::mail_dns::{MailRecord, Purpose, RecordState};

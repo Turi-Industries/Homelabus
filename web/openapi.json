@@ -2253,6 +2253,36 @@
             "type": "object"
           },
           {
+            "description": "🔴 An app the internet reaches runs a flaw a fix exists for, exploited in the\nwild or likely to be. The subjects are the apps; `hlb update check` says whether\nan update carries the fix.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "flaw_exploitable"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An image an app runs was not read against the flaws known today for two days, or\never: an image unread is not an image clean. The subjects are the apps.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "flaws_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 A DNS record the house's mail needs is not what the internet resolves — a\nDKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as\nspam. The subjects are the records' names; `hlb mail dns` prints the lines.",
             "properties": {
               "kind": {

@@ -90,6 +90,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   17.6's 159 fixable flaws hold one —, once per flaw until it is gone; the rest, and every
   image NOT READ, in a weekly digest. A failed reading keeps the last good one
   (`ImageScan::is_current`); an ingress never applied counts as exposed.
+  The inbox says it per app (`flaw_exploitable`, critical, from `flaw_alerts`) and an
+  image with no good reading for two days (`flaws_unknown`) — 🔴 one running by its tag
+  alone included: no digest to read is not clean.
+- **An exploited flaw in what runs makes its update urgent** (`hlb_updater::flaws::exploited`,
+  KEV only, not EPSS): the hourly pass skips maturity (audited `update-before-maturity`)
+  and raises the MANIFEST's reach to a minor — a pinned manifest too. The house's own
+  setting stays the owner's, a major stays a person's, and the window, the notes, the
+  scan and the copy first all hold. Whether the move carries the fix is unknown until it
+  is scanned: the bet is that a bad release harms less than a known attack.
 - **A security scan reads the digest that will run.** A rebuild was scanned as the
   installed image's own `reference()` — the OLD digest — and a version by its tag alone,
   which may name another build by the switch.

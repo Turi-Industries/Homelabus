@@ -122,6 +122,13 @@ pub enum Cause {
     AssertionBroken,
     /// An app's assertions could not be read, or not lately: a door nobody looked at.
     AssertionUnknown,
+    /// 🔴 An app the internet reaches runs a flaw a fix exists for, exploited in the
+    /// wild or likely to be. The subjects are the apps; `hlb update check` says whether
+    /// an update carries the fix.
+    FlawExploitable,
+    /// An image an app runs was not read against the flaws known today for two days, or
+    /// ever: an image unread is not an image clean. The subjects are the apps.
+    FlawsUnknown,
     /// 🔴 A DNS record the house's mail needs is not what the internet resolves — a
     /// DKIM key nobody published, no SPF, an MX elsewhere: mail is refused or filed as
     /// spam. The subjects are the records' names; `hlb mail dns` prints the lines.
