@@ -1375,7 +1375,9 @@ reported within 24 hours.
   and never applies it — read daily since 2026-11-08 (`hlb_updater::firmware`) into the
   inbox (`firmware_update`, `firmware_unknown`), never measured on a real board's
   capsule yet.
-- `cargo deny` beside `cargo audit`. Disks: SMART read nightly, a scheduled scrub, an
+- `cargo deny` beside `cargo audit` — done 2026-11-08: licences, bans and sources in CI's
+  "Dependencies" job, the advisories left to `cargo audit`'s one list. Disks: SMART read
+  nightly, a scheduled scrub, an
   alert on reallocated sectors — smartmontools is installed and nothing reads it. The
   UPS: NUT stops apps, then databases, then Swarm, in that order.
 

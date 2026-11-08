@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 description = "Vaultwarden client: an organisation's members, and the emergency vault's deposits — Bitwarden's client cryptography included."
 
 [dependencies]

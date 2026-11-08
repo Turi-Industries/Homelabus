@@ -1,0 +1,63 @@
+# Read by `cargo deny check licenses bans sources` (CI's "Dependencies" job).
+#
+# Advisories are NOT checked here: `cargo audit` reads them, with `.cargo/audit.toml`'s
+# ignores and their reasons. Two lists of ignored advisories would drift apart, and the
+# one nobody reads would be the one that matters.
+
+[graph]
+# The binaries run on Linux nodes; a developer's macOS builds them too. A dependency of a
+# Windows target alone ships in nothing.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+]
+
+[licenses]
+# Everything the binary links must be one Homelabus (AGPL-3.0-or-later) can ship under.
+# A crate offering several (`Apache-2.0 OR GPL-2.0-only`, self_cell's) passes on the
+# permissive one; a new licence fails CI until someone reads it and adds it here.
+allow = [
+    "0BSD",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+# Several versions of one crate are common (base64 0.21, 0.22 and 0.23 today) and cost
+# build time, not safety: said, never blocking.
+multiple-versions = "warn"
+# A `*` version takes whatever is published tomorrow. The workspace's own path crates
+# have no version to pin.
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # TLS is rustls everywhere: a crate linking the system's OpenSSL (reqwest's
+    # `native-tls`, git2's `https`) ties each binary to the libssl of the node it runs on.
+    { name = "openssl-sys", reason = "TLS is rustls: no system OpenSSL in the binaries" },
+    { name = "native-tls", reason = "TLS is rustls: no system OpenSSL in the binaries" },
+    # Unmaintained since 2024; every manifest is read by serde_yaml_ng. Both in one
+    # binary would parse the same YAML two ways.
+    { name = "serde_yaml", reason = "unmaintained: serde_yaml_ng reads every manifest" },
+]
+
+[sources]
+# crates.io only. A git dependency is code no registry recorded, at a revision anyone
+# with push access to that repository can move.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

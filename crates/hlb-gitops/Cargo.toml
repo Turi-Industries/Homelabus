@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 description = "Git mirror of the desired state: history, diff and rollback."
 
 [dependencies]
