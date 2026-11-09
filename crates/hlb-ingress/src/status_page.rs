@@ -201,8 +201,15 @@ struct Watched {
 struct Probed {
     w: Watched,
     url: String,
-    condition: &'static str,
+    conditions: &'static [&'static str],
 }
+
+/// A public app's conditions. 🔴 Gatus reads a timeout or a refused connection as status
+/// 0, which `< 500` lets through: a hung app read as up every minute (the lab,
+/// 2026-11-09). `[CONNECTED]` is true only once an answer came.
+const ANSWERS: &[&str] = &["[STATUS] < 500", "[CONNECTED] == true"];
+/// A private app's: refused, which no silence imitates.
+const REFUSES: &[&str] = &["[STATUS] == 403"];
 
 /// The probes, in the page's order, each name once: `served` are the names the site
 /// serves itself — the lifeboat's, once promoted — whose private apps are open on
@@ -225,12 +232,12 @@ fn probed(page: &Page, served: &[String]) -> Vec<Probed> {
         .map(|p| {
             let promoted = served.iter().any(|s| s.eq_ignore_ascii_case(&p.host));
             let title = p.title;
-            let (group, condition, description, kind, down, up) = if p.public || promoted {
+            let (group, conditions, description, kind, down, up) = if p.public || promoted {
                 (
                     SERVICES,
                     // A redirect to the sign-in, a 401: the app answered. A 502 is
                     // Caddy saying the app behind it did not.
-                    "[STATUS] < 500",
+                    ANSWERS,
                     format!("{title} does not answer from the internet"),
                     Kind::Outage,
                     format!("{title} is unavailable at the moment. We know, and we are on it."),
@@ -239,7 +246,7 @@ fn probed(page: &Page, served: &[String]) -> Vec<Probed> {
             } else {
                 (
                     CLOSED,
-                    "[STATUS] == 403",
+                    REFUSES,
                     format!(
                         "{title} should be refused from the internet (403): it either answers \
                          nothing or answers strangers"
@@ -265,7 +272,7 @@ fn probed(page: &Page, served: &[String]) -> Vec<Probed> {
             Probed {
                 w: watched,
                 url: format!("https://{}/", p.host),
-                condition,
+                conditions,
             }
         })
         .collect()
@@ -340,7 +347,7 @@ pub fn render(page: &Page, served: &[String]) -> String {
             headers: None,
             interval: "1m".into(),
             client: Client::default(),
-            conditions: vec![p.condition.into()],
+            conditions: p.conditions.iter().map(|c| (*c).into()).collect(),
             ui: Ui::hidden(),
             alerts: vec![Alert::announced(&p.w, page, None)],
         })
@@ -714,7 +721,16 @@ mod tests {
         assert_eq!(vault["conditions"][0].as_str(), Some("[STATUS] == 403"));
         assert_eq!(vault["group"].as_str(), Some(CLOSED));
         let films = endpoint(&v, "Jellyfin");
-        assert_eq!(films["conditions"][0].as_str(), Some("[STATUS] < 500"));
+        let conditions: Vec<_> = films["conditions"]
+            .as_sequence()
+            .expect("conditions")
+            .iter()
+            .filter_map(|c| c.as_str())
+            .collect();
+        assert_eq!(
+            conditions, ANSWERS,
+            "an answer, not just a status under 500"
+        );
         assert_eq!(films["group"].as_str(), Some(SERVICES));
         assert_eq!(films["url"].as_str(), Some("https://films.example.fr/"));
     }

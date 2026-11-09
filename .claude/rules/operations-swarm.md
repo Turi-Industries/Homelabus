@@ -127,6 +127,11 @@ Most of these fail behind a healthy task.
   answered "no such container", read as the command failing — the guides' `exec`
   automations had the same blind spot. There, a job on that node runs `docker exec`
   against its own daemon (`DOCKER_CLI_IMAGE`), its exit code printed last and read back.
+- **🔴 The `docker` CLI reaches the LOCAL daemon unless told otherwise.** An
+  orchestrator of the site's daemon (`connect_unix`, bridged over SSH) read the house's
+  previous spec, probe and logs for the site's services — the lifeboat's `postgres` and
+  `vaultwarden` exist on both. Every CLI call goes through `SwarmOrchestrator::cli`,
+  which sets `DOCKER_HOST` (`tests/cli_follows_the_daemon.rs`).
 - **`docker service logs` is the BINARY's** (bollard has no service logs): a process
   without `docker` read every job's log as empty, and a remote exec "did not say how it
   ended" with nothing naming the missing binary. The controller's image carries it; a

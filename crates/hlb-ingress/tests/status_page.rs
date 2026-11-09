@@ -1,6 +1,7 @@
 //! The status page's configuration, on the real Gatus against a real Caddy: a public
 //! app judged by its answer, a private one by its refusal — and a private app answering
-//! strangers judged DOWN, since that is a door left open.
+//! strangers judged DOWN, since that is a door left open. A public app answering NOTHING
+//! is down too: Gatus reads a timeout's status as 0, which is below 500.
 //!
 //! Gatus reaches each name at the address it is given (`--add-host`, as the site's
 //! service is given the door's), trusting the authority it is told to, as the site's
@@ -25,6 +26,8 @@ const CURL: &str =
 
 const NETWORK: &str = "hlb-status-page-test";
 const CADDY_IP: &str = "172.31.251.10";
+/// An address on the test's network nothing answers at: an app hung or gone.
+const SILENT_IP: &str = "172.31.251.99";
 
 fn image() -> String {
     std::env::var("HLB_CADDY_IMAGE").unwrap_or_else(|_| "hlb-caddy:dev".into())
@@ -131,6 +134,7 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
             probe("Jellyfin", "films.example.test", true),
             probe("Vaultwarden", "vault.example.test", false),
             probe("Leaky", "leak.example.test", false),
+            probe("Hung", "hung.example.test", true),
         ],
         house: Some(CADDY_IP.parse::<Ipv4Addr>().expect("address")),
         token: "tk_0123456789abcdefghijklmnopqrs".into(),
@@ -172,15 +176,21 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
         "SSL_CERT_FILE=/config/root.pem".into(),
     ];
     for p in &page.probes {
+        let ip = if p.title == "Hung" {
+            SILENT_IP
+        } else {
+            CADDY_IP
+        };
         run.push("--add-host".into());
-        run.push(format!("{}:{CADDY_IP}", p.host));
+        run.push(format!("{}:{ip}", p.host));
     }
     run.push(status_page::IMAGE.into());
     docker(&run.iter().map(String::as_str).collect::<Vec<_>>());
     stand.containers.push(gatus.into());
 
-    // Each endpoint is probed once at start: read until all four have a result.
-    let statuses = within(60, "Gatus has not probed every endpoint", || {
+    // Each endpoint is probed once at start: read until all five have a result — the
+    // hung one after its client's timeout.
+    let statuses = within(90, "Gatus has not probed every endpoint", || {
         let out = Command::new("docker")
             .args([
                 "run",
@@ -205,7 +215,7 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
             .iter()
             .filter(|e| e["results"].as_sequence().is_some_and(|r| !r.is_empty()))
             .count();
-        (probed == 4).then_some(all)
+        (probed == 5).then_some(all)
     });
     let success = |name: &str| {
         let e = statuses
@@ -222,6 +232,12 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
     assert!(
         !success("Leaky"),
         "a private app open to strangers: down — {statuses:?}"
+    );
+    // Measured on the lab, 2026-11-09: LibreSpeed frozen, the door timing out, and the
+    // page said it was up every minute.
+    assert!(
+        !success("Hung"),
+        "a public app answering nothing: down — {statuses:?}"
     );
     assert!(success("Reached over the site link"), "{statuses:?}");
     // The public page names nothing of where: no host, no address in what it serves.
