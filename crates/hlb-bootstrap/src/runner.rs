@@ -202,6 +202,64 @@ impl SshRunner {
         });
         a
     }
+
+    /// Forwards the remote Unix socket `remote` to `local` for as long as the returned
+    /// process lives — it is killed when dropped. Returns once the local socket exists.
+    ///
+    /// For Docker's API on a machine whose daemon listens on its socket alone: the
+    /// connection is the one SSH already authenticates, and nothing listens on TCP.
+    pub async fn forward_socket(
+        &self,
+        remote: &str,
+        local: &std::path::Path,
+    ) -> Result<tokio::process::Child> {
+        let mut args = self.base_args();
+        let target = args.pop().unwrap_or_default();
+        args.extend([
+            "-N".to_string(),
+            // A forward that could not be set up is a failure, never a silent session.
+            "-o".into(),
+            "ExitOnForwardFailure=yes".into(),
+            "-o".into(),
+            "ServerAliveInterval=15".into(),
+            "-L".into(),
+            format!("{}:{remote}", local.display()),
+            target,
+        ]);
+        let spawn = |source| Error::Spawn {
+            command: format!("ssh -L {}", self.host),
+            source,
+        };
+        let mut child = Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(spawn)?;
+        for _ in 0..150 {
+            if local.exists() {
+                return Ok(child);
+            }
+            if let Some(status) = child.try_wait().map_err(spawn)? {
+                let mut err = String::new();
+                if let Some(mut e) = child.stderr.take() {
+                    use tokio::io::AsyncReadExt as _;
+                    let _ = e.read_to_string(&mut err).await;
+                }
+                return Err(Error::Ssh {
+                    host: self.host.clone(),
+                    detail: format!("forwarding {remote} ended ({status}): {}", err.trim()),
+                });
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Err(Error::Ssh {
+            host: self.host.clone(),
+            detail: format!("forwarding {remote}: no socket after 15 s"),
+        })
+    }
 }
 
 #[async_trait::async_trait]

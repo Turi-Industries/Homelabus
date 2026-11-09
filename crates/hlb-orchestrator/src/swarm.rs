@@ -2129,6 +2129,144 @@ fn out_of_sequence(e: &bollard::errors::Error) -> bool {
     )
 }
 
+/// Another machine's daemon, and putting files into its volumes.
+impl SwarmOrchestrator {
+    /// The daemon behind a Unix socket other than the default — another machine's,
+    /// forwarded over SSH.
+    pub async fn connect_unix(path: &std::path::Path) -> Result<Self> {
+        let docker =
+            Docker::connect_with_unix(&path.to_string_lossy(), 120, bollard::API_DEFAULT_VERSION)?
+                .negotiate_version()
+                .await?;
+        Ok(Self::from_docker(docker))
+    }
+
+    /// Pulls `image` unless the daemon has it.
+    pub async fn pull(&self, image: &str) -> Result<()> {
+        use futures::StreamExt as _;
+        if self.docker.inspect_image(image).await.is_ok() {
+            return Ok(());
+        }
+        let opts = bollard::query_parameters::CreateImageOptionsBuilder::default()
+            .from_image(image)
+            .build();
+        let mut progress = self.docker.create_image(Some(opts), None, None);
+        while let Some(p) = progress.next().await {
+            p?;
+        }
+        Ok(())
+    }
+
+    /// Unpacks a tar archive into the volume `volume`, mounted at `mount_at` in a
+    /// container of `image` that never starts: the archive's paths are read from `/`,
+    /// owners and modes kept as written.
+    ///
+    /// The image is one the daemon holds or pulls — the service's own, so nothing else
+    /// is fetched. The volume is created when missing, and nothing it held is removed.
+    pub async fn put_archive<S>(
+        &self,
+        image: &str,
+        volume: &str,
+        mount_at: &str,
+        tar: S,
+    ) -> Result<()>
+    where
+        S: futures::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>
+            + Send
+            + 'static,
+    {
+        self.pull(image).await?;
+        let name = format!("hlb-put-{volume}");
+        // One left by a run that died: its mount is the same, its archive half sent.
+        let _ = self
+            .docker
+            .remove_container(
+                &name,
+                Some(
+                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await;
+        let body = bollard::models::ContainerCreateBody {
+            image: Some(image.to_string()),
+            entrypoint: Some(vec!["true".to_string()]),
+            cmd: Some(Vec::new()),
+            network_disabled: Some(true),
+            host_config: Some(bollard::models::HostConfig {
+                mounts: Some(vec![Mount {
+                    target: Some(mount_at.to_string()),
+                    source: Some(volume.to_string()),
+                    typ: Some(MountType::VOLUME),
+                    ..Default::default()
+                }]),
+                network_mode: Some("none".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        self.docker
+            .create_container(
+                Some(
+                    bollard::query_parameters::CreateContainerOptionsBuilder::default()
+                        .name(&name)
+                        .build(),
+                ),
+                body,
+            )
+            .await?;
+        let put = self
+            .docker
+            .upload_to_container(
+                &name,
+                Some(
+                    bollard::query_parameters::UploadToContainerOptionsBuilder::default()
+                        .path("/")
+                        .build(),
+                ),
+                bollard::body_try_stream(tar),
+            )
+            .await;
+        let removed = self
+            .docker
+            .remove_container(
+                &name,
+                Some(
+                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await;
+        put?;
+        removed?;
+        Ok(())
+    }
+
+    /// Removes a volume, and whatever it held.
+    pub async fn remove_volume(&self, name: &str) -> Result<()> {
+        match self
+            .docker
+            .remove_volume(
+                name,
+                Some(
+                    bollard::query_parameters::RemoveVolumeOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
