@@ -207,6 +207,10 @@ pub enum Drift {
     /// is released or lapses.
     Held { app: String, why: String },
 
+    /// Running another image than the frozen manifest's while an update switches it
+    /// (`State::begin_switch`): the manifest moves once the new image is proved running.
+    Switching { app: String, to: String },
+
     /// Garage no longer holds a bucket the app was given, or its key — or holds a key
     /// of its name that is not the one the app signs with. 🔴 The app's service runs
     /// 1/1 against `No such key` and no other check says a word.
@@ -260,6 +264,7 @@ impl Drift {
             | Self::NoRoom { .. }
             | Self::PullStuck { .. }
             | Self::Held { .. }
+            | Self::Switching { .. }
             | Self::StorageUnread { .. } => None,
         }
     }
@@ -301,6 +306,10 @@ impl Drift {
             Self::Held { .. } => Some(
                 "stopped on purpose, and started again by whoever stopped it: started \
                  here, it would write to a volume being copied or restored",
+            ),
+            Self::Switching { .. } => Some(
+                "an update is switching it and watching what Swarm does: put back here, \
+                 the new image goes away mid-switch and the update cannot tell why",
             ),
             Self::StorageLost { .. } => Some(
                 "a key made here would reach neither the vault nor the app's \
@@ -348,7 +357,8 @@ impl Drift {
             | Self::OrphanService { .. }
             | Self::OrphanCallback { .. }
             | Self::Converging { .. }
-            | Self::Held { .. } => Harmless,
+            | Self::Held { .. }
+            | Self::Switching { .. } => Harmless,
         }
     }
 
@@ -359,6 +369,7 @@ impl Drift {
             | Self::ImageDiverged { app, .. }
             | Self::Converging { app, .. }
             | Self::Held { app, .. }
+            | Self::Switching { app, .. }
             | Self::NoRoom { app, .. }
             | Self::PullStuck { app, .. }
             | Self::StorageLost { app, .. } => app,
@@ -404,6 +415,7 @@ impl std::fmt::Display for Drift {
                 write!(f, "{app}: converging ({running}/{desired})")
             }
             Self::Held { app, why } => write!(f, "{app}: held stopped — {why}"),
+            Self::Switching { app, to } => write!(f, "{app}: an update is switching it to {to}"),
             Self::NoRoom { app, node, moves } if moves.is_empty() => write!(
                 f,
                 "{app}: stays down, {node} holds its data and has no memory left for it"
@@ -812,10 +824,15 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
                 // digest, hence a prefix comparison rather than a strict one.
                 if let Some(expected_image) = e.image {
                     if !svc.image.starts_with(&expected_image) && svc.image != expected_image {
-                        drifts.push(Drift::ImageDiverged {
-                            app: e.service,
-                            expected: expected_image,
-                            actual: svc.image.clone(),
+                        // An update owns the service until it has frozen what it keeps or
+                        // given up: corrected here, its new image went back mid-switch.
+                        drifts.push(match self.state.switching(&e.service).await? {
+                            Some(to) => Drift::Switching { app: e.service, to },
+                            None => Drift::ImageDiverged {
+                                app: e.service,
+                                expected: expected_image,
+                                actual: svc.image.clone(),
+                            },
                         });
                     }
                 }
@@ -962,6 +979,7 @@ impl<'a, O: Orchestrator> Reconciler<'a, O> {
             | Drift::OrphanService { .. }
             | Drift::Converging { .. }
             | Drift::Held { .. }
+            | Drift::Switching { .. }
             | Drift::StorageLost { .. }
             | Drift::StorageUnread { .. }
             | Drift::OrphanCallback { .. } => Ok(()),
@@ -1003,6 +1021,10 @@ mod tests {
             Drift::Held {
                 app: "gitea".into(),
                 why: "restore of gitea-data".into(),
+            },
+            Drift::Switching {
+                app: "gitea".into(),
+                to: "a/b:2@sha256:new".into(),
             },
             Drift::PullStuck {
                 app: "gitea".into(),

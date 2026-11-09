@@ -53,21 +53,29 @@ pub async fn apply<O: Orchestrator + ?Sized>(
             continue;
         };
         tracing::info!(app, companion = %c.name, image = %c.to.reference(), "switching");
-        orch.update_image(&c.service, &c.to.reference())
-            .await
-            .map_err(Error::from)?;
-        let outcome = watch(orch, &c.service, digest, timeout_secs).await?;
+        let outcome = switch(
+            orch,
+            state,
+            &c.service,
+            &c.to.reference(),
+            digest,
+            timeout_secs,
+        )
+        .await?;
+        if outcome.is_success() {
+            // Frozen at once: the state says what runs, the app's switch still to come.
+            let mut m = state.app_manifest(app).await?;
+            if let Some(frozen) = m.spec.companions.iter_mut().find(|f| f.name == c.name) {
+                frozen.image = c.to.clone();
+            }
+            let domain = state.app_domain(app).await?;
+            state.upsert_app(app, &m, domain.as_deref()).await?;
+        }
+        state.end_switch(&c.service).await?;
         if !outcome.is_success() {
             tracing::warn!(app, companion = %c.name, "companion not switched, the app stays");
             return Ok(outcome);
         }
-        // Frozen at once: the state says what runs, the app's switch still to come.
-        let mut m = state.app_manifest(app).await?;
-        if let Some(frozen) = m.spec.companions.iter_mut().find(|f| f.name == c.name) {
-            frozen.image = c.to.clone();
-        }
-        let domain = state.app_domain(app).await?;
-        state.upsert_app(app, &m, domain.as_deref()).await?;
     }
 
     // Deployment is always by digest: that is what determines what runs.
@@ -85,11 +93,15 @@ pub async fn apply<O: Orchestrator + ?Sized>(
     let reference = format!("{target_repo}:{target_tag}@{}", candidate.to_digest);
 
     tracing::info!(app, %reference, "switching");
-    orch.update_image(app, &reference)
-        .await
-        .map_err(Error::from)?;
-
-    let outcome = watch(orch, app, &candidate.to_digest, timeout_secs).await?;
+    let outcome = switch(
+        orch,
+        state,
+        app,
+        &reference,
+        &candidate.to_digest,
+        timeout_secs,
+    )
+    .await?;
 
     match &outcome {
         UpdateOutcome::Applied { digest } => {
@@ -118,8 +130,47 @@ pub async fn apply<O: Orchestrator + ?Sized>(
             tracing::warn!(app, "outcome undetermined within the deadline");
         }
     }
+    // Only now, the new image frozen: ended before, the switch leaves a pass seeing the new
+    // image against the old manifest.
+    state.end_switch(app).await?;
 
     Ok(outcome)
+}
+
+/// How long past the watch a switch keeps reconciliation away: the push and the freezing
+/// after it.
+const SWITCH_MARGIN_SECS: u64 = 60;
+
+/// Pushes `reference` to `service` and watches it, the switch recorded meanwhile. The
+/// caller ends it once it has frozen what it keeps; on an error it ends here.
+///
+/// 🔴 Without the record, reconciliation read the new image against the manifest not yet
+/// frozen and put the old one back mid-switch: Caddy 0.4.8 on the lab, five seconds in,
+/// and the update called inconclusive.
+async fn switch<O: Orchestrator + ?Sized>(
+    orch: &O,
+    state: &State,
+    service: &str,
+    reference: &str,
+    digest: &str,
+    timeout_secs: u64,
+) -> Result<UpdateOutcome> {
+    // A day at most, which no watch approaches: the cast cannot wrap.
+    let lasts = timeout_secs.saturating_add(SWITCH_MARGIN_SECS).min(86_400) as i64;
+    state.begin_switch(service, reference, lasts).await?;
+    let watched = async {
+        orch.update_image(service, reference)
+            .await
+            .map_err(Error::from)?;
+        watch(orch, service, digest, timeout_secs).await
+    }
+    .await;
+    if watched.is_err() {
+        // Best effort: the error being reported is the one that matters, and the switch
+        // lapses on its own.
+        let _ = state.end_switch(service).await;
+    }
+    watched
 }
 
 /// What an app's status becomes once its new image runs — `None`: it stays as it is.

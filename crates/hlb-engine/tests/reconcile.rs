@@ -248,6 +248,36 @@ async fn a_manually_changed_image_is_reverted() {
 }
 
 #[tokio::test]
+async fn an_image_an_update_is_switching_to_is_not_taken_back() {
+    // 🔴 The lab, 2026-11-08: five seconds into Caddy's switch to 0.4.8, a pass read the
+    // new image against the manifest the update had not frozen yet, put 0.2.1 back, and
+    // the update ended "inconclusive".
+    let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.25@sha256:new", 2, 2)]);
+    let s = state_with_running_gitea().await;
+    s.begin_switch("gitea", "gitea/gitea:1.25@sha256:new", 240)
+        .await
+        .expect("switch");
+
+    let report = Reconciler::new(&o, &s).reconcile(true).await.unwrap();
+    assert!(o.updated.lock().unwrap().is_empty(), "{report:?}");
+    assert!(matches!(&report.drifts[0], Drift::Switching { to, .. } if to.contains("1.25")));
+    assert!(report.drifts[0].refusal().is_some());
+
+    // Lapsed — the update died mid-switch —: what it pushed was never proved.
+    s.begin_switch("gitea", "gitea/gitea:1.25@sha256:new", -1)
+        .await
+        .expect("switch");
+    Reconciler::new(&o, &s).reconcile(true).await.unwrap();
+    assert_eq!(
+        *o.updated.lock().unwrap(),
+        vec![("gitea".to_string(), "gitea/gitea:1.24".to_string())]
+    );
+
+    s.end_switch("gitea").await.expect("end");
+    assert_eq!(s.switching("gitea").await.expect("read"), None);
+}
+
+#[tokio::test]
 async fn swarm_resolving_the_digest_is_not_a_drift() {
     // Swarm commonly rewrites the reference by appending the resolved digest.
     let o = Fake::with(vec![svc("gitea", "gitea/gitea:1.24@sha256:abcdef", 2, 2)]);
