@@ -750,7 +750,7 @@ impl Restore<'_> {
     }
 
     /// A destination's variables, its credentials out of the vault.
-    async fn env(&self, d: &Destination) -> Result<Vec<(String, String)>, String> {
+    pub(crate) async fn env(&self, d: &Destination) -> Result<Vec<(String, String)>, String> {
         let creds = credentials(self.state, self.vault, d)
             .await
             .map_err(|e| e.to_string())?;

@@ -256,3 +256,11 @@ during an outage.
   transaction — each `CREATE TABLE` commits —: stopped halfway, the database holds what
   it reached, so the app is left stopped and the copy taken first named
   (`hlb-backup-run/tests/maria_database.rs`).
+- **🔴 `restic dump` of a directory leaves the directory itself out.** Its tar holds
+  `donnees/<volume>/…` with every entry's owner and mode, and no entry for
+  `donnees/<volume>` — so a volume unpacked from it has a root owned by whoever made the
+  mount point, not the app's (restic 0.19.1, measured 2026-11-09). Its attributes come
+  from `restic ls --json <id> <path>` (the first node; `mode` is Go's, the permission
+  bits are its low nine) and go back as a directory entry written first. Docker's
+  archive API (`PUT /containers/<id>/archive`, a container never started, the volume
+  mounted at `/donnees/<volume>`, `path=/`) keeps every owner and mode as written.

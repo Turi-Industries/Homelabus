@@ -102,20 +102,69 @@ impl Snapshot {
     /// (`2026-10-19T14:02:03.123456789+02:00`): read without it, a snapshot from
     /// UTC+14 would look fourteen hours ahead.
     pub fn epoch(&self) -> Option<i64> {
-        let t = self.time.trim();
-        let (_, clock) = t.split_once('T')?;
-        let (local, offset) = match clock.strip_suffix('Z') {
-            Some(_) => (&t[..t.len() - 1], 0),
-            None => {
-                let at = clock.rfind(['+', '-'])?;
-                let sign = if clock[at..].starts_with('-') { -1 } else { 1 };
-                let (h, m) = clock[at + 1..].split_once(':')?;
-                let offset = sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60);
-                (&t[..t.len() - (clock.len() - at)], offset)
+        rfc3339_epoch(&self.time)
+    }
+}
+
+/// A time as restic writes it, with its offset, in seconds since the epoch.
+fn rfc3339_epoch(t: &str) -> Option<i64> {
+    let t = t.trim();
+    let (_, clock) = t.split_once('T')?;
+    let (local, offset) = match clock.strip_suffix('Z') {
+        Some(_) => (&t[..t.len() - 1], 0),
+        None => {
+            let at = clock.rfind(['+', '-'])?;
+            let sign = if clock[at..].starts_with('-') { -1 } else { 1 };
+            let (h, m) = clock[at + 1..].split_once(':')?;
+            let offset = sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60);
+            (&t[..t.len() - (clock.len() - at)], offset)
+        }
+    };
+    let whole = local.split('.').next()?;
+    Some(crate::pitr::parse_utc(whole)? - offset)
+}
+
+/// One entry of a snapshot, as `restic ls --json` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Node {
+    pub path: String,
+    /// `dir`, `file`, `symlink`…
+    pub kind: String,
+    pub uid: u32,
+    pub gid: u32,
+    /// The permission bits, setuid, setgid and sticky among them, as `chmod` reads them.
+    pub mode: u32,
+    pub mtime: i64,
+    pub size: u64,
+}
+
+impl Node {
+    /// One line of `restic ls --json`; `None` for its snapshot's line, or a line unread.
+    ///
+    /// ⚠️ `mode` is Go's `FileMode`: the permission bits are its low nine, and setuid,
+    /// setgid and sticky sit at bits 23, 22 and 20 — not where `chmod` puts them.
+    fn parse(line: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        if v.get("struct_type").and_then(|t| t.as_str()) != Some("node") {
+            return None;
+        }
+        let num = |k: &str| v.get(k).and_then(serde_json::Value::as_u64);
+        let go = num("mode")?;
+        let mut mode = (go & 0o777) as u32;
+        for (bit, unix) in [(1u64 << 23, 0o4000), (1 << 22, 0o2000), (1 << 20, 0o1000)] {
+            if go & bit != 0 {
+                mode |= unix;
             }
-        };
-        let whole = local.split('.').next()?;
-        Some(crate::pitr::parse_utc(whole)? - offset)
+        }
+        Some(Self {
+            path: v.get("path")?.as_str()?.to_string(),
+            kind: v.get("type")?.as_str()?.to_string(),
+            uid: u32::try_from(num("uid")?).ok()?,
+            gid: u32::try_from(num("gid")?).ok()?,
+            mode,
+            mtime: rfc3339_epoch(v.get("mtime")?.as_str()?)?,
+            size: num("size").unwrap_or(0),
+        })
     }
 }
 
@@ -321,6 +370,17 @@ impl<R: Runner> Repository<R> {
         Ok(())
     }
 
+    /// `path` in `snapshot`, as restic recorded it — `None` when the snapshot does not
+    /// hold it. What `dump` leaves out of a directory's archive: the directory itself.
+    pub async fn node(&self, snapshot: &str, path: &str) -> Result<Option<Node>> {
+        let out = self.exec(&["ls", "--json", snapshot, path]).await?;
+        Ok(out
+            .stdout
+            .lines()
+            .filter_map(Node::parse)
+            .find(|n| n.path == path))
+    }
+
     pub async fn snapshots(&self, tag: Option<&str>) -> Result<Vec<Snapshot>> {
         let mut args = vec!["snapshots", "--json"];
         if let Some(t) = tag {
@@ -447,6 +507,24 @@ pub fn forget_passes(policy: &RetentionPolicy, prune: bool) -> Result<Vec<Vec<St
 
 #[cfg(test)]
 mod tests {
+    /// Lines from restic 0.19.1's `ls --json`, of a directory `chmod 2750` and a file
+    /// in it (measured 2026-11-09).
+    #[test]
+    fn a_node_reads_as_chmod_would_set_it() {
+        let dir = r#"{"name":"vol","type":"dir","path":"/donnees/vol","uid":1000,"gid":1001,"mode":2151678440,"permissions":"dgrwxr-x---","mtime":"2026-11-09T13:00:00.433414426Z","message_type":"node","struct_type":"node"}"#;
+        let n = super::Node::parse(dir).expect("a node");
+        assert_eq!(
+            (n.kind.as_str(), n.uid, n.gid, n.mode),
+            ("dir", 1000, 1001, 0o2750)
+        );
+        assert_eq!(Some(n.mtime), crate::pitr::parse_utc("2026-11-09 13:00:00"));
+        let file = r#"{"name":"a.txt","type":"file","path":"/donnees/vol/a.txt","uid":1000,"gid":1001,"size":3,"mode":416,"mtime":"2026-11-09T13:00:00Z","struct_type":"node"}"#;
+        let f = super::Node::parse(file).expect("a node");
+        assert_eq!((f.mode, f.size), (0o640, 3));
+        let snapshot = r#"{"time":"2026-11-09T13:00:03Z","paths":["/donnees/vol"],"id":"0877","struct_type":"snapshot"}"#;
+        assert_eq!(super::Node::parse(snapshot), None);
+    }
+
     #[test]
     fn a_snapshot_s_time_is_read_with_its_offset() {
         let at = |time: &str| {

@@ -8,8 +8,8 @@ pub mod postgres;
 
 pub use mariadb::MariadbProvisioner;
 pub use postgres::{
-    connection_url, database_statements, drop_database_statement, extension_statement,
-    PostgresProvisioner,
+    connection_limit_statement, connection_url, database_statements, drop_database_statement,
+    extension_statement, role_statement, PostgresProvisioner,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -202,6 +202,85 @@ impl SshRunner {
         });
         a
     }
+
+    /// The machine's Docker API on the local socket `local`, for as long as the returned
+    /// bridge lives: each connection made to it is one `docker system dial-stdio` run
+    /// over SSH — what `DOCKER_HOST=ssh://` does.
+    ///
+    /// 🔴 Not `ssh -L`: Homelabus's key is granted `no-port-forwarding` (`access`), and
+    /// sshd refuses a socket forward under it — measured on the lab's VPS, the client
+    /// saw only a connection closed. A command is what the key may run, and nothing
+    /// listens on TCP. Proved once before returning, so a site whose Docker does not
+    /// answer is said here rather than as the first API call's broken pipe.
+    pub async fn docker_socket(&self, local: &std::path::Path) -> Result<DockerBridge> {
+        let mut args = self.base_args();
+        args.extend(["docker", "system", "dial-stdio"].map(String::from));
+        let listener = tokio::net::UnixListener::bind(local).map_err(|source| Error::Spawn {
+            command: format!("listening on {}", local.display()),
+            source,
+        })?;
+        let task = tokio::spawn(async move {
+            while let Ok((conn, _)) = listener.accept().await {
+                let args = args.clone();
+                tokio::spawn(async move {
+                    let Ok(mut child) = Command::new("ssh")
+                        .args(&args)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .kill_on_drop(true)
+                        .spawn()
+                    else {
+                        return;
+                    };
+                    let (Some(mut to), Some(mut from)) = (child.stdin.take(), child.stdout.take())
+                    else {
+                        return;
+                    };
+                    let (mut read, mut write) = conn.into_split();
+                    // Each half ends on its own: the client's end of request closes
+                    // dial-stdio's input, and the daemon's answer still comes back.
+                    let up = async {
+                        let _ = tokio::io::copy(&mut read, &mut to).await;
+                        drop(to);
+                    };
+                    let down = async {
+                        let _ = tokio::io::copy(&mut from, &mut write).await;
+                        let _ = tokio::io::AsyncWriteExt::shutdown(&mut write).await;
+                    };
+                    tokio::join!(up, down);
+                    let _ = child.wait().await;
+                });
+            }
+        });
+        let bridge = DockerBridge {
+            path: local.to_path_buf(),
+            task,
+        };
+        let out = self
+            .run(&["docker", "version", "--format", "{{.Server.Version}}"].map(String::from))
+            .await?;
+        if !out.ok() {
+            return Err(Error::Ssh {
+                host: self.host.clone(),
+                detail: format!("its Docker does not answer: {}", out.stderr.trim()),
+            });
+        }
+        Ok(bridge)
+    }
+}
+
+/// A machine's Docker API on a local socket, closed when dropped.
+pub struct DockerBridge {
+    path: std::path::PathBuf,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for DockerBridge {
+    fn drop(&mut self) {
+        self.task.abort();
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[async_trait::async_trait]

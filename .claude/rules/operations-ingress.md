@@ -36,10 +36,14 @@ some mistakes loudly; the others are a 502, or a door left open.
   a DNS console token is refused there. Stalwart's `dns-update` 0.5.9 speaks the same.
 - **🔴 Relayed HTTPS reaches Caddy on 10443, never on 443.** The VPS's HAProxy sends
   the visitor's address in a PROXY header, and a hostile VPS forges any source in it —
-  measured, a header claiming `192.168.1.5` was read as the client. Only the port tells
-  relayed traffic apart: private routes refuse `{http.request.local.port}` 10443
-  whatever the address. And `fallback_policy reject` did NOT refuse a LAN client sending
-  no header on 10443 — the port matcher is what closes it. Without the header at all,
+  measured, a header claiming `192.168.1.5` was read as the client. Only the LISTENER
+  tells relayed traffic apart: every site block is rendered twice, and on 10443 a
+  private route refuses everyone. 🔴 Never `{http.request.local.port}`: behind
+  `proxy_protocol` the local address is the header's destination — 443 as HAProxy
+  writes it — and the lab's Vaultwarden, private, answered 200 through the VPS
+  (`tests/relay_is_a_stranger.rs`, real HAProxy and Caddy). And `fallback_policy
+  reject` did NOT refuse a LAN client sending no header on 10443 — the listener's own
+  blocks are what close it. Without the header at all,
   every visitor would be `10.43.0.1`, which is why the site network is cut out of the
   private ranges.
 

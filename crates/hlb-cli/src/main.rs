@@ -2179,6 +2179,14 @@ enum SiteCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Rebuild the vital apps on the site from their latest backups — PocketID with
+    /// them when they sign in through it, their PostgreSQL databases on a server of
+    /// the site's own —, start them once until healthy, record the rehearsal, and stop
+    /// them. Preview by default.
+    Lifeboat {
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -9841,6 +9849,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     }
                     SiteCmd::Status => site::status(&cli).await,
                     SiteCmd::Sync { apply } => site::sync(&cli, *apply).await,
+                    SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
                 }
             })
         }

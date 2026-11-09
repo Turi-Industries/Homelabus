@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod door;
+pub mod lifeboat;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -283,11 +284,43 @@ async fn own_swarm(hub: &dyn Runner) -> std::result::Result<&'static str, String
     }
 }
 
+/// Whether the house's Caddy, as frozen, publishes the port the door relays HTTPS to.
+///
+/// A Caddy installed before the relay existed listens on 80 and 443 only: the door
+/// opens, its health checks pass on 80, and every visitor's HTTPS is refused at home —
+/// found on the lab, whose Caddy predated it.
+fn relays_https(caddy: &hlb_types::Manifest) -> bool {
+    caddy
+        .spec
+        .security
+        .published_ports
+        .contains(&hlb_types::manifest::PublishedPort::tcp(
+            hlb_ingress::caddyfile::RELAY_HTTPS_PORT,
+        ))
+}
+
 /// Puts the front door in place, or brings it up to date, and says what visitors need
 /// for it to be theirs.
-async fn open_door(hub: &dyn Runner, s: &Site) -> bool {
+async fn open_door(state: &State, hub: &dyn Runner, s: &Site) -> bool {
     match door::deploy(hub, s).await {
         Ok(how) => {
+            if let Ok(caddy) = state
+                .app_manifest(hlb_types::manifest::INGRESS_SERVICE)
+                .await
+            {
+                if !relays_https(&caddy) {
+                    eprintln!(
+                        "\n🔴 The front door is {}, and leads nowhere for HTTPS: the house's",
+                        how.says()
+                    );
+                    eprintln!(
+                        "   Caddy was installed before the relay and does not publish {}.",
+                        hlb_ingress::caddyfile::RELAY_HTTPS_PORT
+                    );
+                    eprintln!("   hlb upgrade caddy --apply");
+                    return false;
+                }
+            }
             println!(
                 "\nThe front door: {} — {}.",
                 how.says(),
@@ -452,7 +485,7 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     }
-    let door = open_door(ours.as_ref(), &s).await;
+    let door = open_door(&state, ours.as_ref(), &s).await;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
@@ -519,7 +552,7 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let results = link(&state, &vault, &mut s, hub.as_ref()).await?;
     let linked = say_linked(&results, &s.name);
     // Opened even when a node failed to link: its health check keeps it out of the door.
-    let door = open_door(hub.as_ref(), &s).await;
+    let door = open_door(&state, hub.as_ref(), &s).await;
     let all = linked && door;
     let outcome = if all { "ok" } else { "partial" };
     state
@@ -669,6 +702,28 @@ mod tests {
             [80, hlb_ingress::caddyfile::RELAY_HTTPS_PORT],
             "a port the door relays to and the house drops is a door that never opens"
         );
+    }
+
+    #[test]
+    fn a_caddy_frozen_before_the_relay_is_told_apart() {
+        let catalog = hlb_catalog::Catalog::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../catalog"
+        )))
+        .expect("catalog");
+        let caddy = catalog
+            .get(hlb_types::manifest::INGRESS_SERVICE)
+            .expect("caddy in the catalog")
+            .manifest
+            .clone();
+        assert!(super::relays_https(&caddy), "the catalog's Caddy relays");
+        let mut before = caddy;
+        before
+            .spec
+            .security
+            .published_ports
+            .retain(|p| p.port != hlb_ingress::caddyfile::RELAY_HTTPS_PORT);
+        assert!(!super::relays_https(&before));
     }
 
     #[test]

@@ -494,8 +494,29 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
         .iter()
         .partition(|r| wildcard.is_some_and(|w| w.covers(&r.host)));
 
+    // 🔴 Each block twice: on 443 for the house, on the relay port for what the front
+    // door brings, where nobody is ever at home. Not one block for both told apart by
+    // `{http.request.local.port}`: behind `proxy_protocol` the local address is the
+    // HEADER's — 443, as HAProxy writes it, or whatever a hostile VPS writes — and a
+    // private route answered the internet through the lab's front door (2026-11-09).
+    for relayed in [false, true] {
+        render_blocks(&mut out, &covered, &own, wildcard, cfg, relayed);
+    }
+
+    out
+}
+
+/// The site blocks of one listener: the house's, or the front door's port.
+fn render_blocks(
+    out: &mut String,
+    covered: &[&Route],
+    own: &[&Route],
+    wildcard: Option<&Wildcard>,
+    cfg: &Config,
+    relayed: bool,
+) {
     if let Some(w) = wildcard {
-        let _ = writeln!(out, "{} {{", with_relay(&w.subjects()));
+        let _ = writeln!(out, "{} {{", on_listener(&w.subjects(), relayed));
         let _ = writeln!(out, "\ttls {{");
         out.push_str(&w.provider.directive(&w.credentials, "\t\t"));
         // A site's own `tls` makes its own issuer: the global directory is said again,
@@ -521,12 +542,12 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
             }
         }
         let _ = writeln!(out, "\t}}");
-        render_log(&mut out, cfg, "\t");
-        for r in &covered {
+        render_log(out, cfg, "\t");
+        for r in covered {
             let m = sanitize(&r.host);
             let _ = writeln!(out, "\n\t@{m} host {}", r.host);
             let _ = writeln!(out, "\thandle @{m} {{");
-            render_route(&mut out, r, cfg, "\t\t");
+            render_route(out, r, cfg, "\t\t", relayed);
             let _ = writeln!(out, "\t}}");
         }
         // A name nobody installed says so, rather than an empty page or a TLS error.
@@ -537,13 +558,15 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
     }
 
     for r in own {
-        let _ = writeln!(out, "{} {{", with_relay(std::slice::from_ref(&r.host)));
-        render_log(&mut out, cfg, "\t");
-        render_route(&mut out, r, cfg, "\t");
+        let _ = writeln!(
+            out,
+            "{} {{",
+            on_listener(std::slice::from_ref(&r.host), relayed)
+        );
+        render_log(out, cfg, "\t");
+        render_route(out, r, cfg, "\t", relayed);
         let _ = writeln!(out, "}}\n");
     }
-
-    out
 }
 
 /// Where CrowdSec reads what happened: Caddy's `logs` volume, mounted by CrowdSec too.
@@ -582,7 +605,7 @@ fn render_log(out: &mut String, cfg: &Config, indent: &str) {
 ///
 /// Matcher names carry the host: under a wildcard every route shares one site block,
 /// where two `@external` would be one name defined twice.
-fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str) {
+fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str, relayed: bool) {
     let m = sanitize(&r.host);
     let upstream = format!("{}:{}", r.service, r.port);
 
@@ -659,7 +682,7 @@ fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str) {
         // Private exposure by default: only the internal network gets through.
         let _ = writeln!(out, "\n{indent}# Private route: private addresses only.");
         let _ = writeln!(out, "{indent}@external_{m} {{");
-        write_not_at_home(out, &format!("{indent}\t"));
+        write_not_at_home(out, &format!("{indent}\t"), relayed);
         if !r.open_paths.is_empty() {
             write_not_open(out, &r.open_paths, &format!("{indent}\t"));
         }
@@ -819,32 +842,34 @@ pub const UNCLEAN_PATH: &str = r"^[^?]*(%2[fF]|%5[cC]|%2[eE]|\\|/\.\.?(/|\?|$))"
 /// relays is told apart from what reached Caddy in the house, whatever address it claims.
 pub const RELAY_HTTPS_PORT: u16 = 10443;
 
-/// Every site address, then the same on the front door's port.
-fn with_relay(subjects: &[String]) -> String {
-    let relayed = subjects.iter().map(|s| format!("{s}:{RELAY_HTTPS_PORT}"));
+/// The site addresses, on the front door's port when `relayed`.
+fn on_listener(subjects: &[String], relayed: bool) -> String {
     subjects
         .iter()
-        .cloned()
-        .chain(relayed)
+        .map(|s| {
+            if relayed {
+                format!("{s}:{RELAY_HTTPS_PORT}")
+            } else {
+                s.clone()
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// The matcher line set "not someone at home": a private address, AND not relayed by the
-/// front door.
+/// The matcher line "not someone at home": not a private address — and on the front
+/// door's port, everyone.
 ///
 /// 🔴 The site is not trusted with the house: a VPS whose host is hostile could send a
 /// PROXY header claiming `192.168.1.5` and walk into every private route. Whatever
-/// arrives on the front door's port is a stranger, measured against Caddy 2.11.4 with a
-/// forged header (2026-11-09).
-fn write_not_at_home(out: &mut String, indent: &str) {
-    let _ = writeln!(out, "{indent}not {{");
-    let _ = writeln!(out, "{indent}\tremote_ip {}", private_ranges());
-    let _ = writeln!(
-        out,
-        "{indent}\tnot vars {{http.request.local.port}} {RELAY_HTTPS_PORT}"
-    );
-    let _ = writeln!(out, "{indent}}}");
+/// arrives on the front door's port is a stranger, by the listener it reached — the
+/// only thing the header does not write (`tests/relay_is_a_stranger.rs`).
+fn write_not_at_home(out: &mut String, indent: &str, relayed: bool) {
+    if relayed {
+        let _ = writeln!(out, "{indent}path *");
+        return;
+    }
+    let _ = writeln!(out, "{indent}not remote_ip {}", private_ranges());
 }
 
 /// The matcher line set "not one of `open`, written cleanly": a request on an open
@@ -898,17 +923,25 @@ mod tests {
         }
     }
 
-    /// The text of the block serving `host`, whether its own site or a `handle`.
+    /// The text of the block serving `host` on 443, whether its own site or a `handle`.
     fn block<'a>(out: &'a str, host: &str) -> &'a str {
+        // The house's blocks come first: the first `handle` is the house's.
         let m = sanitize(host);
         out.split(&format!("handle @{m} {{"))
             .nth(1)
-            .or_else(|| {
-                out.split(&format!("{host}, {host}:{RELAY_HTTPS_PORT} {{"))
-                    .nth(1)
-            })
+            .or_else(|| out.split(&format!("\n{host} {{")).nth(1))
             .and_then(|s| s.split("\n}").next())
             .expect("the host's block")
+    }
+
+    /// The same on the front door's port.
+    fn relayed_block<'a>(out: &'a str, host: &str) -> &'a str {
+        let m = sanitize(host);
+        out.split(&format!("\n{host}:{RELAY_HTTPS_PORT} {{"))
+            .nth(1)
+            .or_else(|| out.split(&format!("handle @{m} {{")).nth(2))
+            .and_then(|s| s.split("\n}").next())
+            .expect("the host's relayed block")
     }
 
     #[test]
@@ -954,7 +987,7 @@ mod tests {
         r.public = false;
         let out = render(&[r], &Config::default());
 
-        assert!(out.contains("@external_git_example_fr {\n\t\tnot {\n\t\t\tremote_ip "));
+        assert!(out.contains("@external_git_example_fr {\n\t\tnot remote_ip "));
         assert!(out.contains("respond @external_git_example_fr 403"));
         assert!(out.contains("192.168.0.0/16"));
     }
@@ -1220,10 +1253,15 @@ mod tests {
         private.public = false;
         let out = render(&[private], &Config::default());
         let b = block(&out, "git.example.fr");
+        assert!(b.contains("\tnot remote_ip 10.0.0.0/11 "), "{b}");
+        // Never told apart by `{http.request.local.port}`: behind the PROXY header it is
+        // the header's destination, which the VPS writes.
+        assert!(!out.contains("http.request.local"), "{out}");
+        let relayed = relayed_block(&out, "git.example.fr");
         assert!(
-            b.contains("not {\n\t\t\tremote_ip 10.0.0.0/11 ")
-                && b.contains("\tnot vars {http.request.local.port} 10443\n"),
-            "{b}"
+            relayed.contains("@external_git_example_fr {\n\t\tpath *\n\t}")
+                && relayed.contains("respond @external_git_example_fr 403"),
+            "on the front door's port nobody is at home: {relayed}"
         );
         assert!(
             !b.contains(" 10.43.0.0/"),
@@ -1246,12 +1284,8 @@ mod tests {
     fn a_host_is_routed_once() {
         // Two site blocks for one name: Caddy refuses the whole file.
         let out = render(&[gitea(), gitea()], &Config::default());
-        assert_eq!(
-            out.matches("git.example.fr, git.example.fr:10443 {")
-                .count(),
-            1,
-            "{out}"
-        );
+        assert_eq!(out.matches("\ngit.example.fr {").count(), 1, "{out}");
+        assert_eq!(out.matches("\ngit.example.fr:10443 {").count(), 1, "{out}");
     }
 
     fn with_crowdsec() -> Config {
@@ -1283,17 +1317,18 @@ mod tests {
         let mut cfg = with_crowdsec();
         let mut other = gitea();
         other.host = "photos.other.org".into();
+        // Each site on 443 and again on the front door's port.
         let out = render(&[gitea(), other], &cfg);
         assert_eq!(
             out.matches("output file /var/log/caddy/access.log").count(),
-            2,
+            4,
             "{out}"
         );
         cfg.tls = with_acme(false).tls;
         let out = render(&[gitea()], &cfg);
         assert_eq!(
             out.matches("output file /var/log/caddy/access.log").count(),
-            1,
+            2,
             "{out}"
         );
     }
@@ -1490,10 +1525,7 @@ spec:
         assert_eq!(wildcard().subjects(), vec!["*.example.fr", "example.fr"]);
 
         let out = render(&[], &with_acme(false));
-        assert!(
-            out.contains("*.example.fr, example.fr, *.example.fr:10443, example.fr:10443 {"),
-            "{out}"
-        );
+        assert!(out.contains("*.example.fr, example.fr {"), "{out}");
     }
 
     #[test]
@@ -1515,20 +1547,14 @@ spec:
         other.host = "photos.other.org".into();
         let out = render(&[gitea(), vikunja(), other], &with_acme(false));
 
-        assert!(
-            !out.contains("\ngit.example.fr, git.example.fr:10443 {"),
-            "{out}"
-        );
+        assert!(!out.contains("\ngit.example.fr {"), "{out}");
         assert!(
             out.contains("\t@git_example_fr host git.example.fr\n"),
             "{out}"
         );
         assert!(out.contains("\thandle @tasks_example_fr {"), "{out}");
         // A name outside the domain still gets its own site, and its own certificate.
-        assert!(
-            out.contains("\nphotos.other.org, photos.other.org:10443 {"),
-            "{out}"
-        );
+        assert!(out.contains("\nphotos.other.org {"), "{out}");
     }
 
     #[test]
@@ -1538,7 +1564,9 @@ spec:
             .lines()
             .filter(|l| l.trim_start().starts_with("dns "))
             .count();
-        assert_eq!(directives, 1, "{out}");
+        // Once per listener, the same subjects and issuer: Caddy accepts the two
+        // (`tests/caddy_validates.rs`, every provider) and keys certificates by name.
+        assert_eq!(directives, 2, "{out}");
     }
 
     #[test]
@@ -1582,10 +1610,7 @@ spec:
         let out = render(&[gitea()], &cfg);
         assert!(!out.contains("tls {"), "{out}");
         assert!(out.contains("\temail a@example.fr\n"), "{out}");
-        assert!(
-            out.contains("\ngit.example.fr, git.example.fr:10443 {"),
-            "{out}"
-        );
+        assert!(out.contains("\ngit.example.fr {"), "{out}");
     }
 
     #[test]
@@ -1594,7 +1619,7 @@ spec:
         // the wildcard would be requested from production while staging was set.
         let out = render(&[gitea()], &with_acme(true));
         let wildcard = out
-            .split("*.example.fr, example.fr, *.example.fr:10443, example.fr:10443 {")
+            .split("*.example.fr, example.fr {")
             .nth(1)
             .expect("wildcard");
         assert!(

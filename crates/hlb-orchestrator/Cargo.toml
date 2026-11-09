@@ -12,6 +12,8 @@ hlb-types.workspace = true
 bollard.workspace = true
 tokio.workspace = true
 futures.workspace = true
+# What a tar archive streamed into another daemon's volume is made of.
+bytes = "1"
 async-trait.workspace = true
 serde.workspace = true
 # A service's probe read back as Docker names it (`swarm::probe_of`).
@@ -21,6 +23,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+bytes = "1"
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
