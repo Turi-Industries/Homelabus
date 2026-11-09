@@ -1594,6 +1594,7 @@ name = "hlb-backup-run"
 version = "0.4.9-dev"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "hlb-backup",
  "hlb-objstore",
@@ -1707,6 +1708,7 @@ dependencies = [
  "hlb-users",
  "reqwest",
  "rpassword",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

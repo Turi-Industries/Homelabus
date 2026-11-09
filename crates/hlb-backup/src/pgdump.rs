@@ -219,6 +219,23 @@ impl<R: DumpRunner> PgDumper<R> {
         Ok(())
     }
 
+    /// Runs `script` with `psql` in `target`'s database, read from its standard input
+    /// — a role's password in it never reaches a command line. Each statement on its
+    /// own, stopping at the first that fails.
+    pub async fn psql_script(&self, target: &PgTarget, script: &str) -> Result<()> {
+        let args = ["psql", "--no-psqlrc", "--quiet", "--set", "ON_ERROR_STOP=1"].map(String::from);
+        let mut env = target.env();
+        env.push(("HLB_STDIN_B64".into(), base64_encode(script.as_bytes())));
+        let out = self.runner.run(&args, &env).await?;
+        if out.status != 0 {
+            return Err(Error::Dump {
+                database: target.database.clone(),
+                stderr: out.stderr.trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Runs `statements` with `psql` in `target`'s database, each on its own — `CREATE
     /// DATABASE` refuses a transaction —, stopping at the first that fails.
     pub async fn psql(&self, target: &PgTarget, statements: &[String]) -> Result<()> {

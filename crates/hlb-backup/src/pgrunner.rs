@@ -14,6 +14,8 @@ pub struct PgContainerRunner {
     image: String,
     /// Docker network on which the server is reachable.
     network: Option<String>,
+    /// Another daemon than this machine's: `unix:///…`, a socket forwarded from it.
+    docker_host: Option<String>,
 }
 
 impl PgContainerRunner {
@@ -21,12 +23,20 @@ impl PgContainerRunner {
         Self {
             image: image.into(),
             network: None,
+            docker_host: None,
         }
     }
 
     /// Joins a network to reach the server by its service name.
     pub fn network(mut self, net: impl Into<String>) -> Self {
         self.network = Some(net.into());
+        self
+    }
+
+    /// Runs the tools on the daemon behind this socket — another machine's, whose
+    /// server this one cannot reach.
+    pub fn docker_socket(mut self, path: &std::path::Path) -> Self {
+        self.docker_host = Some(format!("unix://{}", path.display()));
         self
     }
 }
@@ -90,6 +100,9 @@ impl PgContainerRunner {
     /// The `docker run` the client tool is started by; `stdin` when a payload follows.
     fn command(&self, args: &[String], env: &[(String, String)], stdin: bool) -> Command {
         let mut cmd = Command::new("docker");
+        if let Some(h) = &self.docker_host {
+            cmd.env("DOCKER_HOST", h);
+        }
         cmd.args(["run", "--rm", "-i"]);
 
         if let Some(n) = &self.network {

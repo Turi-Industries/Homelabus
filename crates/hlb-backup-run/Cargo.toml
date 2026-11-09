@@ -21,6 +21,7 @@ hlb-updater.workspace = true
 # The emergency kit's fingerprint.
 sha2 = "0.11"
 tempfile = "3"
+bytes = "1"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "sync", "time"] }
 tracing.workspace = true

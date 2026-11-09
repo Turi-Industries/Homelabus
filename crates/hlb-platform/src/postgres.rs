@@ -60,11 +60,7 @@ impl PostgresProvisioner {
         // strictly above and then escaped with double quotes.
         // The password goes through an escaped literal.
         if !self.role_exists(role).await? {
-            let stmt = format!(
-                r#"CREATE ROLE "{}" LOGIN PASSWORD {}"#,
-                escape_ident(role),
-                quote_literal(password)
-            );
+            let stmt = role_statement(role, password)?;
             sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
                 .execute(&self.pool)
                 .await
@@ -265,11 +261,7 @@ impl PostgresProvisioner {
     /// ("too many connections for role"), where an app without one could take every
     /// connection the shared server has.
     pub async fn limit_connections(&self, role: &str, limit: u32) -> Result<()> {
-        validate_identifier(role)?;
-        let stmt = format!(
-            r#"ALTER ROLE "{}" CONNECTION LIMIT {limit}"#,
-            escape_ident(role)
-        );
+        let stmt = connection_limit_statement(role, limit)?;
         sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
             .execute(&self.pool)
             .await
@@ -351,6 +343,26 @@ pub fn database_statements(database: &str, role: &str) -> Result<[String; 3]> {
         format!(r#"REVOKE ALL ON DATABASE "{database}" FROM PUBLIC"#),
         format!(r#"GRANT ALL PRIVILEGES ON DATABASE "{database}" TO "{role}""#),
     ])
+}
+
+/// The app's role, signing in with `password`. ⚠️ The statement carries the password:
+/// it goes to the server over a connection or a standard input, never a command line.
+pub fn role_statement(role: &str, password: &str) -> Result<String> {
+    validate_identifier(role)?;
+    Ok(format!(
+        r#"CREATE ROLE "{}" LOGIN PASSWORD {}"#,
+        escape_ident(role),
+        quote_literal(password)
+    ))
+}
+
+/// The most connections the server lets `role` hold.
+pub fn connection_limit_statement(role: &str, limit: u32) -> Result<String> {
+    validate_identifier(role)?;
+    Ok(format!(
+        r#"ALTER ROLE "{}" CONNECTION LIMIT {limit}"#,
+        escape_ident(role)
+    ))
 }
 
 /// The statement removing an app's database before a restore recreates it, closing the
