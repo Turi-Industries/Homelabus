@@ -33,6 +33,8 @@ members = [
     "crates/hlb-engine",
     "crates/hlb-cli",
 ]
+# A patched dependency, not ours to format, lint or test.
+exclude = ["vendor"]
 
 [workspace.package]
 # Between releases, the NEXT one as a pre-release: an app's `metadata.hlb` names the
@@ -134,3 +136,12 @@ expect_used = "warn"
 # trait method `#[must_use]` over a `Pin<Box<dyn Future>>` that already is. Clippy 1.99
 # (CI's stable on 2026-10-14) refused all 21 methods of `Orchestrator` for it.
 double_must_use = "allow"
+
+# sqlx-sqlite 0.9.0 caps libsqlite3-sys below 0.38, and every SQLite it can bundle leaks
+# uninitialised page-cache memory when opened beside a `-wal` of another page size
+# (RUSTSEC-2026-0459, fixed in libsqlite3-sys 0.39). That reaches Homelabus: a backup
+# opens each app's SQLite database WITH its `-wal`, files the app writes. The copy is
+# 0.9.0 with upstream's one-line raise of that bound (#4502). sqlx 0.9.1 pins its own
+# sqlx-sqlite, so cargo then warns this patch is unused: delete it and `vendor/`.
+[patch.crates-io]
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }
