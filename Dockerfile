@@ -28,7 +28,7 @@ RUN xcaddy build v2.11.4 \
     --with github.com/hslatman/caddy-crowdsec-bouncer/http@v0.14.1 \
     --with github.com/mholt/caddy-ratelimit@v0.1.0
 
-FROM caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f AS caddy
+FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS caddy
 COPY --from=caddy-build /usr/bin/caddy /usr/bin/caddy
 
 FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
