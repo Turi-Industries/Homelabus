@@ -18,6 +18,7 @@ pub mod family;
 pub mod ingress;
 pub mod install;
 pub mod jobs;
+pub mod lifeboat;
 pub mod mail_dns;
 pub mod mail_queue;
 pub mod mail_relay;
@@ -526,6 +527,9 @@ pub struct Executor<'a, O: Orchestrator + ?Sized> {
     /// Values never filled in, their tokens left literal: what a service rendered for
     /// another machine must not carry.
     withheld: Vec<hlb_types::binding::Token>,
+    /// Vault entries read as another value: a server rendered for another machine is
+    /// given its own administrator, never the house's.
+    replaced: Vec<(String, String)>,
 }
 
 impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
@@ -545,7 +549,14 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             network: hlb_orchestrator::PLATFORM_NETWORK.to_string(),
             apply: false,
             withheld: Vec::new(),
+            replaced: Vec::new(),
         }
+    }
+
+    /// Reads the vault's `name` as `value` in every service rendered.
+    pub fn replacing_secret(mut self, name: &str, value: &str) -> Self {
+        self.replaced.push((name.to_string(), value.to_string()));
+        self
     }
 
     /// Leaves these tokens literal in every service rendered.
@@ -1078,6 +1089,9 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
     /// generated, and the matching action will take care of it. The token then stays
     /// literal, which is visible.
     async fn read_secret(&self, name: &str) -> Result<Option<String>> {
+        if let Some((_, v)) = self.replaced.iter().find(|(n, _)| n == name) {
+            return Ok(Some(v.clone()));
+        }
         let Some(vault) = self.vault else {
             return Ok(None);
         };
@@ -3659,10 +3673,11 @@ spec:
         assert!(!password.contains("{{"), "the generated one: {password}");
     }
 
-    /// A service rendered for another machine carries no value it was not meant to:
-    /// the token stays literal, never empty, and nothing is deployed.
+    /// A service rendered for another machine carries no value it was not meant to: a
+    /// withheld token stays literal, never empty; a replaced secret is the one given;
+    /// nothing is deployed.
     #[tokio::test]
-    async fn a_withheld_value_stays_a_token_in_the_rendered_service() {
+    async fn a_service_rendered_for_another_machine_carries_what_it_is_given() {
         let (o, s) = (Fake::default(), State::in_memory().await.unwrap());
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::init(dir.path().join("master.key")).unwrap();
@@ -3709,7 +3724,23 @@ spec:
             Some("{{ smtp.password }}")
         );
         assert_eq!(get(&withheld, "MAILER_HOST").as_deref(), Some("stalwart"));
-        assert_eq!(o.deployed_specs.lock().unwrap().len(), deployed, "rendered only");
+
+        // And a secret replaced is read as given, the vault's never.
+        let replaced = Executor::new(&o, &s)
+            .with_vault(&vault)
+            .replacing_secret("vikunja-smtp-password", "the-site-s-own")
+            .render_service("vikunja", deploy)
+            .await
+            .unwrap();
+        assert_eq!(
+            get(&replaced, "MAILER_PASSWORD").as_deref(),
+            Some("the-site-s-own")
+        );
+        assert_eq!(
+            o.deployed_specs.lock().unwrap().len(),
+            deployed,
+            "rendered only"
+        );
     }
 
     #[tokio::test]
