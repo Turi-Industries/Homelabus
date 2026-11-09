@@ -29,6 +29,7 @@ mod door;
 pub mod homecoming;
 pub mod lifeboat;
 pub mod promote;
+pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -311,7 +312,14 @@ async fn open_door(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) -> 
             return false;
         }
     };
-    match door::deploy(hub, s, &names).await {
+    let own = match watch::own_names(state).await {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("\n🔴 The front door: the site's own names could not be read: {e}");
+            return false;
+        }
+    };
+    match door::deploy(hub, s, &names, &own).await {
         Ok(how) => {
             if let Ok(caddy) = state
                 .app_manifest(hlb_types::manifest::INGRESS_SERVICE)
@@ -346,6 +354,41 @@ async fn open_door(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) -> 
             eprintln!("\n🔴 The front door: {e}");
             eprintln!(
                 "   The one running, if any, is untouched. Once fixed: hlb site sync --apply"
+            );
+            false
+        }
+    }
+}
+
+/// Puts the site's watch in place after the door, and says how the owner reads it.
+async fn watch_site(state: &State, vault: &Vault, s: &Site) -> bool {
+    match watch::deploy(state, vault, s).await {
+        Ok(w) => {
+            println!(
+                "\nThe watch: {} probed from the site, every minute.",
+                hlb_api::plural(w.probes as u64, "name", "names")
+            );
+            println!("   The status page, public: {}", w.page);
+            println!(
+                "   Its two names point at {} (their A records), as the house's do.",
+                s.endpoint
+            );
+            println!(
+                "   Alerts, on the phone: the ntfy app, server {}, topic {},",
+                w.alerts,
+                hlb_ingress::status_page::TOPIC
+            );
+            println!(
+                "   user {}, password: hlb secret-get {}",
+                hlb_engine::site_watch::READER,
+                hlb_engine::site_watch::READER_SECRET
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!("\n🔴 The watch: {e}");
+            eprintln!(
+                "   Nothing watches the house from its site. Once fixed: hlb site sync --apply"
             );
             false
         }
@@ -447,6 +490,15 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             "            the certificates stay at home. {}",
             hlb_ingress::front_door::IMAGE
         );
+        println!(
+            "  watch   : {} probing every name through the door, alerts by {},",
+            hlb_ingress::status_page::SERVICE,
+            hlb_ingress::status_page::NTFY
+        );
+        println!(
+            "            both served by {} as status. and alerts. of the house's domain.",
+            hlb_ingress::front_door::SITE_EDGE
+        );
         println!();
         if !provision_machine(first.as_ref(), &distro, false, false, false).await? {
             return Ok(ExitCode::FAILURE);
@@ -495,12 +547,13 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
         }
     }
     let door = open_door(&state, &vault, ours.as_ref(), &s).await;
+    let watched = watch_site(&state, &vault, &s).await;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
         s.name
     );
-    Ok(if linked && door {
+    Ok(if linked && door && watched {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -551,8 +604,14 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
             println!("  {} — no longer in the house: unlinked", m.name);
         }
         println!(
-            "and its front door ({}) to the nodes linked.",
+            "and its front door ({}) to the nodes linked;",
             hlb_ingress::front_door::SERVICE
+        );
+        println!(
+            "and its watch: {}, {} and {}, probing every name the house serves.",
+            hlb_ingress::status_page::SERVICE,
+            hlb_ingress::status_page::NTFY,
+            hlb_ingress::front_door::SITE_EDGE
         );
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
@@ -562,7 +621,8 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let linked = say_linked(&results, &s.name);
     // Opened even when a node failed to link: its health check keeps it out of the door.
     let door = open_door(&state, &vault, hub.as_ref(), &s).await;
-    let all = linked && door;
+    let watched = watch_site(&state, &vault, &s).await;
+    let all = linked && door && watched;
     let outcome = if all { "ok" } else { "partial" };
     state
         .audit("cli", ACTOR_ROLE, "site-sync", &s.name, outcome, None)

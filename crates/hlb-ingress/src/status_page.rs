@@ -68,6 +68,15 @@ pub fn render(page: &Page, served: &[String]) -> String {
     let mut probes = page.probes.clone();
     probes.sort_by(|a, b| (a.title.as_str(), &a.host).cmp(&(b.title.as_str(), &b.host)));
     probes.dedup_by(|a, b| a.host == b.host);
+    // Gatus keys an endpoint by its group and name: two routes of one app under one
+    // title would be one endpoint, the second probe's history written over the first's.
+    let titles: Vec<String> = probes.iter().map(|p| p.title.clone()).collect();
+    for p in &mut probes {
+        if titles.iter().filter(|t| **t == p.title).count() > 1 {
+            let label = p.host.split('.').next().unwrap_or(&p.host).to_string();
+            p.title = format!("{} ({label})", p.title);
+        }
+    }
     let mut endpoints: Vec<Endpoint> = probes
         .iter()
         .map(|p| {
@@ -395,6 +404,20 @@ mod tests {
         p.probes[0].title = "Vault: \"famille\" # 1".into();
         let v = parsed(&render(&p, &[]));
         endpoint(&v, "Vault: \"famille\" # 1");
+    }
+
+    #[test]
+    fn two_names_of_one_app_are_two_endpoints() {
+        let mut p = page();
+        p.probes.push(Probe {
+            title: "Jellyfin".into(),
+            host: "tv.example.fr".into(),
+            public: true,
+        });
+        let v = parsed(&render(&p, &[]));
+        endpoint(&v, "Jellyfin (films)");
+        endpoint(&v, "Jellyfin (tv)");
+        endpoint(&v, "Vaultwarden");
     }
 
     #[test]

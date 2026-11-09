@@ -288,7 +288,20 @@ async fn send_home(
     let names = super::lifeboat::names(state, vault)
         .await
         .map_err(|e| e.to_string())?;
-    super::door::deploy(ssh, s, &names).await.map(|_| ())
+    let own = super::watch::own_names(state)
+        .await
+        .map_err(|e| e.to_string())?;
+    super::door::deploy(ssh, s, &names, &own).await?;
+    // The page judges the private apps closed again, once the door says they are.
+    let swap = super::watch::swap_to(hlb_engine::site_watch::GATUS_HOME);
+    let out = ssh.run(&swap).await.map_err(|e| e.to_string())?;
+    if !out.ok() {
+        return Err(format!(
+            "the status page still reads the site as serving: {}",
+            out.stderr.trim()
+        ));
+    }
+    Ok(())
 }
 
 /// Removes a volume once the service holding it is gone: its task takes a moment to stop.

@@ -1485,6 +1485,24 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      at the return, kept in the copy taken first. Not yet run on the lab.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
+     5a built 2026-11-09: `hlb site add` and `sync` put the site's watch in place after
+     the door, on an overlay of its own (`hlb-site-watch`, never the lifeboat's): an
+     ntfy of the VPS's (`deny-all`, the phone's account read-only, Gatus's token
+     write-only, no `upstream-base-url`), Gatus, and the edge — a Caddy of the site's
+     own serving `status.` and `alerts.` of the house's domain, its certificates over
+     HTTP-01 like the lifeboat's and kept, since nothing of the house's is in them. The
+     door sends those two names to the edge, promoted or not. Gatus probes every name
+     the house's Caddy last PUBLISHED, through the door — each resolved to the door's
+     address on the overlay, whatever the public DNS says — a public app by its answer
+     (`< 500`), a private one by its 403: a private app answering strangers is down.
+     One probe of the house's Caddy over the link, not one per app: an app cannot be
+     reached that way — 10443 wants the PROXY header, 443 is closed to the VPS — and
+     which node's link is down is the house's to say, in 5b. The page shows no host,
+     address, condition or error. Its file is checked by Gatus itself before it is put
+     in place, and two wait beside it: the promotion swaps the page after the door
+     (private apps served on purpose then), the return swaps it back. Measured on the
+     real Gatus and Caddy (`tests/status_page.rs`). Gatus has no `NET_RAW`, so no ping.
+     Not yet run on the lab.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
   7. **The gate on the lab**, timed both ways.

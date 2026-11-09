@@ -317,12 +317,16 @@ started once until healthy and stopped: the house reads the backups and pushes, 
 VPS never holds the restic password. Promoted, the site starts them with a Caddy of its
 own, which asks for their certificates over HTTP, and the door sends their names there;
 the night no `hlb` can run, `/usr/local/sbin/hlb-site-promote --apply` over SSH is the
-same promotion.
+same promotion. Its watch probes every name the house serves through the door each
+minute, on a public page of the site's own name (`status.` of the house's domain), and
+sends alerts to an ntfy of its own (`alerts.`), which the owner's phone subscribes to —
+nothing goes through the house, nor a third party.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake
-./target/debug/hlb site sync --apply         # a node joined or left: the link and the door
+./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch
+./target/debug/hlb secret-get site-ntfy-reader-password   # the phone's, for the site's alerts
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
 ./target/debug/hlb site promote              # what the site would start and serve

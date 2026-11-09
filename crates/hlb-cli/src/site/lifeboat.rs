@@ -555,7 +555,8 @@ async fn rebuild(
     hlb_bootstrap::provision::install_file(&ssh, lifeboat::PROMOTE_SCRIPT, &script, 0o700).await?;
     now.names = ingress.names.clone();
     remember(state, vault, &now).await?;
-    super::door::deploy(&ssh, s, &ingress.names).await?;
+    let own = super::watch::own_names(state).await?;
+    super::door::deploy(&ssh, s, &ingress.names, &own).await?;
     println!(
         "  ✓ promotion ready: {} on {}",
         lifeboat::PROMOTE_SCRIPT,

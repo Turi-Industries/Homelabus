@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use hlb_bootstrap::provision;
 use hlb_bootstrap::Runner;
-use hlb_engine::lifeboat;
+use hlb_engine::{lifeboat, site_watch};
 use hlb_ingress::front_door::{self, Backend, CONFIG_DIR, IMAGE, MOUNTED_AT, SERVICE};
 use hlb_mesh::site::Site;
 
@@ -63,14 +63,15 @@ fn backends(s: &Site) -> Vec<Backend> {
         .collect()
 }
 
-/// The door's configuration for this site's members.
-pub fn config(s: &Site) -> String {
-    front_door::render(&backends(s), &[])
+/// The door's configuration for this site's members, `own` — the site's own names —
+/// to its edge.
+pub fn config(s: &Site, own: &[String]) -> String {
+    front_door::render(&backends(s), own)
 }
 
 /// The same once promoted: `names`, the lifeboat's, to the site's own Caddy.
-pub fn promoted(s: &Site, names: &[String]) -> String {
-    front_door::render_promoted(&backends(s), names, &[])
+pub fn promoted(s: &Site, names: &[String], own: &[String]) -> String {
+    front_door::render_promoted(&backends(s), names, own)
 }
 
 /// The service's arguments after `docker service create`, its label left out.
@@ -90,6 +91,9 @@ fn spec() -> Vec<String> {
         // Where the site's own Caddy answers once promoted, by name.
         "--network",
         lifeboat::NETWORK,
+        // Where the site's edge answers, and where Gatus reaches every name through it.
+        "--network",
+        site_watch::NETWORK,
         "--read-only",
         "--cap-drop",
         "ALL",
@@ -182,8 +186,14 @@ async fn put(hub: &dyn Runner, name: &str, content: &str) -> Result<bool, String
 }
 
 /// Puts the door in place on the site, or brings it up to date. `names`: the
-/// lifeboat's, whose promoted file waits beside the running one.
-pub async fn deploy(hub: &dyn Runner, s: &Site, names: &[String]) -> Result<Outcome, String> {
+/// lifeboat's, whose promoted file waits beside the running one; `own`: the site's,
+/// to its edge in either file.
+pub async fn deploy(
+    hub: &dyn Runner,
+    s: &Site,
+    names: &[String],
+    own: &[String],
+) -> Result<Outcome, String> {
     if s.members.is_empty() {
         return Err("no house node is linked: the door would lead nowhere".into());
     }
@@ -192,7 +202,7 @@ pub async fn deploy(hub: &dyn Runner, s: &Site, names: &[String]) -> Result<Outc
         .await
         .map_err(|e| e.to_string())?
         .is_some();
-    let lifeboat_cfg = (!names.is_empty()).then(|| promoted(s, names));
+    let lifeboat_cfg = (!names.is_empty()).then(|| promoted(s, names, own));
     if let Some(p) = &lifeboat_cfg {
         put(hub, lifeboat::PROMOTED_DOOR, p).await?;
     }
@@ -207,7 +217,7 @@ pub async fn deploy(hub: &dyn Runner, s: &Site, names: &[String]) -> Result<Outc
                     .into(),
             )
         }
-        (_, false) => config(s),
+        (_, false) => config(s, own),
     };
     let changed = put(hub, LIVE, &cfg).await?;
 
@@ -254,11 +264,18 @@ pub async fn deploy(hub: &dyn Runner, s: &Site, names: &[String]) -> Result<Outc
     Ok(outcome)
 }
 
-/// The lifeboat's overlay, as `SwarmOrchestrator::ensure_network` makes it: the door
-/// joins it before anything else may have.
+/// The lifeboat's overlay and the watch's, as `SwarmOrchestrator::ensure_network`
+/// makes them: the door joins both before anything else may have.
 async fn ensure_network(hub: &dyn Runner) -> Result<(), String> {
+    for net in [lifeboat::NETWORK, site_watch::NETWORK] {
+        overlay(hub, net).await?;
+    }
+    Ok(())
+}
+
+async fn overlay(hub: &dyn Runner, net: &str) -> Result<(), String> {
     let inspected = hub
-        .run(&argv(&["docker", "network", "inspect", lifeboat::NETWORK]))
+        .run(&argv(&["docker", "network", "inspect", net]))
         .await
         .map_err(|e| e.to_string())?;
     if inspected.ok() {
@@ -271,7 +288,7 @@ async fn ensure_network(hub: &dyn Runner) -> Result<(), String> {
     let label = format!("{}=true", hlb_orchestrator::swarm::MANAGED_LABEL);
     run(
         hub,
-        "creating the lifeboat's network",
+        &format!("creating the network {net}"),
         argv(&[
             "docker",
             "network",
@@ -283,7 +300,7 @@ async fn ensure_network(hub: &dyn Runner) -> Result<(), String> {
             &mtu,
             "--label",
             &label,
-            lifeboat::NETWORK,
+            net,
         ]),
     )
     .await
@@ -396,6 +413,9 @@ mod tests {
                     Some(l) => (0, format!("{l}\n")),
                     None => (1, String::new()),
                 }
+            } else if line.starts_with("docker network inspect") {
+                // A fresh VPS: no overlay of ours yet.
+                (1, String::new())
             } else if line.starts_with("docker run") && self.check_refuses {
                 (1, String::new())
             } else if line.starts_with("docker ps") {
@@ -464,7 +484,7 @@ mod tests {
     async fn a_new_door_is_checked_put_in_place_then_created() {
         let vps = Vps::default();
         let s = site(&[("deb1", 2)]);
-        assert_eq!(deploy(&vps, &s, &[]).await, Ok(Outcome::Created));
+        assert_eq!(deploy(&vps, &s, &[], &[]).await, Ok(Outcome::Created));
         let ran = vps.ran();
         let at = |p: &str| ran.iter().position(|c| c.starts_with(p)).expect(p);
         let into_place = put_in_place();
@@ -482,7 +502,7 @@ mod tests {
         }
         assert_eq!(
             vps.files.lock().expect("lock").get(&super::at(LIVE)),
-            Some(&config(&s))
+            Some(&config(&s, &[]))
         );
     }
 
@@ -493,12 +513,12 @@ mod tests {
             check_refuses: true,
             ..Vps::default()
         };
-        let old = config(&site(&[("deb1", 2)]));
+        let old = config(&site(&[("deb1", 2)]), &[]);
         vps.files
             .lock()
             .expect("lock")
             .insert(at(LIVE), old.clone());
-        let r = deploy(&vps, &site(&[("deb1", 2), ("deb2", 3)]), &[]).await;
+        let r = deploy(&vps, &site(&[("deb1", 2), ("deb2", 3)]), &[], &[]).await;
         assert!(r.is_err(), "{r:?}");
         assert!(!vps.ran_any(&put_in_place()), "{:#?}", vps.ran());
         assert!(!vps.ran_any("docker kill"), "{:#?}", vps.ran());
@@ -517,8 +537,8 @@ mod tests {
         vps.files
             .lock()
             .expect("lock")
-            .insert(at(LIVE), config(&site(&[("deb1", 2)])));
-        let r = deploy(&vps, &site(&[("deb1", 2), ("deb2", 3)]), &[]).await;
+            .insert(at(LIVE), config(&site(&[("deb1", 2)]), &[]));
+        let r = deploy(&vps, &site(&[("deb1", 2), ("deb2", 3)]), &[], &[]).await;
         assert_eq!(r, Ok(Outcome::Reloaded));
         assert!(
             vps.ran_any("docker kill -s USR2 abc123"),
@@ -536,8 +556,11 @@ mod tests {
             service: Some(fingerprint()),
             ..Vps::default()
         };
-        vps.files.lock().expect("lock").insert(at(LIVE), config(&s));
-        assert_eq!(deploy(&vps, &s, &[]).await, Ok(Outcome::Unchanged));
+        vps.files
+            .lock()
+            .expect("lock")
+            .insert(at(LIVE), config(&s, &[]));
+        assert_eq!(deploy(&vps, &s, &[], &[]).await, Ok(Outcome::Unchanged));
         let ran = vps.ran();
         assert_eq!(ran.len(), 1, "only the inspection: {ran:#?}");
     }
@@ -549,8 +572,11 @@ mod tests {
             service: Some("older".into()),
             ..Vps::default()
         };
-        vps.files.lock().expect("lock").insert(at(LIVE), config(&s));
-        assert_eq!(deploy(&vps, &s, &[]).await, Ok(Outcome::Replaced));
+        vps.files
+            .lock()
+            .expect("lock")
+            .insert(at(LIVE), config(&s, &[]));
+        assert_eq!(deploy(&vps, &s, &[], &[]).await, Ok(Outcome::Replaced));
         assert!(vps.ran_any("docker service rm hlb-front-door"));
         assert!(vps.ran_any("docker service create"));
     }
@@ -563,16 +589,16 @@ mod tests {
     async fn the_promoted_door_waits_beside_the_running_one() {
         let s = site(&[("deb1", 2)]);
         let vps = Vps::default();
-        assert_eq!(deploy(&vps, &s, &names()).await, Ok(Outcome::Created));
+        assert_eq!(deploy(&vps, &s, &names(), &[]).await, Ok(Outcome::Created));
         let files = vps.files.lock().expect("lock").clone();
         assert_eq!(
             files.get(&at(LIVE)),
-            Some(&config(&s)),
+            Some(&config(&s, &[])),
             "home until promoted"
         );
         assert_eq!(
             files.get(&at(lifeboat::PROMOTED_DOOR)),
-            Some(&promoted(&s, &names()))
+            Some(&promoted(&s, &names(), &[]))
         );
         let create = vps
             .ran()
@@ -598,27 +624,58 @@ mod tests {
                 lifeboat::PROMOTED_MARK.into(),
                 "2026-11-09T20:00:00Z\n".into(),
             );
-            f.insert(at(LIVE), promoted(&s, &names()));
+            f.insert(at(LIVE), promoted(&s, &names(), &[]));
         }
         // A new house node: both files move, the running one stays promoted.
         let more = site(&[("deb1", 2), ("deb2", 3)]);
-        assert_eq!(deploy(&vps, &more, &names()).await, Ok(Outcome::Reloaded));
+        assert_eq!(
+            deploy(&vps, &more, &names(), &[]).await,
+            Ok(Outcome::Reloaded)
+        );
         assert_eq!(
             vps.files.lock().expect("lock").get(&super::at(LIVE)),
-            Some(&promoted(&more, &names()))
+            Some(&promoted(&more, &names(), &[]))
         );
         // Promoted with nothing to serve: left alone, said.
-        assert!(deploy(&vps, &more, &[]).await.is_err());
+        assert!(deploy(&vps, &more, &[], &[]).await.is_err());
         assert_eq!(
             vps.files.lock().expect("lock").get(&super::at(LIVE)),
-            Some(&promoted(&more, &names()))
+            Some(&promoted(&more, &names(), &[]))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_site_s_own_names_go_to_its_edge_promoted_or_not() {
+        let s = site(&[("deb1", 2)]);
+        let own = vec!["status.example.fr".to_string()];
+        let vps = Vps::default();
+        assert_eq!(deploy(&vps, &s, &names(), &own).await, Ok(Outcome::Created));
+        let files = vps.files.lock().expect("lock").clone();
+        for f in [LIVE, lifeboat::PROMOTED_DOOR] {
+            let cfg = files.get(&at(f)).expect(f);
+            assert!(cfg.contains(front_door::SITE_EDGE), "{f}: {cfg}");
+            assert!(cfg.contains("status.example.fr"), "{f}: {cfg}");
+        }
+        let ran = vps.ran();
+        let create = ran
+            .iter()
+            .find(|c| c.starts_with("docker service create"))
+            .expect("created");
+        assert!(
+            create.contains(&format!("--network {}", site_watch::NETWORK)),
+            "{create}"
+        );
+        assert!(
+            ran.iter()
+                .any(|c| c.contains("network create") && c.ends_with(site_watch::NETWORK)),
+            "{ran:#?}"
         );
     }
 
     #[tokio::test]
     async fn a_site_with_no_house_node_opens_no_door() {
         let vps = Vps::default();
-        assert!(deploy(&vps, &site(&[]), &[]).await.is_err());
+        assert!(deploy(&vps, &site(&[]), &[], &[]).await.is_err());
         assert!(vps.ran().is_empty());
     }
 }
