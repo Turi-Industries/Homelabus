@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use hlb_bootstrap::provision;
 use hlb_bootstrap::Runner;
-use hlb_engine::site_watch::{self, CONFIG_DIR, GATUS_HOME, GATUS_LIVE, GATUS_PROMOTED};
+use hlb_engine::site_watch::{
+    self, ANNOUNCED, CONFIG_DIR, GATUS_BEFORE, GATUS_HOME, GATUS_LIVE, GATUS_PROMOTED,
+};
 use hlb_engine::{ingress::CONTROLLER_SERVICE, lifeboat};
 use hlb_ingress::status_page::{self, Page, Probe};
 use hlb_mesh::site::Site;
@@ -297,6 +299,23 @@ pub async fn deploy(state: &State, vault: &Vault, s: &Site) -> Result<Watching> 
     )
     .await?;
 
+    let ack = drawn(
+        state,
+        vault,
+        site_watch::ACK_SECRET,
+        "the site's alerts' button, announcing on the status page",
+        site_watch::draw_token,
+    )
+    .await?;
+    let announcer = drawn(
+        state,
+        vault,
+        site_watch::ANNOUNCER_SECRET,
+        "the site's announcer, reading the alerts and their acknowledgements",
+        site_watch::draw_token,
+    )
+    .await?;
+
     let push_token = drawn(
         state,
         vault,
@@ -313,6 +332,8 @@ pub async fn deploy(state: &State, vault: &Vault, s: &Site) -> Result<Watching> 
         token: token.clone(),
         url: page_url.clone(),
         push_token,
+        alerts_url: format!("https://{alerts}"),
+        ack_token: ack.clone(),
     };
     if status_page::probes_nothing(&page) {
         return Err(
@@ -352,15 +373,41 @@ pub async fn deploy(state: &State, vault: &Vault, s: &Site) -> Result<Watching> 
     )
     .await?;
 
-    let ntfy = site_watch::ntfy(&site_watch::ntfy_config(&alerts, &reader, &token));
+    let tokens = site_watch::Tokens {
+        gatus: token,
+        ack,
+        announcer,
+    };
+    let ntfy = site_watch::ntfy(&site_watch::ntfy_config(&alerts, &reader, &tokens));
     site.deploy(&ntfy).await?;
     site.wait_healthy(&ntfy.name, HEALTHY_WITHIN_SECS).await?;
+
+    // Before the announcer and Gatus mount it: Swarm refuses a bind on a path that
+    // does not exist. Root's, which both run as.
+    let announced = format!("{CONFIG_DIR}/{ANNOUNCED}");
+    run(
+        &ssh,
+        "creating the announcements' directory",
+        argv(&["install", "-d", "-m", "0755", &announced]),
+    )
+    .await?;
+    let announcer = site_watch::announcer(&tokens.announcer, &status_page::texts(&page, &served));
+    site.deploy(&announcer).await?;
+    site.wait_healthy(&announcer.name, HEALTHY_WITHIN_SECS)
+        .await?;
 
     let hosts: Vec<String> = probes.iter().map(|p| p.host.clone()).collect();
     let acme_root = e.acme_ca_root.as_deref();
     let gatus = site_watch::gatus(&hosts, &door, acme_root);
     site.deploy(&gatus).await?;
     site.wait_healthy(&gatus.name, HEALTHY_WITHIN_SECS).await?;
+    // The page ran from this file before it read a directory: nothing reads it now.
+    run(
+        &ssh,
+        "removing the page's former file",
+        argv(&["rm", "-f", &format!("{CONFIG_DIR}/{GATUS_BEFORE}")]),
+    )
+    .await?;
 
     let mut ingress = site_watch::edge_caddyfile(&e.domain, tls, &subnet);
     ingress.acme_root = e.acme_ca_root.clone();
