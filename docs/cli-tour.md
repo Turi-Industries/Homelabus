@@ -311,12 +311,17 @@ A site of the house's own — a rented VPS — is prepared the same way, but nev
 the house's Swarm: it runs one of its own, and the house's nodes each open a tunnel to
 it (`hlb-site`, `10.43.0.0/24`), their firewall letting it reach 80 and Caddy's relay
 port 10443 only. Its front door, HAProxy, relays 80 and 443 home without decrypting
-them — the certificates stay at home — once the house's names point at the VPS.
+them — the certificates stay at home — once the house's names point at the VPS. Its
+lifeboat is the vital apps rebuilt there from their latest backups, PocketID with them,
+started once until healthy and stopped: the house reads the backups and pushes, so the
+VPS never holds the restic password.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake
 ./target/debug/hlb site sync --apply         # a node joined or left: the link and the door
+./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
+./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the

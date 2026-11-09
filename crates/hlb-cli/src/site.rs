@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod door;
+pub mod lifeboat;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

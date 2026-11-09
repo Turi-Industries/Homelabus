@@ -31,6 +31,7 @@ hlb-selfupdate.workspace = true
 hlb-metrics.workspace = true
 hlb-users.workspace = true
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 # The passphrase of a source's signing key, read from the terminal without echo.

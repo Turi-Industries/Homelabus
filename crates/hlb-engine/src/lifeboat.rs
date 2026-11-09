@@ -10,6 +10,9 @@
 //! something the site does not carry is refused whole: half an app started from a
 //! backup looks healthy and is not the app.
 
+use hlb_orchestrator::ServiceSpec;
+use hlb_resolver::{Action, Plan};
+use hlb_state::State;
 use hlb_types::binding::Token;
 use hlb_types::{Capability, Criticality, DbEngine, Manifest, SsoMode};
 
@@ -25,6 +28,62 @@ pub const SIGN_IN: &str = "pocket-id";
 /// so the password would open nothing for the app — and a VPS holding it could send
 /// mail as the house.
 pub const WITHHELD: &[Token] = &[Token::SmtpPassword];
+
+/// The vault's entry holding the site PostgreSQL's administrator password. A stored
+/// name: the house's own never leaves it.
+pub const ADMIN_SECRET: &str = "site-lifeboat-postgres-admin";
+
+/// The vault entry the PostgreSQL service reads its administrator from — the one the
+/// site's is rendered with instead.
+pub fn admin_entry() -> String {
+    hlb_types::binding::GeneratedSecret {
+        name: "admin-password".into(),
+        form: hlb_types::binding::SecretForm::Plain,
+    }
+    .vault_name(POSTGRES)
+}
+
+/// The PostgreSQL service, which the site runs for the databases it carries.
+pub const POSTGRES: &str = "postgres";
+
+/// An installed app's plan, as the house deployed it: its frozen manifest and guide,
+/// its domain, mail domain and the house's zone.
+pub async fn plan_of(state: &State, app: &str) -> crate::Result<Plan> {
+    let manifest = state.app_manifest(app).await?;
+    let guide = crate::install::installed_guide(state, app, || None).await?;
+    let params = hlb_resolver::InstallParams {
+        domain: state.app_domain(app).await?,
+        mail_domain: crate::install::mail_domain(state, app, None).await?,
+        timezone: state.timezone().await?,
+        ..Default::default()
+    };
+    Ok(hlb_resolver::resolve_with_guide(
+        &manifest, &guide, &params,
+    )?)
+}
+
+/// The services a plan deploys, companions first as the plan orders them.
+pub fn services(plan: &Plan) -> Vec<&Action> {
+    plan.actions
+        .iter()
+        .filter(|a| matches!(a, Action::DeployService { .. }))
+        .collect()
+}
+
+/// A service rendered for the house, made the site's: one task, on its one node, on
+/// the lifeboat's overlay, its volumes the site's own Docker volumes.
+///
+/// 🔴 Never the house's placement: a constraint naming a house node or an NFS backing
+/// pointing at the house's pool would leave the task pending, or write into the house.
+pub fn for_site(mut spec: ServiceSpec) -> ServiceSpec {
+    spec.replicas = 1;
+    spec.constraints.clear();
+    spec.backings.clear();
+    spec.networks = vec![NETWORK.to_string()];
+    // The ingress's names are the house's: the site's services answer to their own.
+    spec.aliases.clear();
+    spec
+}
 
 /// What the site is asked to hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -330,6 +389,38 @@ spec:
         );
         assert_eq!(sel.refused.len(), 1);
         assert!(sel.refused[0].1.contains("bucket"), "{sel:?}");
+    }
+
+    #[test]
+    fn the_site_s_postgres_reads_its_own_administrator() {
+        // The name the catalog's server reads its password from.
+        assert_eq!(admin_entry(), "postgres-admin-password");
+        assert_ne!(admin_entry(), ADMIN_SECRET);
+    }
+
+    #[test]
+    fn a_service_for_the_site_keeps_nothing_of_the_house_s_placement() {
+        let mut spec = ServiceSpec::new("vaultwarden", "vaultwarden/server:1")
+            .replicas(0)
+            .network("hlb-platform")
+            .constraint("node.labels.hlb.data.vaultwarden==true")
+            .mount_backed(
+                "vaultwarden-data",
+                "/data",
+                hlb_orchestrator::VolumeBacking::Nfs {
+                    server: "10.0.0.2".into(),
+                    export: "/tank/apps/vaultwarden/data".into(),
+                },
+            );
+        spec.aliases.push("vault.example.org".into());
+        let site = for_site(spec);
+        assert_eq!(site.replicas, 1, "started once, whatever the house decided");
+        assert!(site.constraints.is_empty() && site.backings.is_empty() && site.aliases.is_empty());
+        assert_eq!(site.networks, vec![NETWORK.to_string()]);
+        assert_eq!(
+            site.mounts,
+            vec![("vaultwarden-data".to_string(), "/data".to_string())]
+        );
     }
 
     #[test]

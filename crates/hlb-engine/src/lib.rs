@@ -70,6 +70,10 @@ pub enum Error {
     #[error("{0}")]
     Storage(String),
 
+    /// An installed app's manifest no longer resolves into a plan.
+    #[error("plan: {0}")]
+    Plan(#[from] hlb_resolver::Error),
+
     /// Rendering asked of an action that deploys no service.
     #[error("{0} deploys no service")]
     NotAService(String),

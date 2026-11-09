@@ -1387,9 +1387,21 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      backups onto the VPS, stopped, started once by a health check, recorded as a
      rehearsal; refused at preview beyond the site's memory or disk, figures measured
      with `docker stats` on the lab first.
+     Built 2026-11-09, not yet run on the lab: `hlb site lifeboat [--apply]`
+     (`hlb_engine::lifeboat` chooses and renders, `hlb_backup_run::lifeboat` sends). The
+     house reads the backups and pushes through the site's Docker socket, forwarded over
+     SSH: each volume's archive with its root put back in front (`restic dump` leaves the
+     directory out), its SQLite from the same pass's copy, each PostgreSQL dump into a
+     server of the site's own whose administrator is the site's (`site-lifeboat-postgres-
+     admin`), the app's role created with the password its app is given. The SMTP
+     password is withheld. Memory is the manifests' limits against the site's; each
+     archive is refused past a tenth of the site's disk left free. Recorded as a drill
+     (`lifeboat`), audited; what it left is named in the vault and removed by the next
+     run. Left: the nightly run from the controller, and the measured figures.
   4. **Promote and return**, by hand: `hlb site promote` points the front door at the
      lifeboat; `hlb site return` brings writes home where the manifest says how,
-     read-only on the VPS otherwise.
+     read-only on the VPS otherwise. A promoted site's lifeboat is serving: `hlb site
+     lifeboat` must refuse it, or the night's run removes what people are writing to.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
