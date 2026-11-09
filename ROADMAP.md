@@ -301,6 +301,12 @@ exported — Homelabus never bills.
   certificate of its own: the VPS's name, no house app's. Healthchecks' interface is
   reached by an SSH tunnel only, never published. Three pull requests: 5a Gatus, the
   probes and the alerts; 5b the heartbeats; 5c the announcement on acknowledgement.
+- **The heartbeats go to Gatus, not Healthchecks** (2026-11-09): Gatus's own
+  `external-endpoints` with a `heartbeat` — one service less on the VPS, no
+  administration interface to guard. Measured on v5.38 with the real ntfy first: a
+  wrong token refused (401), one outage one alert, the next push one "resolved", no
+  false "resolved" between. What Healthchecks had and this does not — a cron schedule
+  rather than an interval, a ping's body kept — none of the house's heartbeats needs.
 
 #### The phases
 
@@ -1503,6 +1509,17 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      (private apps served on purpose then), the return swaps it back. Measured on the
      real Gatus and Caddy (`tests/status_page.rs`). Gatus has no `NET_RAW`, so no ping.
      Not yet run on the lab.
+     5b built 2026-11-09: two heartbeats Gatus awaits, each alerting at its first miss
+     (its interval is the grace): "Homelabus answers" (20 min) and "Backups up to date"
+     (2 h, pushed failing while an app is overdue — longer, so a dead house is one alert
+     first). `hlb-privd` pushes both every 5 minutes to `status.` with a token of the
+     vault's (`site-gatus-push-token`, drawn by `hlb site sync`: no token, no push),
+     trusting a private ACME directory's root; three lost in a row are said by the
+     HOUSE's notifications ("the site does not answer"), once, and its return once.
+     The real Gatus holds the key the house pushes to (`tests/status_page.rs`). Left:
+     the lifeboat's heartbeat waits for its nightly run from the controller; which
+     node's link is down needs the hub's handshakes, read over SSH, which the daemon
+     has not.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
   7. **The gate on the lab**, timed both ways.

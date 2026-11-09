@@ -135,6 +135,7 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
         house: Some(CADDY_IP.parse::<Ipv4Addr>().expect("address")),
         token: "tk_0123456789abcdefghijklmnopqrs".into(),
         url: "https://status.example.test".into(),
+        push_token: "push-0123456789abcdef".into(),
     };
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -229,4 +230,69 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
             "{leak} on the public page: {served}"
         );
     }
+
+    // The house's heartbeats, pushed where `push_path` says, with the page's token.
+    let push = |path: &str, token: &str| {
+        let url = format!("http://{gatus}:{}{path}", status_page::PORT);
+        let auth = format!("Authorization: Bearer {token}");
+        let out = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--network",
+                NETWORK,
+                CURL,
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                "POST",
+                "-H",
+                &auth,
+                &url,
+            ])
+            .output()
+            .expect("curl");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let controller = status_page::push_path(&status_page::CONTROLLER);
+    assert_eq!(push(&format!("{controller}?success=true"), "nope"), "401");
+    assert_eq!(
+        push(&format!("{controller}?success=true"), &page.push_token),
+        "200"
+    );
+    let backups = status_page::push_path(&status_page::BACKUPS);
+    assert_eq!(
+        push(
+            &format!("{backups}?success=false&error=gitea"),
+            &page.push_token
+        ),
+        "200",
+        "a key Gatus does not hold is a 404: {backups}"
+    );
+    let result = |beat: &status_page::Heartbeat| {
+        let key = status_page::key(status_page::HOUSE, beat.name);
+        let out = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--network",
+                NETWORK,
+                CURL,
+                "-sf",
+                &format!(
+                    "http://{gatus}:{}/api/v1/endpoints/{key}/statuses",
+                    status_page::PORT
+                ),
+            ])
+            .output()
+            .expect("curl");
+        let v: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&String::from_utf8_lossy(&out.stdout)).expect("JSON");
+        v["results"][0]["success"].as_bool()
+    };
+    assert_eq!(result(&status_page::CONTROLLER), Some(true));
+    assert_eq!(result(&status_page::BACKUPS), Some(false));
 }

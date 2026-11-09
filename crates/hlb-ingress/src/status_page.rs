@@ -60,6 +60,63 @@ pub struct Page {
     pub token: String,
     /// The page's own address, which an alert links to.
     pub url: String,
+    /// What the house pushes its heartbeats with.
+    pub push_token: String,
+}
+
+/// What the house says by itself, every few minutes: Gatus alerts when it stops.
+///
+/// 🔴 The name is the endpoint's KEY, with its group: the house pushes to
+/// `/api/v1/endpoints/<key>/external`. Renamed, every push is a 404 and the
+/// heartbeat goes missing — an alert for a house that is fine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Heartbeat {
+    pub name: &'static str,
+    /// How long without a push before it is an outage.
+    pub interval_mins: u64,
+    pub description: &'static str,
+}
+
+/// The house's controller: pushed while it runs and reaches the site.
+pub const CONTROLLER: Heartbeat = Heartbeat {
+    name: "Homelabus answers",
+    interval_mins: 20,
+    description: "the house has said nothing for 20 minutes: the house, its internet \
+                  connection or Homelabus itself is down",
+};
+
+/// The backups: pushed failing while an app is overdue — and missing, like the
+/// controller's, when the house says nothing at all. Longer, so one outage is one alert.
+pub const BACKUPS: Heartbeat = Heartbeat {
+    name: "Backups up to date",
+    interval_mins: 120,
+    description: "an app has gone too long without a successful backup, or the house has \
+                  not said otherwise for two hours",
+};
+
+pub const HEARTBEATS: [Heartbeat; 2] = [CONTROLLER, BACKUPS];
+
+/// Gatus's key for an endpoint: its group and name, lower case, each of ` /_,.#+&`
+/// a dash (`util.ConvertGroupAndEndpointNameToKey`, v5.38).
+pub fn key(group: &str, name: &str) -> String {
+    let clean = |s: &str| {
+        s.to_lowercase()
+            .chars()
+            .map(|c| if " /_,.#+&".contains(c) { '-' } else { c })
+            .collect::<String>()
+    };
+    format!("{}_{}", clean(group), clean(name))
+}
+
+/// Where the house pushes `beat`, on the page's own name.
+pub fn push_path(beat: &Heartbeat) -> String {
+    format!("/api/v1/endpoints/{}/external", key(HOUSE, beat.name))
+}
+
+/// Whether the page would hold no endpoint Gatus probes: Gatus refuses to start on
+/// heartbeats alone ("at least one endpoint", v5.38).
+pub fn probes_nothing(page: &Page) -> bool {
+    page.probes.is_empty() && page.house.is_none()
 }
 
 /// Gatus's configuration. `served`: the names the site serves itself — the
@@ -160,6 +217,22 @@ pub fn render(page: &Page, served: &[String]) -> String {
             },
         },
         endpoints,
+        external_endpoints: HEARTBEATS
+            .iter()
+            .map(|h| External {
+                name: h.name.into(),
+                group: HOUSE.into(),
+                token: page.push_token.clone(),
+                heartbeat: Beat {
+                    interval: format!("{}m", h.interval_mins),
+                },
+                alerts: vec![Alert {
+                    // The interval is the grace already: missed once is an outage.
+                    failure_threshold: Some(1),
+                    ..Alert::ntfy(h.description.into())
+                }],
+            })
+            .collect(),
     };
     let yaml = serde_yaml_ng::to_string(&config)
         // A struct of strings and numbers: nothing serde_yaml_ng refuses.
@@ -175,6 +248,21 @@ struct Config {
     ui: PageUi,
     alerting: Alerting,
     endpoints: Vec<Endpoint>,
+    external_endpoints: Vec<External>,
+}
+
+#[derive(Serialize)]
+struct External {
+    name: String,
+    group: String,
+    token: String,
+    heartbeat: Beat,
+    alerts: Vec<Alert>,
+}
+
+#[derive(Serialize)]
+struct Beat {
+    interval: String,
 }
 
 #[derive(Serialize)]
@@ -283,10 +371,13 @@ impl Ui {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "kebab-case")]
 struct Alert {
     #[serde(rename = "type")]
     kind: String,
     description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_threshold: Option<u8>,
 }
 
 impl Alert {
@@ -294,6 +385,7 @@ impl Alert {
         Self {
             kind: "ntfy".into(),
             description,
+            failure_threshold: None,
         }
     }
 }
@@ -319,6 +411,7 @@ mod tests {
             house: Some(Ipv4Addr::new(10, 43, 0, 2)),
             token: "tk_0123456789abcdefghijklmnopqrs".into(),
             url: "https://status.example.fr".into(),
+            push_token: "push-0123456789".into(),
         }
     }
 
@@ -418,6 +511,49 @@ mod tests {
         endpoint(&v, "Jellyfin (films)");
         endpoint(&v, "Jellyfin (tv)");
         endpoint(&v, "Vaultwarden");
+    }
+
+    #[test]
+    fn the_house_s_heartbeats_are_awaited_and_alert_at_the_first_miss() {
+        let v = parsed(&render(&page(), &[]));
+        let beats = v["external-endpoints"].as_sequence().expect("external");
+        assert_eq!(beats.len(), HEARTBEATS.len());
+        for (b, h) in beats.iter().zip(HEARTBEATS) {
+            assert_eq!(b["name"].as_str(), Some(h.name));
+            assert_eq!(b["group"].as_str(), Some(HOUSE));
+            assert_eq!(b["token"].as_str(), Some("push-0123456789"));
+            assert_eq!(
+                b["heartbeat"]["interval"].as_str(),
+                Some(format!("{}m", h.interval_mins).as_str())
+            );
+            assert_eq!(b["alerts"][0]["failure-threshold"].as_u64(), Some(1));
+        }
+        // The probes keep the default threshold: one slow answer is not an outage.
+        let films = endpoint(&v, "Jellyfin");
+        assert!(
+            films["alerts"][0]["failure-threshold"].is_null(),
+            "{films:?}"
+        );
+    }
+
+    #[test]
+    fn a_heartbeat_is_pushed_where_gatus_keys_it() {
+        assert_eq!(key("The house", "Backups"), "the-house_backups");
+        assert_eq!(
+            push_path(&BACKUPS),
+            "/api/v1/endpoints/the-house_backups-up-to-date/external"
+        );
+        assert_eq!(key("A/b_c,d.e#f+g&h", "X"), "a-b-c-d-e-f-g-h_x");
+    }
+
+    #[test]
+    fn a_page_of_heartbeats_alone_is_told_apart() {
+        let mut p = page();
+        assert!(!probes_nothing(&p));
+        p.probes.clear();
+        assert!(!probes_nothing(&p), "the house's probe is still there");
+        p.house = None;
+        assert!(probes_nothing(&p));
     }
 
     #[test]
