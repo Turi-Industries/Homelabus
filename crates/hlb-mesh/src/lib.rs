@@ -19,6 +19,7 @@
 
 pub mod config;
 pub mod keys;
+pub mod site;
 
 pub use config::{
     firewall_rules, host_of, provision_node, MeshConfig, Peer, CONFIG_PATH, FIREWALL_PATH,

@@ -413,15 +413,15 @@ async fn the_mesh_comes_up_under_openrc() {
 
     let config = format!("[Interface]\nPrivateKey = {key}\nAddress = 10.42.0.2/24\nListenPort = 51820\nPostUp = nft -f /etc/wireguard/hlb0.nft\n");
     let firewall = "table inet hlb_swarm\ndelete table inet hlb_swarm\ntable inet hlb_swarm {\n\tchain input {\n\t\ttype filter hook input priority -10; policy accept;\n\t\tiifname \"hlb0\" accept\n\t\tudp dport 4789 drop\n\t}\n}\n";
-    let steps = hlb_bootstrap::mesh::steps(
-        Init::OpenRc,
-        "hlb0",
-        "/etc/wireguard/hlb0.conf",
-        &config,
-        "/etc/wireguard/hlb0.nft",
-        firewall,
-    )
-    .expect("openrc steps");
+    let tunnel = hlb_bootstrap::mesh::Tunnel {
+        label: "the mesh",
+        unit: "hlb-mesh",
+        interface: "hlb0",
+        config_path: "/etc/wireguard/hlb0.conf",
+        firewall_path: "/etc/wireguard/hlb0.nft",
+    };
+    let steps =
+        hlb_bootstrap::mesh::steps(Init::OpenRc, &tunnel, &config, firewall).expect("openrc steps");
     let plan = Provision {
         steps,
         notes: Vec::new(),

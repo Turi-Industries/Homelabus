@@ -16,6 +16,7 @@ mod relay;
 mod restore;
 mod roles;
 mod seal;
+mod site;
 mod sources;
 mod storage;
 mod termix;
@@ -379,6 +380,11 @@ enum Command {
     /// WireGuard mesh between nodes.
     #[command(subcommand)]
     Mesh(MeshCmd),
+
+    /// The house's site of its own — a rented VPS: front door, lifeboat, status page.
+    /// Never a member of the house's Swarm.
+    #[command(subcommand)]
+    Site(SiteCmd),
 
     /// CrowdSec bouncer: enrolment and status.
     #[command(subcommand)]
@@ -2141,6 +2147,41 @@ enum MeshCmd {
 }
 
 #[derive(Subcommand)]
+enum SiteCmd {
+    /// Prepare a VPS as the house's site — Docker, hardening, unattended updates, a
+    /// Swarm of its own — and link every house node to it over a tunnel of its own,
+    /// the VPS reaching the front door's ports at home and nothing else. Preview by
+    /// default.
+    Add {
+        /// SSH host of the VPS.
+        host: String,
+        #[arg(long, default_value = "root")]
+        user: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        /// SSH key for the FIRST contact. Afterwards Homelabus uses its own.
+        #[arg(long)]
+        identity: Option<String>,
+        /// The site's name.
+        #[arg(long, default_value = "vps")]
+        name: String,
+        /// Where the house's nodes reach the VPS's WireGuard. Default: the SSH host.
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Each house node's tunnel to the site, read off the VPS.
+    Status,
+    /// Push the link again: a node joined or left the house, or one was unreachable.
+    /// Preview by default.
+    Sync {
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CrowdsecCmd {
     /// Enrol the bouncer and store its key in the vault. Without it, nothing is blocked.
     Enroll {
@@ -3379,17 +3420,28 @@ const SECRET_SSH: &str = "homelabus-ssh-key";
 /// 🔴 It NEVER changes on its own. Regenerating it would cut access to every machine
 /// already joined, which carry the old public key in their `authorized_keys` — and each
 /// one would have to be visited by hand.
+/// Homelabus's SSH key, when one was made: a command that only reads never makes it.
+pub(crate) async fn existing_ssh_key(
+    state: &State,
+    vault: &Vault,
+) -> Result<Option<hlb_bootstrap::access::KeyPair>, Box<dyn std::error::Error>> {
+    let Some(ct) = state.secret(SECRET_SSH).await? else {
+        return Ok(None);
+    };
+    let json = vault.decrypt(&ct)?;
+    let v: serde_json::Value = serde_json::from_str(&json)?;
+    Ok(Some(hlb_bootstrap::access::KeyPair {
+        private: v["private"].as_str().unwrap_or_default().to_string(),
+        public: v["public"].as_str().unwrap_or_default().to_string(),
+    }))
+}
+
 async fn cluster_ssh_key(
     state: &State,
     vault: &Vault,
 ) -> Result<hlb_bootstrap::access::KeyPair, Box<dyn std::error::Error>> {
-    if let Some(ct) = state.secret(SECRET_SSH).await? {
-        let json = vault.decrypt(&ct)?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-        return Ok(hlb_bootstrap::access::KeyPair {
-            private: v["private"].as_str().unwrap_or_default().to_string(),
-            public: v["public"].as_str().unwrap_or_default().to_string(),
-        });
+    if let Some(kp) = existing_ssh_key(state, vault).await? {
+        return Ok(kp);
     }
 
     let kp = hlb_bootstrap::access::generate_keypair("homelabus@cluster").await?;
@@ -3507,10 +3559,8 @@ async fn apply_mesh(
         .ok_or_else(|| format!("\"{node}\" is not in the mesh"))?;
     let steps = hlb_bootstrap::mesh::steps(
         hlb_bootstrap::provision::Init::for_family(distro.family),
-        hlb_mesh::INTERFACE,
-        hlb_mesh::CONFIG_PATH,
+        &MESH_TUNNEL,
         &config,
-        hlb_mesh::FIREWALL_PATH,
         &hlb_mesh::firewall_rules(hlb_mesh::INTERFACE),
     )?;
     let plan = hlb_bootstrap::provision::Provision {
@@ -3521,6 +3571,15 @@ async fn apply_mesh(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// The mesh's tunnel, as the bootstrap puts it in place.
+pub(crate) const MESH_TUNNEL: hlb_bootstrap::mesh::Tunnel<'static> = hlb_bootstrap::mesh::Tunnel {
+    label: "the mesh",
+    unit: "hlb-mesh",
+    interface: hlb_mesh::INTERFACE,
+    config_path: hlb_mesh::CONFIG_PATH,
+    firewall_path: hlb_mesh::FIREWALL_PATH,
+};
 
 /// `user@host:port`, each part optional, as stored on a peer.
 fn ssh_target(host: &str, user: Option<&str>, port: Option<u16>) -> String {
@@ -4975,6 +5034,65 @@ struct NodeAdd<'a> {
     apply: bool,
 }
 
+/// Puts Homelabus's own SSH key on a machine reached for the first time, and proves it
+/// signs in through it — now, rather than at the next restart.
+///
+/// The runner returned goes through that key; the directory holding it lives as long as
+/// the runner is used. `None`: the key is in place but refused, and what to check was
+/// printed.
+pub(crate) async fn adopt_machine(
+    state: &State,
+    vault: &Vault,
+    host: &str,
+    user: Option<&str>,
+    port: Option<u16>,
+    identity: Option<&str>,
+) -> Result<Option<(tempfile::TempDir, Box<dyn hlb_bootstrap::Runner>)>, Box<dyn std::error::Error>>
+{
+    use hlb_bootstrap::access;
+    let kp = cluster_ssh_key(state, vault).await?;
+    let key = access::ManagedKey::new(&kp.public, "hlb");
+
+    // A concrete runner: the trait object does not satisfy the `Sized` bounds.
+    let ssh_first = ssh_runner(host, user, port, identity);
+    let before = access::read_authorized_keys(&ssh_first, "~").await?;
+    let (after, ch) = access::grant(&before, &key);
+
+    if ch.is_noop() {
+        println!(
+            "SSH key already in place ({} kept)",
+            hlb_api::plural(ch.kept as u64, "other key", "other keys")
+        );
+    } else {
+        access::write_authorized_keys(&ssh_first, "~", &after, &before).await?;
+        println!(
+            "SSH key installed ({} added, {} replaced, {} kept)",
+            ch.added, ch.removed, ch.kept
+        );
+        state
+            .audit("cli", ACTOR_ROLE, "access-grant", host, "ok", None)
+            .await?;
+    }
+
+    let tmp = tempfile::tempdir()?;
+    let key_path = write_temporary_key(tmp.path(), &kp.private)?;
+    let ours = build_runner(Some(host), user, port, key_path.to_str());
+
+    match ours.run(&["true".to_string()]).await {
+        Ok(o) if o.ok() => {
+            println!("access through Homelabus's key verified");
+            Ok(Some((tmp, ours)))
+        }
+        _ => {
+            eprintln!("🔴 The key was installed but does NOT allow signing in.");
+            eprintln!("   Most frequent cause: sshd ignores authorized_keys when ~/.ssh");
+            eprintln!("   or the file are group-readable — without saying so.");
+            eprintln!("   Check: ls -ld ~/.ssh ~/.ssh/authorized_keys");
+            Ok(None)
+        }
+    }
+}
+
 /// Joins a machine to the cluster, end to end.
 ///
 /// The order of the steps is not cosmetic:
@@ -4990,7 +5108,6 @@ struct NodeAdd<'a> {
 /// placement constraints match nothing) — which shows up as `wait_healthy` timing out
 /// with no explanation.
 async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    use hlb_bootstrap::access;
     let NodeAdd {
         host,
         user,
@@ -5163,46 +5280,10 @@ async fn node_add(cli: &Cli, args: NodeAdd<'_>) -> Result<ExitCode, Box<dyn std:
     }
 
     // -- 2. Homelabus's key ----------------------------------------------------
-    let kp = cluster_ssh_key(&state, &vault).await?;
-    let key = access::ManagedKey::new(&kp.public, "hlb");
-
-    // A concrete runner: the trait object does not satisfy the `Sized` bounds.
-    let ssh_first = ssh_runner(host, user, port, identity);
-    let before = access::read_authorized_keys(&ssh_first, "~").await?;
-    let (after, ch) = access::grant(&before, &key);
-
-    if ch.is_noop() {
-        println!(
-            "SSH key already in place ({} kept)",
-            hlb_api::plural(ch.kept as u64, "other key", "other keys")
-        );
-    } else {
-        access::write_authorized_keys(&ssh_first, "~", &after, &before).await?;
-        println!(
-            "SSH key installed ({} added, {} replaced, {} kept)",
-            ch.added, ch.removed, ch.kept
-        );
-        state
-            .audit("cli", ACTOR_ROLE, "access-grant", host, "ok", None)
-            .await?;
-    }
-
-    // From here on we go through OUR key: that is what proves it works, now, rather
-    // than discovering it at the next restart.
-    let tmp = tempfile::tempdir()?;
-    let key_path = write_temporary_key(tmp.path(), &kp.private)?;
-    let ours = build_runner(Some(host), user, port, key_path.to_str());
-
-    match ours.run(&["true".to_string()]).await {
-        Ok(o) if o.ok() => println!("access through Homelabus's key verified"),
-        _ => {
-            eprintln!("🔴 The key was installed but does NOT allow signing in.");
-            eprintln!("   Most frequent cause: sshd ignores authorized_keys when ~/.ssh");
-            eprintln!("   or the file are group-readable — without saying so.");
-            eprintln!("   Check: ls -ld ~/.ssh ~/.ssh/authorized_keys");
-            return Ok(ExitCode::FAILURE);
-        }
-    }
+    let Some((_key_dir, ours)) = adopt_machine(&state, &vault, host, user, port, identity).await?
+    else {
+        return Ok(ExitCode::FAILURE);
+    };
 
     // -- 3. Dependencies, Docker, unattended updates --------------------------
     let Some(distro) = report.distro else {
@@ -9731,6 +9812,38 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             })
         }
 
+        Command::Site(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async {
+                match cmd {
+                    SiteCmd::Add {
+                        host,
+                        user,
+                        port,
+                        identity,
+                        name,
+                        endpoint,
+                        apply,
+                    } => {
+                        site::add(
+                            &cli,
+                            site::Add {
+                                host,
+                                user: user.as_deref(),
+                                port: *port,
+                                identity: identity.as_deref(),
+                                name,
+                                endpoint: endpoint.as_deref(),
+                                apply: *apply,
+                            },
+                        )
+                        .await
+                    }
+                    SiteCmd::Status => site::status(&cli).await,
+                    SiteCmd::Sync { apply } => site::sync(&cli, *apply).await,
+                }
+            })
+        }
         Command::Mesh(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {

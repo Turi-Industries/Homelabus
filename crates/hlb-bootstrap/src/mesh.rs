@@ -14,18 +14,40 @@
 
 use crate::provision::{Action, Init, Phase, Step};
 
-/// The steps that bring a node's mesh up, or bring it up to date.
+/// Which WireGuard tunnel the steps are for: the mesh, or the link to a site.
+///
+/// 🔴 Each has unit files of its own. With the mesh's names fixed, the site's link would
+/// have rewritten Docker's `hlb-mesh.conf` drop-in to wait for `hlb-site` instead of
+/// `hlb0`: Docker starting before the mesh after the next reboot, and the node out of
+/// the Swarm, with nothing to say why.
+#[derive(Debug, Clone, Copy)]
+pub struct Tunnel<'a> {
+    /// How the preview names it: "the mesh".
+    pub label: &'a str,
+    /// The name its OpenRC service and its Docker drop-in carry.
+    pub unit: &'a str,
+    pub interface: &'a str,
+    pub config_path: &'a str,
+    pub firewall_path: &'a str,
+}
+
+/// The steps that bring a tunnel up, or bring it up to date.
 ///
 /// `Err` on an init system the steps cannot drive: the configuration is then for a
 /// person to put in place, and they are told where.
 pub fn steps(
     init: Init,
-    interface: &str,
-    config_path: &str,
+    tunnel: &Tunnel<'_>,
     config: &str,
-    firewall_path: &str,
     firewall: &str,
 ) -> Result<Vec<Step>, String> {
+    let Tunnel {
+        label,
+        unit,
+        interface,
+        config_path,
+        firewall_path,
+    } = *tunnel;
     let install = |what: &str, path: &str, content: &str, mode| Step {
         phase: Phase::Configuration,
         what: what.to_string(),
@@ -43,9 +65,19 @@ pub fn steps(
     let sh = |script: String| vec!["sh".to_string(), "-c".to_string(), script];
 
     let mut out = vec![
-        install("the mesh's firewall rules", firewall_path, firewall, 0o600),
+        install(
+            &format!("{label}'s firewall rules"),
+            firewall_path,
+            firewall,
+            0o600,
+        ),
         // 0600: it carries the node's private key.
-        install("the mesh configuration", config_path, config, 0o600),
+        install(
+            &format!("{label}'s configuration"),
+            config_path,
+            config,
+            0o600,
+        ),
     ];
     // Synchronised in place when the interface is up, started otherwise: the same on
     // both inits, only the starting differs.
@@ -63,12 +95,12 @@ pub fn steps(
         // Alpine has no `wg-quick@` unit: a service of our own, ordered before Docker
         // for the same reason as the systemd drop-in below.
         out.push(install(
-            "the mesh's service, started before Docker",
-            "/etc/init.d/hlb-mesh",
+            &format!("{label}'s service, started before Docker"),
+            &format!("/etc/init.d/{unit}"),
             &format!(
                 "#!/sbin/openrc-run\n\
-                 # Written by Homelabus: Swarm listens on the mesh address.\n\
-                 description=\"Homelabus WireGuard mesh ({interface})\"\n\
+                 # Written by Homelabus: Swarm may listen on its address.\n\
+                 description=\"Homelabus WireGuard, {label} ({interface})\"\n\
                  depend() {{\n\
                  \tneed net\n\
                  \tbefore docker\n\
@@ -87,17 +119,17 @@ pub fn steps(
             0o755,
         ));
         out.push(run(
-            "start the mesh at every boot",
+            &format!("start {label} at every boot"),
             vec![
                 "rc-update".into(),
                 "add".into(),
-                "hlb-mesh".into(),
+                unit.into(),
                 "default".into(),
             ],
         ));
         out.push(run(
-            "bring the mesh up, or synchronise it in place",
-            bring_up("rc-service hlb-mesh start"),
+            &format!("bring {label} up, or synchronise it in place"),
+            bring_up(&format!("rc-service {unit} start")),
         ));
         return Ok(out);
     }
@@ -106,10 +138,10 @@ pub fn steps(
         // Docker started before the tunnel cannot bind Swarm to an address that does
         // not exist yet, and the node comes back from a reboot out of the cluster.
         install(
-            "start Docker after the mesh",
-            "/etc/systemd/system/docker.service.d/hlb-mesh.conf",
+            &format!("start Docker after {label}"),
+            &format!("/etc/systemd/system/docker.service.d/{unit}.conf"),
             &format!(
-                "# Written by Homelabus: Swarm listens on the mesh address.\n\
+                "# Written by Homelabus: Swarm may listen on its address.\n\
                  [Unit]\n\
                  After=wg-quick@{interface}.service\n\
                  Wants=wg-quick@{interface}.service\n"
@@ -121,7 +153,7 @@ pub fn steps(
             vec!["systemctl".into(), "daemon-reload".into()],
         ),
         run(
-            "start the mesh at every boot",
+            &format!("start {label} at every boot"),
             vec![
                 "systemctl".into(),
                 "enable".into(),
@@ -129,7 +161,7 @@ pub fn steps(
             ],
         ),
         run(
-            "bring the mesh up, or synchronise it in place",
+            &format!("bring {label} up, or synchronise it in place"),
             bring_up(&format!("systemctl start wg-quick@{interface}")),
         ),
     ]);
@@ -154,16 +186,52 @@ pub fn reachability_check(peer_ip: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    const MESH: Tunnel<'static> = Tunnel {
+        label: "the mesh",
+        unit: "hlb-mesh",
+        interface: "hlb0",
+        config_path: "/etc/wireguard/hlb0.conf",
+        firewall_path: "/etc/wireguard/hlb0.nft",
+    };
+
+    const SITE: Tunnel<'static> = Tunnel {
+        label: "the site link",
+        unit: "hlb-site",
+        interface: "hlb-site",
+        config_path: "/etc/wireguard/hlb-site.conf",
+        firewall_path: "/etc/wireguard/hlb-site.nft",
+    };
+
     fn the_steps() -> Vec<Step> {
         steps(
             Init::Systemd,
-            "hlb0",
-            "/etc/wireguard/hlb0.conf",
+            &MESH,
             "[Interface]\nPrivateKey = secret\n",
-            "/etc/wireguard/hlb0.nft",
             "table inet hlb_swarm\n",
         )
         .expect("systemd")
+    }
+
+    fn paths(s: &[Step]) -> Vec<String> {
+        s.iter()
+            .filter_map(|s| match &s.action {
+                Action::Install { path, .. } => Some(path.clone()),
+                Action::Run(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_tunnels_never_write_each_others_files() {
+        // 🔴 The site's link rewriting the mesh's Docker drop-in would leave Docker
+        // starting before the mesh at the next boot, and the node out of the Swarm.
+        for init in [Init::Systemd, Init::OpenRc] {
+            let mesh = paths(&steps(init, &MESH, "", "").expect("mesh"));
+            let site = paths(&steps(init, &SITE, "", "").expect("site"));
+            for p in &site {
+                assert!(!mesh.contains(p), "{init:?}: both tunnels write {p}");
+            }
+        }
     }
 
     #[test]
@@ -221,10 +289,8 @@ mod tests {
     fn openrc_gets_a_service_of_its_own_ordered_before_docker() {
         let s = steps(
             Init::OpenRc,
-            "hlb0",
-            "/etc/wireguard/hlb0.conf",
+            &MESH,
             "[Interface]\n",
-            "/etc/wireguard/hlb0.nft",
             "table inet hlb_swarm\n",
         )
         .expect("openrc");
