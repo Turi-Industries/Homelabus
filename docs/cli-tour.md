@@ -307,6 +307,16 @@ printf '%s' '<user>:<token>' | ./target/debug/hlb secret-set registry-ghcr.io --
 ./target/debug/hlb fleet controller --image ghcr.io/turi-industries/hlb-controller:0.4.8 --apply
 ```
 
+A site of the house's own — a rented VPS — is prepared the same way, but never joins
+the house's Swarm: it runs one of its own, and the house's nodes each open a tunnel to
+it (`hlb-site`, `10.43.0.0/24`), their firewall letting it reach 80 and 443 only.
+
+```sh
+./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
+./target/debug/hlb site status               # each house node's last handshake
+./target/debug/hlb site sync --apply         # a node joined or left the house
+```
+
 The controller is two services of one image: `hlb-privd`, the daemon holding the
 state, the vault and Docker, and `hlb-controller`, the web side, as uid 8420 with no
 capability, the state's directory read-only and the daemon's socket in it. That

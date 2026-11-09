@@ -1362,8 +1362,13 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      (`hlb-site`, `10.43.0.0/24`), each house node opening its tunnel to the VPS — the
      house is behind NAT or a CGNAT — and the house's firewall letting the VPS reach
      80 and 443 only. Swarm's ports on that link would hand the VPS every secret. The
-     site's memory and disk read off the machine and recorded; the tunnels' handshakes
-     read by reconciliation.
+     site's memory and disk read off the machine and recorded; each tunnel's last
+     handshake read by `hlb site status` — the controller watches it with step 5.
+     Built 2026-11-09: `hlb_mesh::site`, `hlb site add | status | sync`; the house's
+     rules sit at prerouting, before Docker's DNAT, which `input` never sees. Found on
+     the way: the bootstrap wrote one tunnel's unit files under fixed names, so the
+     link would have rewritten Docker's wait for the mesh (`mesh::Tunnel`). Not yet run
+     on the lab.
   2. **The front door.** HAProxy on the VPS in TCP mode, never decrypting, every house
      node a backend on its site address, its health check finding the one Caddy runs
      on; the PROXY protocol to Caddy, accepted from the site network only, so the
