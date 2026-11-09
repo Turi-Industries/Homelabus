@@ -2196,6 +2196,14 @@ enum SiteCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Bring home what the site wrote while it served: the house's copies and the
+    /// site's stopped, each database and volume read off the site into the house's
+    /// backups and restored over the house's — what the house held backed up first —,
+    /// the house started, the door sent home. Preview by default.
+    Return {
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -9860,6 +9868,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     SiteCmd::Sync { apply } => site::sync(&cli, *apply).await,
                     SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
                     SiteCmd::Promote { apply } => site::promote::run(&cli, *apply).await,
+                    SiteCmd::Return { apply } => site::homecoming::run(&cli, *apply).await,
                 }
             })
         }

@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod door;
+pub mod homecoming;
 pub mod lifeboat;
 pub mod promote;
 

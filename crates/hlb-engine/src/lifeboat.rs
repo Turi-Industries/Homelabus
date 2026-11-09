@@ -376,6 +376,14 @@ pub const PROMOTED_MARK: &str = "/etc/hlb/site/promoted";
 /// The door's file once promoted, beside the one it runs.
 pub const PROMOTED_DOOR: &str = "haproxy.promoted.cfg";
 
+/// Why the house's own copies of the carried apps are held stopped while the site
+/// serves them: two copies written at once cannot be merged, and the return replaces
+/// the house's. 🔴 A stored value (`service_holds.why`).
+pub const HOUSE_HOLD: &str = "the site serves it";
+/// As long as a promotion may last. Expired, reconciliation would start the house's
+/// copy beside the site's, for the LAN, and the return would replace what it wrote.
+pub const HOUSE_HOLD_SECS: i64 = 365 * 24 * 3600;
+
 /// The promotion, a script of its own on the site: the night the house is down there is
 /// no house to run `hlb` from, only SSH to the VPS.
 ///
@@ -394,7 +402,7 @@ pub fn promote_script(services: &[String], names: &[String]) -> String {
 # The site serves the house's vital apps while the house is down.
 #   {PROMOTE_SCRIPT}           says what it would do
 #   {PROMOTE_SCRIPT} --apply   does it
-# Undone from the house, once it is back.
+# Undone from the house, once it is back: hlb site return --apply
 set -eu
 SERVICES="{svc}"
 NAMES="{listed}"

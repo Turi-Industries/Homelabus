@@ -1454,6 +1454,24 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      reads it (the catalog is validated by the released `hlb`) — until then the lab's
      Vaultwarden is refused; and the house coming back mid-promotion still serves its
      own copies to the LAN, which 4b must hold.
+     4b built 2026-11-09: `hlb site return [--apply]`. What the site wrote comes home
+     THROUGH the backups: each database dumped on the site's PostgreSQL by its own
+     administrator, each backed-up volume read off the site's daemon
+     (`SwarmOrchestrator::get_archive`) and unpacked here, both archived to the app's
+     destinations as `kind:from-site` and recorded, then put back by the restores
+     `hlb backup restore` runs — placement and NFS as they know them, what the house
+     held backed up first (`kind:pre-restore`), `--delete`. The site's copy outlives the
+     site. Order: the house's copies held stopped (`promote --apply` holds them from the
+     start, a year), the site's stopped, everything read, everything restored, the house
+     started until healthy — never fewer replicas than the plan declares — then the mark
+     removed and the door sent home, the site's Caddy and its certificates removed. A
+     failure before the door gives the site its apps back and keeps the house held: a
+     rerun reads the site again. Measured on a real Docker (`tests/lifeboat.rs`): a
+     volume and a PostgreSQL database come home whole, owned as on the site. Found: a
+     restore in place keeps the volume's ROOT as it was (restic 0.19.1). Left: a house
+     back after a promotion made over SSH alone still starts its own copies for the LAN
+     — nothing reads the site's mark when the house starts; what they write is replaced
+     at the return, kept in the copy taken first. Not yet run on the lab.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless

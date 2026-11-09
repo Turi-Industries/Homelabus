@@ -327,6 +327,8 @@ same promotion.
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
 ./target/debug/hlb site promote              # what the site would start and serve
 ./target/debug/hlb site promote --apply      # the site serves them; private ones open to the internet
+./target/debug/hlb site return               # what comes home, and from which snapshot
+./target/debug/hlb site return --apply       # the site's writes replace the house's; the door goes home
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the

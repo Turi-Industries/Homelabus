@@ -469,3 +469,262 @@ async fn a_volume_crosses_to_the_site_owned_as_it_was_its_sqlite_consistent() {
         "the WAL's last rows are in, the later change is not"
     );
 }
+
+/// What a site served comes home through the backups: its volume read off the site's
+/// daemon, archived as `kind:from-site`, then restored over the house's — owned and
+/// moded as the site held it, the house's own files gone, what the house held kept in
+/// the snapshot the restore took first.
+///
+/// One daemon plays both: the site's volume is read, then replaced by the house's.
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn a_volume_comes_home_from_the_site_whole_through_the_backups() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let (data, repo) = ("hlb-test-return-volume", "hlb-test-return-repo");
+    struct Gone(&'static str, &'static str);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = docker(&["volume", "rm", "-f", self.0, self.1]);
+        }
+    }
+    let _gone = Gone(data, repo);
+    let _ = docker(&["volume", "rm", "-f", data, repo]);
+    docker(&["volume", "create", repo]);
+
+    // The site's: written there while it served, owned by the app's user.
+    docker(&["volume", "create", data]);
+    let filled = docker(&[
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        "-v",
+        &format!("{data}:/d"),
+        hlb_backup::images::RESTIC,
+        "-c",
+        "mkdir /d/sub && echo written-on-the-site > /d/sub/a.txt && \
+         chown -R 4242:4242 /d && chmod 705 /d/sub",
+    ]);
+    assert!(
+        filled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&filled.stderr)
+    );
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let state = hlb_state::State::open(&dir.path().join("hlb.db"))
+        .await
+        .expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        "apiVersion: hlb/v1\nkind: App\nmetadata: { name: demo }\n\
+         spec:\n  image: { repo: a/b, tag: \"1\" }\n",
+    )
+    .expect("manifest");
+    state
+        .upsert_app("demo", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .upsert_destination("nas", repo, "critical,bulky", None)
+        .await
+        .expect("destination");
+    let socket = std::path::Path::new("/var/run/docker.sock");
+    let docker_api = hlb_orchestrator::SwarmOrchestrator::connect_unix(socket)
+        .await
+        .expect("docker");
+    let restore = Restore {
+        state: &state,
+        vault: &vault,
+        fallback_repo: None,
+        network: "bridge",
+        orchestrator: None,
+    };
+    let scratch = tempfile::tempdir().expect("scratch");
+    let brought = restore
+        .volume_from_site(
+            "demo",
+            data,
+            &Site {
+                docker: &docker_api,
+                socket,
+                network: "bridge",
+            },
+            hlb_backup::images::RESTIC,
+            scratch.path(),
+        )
+        .await
+        .expect("read off the site");
+    assert!(brought.bytes > 0);
+    let tags = &brought.source.snapshot.tags;
+    assert!(
+        tags.iter()
+            .any(|t| t == hlb_backup_run::lifeboat::FROM_SITE),
+        "{tags:?}"
+    );
+
+    // The house's own copy, which the site's replaces.
+    let home = tempfile::tempdir().expect("house volume");
+    std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700)).expect("mode");
+    std::fs::write(home.path().join("house.txt"), "the house's\n").expect("house");
+    bound(data, home.path());
+    let before = restore
+        .in_place(
+            "demo",
+            data,
+            &hlb_backup_run::placement::Place::Here,
+            &brought.source,
+        )
+        .await
+        .expect("restored");
+    assert_ne!(before, brought.source.snapshot.id);
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("sub/a.txt")).expect("the site's file"),
+        "written-on-the-site\n"
+    );
+    assert!(
+        !home.path().join("house.txt").exists(),
+        "whole: the house's own files are gone"
+    );
+    // The volume's root stays the house's: restic restores into it, and the site's
+    // came from the house's backup in the first place.
+    let sub = std::fs::metadata(home.path().join("sub")).expect("sub");
+    assert_eq!(
+        (sub.uid(), sub.mode() & 0o7777),
+        (4242, 0o705),
+        "owned and moded as the site held it"
+    );
+}
+
+/// The site's database comes home the same way: dumped on the site's server as its
+/// administrator, archived as `kind:from-site`, restored over the house's — the app's
+/// rows the site's, its tables still its own.
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn a_database_comes_home_from_the_site_whole_through_the_backups() {
+    const HOUSE: &str = "hlb-test-return-house";
+    const SITE: &str = "hlb-test-return-site";
+    const HOUSE_PG: &str = "hlb-test-return-house-pg";
+    const SITE_PG: &str = "hlb-test-return-site-pg";
+    const REPO: &str = "hlb-test-return-db-repo";
+    struct Gone;
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = docker(&["rm", "-f", HOUSE_PG, SITE_PG]);
+            let _ = docker(&["network", "rm", HOUSE, SITE]);
+            let _ = docker(&["volume", "rm", "-f", REPO]);
+        }
+    }
+    let _gone = Gone;
+    let _ = docker(&["rm", "-f", HOUSE_PG, SITE_PG]);
+    let _ = docker(&["volume", "rm", "-f", REPO]);
+    docker(&["network", "create", HOUSE]);
+    docker(&["network", "create", SITE]);
+    docker(&["volume", "create", REPO]);
+    let make = |server_name: &str, row: &str| {
+        psql(
+            server_name,
+            "postgres",
+            "postgres",
+            "CREATE ROLE chat LOGIN PASSWORD 'p'",
+        );
+        for s in hlb_platform::database_statements("chat", "chat").expect("statements") {
+            psql(server_name, "postgres", "postgres", &s);
+        }
+        psql(server_name, "chat", "chat", "CREATE TABLE kv (v text)");
+        psql(
+            server_name,
+            "chat",
+            "chat",
+            &format!("INSERT INTO kv VALUES ('{row}')"),
+        );
+    };
+    server(HOUSE_PG, HOUSE, ADMIN, HOUSE_PG);
+    make(HOUSE_PG, "the-house-s");
+    server(SITE_PG, SITE, SITE_ADMIN, "postgres");
+    make(SITE_PG, "written-on-the-site");
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let state = hlb_state::State::open(&dir.path().join("hlb.db"))
+        .await
+        .expect("state");
+    let vault = hlb_secrets::Vault::open_or_init(dir.path().join("k.key")).expect("vault");
+    let manifest: hlb_types::Manifest = serde_yaml_ng::from_str(
+        r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: chat }
+spec:
+  image: { repo: a/b, tag: "1" }
+  requires:
+    - { kind: database, engine: postgres }
+"#,
+    )
+    .expect("manifest");
+    state
+        .upsert_app("chat", &manifest, None)
+        .await
+        .expect("app");
+    state
+        .upsert_destination("nas", REPO, "critical,bulky", None)
+        .await
+        .expect("destination");
+    let socket = std::path::Path::new("/var/run/docker.sock");
+    let docker_api = hlb_orchestrator::SwarmOrchestrator::connect_unix(socket)
+        .await
+        .expect("docker");
+    let restore = Restore {
+        state: &state,
+        vault: &vault,
+        fallback_repo: None,
+        network: HOUSE,
+        orchestrator: None,
+    };
+    let db = Database {
+        engine: hlb_types::DbEngine::Postgres,
+        name: "chat",
+        role: "chat",
+        extensions: &[],
+    };
+    let brought = restore
+        .database_from_site(
+            "chat",
+            &db,
+            &Site {
+                docker: &docker_api,
+                socket,
+                network: SITE,
+            },
+            &Server {
+                image: hlb_backup::images::POSTGRES_CLIENT,
+                admin_password: SITE_ADMIN,
+            },
+        )
+        .await
+        .expect("read off the site");
+    assert!(brought.bytes > 0);
+    let admin = format!("postgres://postgres:{ADMIN}@{HOUSE_PG}:5432/postgres");
+    restore
+        .database_in_place("chat", &db, &admin, &brought.source)
+        .await
+        .expect("restored");
+    assert_eq!(
+        psql(
+            HOUSE_PG,
+            "chat",
+            "chat",
+            "SELECT string_agg(v, ',') FROM kv"
+        ),
+        "written-on-the-site"
+    );
+    assert_eq!(
+        psql(
+            HOUSE_PG,
+            "postgres",
+            "chat",
+            "SELECT tableowner FROM pg_tables WHERE tablename = 'kv'"
+        ),
+        "chat",
+        "the table is still the app's"
+    );
+}

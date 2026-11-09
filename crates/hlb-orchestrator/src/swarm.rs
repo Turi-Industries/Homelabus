@@ -2157,38 +2157,19 @@ impl SwarmOrchestrator {
         Ok(())
     }
 
-    /// Unpacks a tar archive into the volume `volume`, mounted at `mount_at` in a
-    /// container of `image` that never starts: the archive's paths are read from `/`,
-    /// owners and modes kept as written.
-    ///
-    /// The image is one the daemon holds or pulls — the service's own, so nothing else
-    /// is fetched. The volume is created when missing, and nothing it held is removed.
-    pub async fn put_archive<S>(
+    /// A container of `image` that never starts, `volume` mounted at `mount_at`: what
+    /// the archive API reads and writes through. Its name; the caller removes it.
+    async fn parked(
         &self,
+        prefix: &str,
         image: &str,
         volume: &str,
         mount_at: &str,
-        tar: S,
-    ) -> Result<()>
-    where
-        S: futures::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>
-            + Send
-            + 'static,
-    {
+    ) -> Result<String> {
         self.pull(image).await?;
-        let name = format!("hlb-put-{volume}");
-        // One left by a run that died: its mount is the same, its archive half sent.
-        let _ = self
-            .docker
-            .remove_container(
-                &name,
-                Some(
-                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
-                        .force(true)
-                        .build(),
-                ),
-            )
-            .await;
+        let name = format!("{prefix}-{volume}");
+        // One left by a run that died: its mount is the same, its archive half moved.
+        self.unpark(&name).await.ok();
         let body = bollard::models::ContainerCreateBody {
             image: Some(image.to_string()),
             entrypoint: Some(vec!["true".to_string()]),
@@ -2216,6 +2197,42 @@ impl SwarmOrchestrator {
                 body,
             )
             .await?;
+        Ok(name)
+    }
+
+    async fn unpark(&self, name: &str) -> Result<()> {
+        self.docker
+            .remove_container(
+                name,
+                Some(
+                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
+                        .force(true)
+                        .build(),
+                ),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Unpacks a tar archive into the volume `volume`, mounted at `mount_at` in a
+    /// container of `image` that never starts: the archive's paths are read from `/`,
+    /// owners and modes kept as written.
+    ///
+    /// The image is one the daemon holds or pulls — the service's own, so nothing else
+    /// is fetched. The volume is created when missing, and nothing it held is removed.
+    pub async fn put_archive<S>(
+        &self,
+        image: &str,
+        volume: &str,
+        mount_at: &str,
+        tar: S,
+    ) -> Result<()>
+    where
+        S: futures::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>
+            + Send
+            + 'static,
+    {
+        let name = self.parked("hlb-put", image, volume, mount_at).await?;
         let put = self
             .docker
             .upload_to_container(
@@ -2228,20 +2245,58 @@ impl SwarmOrchestrator {
                 bollard::body_try_stream(tar),
             )
             .await;
-        let removed = self
-            .docker
-            .remove_container(
-                &name,
-                Some(
-                    bollard::query_parameters::RemoveContainerOptionsBuilder::default()
-                        .force(true)
-                        .build(),
-                ),
-            )
-            .await;
+        let removed = self.unpark(&name).await;
         put?;
         removed?;
         Ok(())
+    }
+
+    /// The volume `volume` as a tar archive, written to `out`: mounted at `mount_at` in
+    /// a container of `image` that never starts, and read from there — its entries named
+    /// `<last part of mount_at>/…`, the volume's root first, owners and modes as they
+    /// are. The bytes written.
+    ///
+    /// ⚠️ What writes the volume must be stopped: the archive is read file by file.
+    pub async fn get_archive<W>(
+        &self,
+        image: &str,
+        volume: &str,
+        mount_at: &str,
+        out: &mut W,
+    ) -> Result<u64>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use futures::StreamExt as _;
+        use tokio::io::AsyncWriteExt as _;
+        let name = self.parked("hlb-get", image, volume, mount_at).await?;
+        let read = async {
+            let mut stream = self.docker.download_from_container(
+                &name,
+                Some(
+                    bollard::query_parameters::DownloadFromContainerOptionsBuilder::default()
+                        .path(mount_at)
+                        .build(),
+                ),
+            );
+            let mut n = 0u64;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                out.write_all(&chunk)
+                    .await
+                    .map_err(|e| Error::Unexpected(format!("writing the archive: {e}")))?;
+                n += chunk.len() as u64;
+            }
+            out.flush()
+                .await
+                .map_err(|e| Error::Unexpected(format!("writing the archive: {e}")))?;
+            Ok::<u64, Error>(n)
+        }
+        .await;
+        let removed = self.unpark(&name).await;
+        let n = read?;
+        removed?;
+        Ok(n)
     }
 
     /// Removes a volume, and whatever it held.
