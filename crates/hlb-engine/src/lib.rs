@@ -69,6 +69,10 @@ pub enum Error {
     #[error("{0}")]
     Storage(String),
 
+    /// Rendering asked of an action that deploys no service.
+    #[error("{0} deploys no service")]
+    NotAService(String),
+
     /// A download its job could not fetch, or whose hash was not the one declared.
     #[error("download: {0}")]
     Download(String),
@@ -519,6 +523,9 @@ pub struct Executor<'a, O: Orchestrator + ?Sized> {
     network: String,
     /// False by default: nothing is written until it is asked for.
     apply: bool,
+    /// Values never filled in, their tokens left literal: what a service rendered for
+    /// another machine must not carry.
+    withheld: Vec<hlb_types::binding::Token>,
 }
 
 impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
@@ -537,7 +544,14 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             storage: StorageConfig::default(),
             network: hlb_orchestrator::PLATFORM_NETWORK.to_string(),
             apply: false,
+            withheld: Vec::new(),
         }
+    }
+
+    /// Leaves these tokens literal in every service rendered.
+    pub fn withholding(mut self, tokens: &[hlb_types::binding::Token]) -> Self {
+        self.withheld = tokens.to_vec();
+        self
     }
 
     /// The overlay the services join, when it is not the default one.
@@ -989,6 +1003,10 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
         // variant breaks compilation everywhere. A parameterised token does not fit
         // that contract, and forcing it in would have weakened the enum for all the
         // others.
+        for t in &self.withheld {
+            values.remove(t);
+        }
+
         let companions: Vec<(String, String)> = manifest
             .as_ref()
             .map(|m| {
@@ -1103,7 +1121,10 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             .map_err(Error::Storage)
     }
 
-    async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
+    /// The service a `DeployService` action deploys, every token filled from the vault
+    /// and every file rendered. Nothing is written: the ingress's own Caddyfile, the
+    /// network and the owners' placement are the deployment's.
+    pub async fn render_service(&self, app: &str, action: &Action) -> Result<ServiceSpec> {
         match action {
             Action::DeployService {
                 name,
@@ -1152,10 +1173,6 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // what finally tells an app where its database is.
                 let env = self.resolve_bindings(app, env).await?;
 
-                // Idempotent, and cheap: the first deployment of an installation is
-                // what creates the network everything else joins.
-                self.orchestrator.ensure_network(&self.network).await?;
-
                 // The count `hlb stop` / `hlb scale` decided for the app's own service:
                 // a redeployment or an upgrade starting a stopped app again would undo
                 // a decision nobody took back.
@@ -1193,22 +1210,6 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 for (path, content) in self.resolve_bindings(app, files).await? {
                     spec = spec.file(&path, &content);
                 }
-                // The ingress is deployed with every route there already is: started on
-                // the image's own Caddyfile it would serve a welcome page to the
-                // internet, and a redeployment without it would drop every route
-                // until the next publication.
-                if name == hlb_types::manifest::INGRESS_SERVICE {
-                    let rendered =
-                        ingress::render(self.orchestrator, self.state, self.vault).await?;
-                    ingress::write(self.orchestrator, &resolved, &rendered).await?;
-                    spec = spec
-                        .command(ingress::command())
-                        .aliases(ingress::aliases(self.state).await?);
-                }
-                // The app's own service: a companion reads no other app's volume.
-                if name == app {
-                    self.follow_owners(name, manifest.as_ref()).await?;
-                }
                 // An app signing people in through PocketID fetches its issuer itself,
                 // and under a private root refused its certificate: the sign-in
                 // button led nowhere. The root is added to what the image trusts.
@@ -1238,6 +1239,36 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                             spec.env.push((k, v));
                         }
                     }
+                }
+                Ok(spec)
+            }
+            other => Err(Error::NotAService(other.to_string())),
+        }
+    }
+
+    async fn execute_one(&self, app: &str, action: &Action) -> Result<Step> {
+        match action {
+            Action::DeployService { name, .. } => {
+                let mut spec = self.render_service(app, action).await?;
+                // Idempotent, and cheap: the first deployment of an installation is
+                // what creates the network everything else joins.
+                self.orchestrator.ensure_network(&self.network).await?;
+                // The ingress is deployed with every route there already is: started on
+                // the image's own Caddyfile it would serve a welcome page to the
+                // internet, and a redeployment without it would drop every route
+                // until the next publication.
+                if name == hlb_types::manifest::INGRESS_SERVICE {
+                    let rendered =
+                        ingress::render(self.orchestrator, self.state, self.vault).await?;
+                    ingress::write(self.orchestrator, &spec.image, &rendered).await?;
+                    spec = spec
+                        .command(ingress::command())
+                        .aliases(ingress::aliases(self.state).await?);
+                }
+                // The app's own service: a companion reads no other app's volume.
+                if name == app {
+                    let manifest = self.state.app_manifest(app).await.ok();
+                    self.follow_owners(name, manifest.as_ref()).await?;
                 }
                 self.orchestrator.deploy(&spec).await?;
                 Ok(Step::Done)
@@ -3626,6 +3657,59 @@ spec:
         assert_eq!(get("MAILER_FROM").as_deref(), Some("vikunja@example.fr"));
         let password = get("MAILER_PASSWORD").expect("a password");
         assert!(!password.contains("{{"), "the generated one: {password}");
+    }
+
+    /// A service rendered for another machine carries no value it was not meant to:
+    /// the token stays literal, never empty, and nothing is deployed.
+    #[tokio::test]
+    async fn a_withheld_value_stays_a_token_in_the_rendered_service() {
+        let (o, s) = (Fake::default(), State::in_memory().await.unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::init(dir.path().join("master.key")).unwrap();
+        send_mail_without_stalwart(&o, &s, &vault).await;
+        let deployed = o.deployed_specs.lock().unwrap().len();
+        let m = s.app_manifest("vikunja").await.unwrap();
+        let p = hlb_resolver::resolve(
+            &m,
+            &hlb_resolver::InstallParams {
+                domain: Some("tasks.example.fr".into()),
+                mail_domain: Some("example.fr".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let deploy = p
+            .actions
+            .iter()
+            .find(|a| matches!(a, Action::DeployService { .. }))
+            .expect("a service");
+        let get = |spec: &ServiceSpec, k: &str| {
+            spec.env
+                .iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.clone())
+        };
+
+        let whole = Executor::new(&o, &s)
+            .with_vault(&vault)
+            .render_service("vikunja", deploy)
+            .await
+            .unwrap();
+        let password = get(&whole, "MAILER_PASSWORD").expect("a password");
+        assert!(!password.contains("{{"), "filled by default: {password}");
+
+        let withheld = Executor::new(&o, &s)
+            .with_vault(&vault)
+            .withholding(&[hlb_types::binding::Token::SmtpPassword])
+            .render_service("vikunja", deploy)
+            .await
+            .unwrap();
+        assert_eq!(
+            get(&withheld, "MAILER_PASSWORD").as_deref(),
+            Some("{{ smtp.password }}")
+        );
+        assert_eq!(get(&withheld, "MAILER_HOST").as_deref(), Some("stalwart"));
+        assert_eq!(o.deployed_specs.lock().unwrap().len(), deployed, "rendered only");
     }
 
     #[tokio::test]
