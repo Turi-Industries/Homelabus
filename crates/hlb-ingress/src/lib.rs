@@ -6,6 +6,7 @@
 pub mod caddyfile;
 pub mod crowdsec;
 pub mod dns;
+pub mod front_door;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

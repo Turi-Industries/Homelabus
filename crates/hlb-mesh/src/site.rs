@@ -30,7 +30,10 @@ pub const UNIT: &str = "hlb-site";
 pub const PORT: u16 = 51821;
 
 /// The ports the site may open at home: what the front door relays, nothing else.
-pub const HOUSE_PORTS: [u16; 2] = [80, 443];
+///
+/// 443 is not one of them: HTTPS is relayed to Caddy's relay port, where nothing the
+/// site sends is taken for the house. Held equal to `hlb_ingress`'s by `hlb-cli`.
+pub const HOUSE_PORTS: [u16; 2] = [80, 10443];
 
 /// `10.43.0.0/24`, beside the mesh's `10.42.0.0/24` and clear of Docker's ranges.
 const NETWORK: [u8; 3] = [10, 43, 0];
@@ -330,7 +333,7 @@ mod tests {
         assert!(f.contains("hook prerouting priority -150"), "{f}");
         assert!(!f.contains("hook input"), "{f}");
         assert!(
-            f.contains("ip saddr 10.43.0.1 tcp dport { 80, 443 } accept"),
+            f.contains("ip saddr 10.43.0.1 tcp dport { 80, 10443 } accept"),
             "{f}"
         );
         assert!(f.trim_end().ends_with("drop\n\t}\n}"), "{f}");

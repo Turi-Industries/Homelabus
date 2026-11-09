@@ -1361,7 +1361,7 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      never joined to the house's. The link is not the mesh: an interface of its own
      (`hlb-site`, `10.43.0.0/24`), each house node opening its tunnel to the VPS — the
      house is behind NAT or a CGNAT — and the house's firewall letting the VPS reach
-     80 and 443 only. Swarm's ports on that link would hand the VPS every secret. The
+     80 and Caddy's relay port only. Swarm's ports on that link would hand the VPS every secret. The
      site's memory and disk read off the machine and recorded; each tunnel's last
      handshake read by `hlb site status` — the controller watches it with step 5.
      Built 2026-11-09: `hlb_mesh::site`, `hlb site add | status | sync`; the house's

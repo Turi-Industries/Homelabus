@@ -617,6 +617,16 @@ mod tests {
     }
 
     #[test]
+    fn the_house_opens_to_the_site_what_the_front_door_relays_to() {
+        assert_eq!(Site::cidr(), hlb_ingress::front_door::SITE_NETWORK);
+        assert_eq!(
+            site::HOUSE_PORTS,
+            [80, hlb_ingress::caddyfile::RELAY_HTTPS_PORT],
+            "a port the door relays to and the house drops is a door that never opens"
+        );
+    }
+
+    #[test]
     fn the_link_never_writes_the_meshs_files() {
         let mesh = crate::MESH_TUNNEL;
         assert_ne!(TUNNEL.unit, mesh.unit);
