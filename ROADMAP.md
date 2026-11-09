@@ -272,6 +272,16 @@ exported — Homelabus never bills.
   for a person unless the house accepts that downtime in its window (`hlb config reboots
   --accept-downtime`). "Ça dépend des personnes, chacun choisit."
 
+#### Decided by the owner, 2026-11-09
+
+- **Phase 4 starts with the VPS, a VM of the lab**: 4 GB on the lab's `hlb-internet`
+  network plays the rented server, for building and for the gate — the house can be cut
+  at will there. A rented VPS comes after the gate.
+- **The VPS before the router**: site, front door, lifeboat, promote and return, Gatus,
+  downtime, then the gate; the signed zone's Knot and OPNsense after it, in the same
+  phase.
+- **One pull request per step, merged by Claude** once CI is green, as in phase 5.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1345,6 +1355,32 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
   its own key, 160-hour certificates from the house over DNS-01; a shield edge so the
   house's uplink is fetched once; public content on a domain of its own; GeoDNS before
   any anycast.
+- **The steps** (2026-11-09), in this order; the gate's row is `5 available` already.
+  1. **A site.** `hlb site add` prepares the VPS over SSH as the bootstrap prepares a
+     node — Docker, hardening, unattended updates — with a Swarm of its OWN, one node,
+     never joined to the house's. The link is not the mesh: an interface of its own
+     (`hlb-site`, `10.43.0.0/24`), each house node opening its tunnel to the VPS — the
+     house is behind NAT or a CGNAT — and the house's firewall letting the VPS reach
+     80 and 443 only. Swarm's ports on that link would hand the VPS every secret. The
+     site's memory and disk read off the machine and recorded; the tunnels' handshakes
+     read by reconciliation.
+  2. **The front door.** HAProxy on the VPS in TCP mode, never decrypting, every house
+     node a backend on its site address, its health check finding the one Caddy runs
+     on; the PROXY protocol to Caddy, accepted from the site network only, so the
+     client's address survives. Certificates stay at home.
+  3. **The lifeboat.** Vital apps — Vaultwarden, PocketID — restored nightly from their
+     backups onto the VPS, stopped, started once by a health check, recorded as a
+     rehearsal; refused at preview beyond the site's memory or disk, figures measured
+     with `docker stats` on the lab first.
+  4. **Promote and return**, by hand: `hlb site promote` points the front door at the
+     lifeboat; `hlb site return` brings writes home where the manifest says how,
+     read-only on the VPS otherwise.
+  5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
+     from home, alerts that never go through the house.
+  6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
+     services, the disruption budget, the migration undone in one command.
+  7. **The gate on the lab**, timed both ways.
+  8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.
