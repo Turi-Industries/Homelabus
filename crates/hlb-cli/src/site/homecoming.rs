@@ -250,6 +250,14 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     println!("✓ the door sends every name home");
+    // Left running for the dumps, it would serve a copy of each database read until the
+    // nightly lifeboat, which leaves everything stopped. Not before the door: a return
+    // failing there gives the site its apps back, PostgreSQL first.
+    if all.iter().any(|c| !c.databases.is_empty()) {
+        if let Err(e) = site.scale(lifeboat::POSTGRES, 0).await {
+            eprintln!("⚠️  the site's PostgreSQL still runs ({e}): the next lifeboat stops it");
+        }
+    }
     // Its certificates' keys: none waits on the VPS for the next promotion.
     site.remove(hlb_ingress::front_door::SITE_CADDY).await.ok();
     for v in [lifeboat::CADDY_DATA, lifeboat::CADDY_CONFIG] {

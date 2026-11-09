@@ -1490,7 +1490,18 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      restore in place keeps the volume's ROOT as it was (restic 0.19.1). Left: a house
      back after a promotion made over SSH alone still starts its own copies for the LAN
      — nothing reads the site's mark when the house starts; what they write is replaced
-     at the return, kept in the copy taken first. Not yet run on the lab.
+     at the return, kept in the copy taken first.
+     Run on the lab 2026-11-09, three cycles (Vaultwarden given `lifeboat` in a lab
+     copy of its manifest): lifeboat, promote, `vw.lab` 200 through the VPS with the
+     site's certificate, a row and a file written there (twice), return — both home, the
+     row its role's, `vw.lab` 200 at home and 403 through the door again; the next
+     lifeboat starts from the `from-site` snapshot. Found there: the site's Caddy asked
+     for its certificate when it STARTED, before the door sent its names to it — the
+     authority validated against the house and the order hung (once over HTTP-01, once
+     over TLS-ALPN-01); the promotion restarts it once the door is swapped. And the
+     return left the site's PostgreSQL running until the next night, a copy of every
+     database it read; it is stopped once the door is home. Left: `promote` says
+     promoted before the certificate is there — nothing waits for it.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
      5a built 2026-11-09: `hlb site add` and `sync` put the site's watch in place after
@@ -1510,7 +1521,14 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      in place, and two wait beside it: the promotion swaps the page after the door
      (private apps served on purpose then), the return swaps it back. Measured on the
      real Gatus and Caddy (`tests/status_page.rs`). Gatus has no `NET_RAW`, so no ping.
-     Not yet run on the lab.
+     Run on the lab 2026-11-09, 5a to 5e end to end: 14 probes, both heartbeats
+     received, LibreSpeed paused → down → the ntfy alert and its button → announced on
+     the page → `site announce --follow` → the house's portal → its resolution archived
+     on the page and the house's copy expired. Found there: Gatus reads a timeout as
+     status 0, which `< 500` let through — a public probe needs `[CONNECTED]` too; and
+     the site's CLI calls of `docker` went to the HOUSE's daemon, reading its specs and
+     logs (#132). Left: `site sync` says the page is ready while the edge can get no
+     certificate — nothing checks the site reaches the ACME directory.
      5b built 2026-11-09: two heartbeats Gatus awaits, each alerting at its first miss
      (its interval is the grace): "Homelabus answers" (20 min) and "Backups up to date"
      (2 h, pushed failing while an app is overdue — longer, so a dead house is one alert

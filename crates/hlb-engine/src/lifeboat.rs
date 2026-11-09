@@ -483,6 +483,10 @@ mv -f {door}/haproxy.cfg.new {door}/haproxy.cfg
 for id in $(docker ps -q --filter label=com.docker.swarm.service.name={door_service}); do
     docker kill -s USR2 "$id" >/dev/null
 done
+# Its certificate asked for again, the door now sending its names here: asked at its
+# start, it was validated through the door still pointing home, and failed or hung.
+docker service update --force --quiet {caddy} >/dev/null
+echo "  ✓ {caddy} asking for its certificate"
 # The status page reads the private apps as served on purpose; Gatus reloads its file.
 if [ -f {watch}/{gatus_promoted} ]; then
     cp {watch}/{gatus_promoted} {watch}/{gatus}.new
@@ -887,6 +891,12 @@ spec:
         // Checked by HAProxy before the rename, reloaded after.
         assert!(at("haproxy -c") < at("mv -f"), "{script}");
         assert!(at("mv -f") < at("USR2"), "{script}");
+        // Its certificate asked for again once the door sends its names to it.
+        let again = format!(
+            "docker service update --force --quiet {}",
+            hlb_ingress::front_door::SITE_CADDY
+        );
+        assert!(at("USR2") < at(&again), "{script}");
         // The page swaps once the door has: a private app read open before it is.
         let page = format!(
             "cp {}/{} ",
