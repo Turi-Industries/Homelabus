@@ -11,6 +11,7 @@
 /// side that only READS them never links Docker.
 pub use hlb_types::swarm as cluster;
 pub mod swarm;
+pub mod tar;
 
 use async_trait::async_trait;
 use hlb_types::{Healthcheck, SecuritySpec};
