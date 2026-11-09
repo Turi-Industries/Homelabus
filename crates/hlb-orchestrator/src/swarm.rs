@@ -158,9 +158,25 @@ pub struct SwarmOrchestrator {
     /// Credentials per registry host, sent with every service created or updated from
     /// an image of that registry.
     registries: HashMap<String, (String, String)>,
+    /// `DOCKER_HOST` for the CLI calls bollard cannot make, when the daemon is not the
+    /// local one.
+    cli_host: Option<String>,
 }
 
 impl SwarmOrchestrator {
+    /// The `docker` CLI, aimed at this orchestrator's daemon.
+    ///
+    /// 🔴 Never `Command::new("docker")` alone: for a site's daemon, bridged over SSH,
+    /// it read the HOUSE's — the house's probe and previous spec for the site's
+    /// `postgres`, which both have (the lab, 2026-11-09).
+    fn cli(&self) -> tokio::process::Command {
+        let mut c = tokio::process::Command::new("docker");
+        if let Some(host) = &self.cli_host {
+            c.env("DOCKER_HOST", host);
+        }
+        c
+    }
+
     /// `docker exec` in a container of another node, through a job placed there.
     ///
     /// A job's outcome is its log, not an exit code: the command's own code is
@@ -306,6 +322,7 @@ impl SwarmOrchestrator {
         Ok(Self {
             docker,
             registries: HashMap::new(),
+            cli_host: None,
         })
     }
 
@@ -313,6 +330,7 @@ impl SwarmOrchestrator {
         Self {
             docker,
             registries: HashMap::new(),
+            cli_host: None,
         }
     }
 
@@ -401,7 +419,7 @@ impl SwarmOrchestrator {
         let pruned = async {
             let current = self.inspect(service).await?;
             let mut held = current.spec.as_ref().map(spec_secrets).unwrap_or_default();
-            held.extend(Self::previous_spec_secrets(service).await?);
+            held.extend(self.previous_spec_secrets(service).await?);
             let listed = self.managed_secrets().await?;
             for name in stale_file_secrets(service, &listed, &held) {
                 self.docker.delete_secret(&name).await?;
@@ -1007,7 +1025,7 @@ impl SwarmOrchestrator {
             .and_then(|s| s.task_template.as_mut())
             .and_then(|t| t.container_spec.as_mut());
         if let Some(cs) = cs.filter(|c| c.health_check.is_none()) {
-            cs.health_check = Self::probe_of(name).await?;
+            cs.health_check = self.probe_of(name).await?;
         }
         Ok(svc)
     }
@@ -1030,8 +1048,9 @@ impl SwarmOrchestrator {
     /// The secrets a service's previous spec mounts, as `docker service inspect` prints
     /// them: bollard's `Service` has no `PreviousSpec`, and reading none would delete
     /// what a rollback needs. An unreadable answer is an error, for the same reason.
-    async fn previous_spec_secrets(name: &str) -> Result<Vec<String>> {
-        let out = tokio::process::Command::new("docker")
+    async fn previous_spec_secrets(&self, name: &str) -> Result<Vec<String>> {
+        let out = self
+            .cli()
             .args([
                 "service",
                 "inspect",
@@ -1054,8 +1073,9 @@ impl SwarmOrchestrator {
     }
 
     /// A service's probe, as `docker service inspect` prints it.
-    async fn probe_of(name: &str) -> Result<Option<bollard::models::HealthConfig>> {
-        let out = tokio::process::Command::new("docker")
+    async fn probe_of(&self, name: &str) -> Result<Option<bollard::models::HealthConfig>> {
+        let out = self
+            .cli()
             .args([
                 "service",
                 "inspect",
@@ -1609,7 +1629,8 @@ impl Orchestrator for SwarmOrchestrator {
         // ⚠️ `bollard` 0.19 exposes neither `update_swarm` nor `get_swarm_unlock_key`,
         // so this goes through the Docker CLI — as do a service's logs, and it is said
         // rather than hidden.
-        let out = tokio::process::Command::new("docker")
+        let out = self
+            .cli()
             .args(["swarm", "update", "--autolock=true"])
             .output()
             .await
@@ -1624,7 +1645,8 @@ impl Orchestrator for SwarmOrchestrator {
 
         // The key is only available AFTER activation: asking before would return an
         // empty string, which would be filed in the vault as if the job were done.
-        let out = tokio::process::Command::new("docker")
+        let out = self
+            .cli()
             .args(["swarm", "unlock-key", "-q"])
             .output()
             .await
@@ -2062,7 +2084,8 @@ impl Orchestrator for SwarmOrchestrator {
         // swallowed by the one caller, so every failed job's reason read empty: "Caddy
         // refused the new configuration: " and nothing, a restic job "exit (1)". The
         // service endpoint is also the only one reaching a task on another node.
-        let out = tokio::process::Command::new("docker")
+        let out = self
+            .cli()
             .args(["service", "logs", "--raw", "--timestamps", "--tail"])
             .arg(n.to_string())
             .arg(service)
@@ -2145,7 +2168,10 @@ impl SwarmOrchestrator {
             Docker::connect_with_unix(&path.to_string_lossy(), 120, bollard::API_DEFAULT_VERSION)?
                 .negotiate_version()
                 .await?;
-        Ok(Self::from_docker(docker))
+        Ok(Self {
+            cli_host: Some(format!("unix://{}", path.display())),
+            ..Self::from_docker(docker)
+        })
     }
 
     /// Pulls `image` unless the daemon has it.

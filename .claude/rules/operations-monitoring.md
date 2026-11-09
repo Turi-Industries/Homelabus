@@ -120,5 +120,9 @@ Measured on Gatus 5.38 and ntfy 2.34; each is silent when it fires.
   alert's part in `provider-override.placeholders` — the provider's body is one for all.
 - **`ntfy subscribe` runs a message's command from `/tmp`**, and Swarm's tmpfs is
   `noexec` (exit 126). Read its JSON lines instead (`--from-config` with no command).
+- **🔴 Gatus reads a timeout or a refused connection as status 0**, and `[STATUS] < 500`
+  passes it: the lab's LibreSpeed, frozen, read UP every minute through the door
+  (2026-11-09). A public app's probe also requires `[CONNECTED] == true`, true only once
+  an answer came (`status_page::ANSWERS`, `tests/status_page.rs` on the real image).
 - **ntfy refuses a token not exactly 32 characters** (`tk_` + 29), and a subscription
   receives only what comes after it — nothing is replayed at start.
