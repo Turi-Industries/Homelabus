@@ -451,6 +451,140 @@ pub fn refuse_words(words: &str) -> Option<&'static str> {
     }
 }
 
+/// Gatus's `/api/v1/config`, as far as the house reads it: the page's announcements.
+/// Gatus's own format, so unknown fields are let through.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct PageConfig {
+    #[serde(default)]
+    pub announcements: Vec<PageAnnouncement>,
+}
+
+/// One entry of the page: one incident, from the announcement to its archive.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PageAnnouncement {
+    pub timestamp: String,
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub archived: bool,
+}
+
+/// What the house mirrors of a page at most, a page being the VPS's word: the
+/// announcer keeps a month of incidents, and each says a few sentences.
+pub const MIRRORED_ENTRIES: usize = 50;
+pub const MIRRORED_CHARS: usize = 4000;
+
+/// The hour [`ANNOUNCE_SH`] writes before what it appends: ` [18:30 UTC] `.
+const MARK_LEN: usize = 13;
+
+fn mark_at(b: &[u8], i: usize) -> bool {
+    b.len() >= i + MARK_LEN
+        && &b[i..i + 2] == b" ["
+        && b[i + 2].is_ascii_digit()
+        && b[i + 3].is_ascii_digit()
+        && b[i + 4] == b':'
+        && b[i + 5].is_ascii_digit()
+        && b[i + 6].is_ascii_digit()
+        && &b[i + 7..i + MARK_LEN] == b" UTC] "
+}
+
+/// A page message cut where the announcer appended: the first words, then each
+/// addition with its hour (`[18:30 UTC] …`).
+pub fn segments(message: &str) -> Vec<String> {
+    let b = message.as_bytes();
+    let (mut out, mut start, mut i) = (Vec::new(), 0, 0);
+    while i < b.len() {
+        if mark_at(b, i) {
+            out.push(message[start..i].to_string());
+            // The space before the bracket is the separator, the rest the addition's.
+            start = i + 1;
+            i += MARK_LEN;
+        } else {
+            i += 1;
+        }
+    }
+    out.push(message[start..].to_string());
+    out
+}
+
+/// The portal's title for an incident: its first sentence, short.
+fn title_of(body: &str) -> String {
+    let first = body
+        .split_inclusive(". ")
+        .next()
+        .unwrap_or(body)
+        .trim()
+        .trim_end_matches('.');
+    if first.chars().count() > 80 {
+        format!("{}…", first.chars().take(79).collect::<String>())
+    } else {
+        first.to_string()
+    }
+}
+
+/// The house's level for a Gatus type; an unknown one is the lowest, never an incident.
+fn level_of(kind: &str) -> hlb_api::AnnouncementLevel {
+    let known = [status_page::Kind::Outage, status_page::Kind::Warning]
+        .into_iter()
+        .find(|k| k.as_str() == kind);
+    match known {
+        Some(status_page::Kind::Outage) => hlb_api::AnnouncementLevel::Incident,
+        Some(status_page::Kind::Warning) => hlb_api::AnnouncementLevel::Warning,
+        None => hlb_api::AnnouncementLevel::Info,
+    }
+}
+
+/// What a pass writes of one entry of the page, given what the house already holds of
+/// it; `None` when nothing changed, or when the page's word is past what is mirrored.
+///
+/// 🔴 The house's announcement is FOLLOWED, never rewritten (the owner's decision,
+/// 2026-11-09): what the page added becomes a follow-up, and words the owner replaced
+/// on the page a "Reworded" one — the house's thread keeps what was said, and when.
+pub fn mirror(
+    e: &PageAnnouncement,
+    known: Option<&hlb_state::SiteAnnouncement>,
+) -> Option<hlb_state::SiteMirror> {
+    if e.timestamp.len() > 64 || e.message.chars().count() > MIRRORED_CHARS {
+        return None;
+    }
+    if known.is_some_and(|k| k.seen == e.message && k.archived == e.archived) {
+        return None;
+    }
+    let now = segments(&e.message);
+    let same = known.map_or(1, |k| {
+        segments(&k.seen)
+            .iter()
+            .zip(&now)
+            .take_while(|(a, b)| a == b)
+            .count()
+    });
+    let follow_ups = now
+        .iter()
+        .enumerate()
+        .skip(same)
+        .map(|(i, s)| {
+            if i == 0 {
+                format!("Reworded: {s}")
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    Some(hlb_state::SiteMirror {
+        timestamp: e.timestamp.clone(),
+        seen: e.message.clone(),
+        archived: e.archived,
+        first: hlb_state::FirstWords {
+            title: title_of(&now[0]),
+            body: now[0].clone(),
+            level: level_of(&e.kind),
+        },
+        follow_ups,
+    })
+}
+
 /// The announcer's ntfy client: both topics, printed — no command per message.
 pub fn announcer_client(token: &str) -> String {
     format!(
@@ -808,6 +942,12 @@ mod tests {
         let (before, after) = followed.split_once(" UTC] ").expect("the hour");
         assert!(before.starts_with(&words.replace('$', "$$")), "{followed}");
         assert_eq!(after, "Disk replaced, restoring.");
+        // What the house cuts the page's message into is what the script appends — read
+        // as Gatus serves it, `$$` a dollar.
+        let cut = segments(&followed.replace("$$", "$"));
+        assert_eq!(cut.len(), 2, "{cut:?}");
+        assert_eq!(cut[0], words);
+        assert!(cut[1].starts_with('[') && cut[1].ends_with("UTC] Disk replaced, restoring."));
 
         // What the page cannot show as written is refused, the page untouched.
         for (how, bad) in [
@@ -863,6 +1003,96 @@ mod tests {
         assert!(message.ends_with("Budget $$HOME is back."), "{message}");
         let out = say("follow", "Late.");
         assert!(!out.status.success());
+    }
+
+    fn on_page(message: &str, archived: bool) -> PageAnnouncement {
+        PageAnnouncement {
+            timestamp: "2026-11-09T18:00:00Z".into(),
+            kind: "outage".into(),
+            message: message.into(),
+            archived,
+        }
+    }
+
+    fn held(seen: &str, archived: bool) -> hlb_state::SiteAnnouncement {
+        hlb_state::SiteAnnouncement {
+            announcement: Some(1),
+            seen: seen.into(),
+            archived,
+        }
+    }
+
+    #[test]
+    fn a_page_entry_is_followed_in_the_house_never_rewritten() {
+        let first = "Budget is unavailable at the moment. We know, and we are on it.";
+        let m = mirror(&on_page(first, false), None).expect("new");
+        assert_eq!(m.first.title, "Budget is unavailable at the moment");
+        assert_eq!(m.first.body, first);
+        assert_eq!(m.first.level, hlb_api::AnnouncementLevel::Incident);
+        assert!(m.follow_ups.is_empty());
+
+        assert!(mirror(&on_page(first, false), Some(&held(first, false))).is_none());
+
+        let followed = format!("{first} [18:30 UTC] Disk replaced. [19:05 UTC] Restoring.");
+        let m = mirror(&on_page(&followed, false), Some(&held(first, false))).expect("new words");
+        assert_eq!(
+            m.follow_ups,
+            vec!["[18:30 UTC] Disk replaced.", "[19:05 UTC] Restoring."]
+        );
+
+        // Replaced on the page: a follow-up saying so, the house's body kept.
+        let m = mirror(
+            &on_page("Back tonight, $5 lost [sic].", false),
+            Some(&held(&followed, false)),
+        )
+        .expect("reworded");
+        assert_eq!(m.follow_ups, vec!["Reworded: Back tonight, $5 lost [sic]."]);
+        let m = mirror(
+            &on_page("Back tonight. [20:00 UTC] Starting.", false),
+            Some(&held("Back tonight.", false)),
+        )
+        .expect("followed after the rewording");
+        assert_eq!(m.follow_ups, vec!["[20:00 UTC] Starting."]);
+
+        // Archived with the house's "up" words: both reach the house.
+        let over = format!("{first} [21:00 UTC] Budget is back.");
+        let m = mirror(&on_page(&over, true), Some(&held(first, false))).expect("over");
+        assert!(m.archived);
+        assert_eq!(m.follow_ups, vec!["[21:00 UTC] Budget is back."]);
+        assert!(mirror(&on_page(&over, true), Some(&held(&over, true))).is_none());
+
+        // First seen over: published with its whole thread, archived.
+        let m = mirror(&on_page(&over, true), None).expect("history");
+        assert!(m.archived);
+        assert_eq!(m.follow_ups, vec!["[21:00 UTC] Budget is back."]);
+    }
+
+    #[test]
+    fn what_the_page_says_beyond_the_mirror_s_bounds_is_left_there() {
+        let long = "x".repeat(MIRRORED_CHARS + 1);
+        assert!(mirror(&on_page(&long, false), None).is_none());
+        let mut e = on_page("ok", false);
+        e.timestamp = "t".repeat(65);
+        assert!(mirror(&e, None).is_none());
+        // An unknown type is the lowest level, never an incident.
+        let mut e = on_page("ok", false);
+        e.kind = "information".into();
+        assert_eq!(
+            mirror(&e, None).expect("mirrored").first.level,
+            hlb_api::AnnouncementLevel::Info
+        );
+        e.kind = "warning".into();
+        assert_eq!(
+            mirror(&e, None).expect("mirrored").first.level,
+            hlb_api::AnnouncementLevel::Warning
+        );
+        // A title is a sentence, short.
+        let e = on_page(&format!("{}. Then.", "y".repeat(100)), false);
+        let title = mirror(&e, None).expect("mirrored").first.title;
+        assert_eq!(title.chars().count(), 80);
+        assert!(title.ends_with('…'));
+        // A bracket the owner wrote is no hour.
+        assert_eq!(segments("At [18:3 UTC] x [ab:cd UTC] y").len(), 1);
     }
 
     #[test]

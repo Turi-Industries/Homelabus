@@ -4757,6 +4757,100 @@ impl State {
         Ok(r.rows_affected() > 0)
     }
 
+    /// What the house holds of one entry of its site's status page, by the timestamp
+    /// the site's announcer gave it.
+    pub async fn site_announcement(&self, timestamp: &str) -> Result<Option<SiteAnnouncement>> {
+        let row = sqlx::query(
+            "SELECT announcement, seen, archived FROM site_announcements WHERE timestamp = ?1",
+        )
+        .bind(timestamp)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(SiteAnnouncement {
+                announcement: r.try_get("announcement")?,
+                seen: r.try_get("seen")?,
+                archived: r.try_get::<i64, _>("archived")? != 0,
+            })
+        })
+        .transpose()
+    }
+
+    /// Mirrors one entry of the site's status page: published the first time — already
+    /// expired when the page had archived it, so it reaches the history and not the
+    /// portal —, followed afterwards, expired when the page archives it. One
+    /// transaction: a pass cut in the middle publishes nothing twice.
+    pub async fn mirror_site_announcement(&self, m: &SiteMirror, now: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let known = sqlx::query(
+            "SELECT announcement, archived FROM site_announcements WHERE timestamp = ?1",
+        )
+        .bind(&m.timestamp)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (id, was_archived) = match known {
+            Some(r) => (
+                r.try_get::<Option<i64>, _>("announcement")?,
+                r.try_get::<i64, _>("archived")? != 0,
+            ),
+            None => {
+                let id = sqlx::query(
+                    "INSERT INTO announcements (title, body, level, pinned, audience, author, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+                )
+                .bind(&m.first.title)
+                .bind(&m.first.body)
+                .bind(m.first.level.as_str())
+                .bind(i64::from(!m.archived))
+                .bind(SITE_AUTHOR)
+                .bind(m.archived.then_some(now))
+                .execute(&mut *tx)
+                .await?
+                .last_insert_rowid();
+                sqlx::query(
+                    "INSERT INTO site_announcements (timestamp, announcement, seen, archived)
+                     VALUES (?1, ?2, ?3, 0)",
+                )
+                .bind(&m.timestamp)
+                .bind(id)
+                .bind(&m.seen)
+                .execute(&mut *tx)
+                .await?;
+                (Some(id), m.archived)
+            }
+        };
+        if let Some(id) = id {
+            for body in &m.follow_ups {
+                sqlx::query(
+                    "INSERT INTO announcement_updates (announcement, body, author) VALUES (?1, ?2, ?3)",
+                )
+                .bind(id)
+                .bind(body)
+                .bind(SITE_AUTHOR)
+                .execute(&mut *tx)
+                .await?;
+            }
+            if m.archived && !was_archived {
+                sqlx::query(
+                    "UPDATE announcements SET pinned = 0, expires_at = ?2
+                     WHERE id = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+                )
+                .bind(id)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        sqlx::query("UPDATE site_announcements SET seen = ?2, archived = ?3 WHERE timestamp = ?1")
+            .bind(&m.timestamp)
+            .bind(&m.seen)
+            .bind(i64::from(m.archived))
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     // ---------------------------------------------------------------------------
     // Invitations (lot 6.2)
     // ---------------------------------------------------------------------------
@@ -5853,6 +5947,41 @@ impl State {
             })
             .collect()
     }
+}
+
+/// Who the announcements mirrored from the site's status page are by. A stored value
+/// (`announcements.author`).
+pub const SITE_AUTHOR: &str = "status page";
+
+/// What the house holds of one entry of its site's status page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteAnnouncement {
+    /// The house's copy; `None` once a person removed it — never brought back.
+    pub announcement: Option<i64>,
+    /// The page's message as last mirrored.
+    pub seen: String,
+    pub archived: bool,
+}
+
+/// The house's announcement an entry of the page starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstWords {
+    pub title: String,
+    pub body: String,
+    pub level: hlb_api::AnnouncementLevel,
+}
+
+/// One pass over one entry of the page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteMirror {
+    pub timestamp: String,
+    /// The page's message now.
+    pub seen: String,
+    pub archived: bool,
+    /// Published when the house does not know the entry yet, ignored afterwards.
+    pub first: FirstWords,
+    /// What the page added since `seen`, oldest first.
+    pub follow_ups: Vec<String>,
 }
 
 #[cfg(test)]
@@ -8190,6 +8319,138 @@ steps:
             .await
             .expect("list");
         assert_eq!(archive.len(), 1, "the history was lost");
+    }
+
+    fn page_entry(seen: &str, archived: bool, follow_ups: &[&str]) -> SiteMirror {
+        SiteMirror {
+            timestamp: "2026-11-09T18:00:00Z".into(),
+            seen: seen.into(),
+            archived,
+            first: FirstWords {
+                title: "Budget is unavailable at the moment".into(),
+                body: "Budget is unavailable at the moment. We know.".into(),
+                level: hlb_api::AnnouncementLevel::Incident,
+            },
+            follow_ups: follow_ups.iter().map(|f| f.to_string()).collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_site_s_incident_is_one_announcement_followed_until_it_is_over() {
+        let s = st().await;
+        s.mirror_site_announcement(&page_entry("A", false, &[]), 1_000)
+            .await
+            .expect("mirror");
+        // Seen again unchanged, then twice the same follow-up: one announcement.
+        s.mirror_site_announcement(&page_entry("A", false, &[]), 1_300)
+            .await
+            .expect("mirror");
+        s.mirror_site_announcement(
+            &page_entry("A [18:30 UTC] B", false, &["[18:30 UTC] B"]),
+            1_600,
+        )
+        .await
+        .expect("mirror");
+        let portal = s
+            .announcements(hlb_types::Role::User, 1_700, false)
+            .await
+            .expect("list");
+        assert_eq!(portal.len(), 1, "{portal:?}");
+        assert!(portal[0].pinned);
+        assert_eq!(portal[0].author, SITE_AUTHOR);
+        assert_eq!(portal[0].level, hlb_api::AnnouncementLevel::Incident);
+        assert_eq!(
+            portal[0].body,
+            "Budget is unavailable at the moment. We know."
+        );
+        let ups: Vec<&str> = portal[0]
+            .follow_ups
+            .iter()
+            .map(|f| f.body.as_str())
+            .collect();
+        assert_eq!(ups, vec!["[18:30 UTC] B"]);
+        let known = s
+            .site_announcement("2026-11-09T18:00:00Z")
+            .await
+            .expect("read")
+            .expect("known");
+        assert_eq!(
+            (known.seen.as_str(), known.archived),
+            ("A [18:30 UTC] B", false)
+        );
+
+        // Archived on the page: off the portal, in the history, its thread whole.
+        s.mirror_site_announcement(
+            &page_entry("A [18:30 UTC] B [19:00 UTC] C", true, &["[19:00 UTC] C"]),
+            2_000,
+        )
+        .await
+        .expect("mirror");
+        assert!(s
+            .announcements(hlb_types::Role::User, 2_001, false)
+            .await
+            .expect("list")
+            .is_empty());
+        let past = s
+            .announcements(hlb_types::Role::User, 2_001, true)
+            .await
+            .expect("list");
+        assert_eq!(past.len(), 1);
+        assert!(!past[0].pinned);
+        assert_eq!(past[0].follow_ups.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_incident_over_before_the_house_saw_it_reaches_the_history_only() {
+        let s = st().await;
+        s.mirror_site_announcement(
+            &page_entry("A [18:30 UTC] up", true, &["[18:30 UTC] up"]),
+            1_000,
+        )
+        .await
+        .expect("mirror");
+        assert!(s
+            .announcements(hlb_types::Role::User, 1_000, false)
+            .await
+            .expect("list")
+            .is_empty());
+        let past = s
+            .announcements(hlb_types::Role::User, 1_000, true)
+            .await
+            .expect("list");
+        assert_eq!(past.len(), 1);
+        assert_eq!(past[0].follow_ups.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_mirrored_announcement_a_person_removed_is_not_brought_back() {
+        let s = st().await;
+        s.mirror_site_announcement(&page_entry("A", false, &[]), 1_000)
+            .await
+            .expect("mirror");
+        let id = s
+            .announcements(hlb_types::Role::User, 1_000, false)
+            .await
+            .expect("list")[0]
+            .id;
+        assert!(s.remove_announcement(id).await.expect("remove"));
+        s.mirror_site_announcement(
+            &page_entry("A [18:30 UTC] B", true, &["[18:30 UTC] B"]),
+            1_300,
+        )
+        .await
+        .expect("mirror");
+        assert!(s
+            .announcements(hlb_types::Role::Admin, 1_300, true)
+            .await
+            .expect("list")
+            .is_empty());
+        let known = s
+            .site_announcement("2026-11-09T18:00:00Z")
+            .await
+            .expect("read")
+            .expect("still known");
+        assert_eq!(known.announcement, None);
     }
 
     #[tokio::test]

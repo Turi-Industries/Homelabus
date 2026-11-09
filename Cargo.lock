@@ -1789,6 +1789,7 @@ dependencies = [
  "hlb-users",
  "reqwest",
  "rustls-pemfile",
+ "serde",
  "serde_json",
  "serde_yaml_ng",
  "sha1 0.11.0",

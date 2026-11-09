@@ -359,4 +359,20 @@ fn a_pressed_button_puts_the_house_s_words_on_the_page_until_it_is_over() {
     );
     let (ok, _, err) = owner(&[&id, "follow", "Late."]);
     assert!(!ok && err.contains("not on the page"), "{err}");
+
+    // What the house reads of the page, as `hlb-privd` mirrors it into the portal:
+    // Gatus's own answer, the owner's words first and each addition a follow-up.
+    let (body, _) = curl(&[&format!(
+        "http://{gatus}:{}/api/v1/config",
+        status_page::PORT
+    )]);
+    let config: site_watch::PageConfig = serde_json::from_str(&body).expect("Gatus's config");
+    assert_eq!(config.announcements.len(), 1, "{body}");
+    let m = site_watch::mirror(&config.announcements[0], None).expect("mirrored");
+    assert!(m.archived);
+    assert_eq!(m.timestamp, since.as_str().expect("timestamp"));
+    assert_eq!(m.first.body, words);
+    assert_eq!(m.first.level, hlb_api::AnnouncementLevel::Incident);
+    assert_eq!(m.follow_ups.len(), 2, "{:?}", m.follow_ups);
+    assert!(m.follow_ups[1].ends_with("UTC] The house can be reached again."));
 }
