@@ -110,6 +110,10 @@ pub struct ServiceSpec {
     /// Two of its tasks must never run at once — Homelabus's privileged daemon, whose
     /// loops would run twice and whose socket the old task would remove under the new.
     pub alone: bool,
+    /// Names the container resolves to a fixed address, before any DNS: `(name,
+    /// address)`. The site's Gatus reaches each app's name at the front door, whatever
+    /// the public DNS says that day.
+    pub hosts: Vec<(String, String)>,
 }
 
 /// A host path mounted into a container.
@@ -144,6 +148,7 @@ impl ServiceSpec {
             binds: Vec::new(),
             memory: None,
             alone: false,
+            hosts: Vec::new(),
         }
     }
 
