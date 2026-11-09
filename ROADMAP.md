@@ -1373,6 +1373,16 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      node a backend on its site address, its health check finding the one Caddy runs
      on; the PROXY protocol to Caddy, accepted from the site network only, so the
      client's address survives. Certificates stay at home.
+     Built 2026-11-09: `hlb_ingress::front_door`, deployed by `hlb site add | sync`
+     (`hlb-front-door`, host-mode 80 and 443, read-only, no capability; its file
+     checked by the image before the rename, `SIGUSR2` for a new node). 443 is relayed
+     to Caddy's port 10443 with the header, never to 443: a hostile VPS can forge any
+     source — measured, Caddy read a header claiming `192.168.1.5` — so the PORT, not
+     the header, tells relayed traffic apart, and a private route refuses it there;
+     `10.43.0.0/24` is cut out of the private ranges. 80 is relayed as is. Measured:
+     `haproxy -c` on the rendered file, the image read-only binding 80 and 443 and
+     reloading on `SIGUSR2`, the real Caddy on the relay listener. Not yet run on the
+     lab.
   3. **The lifeboat.** Vital apps — Vaultwarden, PocketID — restored nightly from their
      backups onto the VPS, stopped, started once by a health check, recorded as a
      rehearsal; refused at preview beyond the site's memory or disk, figures measured
