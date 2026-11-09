@@ -2,9 +2,9 @@
 //! started once, proved healthy, and stopped — what the site would serve the night the
 //! house is down.
 //!
-//! The house reads the backups and pushes the result through the site's Docker socket,
-//! forwarded over the SSH the site already trusts: the VPS never holds the restic
-//! password, nor the house's PostgreSQL administrator.
+//! The house reads the backups and pushes the result to the site's Docker, reached over
+//! the SSH the site already trusts (`docker system dial-stdio`): the VPS never holds the
+//! restic password, nor the house's PostgreSQL administrator.
 
 use std::process::ExitCode;
 use std::time::Instant;
@@ -274,7 +274,7 @@ async fn rebuild(
         ssh = ssh.port(p);
     }
     let socket = tmp.path().join("docker.sock");
-    let _forward = ssh.forward_socket("/var/run/docker.sock", &socket).await?;
+    let _bridge = ssh.docker_socket(&socket).await?;
     let site = SwarmOrchestrator::connect_unix(&socket).await?;
     let mut said = Vec::new();
 

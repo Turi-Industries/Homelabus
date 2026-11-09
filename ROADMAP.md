@@ -1367,8 +1367,10 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      Built 2026-11-09: `hlb_mesh::site`, `hlb site add | status | sync`; the house's
      rules sit at prerouting, before Docker's DNAT, which `input` never sees. Found on
      the way: the bootstrap wrote one tunnel's unit files under fixed names, so the
-     link would have rewritten Docker's wait for the mesh (`mesh::Tunnel`). Not yet run
-     on the lab.
+     link would have rewritten Docker's wait for the mesh (`mesh::Tunnel`). Run on the
+     lab 2026-11-09: `vps1`, a 4 GB Debian 12 VM on `hlb-internet` (10.99.0.40, the
+     house reaching it through NAT only, it reaching no 10.77.0.x), deb1 and deb2
+     handshaking, enc1–3 off and said so.
   2. **The front door.** HAProxy on the VPS in TCP mode, never decrypting, every house
      node a backend on its site address, its health check finding the one Caddy runs
      on; the PROXY protocol to Caddy, accepted from the site network only, so the
@@ -1381,23 +1383,43 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the header, tells relayed traffic apart, and a private route refuses it there;
      `10.43.0.0/24` is cut out of the private ranges. 80 is relayed as is. Measured:
      `haproxy -c` on the rendered file, the image read-only binding 80 and 443 and
-     reloading on `SIGUSR2`, the real Caddy on the relay listener. Not yet run on the
-     lab.
+     reloading on `SIGUSR2`, the real Caddy on the relay listener. Run on the lab
+     2026-11-09, and it found two holes: a Caddy frozen before the relay publishes no
+     10443, so the door led nowhere for HTTPS (`site add | sync` say so now, `hlb
+     upgrade caddy` named); and 🔴 a PRIVATE route answered through the door — behind
+     `proxy_protocol`, `{http.request.local.port}` is the header's destination, 443 as
+     HAProxy writes it. Every site block is rendered once per listener now, nobody at
+     home on 10443 (`tests/relay_is_a_stranger.rs`, real HAProxy and Caddy, fails on the
+     old rendering). After: Vaultwarden 403 through the VPS and 200 at home, the public
+     controller 200 through it with the visitor's address.
   3. **The lifeboat.** Vital apps — Vaultwarden, PocketID — restored nightly from their
      backups onto the VPS, stopped, started once by a health check, recorded as a
      rehearsal; refused at preview beyond the site's memory or disk, figures measured
      with `docker stats` on the lab first.
-     Built 2026-11-09, not yet run on the lab: `hlb site lifeboat [--apply]`
+     Built 2026-11-09: `hlb site lifeboat [--apply]`
      (`hlb_engine::lifeboat` chooses and renders, `hlb_backup_run::lifeboat` sends). The
-     house reads the backups and pushes through the site's Docker socket, forwarded over
-     SSH: each volume's archive with its root put back in front (`restic dump` leaves the
+     house reads the backups and pushes to the site's Docker over SSH (`docker system
+     dial-stdio`: the house's key may not forward a socket): each volume's archive with its root put back in front (`restic dump` leaves the
      directory out), its SQLite from the same pass's copy, each PostgreSQL dump into a
      server of the site's own whose administrator is the site's (`site-lifeboat-postgres-
      admin`), the app's role created with the password its app is given. The SMTP
      password is withheld. Memory is the manifests' limits against the site's; each
      archive is refused past a tenth of the site's disk left free. Recorded as a drill
      (`lifeboat`), audited; what it left is named in the vault and removed by the next
-     run. Left: the nightly run from the controller, and the measured figures.
+     run. Run on the lab 2026-11-09: PocketID (its SQLite from the pass's copy, 5
+     accounts, integrity ok), Vaultwarden (its database's witness row, its RSA key) and
+     the site's PostgreSQL, started healthy and stopped in 124 s; Vaultwarden starts
+     with its SMTP token literal. Found there: the house's key is `no-port-forwarding`,
+     so sshd refused the socket forward — `docker system dial-stdio` instead, a command
+     per connection; and the archive's scratch file was opened write-only (`EBADF`,
+     reported as "SendRequest"), then a database's path named a directory that did not
+     exist — `tests/lifeboat.rs` now sends a volume and its SQLite too. **Measured**
+     (`docker stats`, idle on the site): PostgreSQL 60 MiB, PocketID 15, Vaultwarden 9,
+     HAProxy 16; at home, in use, 157, 54 and 27. The limits say 2 560 MB, PostgreSQL's
+     2 GiB the bulk: a 2 GB VPS is refused at preview though 100 MiB is what the
+     lifeboat uses — the site's PostgreSQL could be given a limit of its own. A
+     Vaultwarden installed before `criticality` was read as not vital until `hlb
+     upgrade`. Left: the nightly run from the controller.
   4. **Promote and return**, by hand: `hlb site promote` points the front door at the
      lifeboat; `hlb site return` brings writes home where the manifest says how,
      read-only on the VPS otherwise. A promoted site's lifeboat is serving: `hlb site

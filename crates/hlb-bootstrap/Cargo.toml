@@ -15,7 +15,7 @@ serde_json.workspace = true
 sha1 = "0.11"
 sha2 = "0.11"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["process", "fs", "io-util"] }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "net"] }
 tracing.workspace = true
 
 [dev-dependencies]

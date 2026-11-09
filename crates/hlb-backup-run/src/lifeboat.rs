@@ -30,7 +30,7 @@ pub struct Sent {
 /// The site's daemon, and how its free space is asked before an archive is sent.
 pub struct Site<'a> {
     pub docker: &'a SwarmOrchestrator,
-    /// The site daemon's socket, forwarded here: the client tools run there.
+    /// The site daemon's socket, bridged here: the client tools run there.
     pub socket: &'a Path,
     /// The overlay the site's PostgreSQL answers on.
     pub network: &'a str,
@@ -66,6 +66,22 @@ fn attrs(n: &Node) -> Attrs {
     }
 }
 
+/// An error and every cause under it: a request cut on the way says only "client
+/// error (SendRequest)", and why — a pipe broken, the daemon's early answer — is below.
+fn causes(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut next = e.source();
+    while let Some(c) = next {
+        let c_text = c.to_string();
+        if !out.contains(&c_text) {
+            out.push_str(": ");
+            out.push_str(&c_text);
+        }
+        next = c.source();
+    }
+    out
+}
+
 /// A file streamed to Docker in chunks, read from the start.
 fn stream(
     file: tokio::fs::File,
@@ -80,6 +96,20 @@ fn stream(
         buf.truncate(n);
         Ok(Some((bytes::Bytes::from(buf), f)))
     })
+}
+
+/// An archive written here and read back to send. 🔴 Not `File::create`: write-only,
+/// and the read that streams it fails "Bad file descriptor" — which reached the client
+/// as nothing but "client error (SendRequest)".
+async fn scratch_file(path: &Path) -> Result<tokio::fs::File, String> {
+    tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .await
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 async fn rewound(mut f: tokio::fs::File) -> Result<(tokio::fs::File, u64), String> {
@@ -143,9 +173,7 @@ impl Restore<'_> {
             .filter(|n| n.kind == "dir")
             .ok_or_else(|| format!("snapshot {} holds no directory {root}", &id[..8]))?;
         let path = scratch.join(format!("{volume}.tar"));
-        let mut file = tokio::fs::File::create(&path)
-            .await
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut file = scratch_file(&path).await?;
         let head = tar::header(root.trim_start_matches('/'), Kind::Dir, &attrs(&node))?;
         file.write_all(&head).await.map_err(|e| e.to_string())?;
         repo.dump(id, &root, &mut file)
@@ -157,7 +185,7 @@ impl Restore<'_> {
         site.docker
             .put_archive(image, volume, &root, stream(file))
             .await
-            .map_err(|e| format!("{volume} on the site: {e}"))?;
+            .map_err(|e| format!("{volume} on the site: {}", causes(&e)))?;
         let _ = tokio::fs::remove_file(&path).await;
 
         let sqlite = self
@@ -195,10 +223,10 @@ impl Restore<'_> {
             .map_err(|e| e.to_string())?;
         let mut back = Vec::new();
         for (db, s) in sqlite_of_pass(&all, volume, &source.snapshot, &taken) {
-            let path = scratch.join(format!("{volume}-{db}.tar"));
-            let mut file = tokio::fs::File::create(&path)
-                .await
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            // A database is named by its path in the volume (`data/app.db`): its slashes
+            // would name directories the scratch does not have.
+            let path = scratch.join(format!("{volume}-{}.tar", db.replace('/', "_")));
+            let mut file = scratch_file(&path).await?;
             for p in &s.paths {
                 let node = repo
                     .node(&s.id, p)
@@ -239,7 +267,7 @@ impl Restore<'_> {
             site.docker
                 .put_archive(image, volume, &volume_path(volume), stream(file))
                 .await
-                .map_err(|e| format!("{db} on the site: {e}"))?;
+                .map_err(|e| format!("{db} on the site: {}", causes(&e)))?;
             let _ = tokio::fs::remove_file(&path).await;
             back.push(db);
         }

@@ -2132,7 +2132,7 @@ fn out_of_sequence(e: &bollard::errors::Error) -> bool {
 /// Another machine's daemon, and putting files into its volumes.
 impl SwarmOrchestrator {
     /// The daemon behind a Unix socket other than the default — another machine's,
-    /// forwarded over SSH.
+    /// bridged over SSH (`hlb_bootstrap::SshRunner::docker_socket`).
     pub async fn connect_unix(path: &std::path::Path) -> Result<Self> {
         let docker =
             Docker::connect_with_unix(&path.to_string_lossy(), 120, bollard::API_DEFAULT_VERSION)?

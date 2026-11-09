@@ -258,7 +258,7 @@ fn every_provider_s_wildcard_is_accepted() {
 fn the_catalog_s_own_routes_are_accepted() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog");
     let mut manifests = Vec::new();
-    for dir in [root.clone(), root.join("_platform")] {
+    for dir in [root.join("apps"), root.join("_platform")] {
         for e in std::fs::read_dir(&dir).expect("the catalog") {
             let path = e.expect("an entry").path().join("manifest.yaml");
             if let Ok(text) = std::fs::read_to_string(&path) {
