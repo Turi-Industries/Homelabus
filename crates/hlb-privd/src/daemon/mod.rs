@@ -11,6 +11,7 @@ pub mod assertions;
 pub mod disks;
 pub mod domain;
 pub mod flaws;
+pub mod heartbeat;
 pub mod mail_dns;
 pub mod mail_queue;
 pub mod notify;

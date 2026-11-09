@@ -49,6 +49,13 @@ pub const READER: &str = "reader";
 pub const PUBLISHER: &str = "gatus";
 pub const READER_SECRET: &str = "site-ntfy-reader-password";
 pub const TOKEN_SECRET: &str = "site-ntfy-gatus-token";
+/// What the house pushes its heartbeats to the site's Gatus with. A stored name: the
+/// house's daemon pushes only once it is in the vault — that is, once a watch exists.
+pub const PUSH_SECRET: &str = "site-gatus-push-token";
+
+/// How often the house pushes, well inside the shortest heartbeat's interval: three
+/// pushes lost in a row are still not an outage there.
+pub const PUSH_EVERY_SECS: u64 = 300;
 
 /// The site's own names.
 pub fn status_host(domain: &str) -> String {
@@ -221,6 +228,17 @@ pub fn edge(caddy: &Manifest, ingress: &crate::lifeboat::SiteIngress) -> Service
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_house_pushes_well_inside_every_heartbeat() {
+        for h in status_page::HEARTBEATS {
+            assert!(
+                PUSH_EVERY_SECS * 3 < h.interval_mins * 60,
+                "{} would go missing on three lost pushes",
+                h.name
+            );
+        }
+    }
 
     #[test]
     fn a_token_has_the_length_ntfy_reads() {

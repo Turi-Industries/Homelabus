@@ -297,13 +297,30 @@ pub async fn deploy(state: &State, vault: &Vault, s: &Site) -> Result<Watching> 
     )
     .await?;
 
+    let push_token = drawn(
+        state,
+        vault,
+        site_watch::PUSH_SECRET,
+        "the house's daemon, pushing its heartbeats to the site's Gatus",
+        || hlb_secrets::generate_password(32),
+    )
+    .await?;
+
     let probes = probes(state).await?;
     let page = Page {
         probes: probes.clone(),
         house: house_address(s).await,
         token: token.clone(),
         url: page_url.clone(),
+        push_token,
     };
+    if status_page::probes_nothing(&page) {
+        return Err(
+            "the house publishes no name and its Caddy's node is unknown: the \
+                    page would probe nothing, and Gatus refuses to start so"
+                .into(),
+        );
+    }
     let served = super::lifeboat::names(state, vault).await?;
 
     let (tmp, ssh) = super::lifeboat::ssh_to(state, vault, s).await?;

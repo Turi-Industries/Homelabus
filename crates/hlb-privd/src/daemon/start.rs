@@ -1700,6 +1700,42 @@ pub async fn start(
             },
         )));
 
+        // 🔴 The house's heartbeats to its site's Gatus, which alerts the owner when they
+        // stop — the one alert that still leaves when the house is what fell. A site the
+        // house cannot reach is said here, by the house's own notifications.
+        let st_beat = held.state.clone();
+        let notif_beat = notif.clone();
+        let key_beat = cfg.master_key.clone();
+        let reaching = Arc::new(tokio::sync::Mutex::new(
+            super::heartbeat::Reaching::default(),
+        ));
+        tracing::info!(
+            interval = hlb_engine::site_watch::PUSH_EVERY_SECS,
+            "heartbeat loop"
+        );
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(hlb_engine::site_watch::PUSH_EVERY_SECS),
+            shutdown_rx.clone(),
+            move || {
+                let (st, notif, key) = (st_beat.clone(), notif_beat.clone(), key_beat.clone());
+                let reaching = reaching.clone();
+                async move {
+                    // Opened at each pass: a key rotated by `hlb secrets-rekey` is read
+                    // at the next one.
+                    let vault = hlb_secrets::Vault::open(&key).ok();
+                    let Some(reached) = super::heartbeat::pass(&st, vault.as_ref()).await else {
+                        return;
+                    };
+                    if let Err(e) = &reached {
+                        tracing::warn!("heartbeat not pushed to the site: {e}");
+                    }
+                    if let Some(n) = reaching.lock().await.after(reached) {
+                        notif.tell(&n).await;
+                    }
+                }
+            },
+        )));
+
         // The UPS: on battery long enough, the apps stop in waves before the battery runs
         // out; the mains back and steady, they start again. Asked at once: a daemon
         // restarted mid-stop finishes it.

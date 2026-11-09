@@ -16,6 +16,7 @@ hlb-updater.workspace = true
 hlb-catalog.workspace = true
 hlb-resolver.workspace = true
 hlb-engine.workspace = true
+hlb-ingress.workspace = true
 hlb-secrets.workspace = true
 hlb-objstore.workspace = true
 hlb-users.workspace = true

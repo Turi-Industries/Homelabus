@@ -1970,6 +1970,7 @@ dependencies = [
  "hlb-gitops",
  "hlb-guide",
  "hlb-identity",
+ "hlb-ingress",
  "hlb-mail",
  "hlb-metrics",
  "hlb-notify",
