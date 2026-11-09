@@ -187,6 +187,19 @@ struct Carried {
     /// it, written again at each `hlb site sync`.
     #[serde(default)]
     names: Vec<String>,
+    /// The apps carried: what the return brings home, whatever was installed since.
+    #[serde(default)]
+    apps: Vec<String>,
+}
+
+/// The apps the lifeboat last left on the site — chosen again from what is installed
+/// when that run predates their record.
+pub async fn apps(state: &State, vault: &Vault) -> Result<Vec<String>> {
+    let apps = carried(state, vault).await?.apps;
+    if !apps.is_empty() {
+        return Ok(apps);
+    }
+    Ok(lifeboat::select(&installed(state).await?).apps)
 }
 
 /// The names the lifeboat left on the site, for the door's promoted file.
@@ -270,14 +283,13 @@ async fn remove_volume(site: &SwarmOrchestrator, name: &str) -> Result<()> {
     .into())
 }
 
-/// The run itself; what it did, line by line, for the rehearsal's record.
-async fn rebuild(
-    cli: &Cli,
+/// The site over SSH, as the lifeboat reaches it: its Docker is bridged from there. The
+/// directory holds the key; the caller's scratch space too.
+pub(super) async fn ssh_to(
     state: &State,
     vault: &Vault,
     s: &Site,
-    sel: &Selection,
-) -> Result<Vec<String>> {
+) -> Result<(tempfile::TempDir, hlb_bootstrap::SshRunner)> {
     let kp = existing_ssh_key(state, vault)
         .await?
         .ok_or("Homelabus has no SSH key of its own: the site cannot be reached")?;
@@ -291,12 +303,24 @@ async fn rebuild(
     if let Some(p) = port {
         ssh = ssh.port(p);
     }
+    Ok((tmp, ssh))
+}
+
+/// The run itself; what it did, line by line, for the rehearsal's record.
+async fn rebuild(
+    cli: &Cli,
+    state: &State,
+    vault: &Vault,
+    s: &Site,
+    sel: &Selection,
+) -> Result<Vec<String>> {
+    let (tmp, ssh) = ssh_to(state, vault, s).await?;
     // 🔴 A promoted site's lifeboat is serving: removed and rebuilt from last night's
     // backups, it would lose what people wrote there since.
     if let Some(since) = ssh.read_file(lifeboat::PROMOTED_MARK).await? {
         return Err(format!(
             "{} is promoted since {}: its lifeboat is serving, and is left as it is \
-             until it is brought home",
+             until `hlb site return`",
             s.name,
             since.trim()
         )
@@ -327,7 +351,10 @@ async fn rebuild(
     // it would keep files the backup no longer has.
     let before = carried(state, vault).await?;
     let mut plans = Vec::new();
-    let mut now = Carried::default();
+    let mut now = Carried {
+        apps: sel.apps.clone(),
+        ..Carried::default()
+    };
     let pg_plan = if sel.postgres.is_empty() {
         None
     } else {

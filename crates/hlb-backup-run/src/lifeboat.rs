@@ -1,8 +1,13 @@
-//! What the house's backups hold of an app, sent to its site's own daemon.
+//! What the house's backups hold of an app, sent to its site's own daemon — and, once
+//! the site has served it, what it wrote there brought back into those backups.
 //!
 //! 🔴 **Read here, never there.** One restic password encrypts every app's snapshots:
 //! the house restores, and the site receives the files and the dump of the apps it
 //! carries, nothing it could read the others with.
+//!
+//! What comes home goes through the backups rather than straight onto the house's
+//! volumes: the restores already know where each volume lives and back up what it holds
+//! before replacing it, and the site's copy stays restorable once the site is wiped.
 
 use std::path::Path;
 
@@ -15,6 +20,10 @@ use tokio::io::AsyncWriteExt as _;
 
 use crate::restore::{sqlite_of_pass, Database, Restore, Source};
 use crate::{restic_password, volume_path};
+
+/// What the site wrote, archived on its way home. 🔴 A stored value: the restore that
+/// follows names it by id, and a person reading the snapshots tells it apart by this.
+pub const FROM_SITE: &str = "kind:from-site";
 
 /// What one restore sent the site.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +363,175 @@ impl Restore<'_> {
             sqlite: Vec::new(),
         })
     }
+}
+
+impl Restore<'_> {
+    /// `volume` as the site holds it, archived to `app`'s first bulky destination and
+    /// recorded: the source a [`Restore::in_place`] then puts back over the house's.
+    ///
+    /// Read from the site's daemon into `scratch`, unpacked into a Docker volume of this
+    /// machine's, backed up from there at the volume's own path — the path every
+    /// restore looks under. ⚠️ The site's services writing it must be stopped.
+    pub async fn volume_from_site(
+        &self,
+        app: &str,
+        volume: &str,
+        site: &Site<'_>,
+        image: &str,
+        scratch: &Path,
+    ) -> Result<Brought, String> {
+        let dest = crate::effective_destinations(
+            self.state,
+            app,
+            hlb_backup::Class::Bulky,
+            self.fallback_repo,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no destination accepts {app}'s volumes"))?;
+        let path = scratch.join(format!("{volume}.home.tar"));
+        let mut file = scratch_file(&path).await?;
+        let bytes = site
+            .docker
+            .get_archive(image, volume, &volume_path(volume), &mut file)
+            .await
+            .map_err(|e| format!("{volume} on the site: {}", causes(&e)))?;
+        let (file, _) = rewound(file).await?;
+
+        // Its entries are `<volume>/…`, the root first: unpacked under `/<volume>`, the
+        // volume's own owner and mode come with it.
+        let here = hlb_orchestrator::SwarmOrchestrator::connect()
+            .await
+            .map_err(|e| format!("this machine's Docker: {e}"))?;
+        let staging = format!("hlb-home-{volume}");
+        here.remove_volume(&staging).await.ok();
+        let staged = here
+            .put_archive(
+                hlb_backup::images::RESTIC,
+                &staging,
+                &format!("/{volume}"),
+                stream(file),
+            )
+            .await
+            .map_err(|e| format!("{volume} unpacked here: {}", causes(&e)));
+        let _ = tokio::fs::remove_file(&path).await;
+        let taken = match staged {
+            Ok(()) => self.back_up_staged(app, volume, &staging, &dest).await,
+            Err(e) => Err(e),
+        };
+        here.remove_volume(&staging).await.ok();
+        let id = taken?;
+        let source = self.find(app, volume, Some(&dest.name), Some(&id)).await?;
+        Ok(Brought { source, bytes })
+    }
+
+    async fn back_up_staged(
+        &self,
+        app: &str,
+        volume: &str,
+        staging: &str,
+        dest: &hlb_backup::Destination,
+    ) -> Result<String, String> {
+        let password = restic_password(self.state, self.vault)
+            .await
+            .map_err(|e| e.to_string())?;
+        let env = self.env(dest).await?;
+        let (runner, location) = dest.runner(Some(self.network));
+        let repo = hlb_backup::Repository::new(
+            runner.mount(staging, volume_path(volume)),
+            location,
+            password,
+        )
+        .extra_env(env);
+        // Copied with what writes it stopped: a restore does not warn of a live copy.
+        crate::snapshot(
+            &repo,
+            (self.state, &dest.name),
+            app,
+            &[volume_path(volume)],
+            &[FROM_SITE, crate::STOPPED_TAG],
+        )
+        .await
+    }
+
+    /// `db` dumped on the site's PostgreSQL, archived to `app`'s first critical
+    /// destination and recorded: the source a [`Restore::database_in_place`] then puts
+    /// back over the house's. ⚠️ The site's app must be stopped.
+    pub async fn database_from_site(
+        &self,
+        app: &str,
+        db: &Database<'_>,
+        site: &Site<'_>,
+        server: &Server<'_>,
+    ) -> Result<Brought, String> {
+        use hlb_backup::pgdump::scheduled;
+        if db.engine != DbEngine::Postgres {
+            return Err(format!("{}: the site runs PostgreSQL only", db.name));
+        }
+        let dest = crate::effective_destinations(
+            self.state,
+            app,
+            hlb_backup::Class::Critical,
+            self.fallback_repo,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no destination accepts {app}'s dumps"))?;
+        let dumper = hlb_backup::PgDumper::new(
+            hlb_backup::PgContainerRunner::new(server.image)
+                .network(site.network)
+                .docker_socket(site.socket),
+        );
+        let target = hlb_backup::PgTarget {
+            host: "postgres".into(),
+            port: 5432,
+            database: db.name.to_string(),
+            user: "postgres".into(),
+            password: server.admin_password.to_string(),
+        };
+        let dump = scheduled::produce(&dumper, app, &target, crate::now())
+            .await
+            .map_err(|e| format!("{} on the site: {e}", db.name))?;
+        let password = restic_password(self.state, self.vault)
+            .await
+            .map_err(|e| e.to_string())?;
+        let creds = crate::credentials(self.state, self.vault, &dest)
+            .await
+            .map_err(|e| e.to_string())?;
+        let id = scheduled::archive_as(
+            &dest,
+            creds.as_deref(),
+            Some(self.network),
+            &password,
+            &dump,
+            FROM_SITE,
+        )
+        .await
+        .map_err(|e| format!("{} archived: {e}", db.name))?;
+        self.state
+            .record_snapshot(app, &dest.name, &id)
+            .await
+            .map_err(|e| format!("snapshot {id} taken, but not recorded: {e}"))?;
+        let source = self
+            .find_dump(app, db.engine, db.name, Some(&dest.name), Some(&id))
+            .await?;
+        Ok(Brought {
+            source,
+            bytes: dump.bytes.len() as u64,
+        })
+    }
+}
+
+/// What the site wrote, now a snapshot of the house's.
+#[derive(Debug, Clone)]
+pub struct Brought {
+    pub source: Source,
+    /// Bytes read off the site.
+    pub bytes: u64,
 }
 
 /// A writer counting what goes through it.

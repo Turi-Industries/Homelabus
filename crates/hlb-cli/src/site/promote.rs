@@ -7,6 +7,7 @@
 
 use std::process::ExitCode;
 
+use hlb_backup_run::restore;
 use hlb_bootstrap::Runner;
 use hlb_engine::lifeboat;
 
@@ -20,6 +21,33 @@ pub async fn since(site: &dyn Runner) -> Result<Option<String>> {
         .read_file(lifeboat::PROMOTED_MARK)
         .await?
         .map(|s| s.trim().to_string()))
+}
+
+/// Stops the house's own copies of the carried apps, held until the return. Their names.
+async fn hold_house(
+    state: &hlb_state::State,
+    vault: &hlb_secrets::Vault,
+) -> std::result::Result<Vec<String>, String> {
+    let o = hlb_orchestrator::SwarmOrchestrator::connect()
+        .await
+        .map_err(|e| format!("this machine's Docker: {e}"))?;
+    let mut services = Vec::new();
+    for app in super::lifeboat::apps(state, vault)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let m = state.app_manifest(&app).await.map_err(|e| e.to_string())?;
+        services.extend(restore::replicas(&o, &hlb_engine::services_of(&app, &m)).await);
+    }
+    restore::stop_held(
+        &o,
+        state,
+        &services,
+        lifeboat::HOUSE_HOLD,
+        lifeboat::HOUSE_HOLD_SECS,
+    )
+    .await?;
+    Ok(services.into_iter().map(|(s, _)| s).collect())
 }
 
 pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
@@ -49,8 +77,25 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
 
     let mut argv = vec![lifeboat::PROMOTE_SCRIPT.to_string()];
     if apply {
+        // First, or the house's copies take writes the site never sees, for the LAN.
+        match hold_house(&state, &vault).await {
+            Ok(held) if held.is_empty() => {}
+            Ok(held) => println!(
+                "✓ the house's own {} stopped, held until the return",
+                held.join(", ")
+            ),
+            Err(e) => eprintln!(
+                "⚠️  the house's own copies could not be stopped ({e}): what they take \
+                 meanwhile is replaced at the return"
+            ),
+        }
         println!("Promoting {}: each service started, then the door.", s.name);
         argv.push("--apply".into());
+    } else {
+        println!(
+            "Would stop the house's own copies first, held until the return: two copies \
+             written at once cannot be merged."
+        );
     }
     let out = site.run(&argv).await;
     let (ok, detail) = match &out {
@@ -84,8 +129,9 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
             "⚠️  The apps carried are served from {} — the private ones",
             s.name
         );
-        println!("   among them open to the internet — until they are brought home. The");
-        println!("   nightly lifeboat leaves them as they are meanwhile.");
+        println!("   among them open to the internet — until `hlb site return`. The");
+        println!("   nightly lifeboat leaves them as they are meanwhile. They hold what the");
+        println!("   lifeboat's backups held: what the house wrote after is in its own copy.");
         Ok(ExitCode::SUCCESS)
     } else {
         if let Err(e) = &out {

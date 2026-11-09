@@ -264,3 +264,8 @@ during an outage.
   bits are its low nine) and go back as a directory entry written first. Docker's
   archive API (`PUT /containers/<id>/archive`, a container never started, the volume
   mounted at `/donnees/<volume>`, `path=/`) keeps every owner and mode as written.
+- **A restore in place keeps the volume's ROOT as it was.** restic 0.19.1 restoring
+  `/donnees/<volume>` into an existing directory writes everything under it from the
+  snapshot and leaves the root's owner and mode alone (measured 2026-11-09,
+  `hlb-backup-run/tests/lifeboat.rs`). Harmless while both copies descend from one
+  backup; a volume whose root changed mode is not put back by the restore.
