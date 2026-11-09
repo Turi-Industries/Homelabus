@@ -27,6 +27,7 @@ use crate::{
 
 mod door;
 pub mod lifeboat;
+pub mod promote;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -301,8 +302,15 @@ fn relays_https(caddy: &hlb_types::Manifest) -> bool {
 
 /// Puts the front door in place, or brings it up to date, and says what visitors need
 /// for it to be theirs.
-async fn open_door(state: &State, hub: &dyn Runner, s: &Site) -> bool {
-    match door::deploy(hub, s).await {
+async fn open_door(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) -> bool {
+    let names = match lifeboat::names(state, vault).await {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("\n🔴 The front door: what the lifeboat serves could not be read: {e}");
+            return false;
+        }
+    };
+    match door::deploy(hub, s, &names).await {
         Ok(how) => {
             if let Ok(caddy) = state
                 .app_manifest(hlb_types::manifest::INGRESS_SERVICE)
@@ -485,7 +493,7 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     }
-    let door = open_door(&state, ours.as_ref(), &s).await;
+    let door = open_door(&state, &vault, ours.as_ref(), &s).await;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
@@ -552,7 +560,7 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let results = link(&state, &vault, &mut s, hub.as_ref()).await?;
     let linked = say_linked(&results, &s.name);
     // Opened even when a node failed to link: its health check keeps it out of the door.
-    let door = open_door(&state, hub.as_ref(), &s).await;
+    let door = open_door(&state, &vault, hub.as_ref(), &s).await;
     let all = linked && door;
     let outcome = if all { "ok" } else { "partial" };
     state
@@ -618,6 +626,10 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
     );
 
     let (_key_dir, hub) = reach(&state, &vault, &s).await?;
+    // Said first: while promoted, the site serves, and the link only carries the rest.
+    if let Ok(Some(since)) = promote::since(hub.as_ref()).await {
+        println!("  ⚠️  promoted since {since}: the site serves the vital apps");
+    }
     let out = hub
         .run(&[
             "wg".into(),

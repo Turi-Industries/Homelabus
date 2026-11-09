@@ -281,6 +281,16 @@ exported — Homelabus never bills.
   downtime, then the gate; the signed zone's Knot and OPNsense after it, in the same
   phase.
 - **One pull request per step, merged by Claude** once CI is green, as in phase 5.
+- **Promoting the lifeboat** (step 4): the site's own Caddy asks for its certificates
+  over HTTP-01 at promotion, for the lifeboat's names only — no key waits on the VPS
+  beforehand, none leaves the house. The promotion is a script the nightly lifeboat
+  leaves on the VPS, run there by SSH when the house is down; `hlb site promote` runs
+  the same script from the house when it answers. A private app (Vaultwarden) is open
+  to the internet while the site is promoted, behind its own second factor and the
+  rate limits, said by the promotion, closed by the return. What was written on the
+  VPS comes home whole — its database and volumes replacing the house's — for an app
+  whose manifest declares it (`lifeboat: returns: whole`); a vital app declaring
+  nothing is refused by the lifeboat.
 
 #### The phases
 
@@ -1424,6 +1434,26 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      lifeboat; `hlb site return` brings writes home where the manifest says how,
      read-only on the VPS otherwise. A promoted site's lifeboat is serving: `hlb site
      lifeboat` must refuse it, or the night's run removes what people are writing to.
+     Two pull requests: 4a promotes, 4b returns.
+     4a built 2026-11-09: each night the lifeboat also leaves, stopped, the site's own
+     Caddy (`hlb-site-caddy`, its file checked by its binary; site mode of the
+     Caddyfile: HTTP-01 against the house's ACME directory, never the internal root
+     nor a DNS token — `Internal` exposure is refused; its volumes are carried, so
+     removed each night and no key waits there), the door's promoted file
+     (`haproxy.promoted.cfg`, the lifeboat's names to that Caddy, every other name
+     home, kept by `hlb site sync`) and `/usr/local/sbin/hlb-site-promote`: it marks the
+     site (`/etc/hlb/site/promoted`) before starting anything, starts PostgreSQL, the
+     sign-in, the apps and the Caddy each until healthy, then checks and swaps the
+     door. `hlb site promote [--apply]` runs that script from the house, audited;
+     `hlb site status` says since when; a marked site's lifeboat is refused. The
+     memory budget counts the site Caddy's 512 MB. A carried app declares how it
+     returns (`spec.lifeboat.returns: whole`), one declaring nothing is refused. Found:
+     Caddy's automatic redirect named `:10443` and beat a catch-all `http://`, so the
+     site mode disables redirects (`tests/promoted_door.rs`, real HAProxy and Caddy).
+     Left: Vaultwarden's catalog manifest can declare `lifeboat` only once a release
+     reads it (the catalog is validated by the released `hlb`) — until then the lab's
+     Vaultwarden is refused; and the house coming back mid-promotion still serves its
+     own copies to the LAN, which 4b must hold.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless

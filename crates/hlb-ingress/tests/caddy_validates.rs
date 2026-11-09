@@ -186,6 +186,7 @@ fn full(tls: Tls) -> Config {
         }),
         forward_auth: Some(ForwardAuth::default()),
         tls,
+        site: None,
     }
 }
 
@@ -216,6 +217,31 @@ fn per_name_certificates_are_accepted() {
         ca_root: false,
     };
     caddy_validate(&render(&routes(), &full(tls)), "per name, staging");
+}
+
+/// The site's own Caddy, as the lifeboat renders it: the relay's listener alone, the
+/// redirect of its own, certificates per name over HTTP-01.
+#[test]
+#[ignore = "needs Docker and the hlb-caddy image"]
+fn the_site_s_caddy_is_accepted() {
+    let tls = Tls::Acme {
+        email: "admin@example.fr".into(),
+        wildcard: None,
+        staging: true,
+        ca: None,
+        ca_root: false,
+    };
+    let mut routes = routes();
+    for r in &mut routes {
+        r.public = true;
+        r.needs_forward_auth = false;
+    }
+    let cfg = Config {
+        tls,
+        site: Some("10.0.9.0/24".into()),
+        ..Config::default()
+    };
+    caddy_validate(&render(&routes, &cfg), "the site's");
 }
 
 /// 🔴 The one that matters most: every route shares the wildcard's site block, so its

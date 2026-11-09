@@ -37,9 +37,9 @@ pub use capability::{
 };
 pub use manifest::{
     ApiVersion, AuthRoute, Automatic, Companion, CompanionVolume, Criticality, ExposePolicy,
-    Healthcheck, Image, ImageSigner, Ingress, Job, Kind, Manifest, Memory, Metadata, PathRoute,
-    Period, Process, RecoveryLogin, ReleaseNotes, Runtime, SecuritySpec, SignIn, Spec, SwarmSpec,
-    Tmpfs, Ulimit, UpdateChannel, UpdatePolicy,
+    Healthcheck, Image, ImageSigner, Ingress, Job, Kind, Lifeboat, Manifest, Memory, Metadata,
+    PathRoute, Period, Process, RecoveryLogin, ReleaseNotes, Returns, Runtime, SecuritySpec,
+    SignIn, Spec, SwarmSpec, Tmpfs, Ulimit, UpdateChannel, UpdatePolicy,
 };
 
 #[derive(Debug, thiserror::Error)]

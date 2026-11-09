@@ -51,6 +51,23 @@ pub struct Metadata {
     pub homepage: Option<String>,
 }
 
+/// An app's place in the lifeboat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Lifeboat {
+    pub returns: Returns,
+}
+
+/// How an app's writes on the site come home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Returns {
+    /// Its databases and volumes, taken from the site whole, replace the house's. Sound
+    /// only while the house's copy is stopped from the promotion to the return: two
+    /// copies written at once cannot be merged.
+    Whole,
+}
+
 /// Ordered most critical first: a backup pass serves a `vital` app before the rest, so
 /// one cut short has saved what matters most.
 #[derive(
@@ -95,6 +112,13 @@ pub struct Spec {
 
     #[serde(default)]
     pub update: UpdatePolicy,
+
+    /// How what the app writes on the house's site, while the site serves it, comes
+    /// home (`hlb site promote`, `hlb site return`). Optional when read; the lifeboat
+    /// refuses an app declaring nothing — served on the VPS, its writes would have no
+    /// way back, and the house would start again on the day it fell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifeboat: Option<Lifeboat>,
 
     /// Companion containers, deployed **with** the app and for it alone.
     ///
