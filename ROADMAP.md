@@ -291,6 +291,10 @@ exported — Homelabus never bills.
   VPS comes home whole — its database and volumes replacing the house's — for an app
   whose manifest declares it (`lifeboat: returns: whole`); a vital app declaring
   nothing is refused by the lifeboat.
+- **Nothing of a third party watches the house** (2026-11-09): no hosted service —
+  not healthchecks.io, ntfy.sh, an outside SMTP, Telegram or Discord. Healthchecks is
+  self-hosted on the VPS beside Gatus; the alerts leave the VPS by a webhook to a
+  destination the owner holds.
 
 #### The phases
 
@@ -1351,7 +1355,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
 - Gatus on the VPS, generated from the catalog: two probes per app (through the front
   door, and straight home over WireGuard) to say where it breaks; heartbeats pushed from
   home (backup done, lifeboat verified); alerts never through the house's own Stalwart
-  or ntfy; the house probes the VPS, the VPS pings Healthchecks.io. Names the family
+  or ntfy; the house probes the VPS, and the VPS's own Healthchecks — self-hosted
+  there, never healthchecks.io — receives the pings. Names the family
   understands, and an announcement published when the admin acknowledges an alert.
 - Downtime measured per app: seconds per update, minutes to recover a lost node.
   stop-first for a single-volume service, with a maintenance page from Caddy for the
