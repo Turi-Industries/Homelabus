@@ -1536,9 +1536,21 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      subscription's command from `/tmp`, `noexec` under Swarm, so the script reads
      ntfy's JSON lines; Gatus expands `$NAME` in its files, so a `$` is written `$$`;
      it reloads a directory to the second, so each file is dated two seconds ahead.
-     End to end on the real images (`hlb-engine/tests/live_announce.rs`). Left (5d):
-     the words changed by the owner, and the announcement copied into the house's
-     portal once it answers.
+     End to end on the real images (`hlb-engine/tests/live_announce.rs`).
+     5d built 2026-11-09: the owner replaces the house's words or adds to them, the
+     hour before each addition, while the announcement is on the page — `hlb site
+     announce <id> --replace|--follow "<words>"`, or `hlb-site-announce` over SSH to
+     the VPS, which `hlb site sync` leaves there: the house may be down. Both run the
+     announcer's own script inside its running task, so one lock (`flock`, in the
+     image) covers what the owner and the subscription write. An incident is ONE entry
+     from announcement to archive — the resolution appends the house's "it is back" and
+     archives it — so whatever mirrors the page follows one announcement by its
+     timestamp. The words are one line with no control character, refused by the CLI
+     and by the script; `\`, `"` and `$` are escaped for YAML and Gatus. Nothing is
+     said of an alert whose button was not pressed: the words come from the table or
+     the owner, never the button. On the real images, the command through `docker
+     exec` included. Left (5e): the announcement copied into the house's portal once
+     it answers.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
   7. **The gate on the lab**, timed both ways.

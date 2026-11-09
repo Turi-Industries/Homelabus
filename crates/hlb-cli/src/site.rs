@@ -25,6 +25,7 @@ use crate::{
     write_temporary_key, Cli, ACTOR_ROLE,
 };
 
+pub mod announce;
 mod door;
 pub mod homecoming;
 pub mod lifeboat;

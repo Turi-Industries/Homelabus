@@ -4,7 +4,10 @@ paths:
   - "crates/hlb-metrics/**/*.rs"
   - "crates/hlb-notify/**/*.rs"
   - "crates/hlb-controller/src/{agents,capacity,metrics,mutes,promql,timeline}.rs"
-  - "crates/hlb-privd/src/{fleet.rs,daemon/alerts.rs,daemon/notify.rs,daemon/schedule.rs}"
+  - "crates/hlb-privd/src/{fleet.rs,daemon/alerts.rs,daemon/notify.rs,daemon/schedule.rs,daemon/heartbeat.rs}"
+  - "crates/hlb-ingress/src/status_page.rs"
+  - "crates/hlb-engine/src/site_watch.rs"
+  - "crates/hlb-cli/src/site/watch.rs"
 ---
 
 # Operations: watching the system
@@ -100,3 +103,22 @@ where silence is cheapest: an unknown reads as calm unless the type forbids it.
   preceded the outage" when you know nothing — and this screen is read mid-outage.
 - **SQLite writes timestamps without a timezone or a "T".** Parsed strictly as RFC 3339,
   every row is `None` and the timeline is empty on healthy data.
+
+## The site's watch (Gatus and ntfy on the VPS)
+
+Measured on Gatus 5.38 and ntfy 2.34; each is silent when it fires.
+
+- **Gatus refuses a file of heartbeats alone** ("at least one endpoint or suite"), and
+  its refusal is the `panic:` line — the log's last line is a Go stack.
+- **Gatus expands `$NAME` from its environment in every file it reads**, `$$` being a
+  dollar: an app named "Budget $HOME" reads "Budget /root". `status_page::literal`.
+- **A directory config reloads only when a file is newer than the last reading, to the
+  second**, and a DELETED file reloads nothing. The announcer dates each file two
+  seconds ahead; `GATUS_CONFIG_PATH` names `live/`, never a directory holding the
+  waiting pages, which would be merged in.
+- **Gatus's ntfy alert carries no button**: the `custom` one sends ntfy's own JSON, each
+  alert's part in `provider-override.placeholders` — the provider's body is one for all.
+- **`ntfy subscribe` runs a message's command from `/tmp`**, and Swarm's tmpfs is
+  `noexec` (exit 126). Read its JSON lines instead (`--from-config` with no command).
+- **ntfy refuses a token not exactly 32 characters** (`tk_` + 29), and a subscription
+  receives only what comes after it — nothing is replayed at start.
