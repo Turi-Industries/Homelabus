@@ -65,12 +65,12 @@ fn backends(s: &Site) -> Vec<Backend> {
 
 /// The door's configuration for this site's members.
 pub fn config(s: &Site) -> String {
-    front_door::render(&backends(s))
+    front_door::render(&backends(s), &[])
 }
 
 /// The same once promoted: `names`, the lifeboat's, to the site's own Caddy.
 pub fn promoted(s: &Site, names: &[String]) -> String {
-    front_door::render_promoted(&backends(s), names)
+    front_door::render_promoted(&backends(s), names, &[])
 }
 
 /// The service's arguments after `docker service create`, its label left out.

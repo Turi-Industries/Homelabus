@@ -671,6 +671,13 @@ impl SwarmOrchestrator {
                             .collect()
                     }),
                     groups: (!groups.is_empty()).then(|| groups.clone()),
+                    // Docker's own order: the address, then the name.
+                    hosts: (!spec.hosts.is_empty()).then(|| {
+                        spec.hosts
+                            .iter()
+                            .map(|(name, address)| format!("{address} {name}"))
+                            .collect()
+                    }),
 
                     // Hardening actually passed to Swarm, not merely declared in the
                     // manifest.
@@ -2534,6 +2541,22 @@ mod tests {
             ),
             (None, None, None, None, None, None)
         );
+    }
+
+    #[test]
+    fn a_fixed_name_reaches_swarm_as_docker_writes_it() {
+        let mut spec = ServiceSpec::new("gatus", "gatus:1");
+        spec.hosts = vec![("vault.example.fr".into(), "10.0.2.5".into())];
+        let c = SwarmOrchestrator::to_bollard(&spec)
+            .task_template
+            .and_then(|t| t.container_spec)
+            .expect("a container");
+        assert_eq!(c.hosts, Some(vec!["10.0.2.5 vault.example.fr".to_string()]));
+        let none = SwarmOrchestrator::to_bollard(&ServiceSpec::new("a", "a:1"))
+            .task_template
+            .and_then(|t| t.container_spec)
+            .expect("a container");
+        assert_eq!(none.hosts, None);
     }
 
     #[test]

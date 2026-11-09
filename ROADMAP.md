@@ -295,6 +295,12 @@ exported — Homelabus never bills.
   not healthchecks.io, ntfy.sh, an outside SMTP, Telegram or Discord. Healthchecks is
   self-hosted on the VPS beside Gatus; the alerts leave the VPS by a webhook to a
   destination the owner holds.
+- **Step 5's shape** (2026-11-09): the alerts go to an ntfy of the VPS's own, which the
+  owner's Android phone subscribes to — never ntfy.sh, which an iPhone would need to be
+  woken through. The status page is public, on a name the VPS serves with a
+  certificate of its own: the VPS's name, no house app's. Healthchecks' interface is
+  reached by an SSH tunnel only, never published. Three pull requests: 5a Gatus, the
+  probes and the alerts; 5b the heartbeats; 5c the announcement on acknowledgement.
 
 #### The phases
 

@@ -82,7 +82,23 @@ pub fn for_site(mut spec: ServiceSpec) -> ServiceSpec {
     spec.networks = vec![NETWORK.to_string()];
     // The ingress's names are the house's: the site's services answer to their own.
     spec.aliases.clear();
+    if spec.name == POSTGRES {
+        spec.memory = Some(site_postgres_memory());
+    }
     spec
+}
+
+/// The site's PostgreSQL serves the lifeboat's two or three databases, not the house's
+/// every app: measured at 60 MiB idle. The house's 2 GiB limit alone refused a 2 GB VPS
+/// at preview, for 100 MiB in use.
+pub const SITE_POSTGRES_MIB: u64 = 512;
+
+fn site_postgres_memory() -> hlb_types::manifest::Memory {
+    const MIB: u64 = 1024 * 1024;
+    hlb_types::manifest::Memory {
+        reserve: hlb_types::manifest::Bytes(64 * MIB),
+        limit: hlb_types::manifest::Bytes(SITE_POSTGRES_MIB * MIB),
+    }
 }
 
 /// What the site is asked to hold.
@@ -335,20 +351,37 @@ pub fn site_ingress(
 /// The site's Caddy, deployed stopped: the house's image and hardening, none of its
 /// ports — the door reaches it on the overlay — and none of its files.
 pub fn site_caddy(caddy: &Manifest, ingress: &SiteIngress) -> ServiceSpec {
+    let mut spec = caddy_on_site(
+        caddy,
+        ingress,
+        hlb_ingress::front_door::SITE_CADDY,
+        NETWORK,
+        (CADDY_DATA, CADDY_CONFIG),
+    );
+    spec.replicas = 0;
+    spec.memory = caddy.spec.swarm.memory;
+    spec
+}
+
+/// A Caddy on the site, `name` on `network`, its data and config in `volumes`: the
+/// lifeboat's, or the edge serving the site's own names.
+pub fn caddy_on_site(
+    caddy: &Manifest,
+    ingress: &SiteIngress,
+    name: &str,
+    network: &str,
+    volumes: (&str, &str),
+) -> ServiceSpec {
     let mut hardening = caddy.spec.security.clone();
     // 🔴 The house's publishes 80 and 443 in host mode: on the site those are the
     // door's, and a second claim leaves the task pending.
     hardening.published_ports.clear();
-    let mut spec = ServiceSpec::new(
-        hlb_ingress::front_door::SITE_CADDY,
-        caddy.spec.image.reference(),
-    )
-    .replicas(0)
-    .network(NETWORK)
-    .hardening(hardening)
-    .mount(CADDY_DATA, "/data")
-    .mount(CADDY_CONFIG, "/config")
-    .file(CADDYFILE, ingress.caddyfile.clone());
+    let mut spec = ServiceSpec::new(name, caddy.spec.image.reference())
+        .network(network)
+        .hardening(hardening)
+        .mount(volumes.0, "/data")
+        .mount(volumes.1, "/config")
+        .file(CADDYFILE, ingress.caddyfile.clone());
     spec.command = [
         "caddy",
         "run",
@@ -366,7 +399,6 @@ pub fn site_caddy(caddy: &Manifest, ingress: &SiteIngress) -> ServiceSpec {
     if let Some(h) = &caddy.spec.swarm.healthcheck {
         spec = spec.healthcheck(h.clone());
     }
-    spec.memory = caddy.spec.swarm.memory;
     spec
 }
 
@@ -489,14 +521,16 @@ pub fn memory_mib(
         }
     }
     if !sel.postgres.is_empty() {
-        let pg = postgres.ok_or("PostgreSQL is not installed")?;
-        total += limit("postgres", pg.spec.swarm.memory.as_ref())?;
+        postgres.ok_or("PostgreSQL is not installed")?;
+        total += SITE_POSTGRES_MIB;
     }
     // The site's own Caddy runs beside them once promoted, the night it matters.
     if !sel.apps.is_empty() {
         let c = caddy.ok_or("Caddy is not installed: the site would have no ingress")?;
         total += limit("caddy", c.spec.swarm.memory.as_ref())?;
     }
+    // Beside them every night, and every day: the status page, its alerts, its edge.
+    total += crate::site_watch::MEMORY_MIB;
     Ok(total)
 }
 
@@ -679,10 +713,17 @@ spec:
         assert_eq!(site.replicas, 1, "started once, whatever the house decided");
         assert!(site.constraints.is_empty() && site.backings.is_empty() && site.aliases.is_empty());
         assert_eq!(site.networks, vec![NETWORK.to_string()]);
+        assert_eq!(site.memory, None, "an app keeps its own limit");
         assert_eq!(
             site.mounts,
             vec![("vaultwarden-data".to_string(), "/data".to_string())]
         );
+    }
+
+    #[test]
+    fn the_site_s_postgres_has_a_limit_of_its_own() {
+        let site = for_site(ServiceSpec::new(POSTGRES, "postgres:17"));
+        assert_eq!(site.memory.map(|m| m.limit.mib()), Some(SITE_POSTGRES_MIB));
     }
 
     #[test]
@@ -697,7 +738,7 @@ spec:
         let caddy = caddy();
         assert_eq!(
             memory_mib(&sel, &installed, Some(&postgres()), Some(&caddy)),
-            Ok(256 + 256 + 2048 + 512)
+            Ok(256 + 256 + SITE_POSTGRES_MIB + 512 + crate::site_watch::MEMORY_MIB)
         );
         let mut silent = installed.clone();
         silent[0].1.spec.swarm.memory = None;

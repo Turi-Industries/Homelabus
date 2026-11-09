@@ -209,6 +209,7 @@ fn a_promoted_door_serves_the_lifeboat_from_the_site_and_the_rest_from_home() {
             address: Ipv4Addr::new(10, 43, 0, 20),
         }],
         &["vault.example.fr".into()],
+        &[],
     );
     let door = format!("hlb-pd-door-{tag}");
     let env = format!("CFG={cfg}");
