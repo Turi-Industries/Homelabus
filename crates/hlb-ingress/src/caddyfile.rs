@@ -309,6 +309,10 @@ pub struct Config {
     /// The authentication portal. `None` = no forward-auth.
     pub forward_auth: Option<ForwardAuth>,
     pub tls: Tls,
+    /// The site's own Caddy, serving the lifeboat while the site is promoted: the
+    /// front door's listener alone, its PROXY header taken from this network — the
+    /// lifeboat's overlay, which the door reaches it on. `None` is the house's.
+    pub site: Option<String>,
 }
 
 impl Default for Config {
@@ -317,6 +321,7 @@ impl Default for Config {
             crowdsec: None,
             forward_auth: None,
             tls: Tls::Internal { own_root: false },
+            site: None,
         }
     }
 }
@@ -423,6 +428,12 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
             let _ = writeln!(out, "\t}}");
         }
     }
+    // 🔴 Caddy's own redirect names the site's listener — `https://<name>:10443/`, a
+    // port the door does not answer — and wins over a catch-all `http://` (measured,
+    // `tests/promoted_door.rs`). Its challenges are answered all the same.
+    if cfg.site.is_some() {
+        let _ = writeln!(out, "\tauto_https disable_redirects");
+    }
     // Inside the container only: nothing on the overlay can reach it. It serves the
     // health probe; the routes arrive as a file.
     let _ = writeln!(out, "\tadmin localhost:2019");
@@ -446,7 +457,11 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
     let _ = writeln!(out, "\t\tlistener_wrappers {{");
     let _ = writeln!(out, "\t\t\tproxy_protocol {{");
     let _ = writeln!(out, "\t\t\t\ttimeout 5s");
-    let _ = writeln!(out, "\t\t\t\tallow {}", crate::front_door::SITE_NETWORK);
+    let relay_from = cfg
+        .site
+        .as_deref()
+        .unwrap_or(crate::front_door::SITE_NETWORK);
+    let _ = writeln!(out, "\t\t\t\tallow {relay_from}");
     let _ = writeln!(out, "\t\t\t}}");
     let _ = writeln!(out, "\t\t\ttls");
     let _ = writeln!(out, "\t\t}}");
@@ -499,8 +514,17 @@ pub fn render(routes: &[Route], cfg: &Config) -> String {
     // `{http.request.local.port}`: behind `proxy_protocol` the local address is the
     // HEADER's — 443, as HAProxy writes it, or whatever a hostile VPS writes — and a
     // private route answered the internet through the lab's front door (2026-11-09).
-    for relayed in [false, true] {
-        render_blocks(&mut out, &covered, &own, wildcard, cfg, relayed);
+    //
+    // The site's Caddy has the relay's listener alone: nobody is at home on a VPS.
+    if cfg.site.is_none() {
+        render_blocks(&mut out, &covered, &own, wildcard, cfg, false);
+    }
+    render_blocks(&mut out, &covered, &own, wildcard, cfg, true);
+    if cfg.site.is_some() {
+        // To the door's 443. ACME's HTTP challenges are answered before any route.
+        let _ = writeln!(out, "http:// {{");
+        let _ = writeln!(out, "\tredir https://{{host}}{{uri}} 308");
+        let _ = writeln!(out, "}}");
     }
 
     out
@@ -1286,6 +1310,38 @@ mod tests {
         let out = render(&[gitea(), gitea()], &Config::default());
         assert_eq!(out.matches("\ngit.example.fr {").count(), 1, "{out}");
         assert_eq!(out.matches("\ngit.example.fr:10443 {").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn the_site_s_caddy_answers_on_the_relay_alone_from_the_lifeboat_s_overlay() {
+        let mut r = Route::new("vault.example.fr", "vaultwarden", 80);
+        r.public = true;
+        let cfg = Config {
+            site: Some("10.0.9.0/24".into()),
+            ..Config::default()
+        };
+        let out = render(&[r], &cfg);
+        assert!(out.contains("\nvault.example.fr:10443 {"), "{out}");
+        assert!(
+            !out.contains("\nvault.example.fr {"),
+            "nobody is at home on a VPS: {out}"
+        );
+        assert!(out.contains("\t\t\t\tallow 10.0.9.0/24\n"), "{out}");
+        assert!(!out.contains(crate::front_door::SITE_NETWORK), "{out}");
+        // Redirected to the door's 443, never to the listener's port.
+        assert!(out.contains("\tauto_https disable_redirects\n"), "{out}");
+        assert!(
+            out.contains("http:// {\n\tredir https://{host}{uri} 308\n}"),
+            "{out}"
+        );
+        // The house's file is untouched by it.
+        let home = render(
+            &[Route::new("vault.example.fr", "vaultwarden", 80)],
+            &Config::default(),
+        );
+        assert!(!home.contains("http:// {"), "{home}");
+        assert!(!home.contains("disable_redirects"), "{home}");
+        assert!(home.contains("\nvault.example.fr {"), "{home}");
     }
 
     fn with_crowdsec() -> Config {

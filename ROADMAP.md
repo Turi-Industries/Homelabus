@@ -281,6 +281,16 @@ exported — Homelabus never bills.
   downtime, then the gate; the signed zone's Knot and OPNsense after it, in the same
   phase.
 - **One pull request per step, merged by Claude** once CI is green, as in phase 5.
+- **Promoting the lifeboat** (step 4): the site's own Caddy asks for its certificates
+  over HTTP-01 at promotion, for the lifeboat's names only — no key waits on the VPS
+  beforehand, none leaves the house. The promotion is a script the nightly lifeboat
+  leaves on the VPS, run there by SSH when the house is down; `hlb site promote` runs
+  the same script from the house when it answers. A private app (Vaultwarden) is open
+  to the internet while the site is promoted, behind its own second factor and the
+  rate limits, said by the promotion, closed by the return. What was written on the
+  VPS comes home whole — its database and volumes replacing the house's — for an app
+  whose manifest declares it (`lifeboat: returns: whole`); a vital app declaring
+  nothing is refused by the lifeboat.
 
 #### The phases
 

@@ -70,7 +70,11 @@ fn memory_refusal(
         .iter()
         .find(|(n, _)| n == lifeboat::POSTGRES)
         .map(|(_, m)| m);
-    let needed = lifeboat::memory_mib(sel, installed, postgres)?;
+    let caddy = installed
+        .iter()
+        .find(|(n, _)| n == hlb_types::manifest::INGRESS_SERVICE)
+        .map(|(_, m)| m);
+    let needed = lifeboat::memory_mib(sel, installed, postgres, caddy)?;
     let Some(has) = s.memory_mb else {
         return Err(format!(
             "{} MB needed, and the site's memory was never read",
@@ -128,6 +132,11 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         println!("stop it. The site never receives the restic password, nor the house's");
         println!("PostgreSQL administrator. Each archive is refused past a tenth of the");
         println!("site's disk left free.");
+        println!("Would leave beside it, stopped, the site's own Caddy and the promotion");
+        println!(
+            "({}), which starts them the night the house is down.",
+            lifeboat::PROMOTE_SCRIPT
+        );
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -174,6 +183,15 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
 struct Carried {
     services: Vec<String>,
     volumes: Vec<String>,
+    /// The names the site serves once promoted: what the door's promoted file sends
+    /// it, written again at each `hlb site sync`.
+    #[serde(default)]
+    names: Vec<String>,
+}
+
+/// The names the lifeboat left on the site, for the door's promoted file.
+pub async fn names(state: &State, vault: &Vault) -> Result<Vec<String>> {
+    Ok(carried(state, vault).await?.names)
 }
 
 async fn carried(state: &State, vault: &Vault) -> Result<Carried> {
@@ -273,6 +291,33 @@ async fn rebuild(
     if let Some(p) = port {
         ssh = ssh.port(p);
     }
+    // 🔴 A promoted site's lifeboat is serving: removed and rebuilt from last night's
+    // backups, it would lose what people wrote there since.
+    if let Some(since) = ssh.read_file(lifeboat::PROMOTED_MARK).await? {
+        return Err(format!(
+            "{} is promoted since {}: its lifeboat is serving, and is left as it is \
+             until `hlb site return`",
+            s.name,
+            since.trim()
+        )
+        .into());
+    }
+    // Refused before anything is touched: a house the site cannot serve TLS for.
+    let exposure = state.exposure().await?;
+    let tls = lifeboat::site_tls(exposure.as_ref())?;
+    let caddy = state
+        .app_manifest(hlb_types::manifest::INGRESS_SERVICE)
+        .await?;
+    let mut routes = Vec::new();
+    for app in &sel.apps {
+        let m = state.app_manifest(app).await?;
+        let cleared = state.unverified_blocking(app).await? == 0;
+        routes.extend(hlb_ingress::routes_from_manifest(
+            &m,
+            state.app_domain(app).await?.as_deref(),
+            cleared,
+        ));
+    }
     let socket = tmp.path().join("docker.sock");
     let _bridge = ssh.docker_socket(&socket).await?;
     let site = SwarmOrchestrator::connect_unix(&socket).await?;
@@ -296,6 +341,11 @@ async fn rebuild(
         collect(&plan, &mut now);
         plans.push((app.clone(), plan));
     }
+    let apps_services = now.services.clone();
+    now.services
+        .push(hlb_ingress::front_door::SITE_CADDY.to_string());
+    now.volumes.push(lifeboat::CADDY_DATA.to_string());
+    now.volumes.push(lifeboat::CADDY_CONFIG.to_string());
     let mut services: Vec<&String> = before.services.iter().chain(&now.services).collect();
     services.sort();
     services.dedup();
@@ -432,6 +482,58 @@ async fn rebuild(
             said.push(format!("{} healthy", spec.name));
         }
     }
+
+    // The site's own Caddy, stopped beside them: its file checked by its binary now,
+    // not found wrong the night it is needed.
+    let overlay = site
+        .network_subnets(lifeboat::NETWORK)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("the lifeboat's network has no subnet on the site")?;
+    let ingress = lifeboat::site_ingress(
+        routes,
+        tls,
+        &overlay,
+        exposure.as_ref().and_then(|e| e.acme_ca_root.clone()),
+    )?;
+    let caddy_spec = lifeboat::site_caddy(&caddy, &ingress);
+    let mut check = caddy_spec.clone();
+    check.name = format!("{}-check", caddy_spec.name);
+    check.command = [
+        "caddy",
+        "validate",
+        "--config",
+        lifeboat::CADDYFILE,
+        "--adapter",
+        "caddyfile",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    check.healthcheck = None;
+    let checked = site.run_job(&check.job(), HEALTHY_WITHIN_SECS).await?;
+    if !checked.succeeded {
+        return Err(format!(
+            "the site's Caddy refuses its file: {}",
+            checked.output.join(" / ")
+        )
+        .into());
+    }
+    site.deploy(&caddy_spec).await?;
+    said.push(format!("{} ready, stopped", caddy_spec.name));
+
+    // The promotion, and the door's file it puts in place.
+    let script = lifeboat::promote_script(&lifeboat::start_order(&apps_services), &ingress.names);
+    hlb_bootstrap::provision::install_file(&ssh, lifeboat::PROMOTE_SCRIPT, &script, 0o700).await?;
+    now.names = ingress.names.clone();
+    remember(state, vault, &now).await?;
+    super::door::deploy(&ssh, s, &ingress.names).await?;
+    println!(
+        "  ✓ promotion ready: {} on {}",
+        lifeboat::PROMOTE_SCRIPT,
+        ingress.names.join(", ")
+    );
 
     // Stopped, apps first: ready, and holding nothing the night nobody needs it.
     for svc in now.services.iter().rev() {

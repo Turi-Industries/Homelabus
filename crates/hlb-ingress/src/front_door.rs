@@ -91,6 +91,85 @@ pub fn render(backends: &[Backend]) -> String {
     out
 }
 
+/// The site's own Caddy, which serves the lifeboat once the site is promoted. Reached
+/// on the lifeboat's overlay, by name: it runs nowhere else and publishes no port.
+pub const SITE_CADDY: &str = "hlb-site-caddy";
+
+/// `haproxy.cfg` once the site is promoted: `names` — the lifeboat's — go to the site's
+/// own Caddy, every other name home as before.
+///
+/// Still never decrypted here: 443 is told apart by the name the client's hello asks
+/// for (SNI), 80 by its `Host` — plain HTTP, where Let's Encrypt asks the site's Caddy
+/// for its HTTP-01 challenges.
+pub fn render_promoted(backends: &[Backend], names: &[String]) -> String {
+    let mut names = names.to_vec();
+    names.sort();
+    names.dedup();
+    let home = render(backends);
+    let listed = names.join(" ");
+    let mut out = String::new();
+    for line in home.lines() {
+        match line {
+            // Docker's own resolver: the site's Caddy is a name on the overlay, and
+            // HAProxy starts while it runs no task (`init-addr none`).
+            "defaults" => {
+                out.push_str(
+                    "resolvers docker
+                     	nameserver docker 127.0.0.11:53
+                     	hold valid 10s
+                     
+                     defaults
+",
+                );
+            }
+            "frontend http" => {
+                let _ = write!(
+                    out,
+                    "frontend http
+                     	mode http
+                     	# A client trickling its request holds nothing for an hour.
+                     	timeout http-request 10s
+                     	acl lifeboat req.hdr(host),field(1,:),lower -m str {listed}
+                     	use_backend lifeboat_http if lifeboat
+"
+                );
+            }
+            "backend house_http" => {
+                out.push_str(
+                    "backend house_http
+	mode http
+",
+                );
+            }
+            "frontend https" => {
+                let _ = write!(
+                    out,
+                    "frontend https
+                     	tcp-request inspect-delay 5s
+                     	tcp-request content accept if {{ req.ssl_hello_type 1 }}
+                     	use_backend lifeboat_https if {{ req.ssl_sni,lower -m str {listed} }}
+"
+                );
+            }
+            l => {
+                out.push_str(l);
+                out.push('\n');
+            }
+        }
+    }
+    let relay = crate::caddyfile::RELAY_HTTPS_PORT;
+    let _ = write!(
+        out,
+        "\n# The lifeboat: the site's own Caddy, on the lifeboat's overlay.\n\
+         backend lifeboat_http\n\
+         \tmode http\n\
+         \tserver {SITE_CADDY} {SITE_CADDY}:80 resolvers docker init-addr none\n\
+         \nbackend lifeboat_https\n\
+         \tserver {SITE_CADDY} {SITE_CADDY}:{relay} resolvers docker init-addr none send-proxy-v2\n"
+    );
+    out
+}
+
 /// IPv4 ranges covering `base` except `hole`, ascending. `[base]` when the hole is not
 /// inside it.
 pub fn without(base: (Ipv4Addr, u8), hole: (Ipv4Addr, u8)) -> Vec<(Ipv4Addr, u8)> {
@@ -230,6 +309,51 @@ mod tests {
     fn a_hole_elsewhere_leaves_the_range_whole() {
         let r = without((Ipv4Addr::new(192, 168, 0, 0), 16), site_network());
         assert_eq!(r, vec![(Ipv4Addr::new(192, 168, 0, 0), 16)]);
+    }
+
+    fn names() -> Vec<String> {
+        vec!["vault.example.fr".into(), "id.example.fr".into()]
+    }
+
+    #[test]
+    fn a_promoted_door_sends_the_lifeboat_s_names_to_the_site_and_the_rest_home() {
+        let c = render_promoted(&house(), &names());
+        assert!(
+            c.contains(
+                "use_backend lifeboat_https if { req.ssl_sni,lower -m str id.example.fr \
+                 vault.example.fr }"
+            ),
+            "{c}"
+        );
+        assert!(
+            c.contains("acl lifeboat req.hdr(host),field(1,:),lower -m str id.example.fr"),
+            "{c}"
+        );
+        assert!(
+            c.contains("bind :443\n\tdefault_backend house_https\n"),
+            "everything else still goes home: {c}"
+        );
+        // The visitor's address survives to the site's Caddy as it does home.
+        let lifeboat = c
+            .split("\nbackend lifeboat_https\n")
+            .nth(1)
+            .expect("lifeboat");
+        assert!(lifeboat.contains(":10443 resolvers docker"), "{c}");
+        assert!(lifeboat.trim_end().ends_with("send-proxy-v2"), "{c}");
+        let home = c.split("\nbackend house_https\n").nth(1).expect("home");
+        assert!(home.contains("10.43.0.2:10443 check port 80"), "{c}");
+    }
+
+    #[test]
+    fn a_promoted_door_still_decrypts_nothing() {
+        let c = render_promoted(&house(), &names());
+        for never in ["ssl crt", "crt ", " ssl "] {
+            assert!(!c.contains(never), "{never} in the door: {c}");
+        }
+        // Plain HTTP alone is read, on 80.
+        let https = c.split("frontend https").nth(1).expect("https");
+        let https = https.split("\nbackend").next().expect("its end");
+        assert!(!https.contains("mode http"), "{c}");
     }
 
     #[test]

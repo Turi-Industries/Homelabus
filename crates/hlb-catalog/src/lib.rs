@@ -624,6 +624,18 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
         }
         (hlb_types::Kind::App, Some(_)) | (hlb_types::Kind::PlatformService, None) => {}
     }
+    // Only a vital app is carried by the lifeboat: its way home anywhere else is read by
+    // nothing. A platform service is carried for the apps signing in through it.
+    if m.spec.lifeboat.is_some()
+        && m.kind == hlb_types::Kind::App
+        && m.criticality() != hlb_types::Criticality::Vital
+    {
+        return refuse(
+            "`spec.lifeboat` on an app that is not `vital`: the lifeboat carries vital apps \
+             alone, and would never read it"
+                .into(),
+        );
+    }
     for c in &m.spec.requires {
         // 🔴 Created with `CREATE EXTENSION`, which only PostgreSQL has: declared on
         // MariaDB, the install failed at the step, after the app was recorded.
@@ -992,6 +1004,20 @@ mod tests {
                 .any(|(_, e)| e.to_string().contains("`metadata.criticality`")),
             "{errs:?}"
         );
+    }
+
+    #[test]
+    fn a_way_home_is_declared_by_a_vital_app_only() {
+        let refusal = |criticality: hlb_types::Criticality| {
+            let y = "apiVersion: hlb/v1\nkind: App\nmetadata: { name: a }\nspec:\n  \
+                     image: { repo: a/a, tag: \"1\" }\n  lifeboat: { returns: whole }\n";
+            let mut e = Entry::of_yaml(y);
+            e.manifest.metadata.criticality = Some(criticality);
+            catalog_rules(&e).err().map(|e| e.to_string())
+        };
+        assert_eq!(refusal(hlb_types::Criticality::Vital), None);
+        assert!(refusal(hlb_types::Criticality::Important)
+            .is_some_and(|w| w.contains("`spec.lifeboat` on an app that is not `vital`")));
     }
 
     #[test]

@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: pocket-id
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: Pocket ID
   category: platform
   homepage: https://pocket-id.org
@@ -36,6 +36,9 @@ spec:
     memory: { reserve: 64M, limit: 256M }
     replicas: 1
     tier: heavy
+  # Carried by the lifeboat with every app signing in through it. Its SQLite comes home
+  # whole: the passkeys and sessions made on the site are the ones people hold.
+  lifeboat: { returns: whole }
   update:
     # The cluster's most critical service: never an automatic update.
     channel: pin
