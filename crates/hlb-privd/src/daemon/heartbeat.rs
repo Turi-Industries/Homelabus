@@ -114,7 +114,60 @@ pub async fn pass(
             return Some(Err(e));
         }
     }
+    // What the page told the internet of an outage — the house's words, or the owner's
+    // from the site while the house was down — reaches the house's portal too.
+    if let Err(e) = mirror_page(&http, &base, state).await {
+        tracing::warn!("the site's announcements not mirrored: {e}");
+    }
     Some(Ok(()))
+}
+
+/// The most of the page's answer read: Gatus's configuration is a few kilobytes, and
+/// the page is the VPS's word, not the house's.
+const PAGE_BYTES: usize = 1 << 20;
+
+/// Mirrors the site's status page's announcements into the house's
+/// (`hlb_engine::site_watch::mirror`). The number of entries written.
+async fn mirror_page(http: &reqwest::Client, base: &str, state: &State) -> Result<usize, String> {
+    let mut answer = http
+        .get(format!("{base}/api/v1/config"))
+        .send()
+        .await
+        .map_err(|e| format!("the status page: {e}"))?;
+    if !answer.status().is_success() {
+        return Err(format!("the status page answered {}", answer.status()));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = answer
+        .chunk()
+        .await
+        .map_err(|e| format!("the status page: {e}"))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > PAGE_BYTES {
+            return Err(format!(
+                "the status page's answer is past {PAGE_BYTES} bytes"
+            ));
+        }
+    }
+    let page: site_watch::PageConfig =
+        serde_json::from_slice(&body).map_err(|e| format!("the status page's answer: {e}"))?;
+    let now = crate::now();
+    let mut written = 0;
+    for e in page.announcements.iter().take(site_watch::MIRRORED_ENTRIES) {
+        let known = state
+            .site_announcement(&e.timestamp)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(m) = site_watch::mirror(e, known.as_ref()) {
+            state
+                .mirror_site_announcement(&m, now)
+                .await
+                .map_err(|e| e.to_string())?;
+            written += 1;
+        }
+    }
+    Ok(written)
 }
 
 /// The client: the public roots, and a private ACME directory's when the house has one
@@ -162,6 +215,82 @@ async fn push(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Gatus answering `/api/v1/config` with whatever `page` holds at the time.
+    async fn fake_page(page: Arc<std::sync::Mutex<String>>) -> String {
+        let app = axum::Router::new().route(
+            "/api/v1/config",
+            axum::routing::get(move || {
+                let page = page.clone();
+                async move { page.lock().expect("page").clone() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    fn config(message: &str, archived: bool) -> String {
+        serde_json::json!({
+            "oidc": false,
+            "announcements": [{
+                "timestamp": "2026-11-09T18:00:00Z", "type": "outage",
+                "message": message, "archived": archived,
+            }],
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn the_page_s_incident_reaches_the_portal_and_its_history() {
+        let state = State::in_memory().await.expect("state");
+        let page = Arc::new(std::sync::Mutex::new(config(
+            "The house cannot be reached. We know.",
+            false,
+        )));
+        let base = fake_page(page.clone()).await;
+        let http = client(None);
+
+        assert_eq!(mirror_page(&http, &base, &state).await, Ok(1));
+        assert_eq!(
+            mirror_page(&http, &base, &state).await,
+            Ok(0),
+            "seen already"
+        );
+        let now = crate::now();
+        let portal = state
+            .announcements(hlb_types::Role::User, now, false)
+            .await
+            .expect("list");
+        assert_eq!(portal.len(), 1);
+        assert_eq!(portal[0].title, "The house cannot be reached");
+
+        *page.lock().expect("page") = config(
+            "The house cannot be reached. We know. [18:30 UTC] The house can be reached again.",
+            true,
+        );
+        assert_eq!(mirror_page(&http, &base, &state).await, Ok(1));
+        assert!(state
+            .announcements(hlb_types::Role::User, now + 1, false)
+            .await
+            .expect("list")
+            .is_empty());
+        let past = state
+            .announcements(hlb_types::Role::User, now + 1, true)
+            .await
+            .expect("list");
+        assert_eq!(past.len(), 1);
+        assert_eq!(
+            past[0].follow_ups[0].body,
+            "[18:30 UTC] The house can be reached again."
+        );
+
+        *page.lock().expect("page") = "x".repeat(PAGE_BYTES + 1);
+        assert!(mirror_page(&http, &base, &state).await.is_err());
+    }
 
     #[test]
     fn a_site_lost_is_said_once_and_its_return_once() {

@@ -1549,8 +1549,19 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      and by the script; `\`, `"` and `$` are escaped for YAML and Gatus. Nothing is
      said of an alert whose button was not pressed: the words come from the table or
      the owner, never the button. On the real images, the command through `docker
-     exec` included. Left (5e): the announcement copied into the house's portal once
-     it answers.
+     exec` included.
+     5e built 2026-11-09: the house copies the page's announcements into its own.
+     `hlb-privd` reads `status.`'s `/api/v1/config` after each heartbeat (public, at
+     most 1 MiB, 50 entries of 4,000 characters — the page is the VPS's word) and
+     keeps one house announcement per page entry, by its timestamp
+     (`site_announcements`, by "status page", for everyone, pinned while it lasts,
+     Gatus's outage an incident and its warning a warning). What the page appended
+     after an hour becomes a follow-up; words the owner replaced, a "Reworded" one —
+     the house's thread is never rewritten (the owner's choice). Archived on the page,
+     it expires: off the portal, in the history; one the house first sees archived
+     — begun and over while it was down — goes to the history only (the owner's
+     choice). A copy a person removes is not brought back. Gatus's real answer is
+     read in `live_announce.rs`.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
   7. **The gate on the lab**, timed both ways.
