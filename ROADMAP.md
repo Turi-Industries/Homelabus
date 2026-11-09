@@ -1389,13 +1389,24 @@ reported within 24 hours.
   `power_stopped`, `ups_unknown`). Each machine is shut down by NUT's own `upsmon`, a
   secondary Homelabus writes on every node (`--shutdown-user`, decided by the owner
   2026-11-08), held to a real `nut-client` 2.8.0. Not yet run on the lab.
-- **Left: the gate, on the lab** — postponed by the owner 2026-11-08 (the host's memory
-  that evening). One run: a planned reboot of a node with a kernel waiting; deb2's disks
-  and ZFS pool read into the inbox; `dummy-ups` on one node, the waves on `OB` with a
-  short `--after` (order, holds, notification), `OL` starting them in reverse, `hlb-privd`
-  killed mid-wave finishing from its row; upsmon on both nodes with a harmless
-  SHUTDOWNCMD — a real `OB LB` powers them off; a patch applied in the window with nobody
-  there, and a KEV flaw reaching the inbox.
+- ✅ **The gate, on the lab** — 2026-11-08 and 09, Debian 12 deb1 + deb2 with enc1–3
+  off. **A patch applied with nobody there**: the hourly pass took crowdsec v1.8.1 →
+  v1.8.2 in its window, copied its two volumes first, switched by digest, saw it running
+  and froze it (`update-applied` by `controller`, notified; 3 days from first sighting).
+  **An exploited CVE in the inbox**: KEV CVE-2026-111497 (brotli) alerted for five apps at
+  the first daily pass. The UPS on `dummy-ups`: waves in order (apps, the databases once
+  the apps had EXITED, Stalwart), started in reverse, `hlb-privd` killed mid-wave
+  finishing from its row, no pass that changes things beginning mid-stop; upsmon on each
+  ready node, a real `OB LB` powering deb2 off after its last task container, deb1
+  waiting its 60 s cap. Disks and the pool `tank`, firmware and each host's packages read.
+  **Found**: reconciliation took an update back mid-switch — crowdsec, then Caddy 0.4.8,
+  both "inconclusive" 180 s later — since the manifest is frozen only once the new image
+  is proved (#114: the switch is on the state's record, `Drift::Switching`); 0.2 → 0.4
+  read as a minor, so a KEV took Caddy across a breaking release (#113: below 1.0 the
+  second number is the major).
+- **Left from phase 5**: a real planned reboot — refused all evening because enc1–3 were
+  down (degraded), which is the rule; it needs them up or out of the Swarm. SMART on a
+  spinning disk, a real pool's scrub and a real board's fwupd capsule wait for hardware.
 
 **6. The TUI installer.** Gate: a bare machine to the first app, timed.
 - One description of the answers, filled three ways: a Ratatui assistant; a linear

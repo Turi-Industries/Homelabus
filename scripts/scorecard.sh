@@ -152,10 +152,10 @@ row "4 no Rust" "apps that reached an installed house through a catalog pull req
 row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"
 
 # 6. Up to date ----------------------------------------------------------------------
-# Every update and not a fix's: which is one needs the CVE data of phase 5. And nothing
-# applies by itself yet, so it says how long a person took.
+# Every update, not only a fix's, and whoever applied it: the controller a patch in its
+# window, a person the rest.
 lag=$(measured updates-lag)
-row "6 up to date" "days from an update first seen to applied, on the lab: EVERY update, a security fix is told apart by phase 5, and a person applies them" "${lag:-UNMEASURED — probe: \`scripts/drills/updates.sh\`}" "a patch within 7 days, an exploited CVE at the next window"
+row "6 up to date" "days from an update first seen to applied, on the lab: EVERY update, a patch by the controller in its window, the rest by a person" "${lag:-UNMEASURED — probe: \`scripts/drills/updates.sh\`}" "a patch within 7 days, an exploited CVE at the next window"
 # Phase 5's gate, as two rows written before the phase starts: what a person did not do,
 # and how long an exploited flaw in what runs stays unsaid.
 unattended=$(measured updates-unattended)
