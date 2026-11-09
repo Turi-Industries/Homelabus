@@ -39,7 +39,9 @@ spec:
     # Host mode: the client's own address reaches Caddy, which the private routes and
     # the CrowdSec bouncer both decide on. Through the routing mesh every request
     # would come from an overlay address.
-    publishedPorts: [80, 443]
+    # 10443 is the front door's: what a site relays, each visitor's address in a PROXY
+    # header, and never taken for someone at home.
+    publishedPorts: [80, 443, 10443]
     # The binary carries the capability to bind below 1024: with every capability
     # dropped, the kernel refuses to execute it at all.
     capAdd: [NET_BIND_SERVICE]

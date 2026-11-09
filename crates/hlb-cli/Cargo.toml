@@ -49,5 +49,9 @@ clap.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+# The site's door is driven through a VPS the tests fake as a `Runner`.
+async-trait.workspace = true
+
 [lints]
 workspace = true

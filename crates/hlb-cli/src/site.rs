@@ -25,6 +25,8 @@ use crate::{
     write_temporary_key, Cli, ACTOR_ROLE,
 };
 
+mod door;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// The vault's entry holding the site and its members. A stored name.
@@ -281,6 +283,33 @@ async fn own_swarm(hub: &dyn Runner) -> std::result::Result<&'static str, String
     }
 }
 
+/// Puts the front door in place, or brings it up to date, and says what visitors need
+/// for it to be theirs.
+async fn open_door(hub: &dyn Runner, s: &Site) -> bool {
+    match door::deploy(hub, s).await {
+        Ok(how) => {
+            println!(
+                "\nThe front door: {} — {}.",
+                how.says(),
+                hlb_api::plural(s.members.len() as u64, "house node", "house nodes")
+            );
+            println!(
+                "   Visitors come through it once the house's names point at {} (their A",
+                s.endpoint
+            );
+            println!("   records): until then they still arrive home directly.");
+            true
+        }
+        Err(e) => {
+            eprintln!("\n🔴 The front door: {e}");
+            eprintln!(
+                "   The one running, if any, is untouched. Once fixed: hlb site sync --apply"
+            );
+            false
+        }
+    }
+}
+
 /// What `hlb site add` was given.
 pub struct Add<'a> {
     pub host: &'a str,
@@ -368,6 +397,14 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             site::HOUSE_PORTS
         );
         println!("  Swarm   : one of its own, one node — never joined to the house's.");
+        println!(
+            "  door    : {} on 80 and 443, relaying TCP home undecrypted —",
+            hlb_ingress::front_door::SERVICE
+        );
+        println!(
+            "            the certificates stay at home. {}",
+            hlb_ingress::front_door::IMAGE
+        );
         println!();
         if !provision_machine(first.as_ref(), &distro, false, false, false).await? {
             return Ok(ExitCode::FAILURE);
@@ -415,12 +452,13 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     }
+    let door = open_door(ours.as_ref(), &s).await;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
         s.name
     );
-    Ok(if linked {
+    Ok(if linked && door {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -470,12 +508,19 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
         {
             println!("  {} — no longer in the house: unlinked", m.name);
         }
+        println!(
+            "and its front door ({}) to the nodes linked.",
+            hlb_ingress::front_door::SERVICE
+        );
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
     let (_key_dir, hub) = reach(&state, &vault, &s).await?;
     let results = link(&state, &vault, &mut s, hub.as_ref()).await?;
-    let all = say_linked(&results, &s.name);
+    let linked = say_linked(&results, &s.name);
+    // Opened even when a node failed to link: its health check keeps it out of the door.
+    let door = open_door(hub.as_ref(), &s).await;
+    let all = linked && door;
     let outcome = if all { "ok" } else { "partial" };
     state
         .audit("cli", ACTOR_ROLE, "site-sync", &s.name, outcome, None)
@@ -614,6 +659,16 @@ mod tests {
         for bad in ["", "VPS", "-vps", "a/b", "vps 2", &"x".repeat(33)] {
             assert!(!valid_name(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_house_opens_to_the_site_what_the_front_door_relays_to() {
+        assert_eq!(Site::cidr(), hlb_ingress::front_door::SITE_NETWORK);
+        assert_eq!(
+            site::HOUSE_PORTS,
+            [80, hlb_ingress::caddyfile::RELAY_HTTPS_PORT],
+            "a port the door relays to and the house drops is a door that never opens"
+        );
     }
 
     #[test]

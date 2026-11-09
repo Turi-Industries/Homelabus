@@ -309,12 +309,14 @@ printf '%s' '<user>:<token>' | ./target/debug/hlb secret-set registry-ghcr.io --
 
 A site of the house's own — a rented VPS — is prepared the same way, but never joins
 the house's Swarm: it runs one of its own, and the house's nodes each open a tunnel to
-it (`hlb-site`, `10.43.0.0/24`), their firewall letting it reach 80 and 443 only.
+it (`hlb-site`, `10.43.0.0/24`), their firewall letting it reach 80 and Caddy's relay
+port 10443 only. Its front door, HAProxy, relays 80 and 443 home without decrypting
+them — the certificates stay at home — once the house's names point at the VPS.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake
-./target/debug/hlb site sync --apply         # a node joined or left the house
+./target/debug/hlb site sync --apply         # a node joined or left: the link and the door
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the
