@@ -240,12 +240,21 @@ const ANNOUNCER_WRITES: &str = "/announced";
 ///
 /// 🔴 It trusts the button with an id and nothing more: an id is `[a-z0-9-]` read off
 /// the JSON, looked up in the house's table, and anything else is dropped — the words
-/// the page shows are the table's. An announcement is made only while its alert is
-/// open, so a button pressed after the resolution announces nothing over.
+/// the page shows are the table's, or the owner's through [`ANNOUNCE_COMMAND`]. An
+/// announcement is made only while its alert is open, so a button pressed after the
+/// resolution announces nothing over.
+///
+/// An incident is ONE entry from its announcement to its archive: the owner's
+/// follow-ups and the resolution are appended to its message, never entries of their
+/// own — what mirrors the page elsewhere follows one announcement by its timestamp.
+///
+/// Every change holds `.lock`: the owner's command and the subscription write the same
+/// files, and a follow-up read before a resolution would bring the entry back to life.
 ///
 /// Gatus reloads a directory when one of its files is newer than its last reading, to
 /// the second: a file written in the second it reloaded would wait for the next
-/// change. Each one is dated two seconds ahead.
+/// change. Each one is dated two seconds ahead — after the file it replaces is gone,
+/// since a deletion alone reloads nothing.
 const ANNOUNCE_SH: &str = r#"#!/bin/sh
 set -u
 TEXTS=@DIR@/texts
@@ -253,7 +262,37 @@ DIR=@WRITES@
 
 field() { awk -F '\t' -v id="$1" -v n="$2" '$1 == id { print $n; exit }' "$TEXTS"; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+at() { date -u '+[%H:%M UTC]'; }
 fresh() { touch -d "@$(( $(date +%s) + 2 ))" "$1"; }
+
+# One incident's entry: file, timestamp, type, message (quoted), then "archived" or not.
+entry() {
+    {
+        printf 'announcements:\n  - timestamp: %s\n    type: %s\n    message: %s\n' "$2" "$3" "$4"
+        [ -z "${5:-}" ] || printf '    archived: true\n'
+    } > "$DIR/.entry.tmp" && mv -f "$DIR/.entry.tmp" "$1"
+}
+read_entry() { sed -n "s/^  [ -] $2: //p" "$1" | head -n 1; }
+# A quoted message and quoted words, the second after the first, the hour between.
+joined() { printf '%s %s %s' "${1%\"}" "$(at)" "${2#\"}"; }
+
+# The owner's words as the table holds the house's: a YAML string in double quotes,
+# where Gatus reads `$$` as a dollar. One line, no control character: the page shows
+# one paragraph, and an escape YAML reads would be the words' and not ours.
+quoted() {
+    nl='
+'
+    case "$1" in
+    *"$nl"*) echo "the words hold a line break: write them on one line" >&2; return 1 ;;
+    *[![:space:]]*) ;;
+    *) echo "no words given" >&2; return 1 ;;
+    esac
+    if printf '%s' "$1" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+        echo "the words hold a control character" >&2
+        return 1
+    fi
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\$/$$/g')"
+}
 
 opened() {
     [ -n "$(field "$1" 1)" ] && : > "$DIR/.open-$1"
@@ -262,26 +301,56 @@ opened() {
 announce() {
     [ -f "$DIR/.open-$1" ] || return 0
     [ -f "$DIR/$1.yaml" ] && return 0
-    kind=$(field "$1" 2)
     down=$(field "$1" 3)
     [ -n "$down" ] || return 0
-    printf 'announcements:\n  - timestamp: %s\n    type: %s\n    message: %s\n' \
-        "$(now)" "$kind" "$down" > "$DIR/.$1.tmp" &&
-        mv -f "$DIR/.$1.tmp" "$DIR/$1.yaml" && fresh "$DIR/$1.yaml"
+    entry "$DIR/$1.yaml" "$(now)" "$(field "$1" 2)" "$down" && fresh "$DIR/$1.yaml"
 }
 
 resolved() {
     rm -f "$DIR/.open-$1"
-    [ -f "$DIR/$1.yaml" ] || return 0
-    since=$(sed -n 's/^  - timestamp: //p' "$DIR/$1.yaml" | head -n 1)
-    kind=$(field "$1" 2)
-    down=$(field "$1" 3)
+    file="$DIR/$1.yaml"
+    [ -f "$file" ] || return 0
     up=$(field "$1" 4)
+    [ -n "$up" ] || up='""'
     past="$DIR/$1.$(date +%s).yaml"
-    printf 'announcements:\n  - timestamp: %s\n    type: %s\n    message: %s\n    archived: true\n  - timestamp: %s\n    type: operational\n    message: %s\n    archived: true\n' \
-        "$since" "$kind" "$down" "$(now)" "$up" > "$DIR/.$1.tmp" &&
-        mv -f "$DIR/.$1.tmp" "$past" && rm -f "$DIR/$1.yaml" && fresh "$past"
+    entry "$past" "$(read_entry "$file" timestamp)" "$(read_entry "$file" type)" \
+        "$(joined "$(read_entry "$file" message)" "$up")" archived &&
+        rm -f "$file" && fresh "$past"
     find "$DIR" -name '*.*.yaml' -mtime +30 -exec rm -f {} +
+}
+
+# The owner's words, on an announcement still on the page: `replace` says them instead,
+# `follow` adds them after, the hour before them.
+say() {
+    case "$1" in
+    '' | *[!a-z0-9-]*) echo "$1: not a notice's id" >&2; return 2 ;;
+    esac
+    file="$DIR/$1.yaml"
+    if [ ! -f "$file" ]; then
+        echo "$1 is not on the page: its alert's button was never pressed, or it is over" >&2
+        return 1
+    fi
+    words=$(quoted "$3") || return 2
+    case "$2" in
+    replace) message=$words ;;
+    follow) message=$(joined "$(read_entry "$file" message)" "$words") ;;
+    *) echo "$2: replace or follow" >&2; return 2 ;;
+    esac
+    entry "$file" "$(read_entry "$file" timestamp)" "$(read_entry "$file" type)" "$message" &&
+        fresh "$file"
+}
+
+# Each notice of the table: announced (and what the page says), open, or quiet.
+list() {
+    cut -f 1 "$TEXTS" | while IFS= read -r id; do
+        if [ -f "$DIR/$id.yaml" ]; then
+            printf '%s\tannounced\t%s\n' "$id" "$(read_entry "$DIR/$id.yaml" message)"
+        elif [ -f "$DIR/.open-$id" ]; then
+            printf '%s\topen\n' "$id"
+        else
+            printf '%s\tquiet\n' "$id"
+        fi
+    done
 }
 
 handle() {
@@ -304,10 +373,24 @@ handle() {
     return 0
 }
 
+locked() { ( flock 9 && "$@" ) 9> "$DIR/.lock"; }
+
+case "${1:-}" in
 # One message, for the tests: the same function the subscription runs.
-[ "${1:-}" = "--line" ] && { handle "$2"; exit; }
+--line) locked handle "$2"; exit ;;
+--say)
+    if [ $# -ne 4 ]; then
+        echo "usage: <id> replace|follow <words>" >&2
+        exit 2
+    fi
+    locked say "$2" "$3" "$4"
+    exit
+    ;;
+--list) list; exit ;;
+esac
+
 ntfy subscribe -c @DIR@/client.yml --from-config | while IFS= read -r line; do
-    handle "$line"
+    locked handle "$line"
 done
 # The subscription ended: Swarm starts it again.
 exit 1
@@ -322,6 +405,50 @@ pub fn announce_sh() -> String {
         .replace("@ALERTS@", status_page::TOPIC)
         .replace("@TAG@", status_page::NOTICE_TAG)
         .replace("@RESOLVED@", status_page::RESOLVED_TAG)
+}
+
+/// Where `hlb site sync` leaves the owner's command on the site: the night the house is
+/// down there is no `hlb` to run, only SSH to the VPS — from a phone.
+pub const ANNOUNCE_COMMAND: &str = "/usr/local/sbin/hlb-site-announce";
+
+/// The owner's command: the announcer's own script, run in its running task, so one
+/// lock covers what the owner writes and what the subscription writes.
+pub fn announce_command() -> String {
+    format!(
+        r#"#!/bin/sh
+# Generated by Homelabus with the site's watch - do not edit by hand.
+# What the status page says of an outage, from the site itself.
+#   {cmd}                           each notice, and what the page says
+#   {cmd} <id> follow "<words>"     adds them after what it says, with the hour
+#   {cmd} <id> replace "<words>"    says them instead
+# Only once the alert's "Announce" button was pressed, and until the alert resolves.
+set -eu
+task=$(docker ps -q -f "label=com.docker.swarm.service.name={service}" | head -n 1)
+if [ -z "$task" ]; then
+    echo "the announcer is not running here:  docker service ps {service}" >&2
+    exit 1
+fi
+if [ $# -eq 0 ]; then set -- --list; else set -- --say "$@"; fi
+exec docker exec "$task" sh {dir}/announce.sh "$@"
+"#,
+        cmd = ANNOUNCE_COMMAND,
+        service = ANNOUNCER_SERVICE,
+        dir = ANNOUNCER_DIR,
+    )
+}
+
+/// Why the owner's words are refused, before they reach the site — which refuses them
+/// too, for the phone's way there. `None`: they can be said.
+pub fn refuse_words(words: &str) -> Option<&'static str> {
+    if words.trim().is_empty() {
+        Some("no words given")
+    } else if words.contains('\n') || words.contains('\r') {
+        Some("the words hold a line break: write them on one line")
+    } else if words.chars().any(|c| c.is_ascii_control()) {
+        Some("the words hold a control character")
+    } else {
+        None
+    }
 }
 
 /// The announcer's ntfy client: both topics, printed — no command per message.
@@ -490,8 +617,8 @@ mod tests {
         );
     }
 
-    /// The announcer's script, run on one ntfy line in `dir`, its table `texts`.
-    fn announce(dir: &std::path::Path, line: &serde_json::Value) {
+    /// The announcer's script, run in `dir` with `args`, its table `texts`.
+    fn script(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
         let script = announce_sh()
             .replace(
                 &format!("TEXTS={ANNOUNCER_DIR}/texts"),
@@ -501,10 +628,16 @@ mod tests {
                 &format!("DIR={ANNOUNCER_WRITES}"),
                 &format!("DIR={}/announced", dir.display()),
             );
-        let out = std::process::Command::new("sh")
-            .args(["-c", &script, "announce", "--line", &line.to_string()])
+        std::process::Command::new("sh")
+            .args(["-c", &script, "announce"])
+            .args(args)
             .output()
-            .expect("sh");
+            .expect("sh")
+    }
+
+    /// The announcer's script, run on one ntfy line.
+    fn announce(dir: &std::path::Path, line: &serde_json::Value) {
+        let out = script(dir, &["--line", &line.to_string()]);
         assert!(
             out.status.success(),
             "{}",
@@ -512,19 +645,27 @@ mod tests {
         );
     }
 
+    /// The announcements' directory, its lock left out.
     fn announced(dir: &std::path::Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir.join("announced"))
             .expect("dir")
             .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+            .filter(|n| n != ".lock")
             .collect();
         names.sort();
         names
     }
 
-    #[test]
-    fn a_pressed_button_announces_the_house_s_words_while_its_alert_is_open() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let dir = tmp.path();
+    /// The one entry of a file the announcer wrote.
+    fn entry(file: &std::path::Path) -> serde_yaml_ng::Value {
+        let text = std::fs::read_to_string(file).expect("announced");
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).expect("YAML");
+        let list = v["announcements"].as_sequence().expect("announcements");
+        assert_eq!(list.len(), 1, "{text}");
+        list[0].clone()
+    }
+
+    fn budget_page(dir: &std::path::Path) -> &'static str {
         std::fs::create_dir(dir.join("announced")).expect("mkdir");
         let page = status_page::Page {
             probes: vec![status_page::Probe {
@@ -540,32 +681,41 @@ mod tests {
             ack_token: "tk_a".into(),
         };
         std::fs::write(dir.join("texts"), status_page::texts(&page, &[])).expect("texts");
-        let id = "services-budget-home";
-        let ack = |message: &str| {
-            serde_json::json!({
-                "id": "a1", "event": "message", "topic": status_page::ACK_TOPIC,
-                "message": message,
-            })
-        };
-        let alert = |resolved: bool| {
-            let mut tags = vec!["rotating_light".to_string()];
-            if resolved {
-                tags.push(status_page::RESOLVED_TAG.into());
-            }
-            tags.push(format!("{}{id}", status_page::NOTICE_TAG));
-            serde_json::json!({
-                "id": "g1", "event": "message", "topic": status_page::TOPIC,
-                // A title cannot pass for a field: ntfy escapes its quotes.
-                "title": "\",\"message\":\"services-budget-home",
-                "message": "Budget does not answer", "tags": tags,
-            })
-        };
+        "services-budget-home"
+    }
+
+    fn ack(message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": "a1", "event": "message", "topic": status_page::ACK_TOPIC,
+            "message": message,
+        })
+    }
+
+    fn alert(id: &str, resolved: bool) -> serde_json::Value {
+        let mut tags = vec!["rotating_light".to_string()];
+        if resolved {
+            tags.push(status_page::RESOLVED_TAG.into());
+        }
+        tags.push(format!("{}{id}", status_page::NOTICE_TAG));
+        serde_json::json!({
+            "id": "g1", "event": "message", "topic": status_page::TOPIC,
+            // A title cannot pass for a field: ntfy escapes its quotes.
+            "title": "\",\"message\":\"services-budget-home",
+            "message": "Budget does not answer", "tags": tags,
+        })
+    }
+
+    #[test]
+    fn a_pressed_button_announces_the_house_s_words_while_its_alert_is_open() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path();
+        let id = budget_page(dir);
 
         // Pressed before the alert is known: nothing is open to announce.
         announce(dir, &ack(id));
         assert!(announced(dir).is_empty(), "{:?}", announced(dir));
 
-        announce(dir, &alert(false));
+        announce(dir, &alert(id, false));
         announce(dir, &ack("services-unknown"));
         announce(
             dir,
@@ -579,8 +729,7 @@ mod tests {
         let file = dir.join("announced").join(format!("{id}.yaml"));
         let first = std::fs::read_to_string(&file).expect("announced");
         // Gatus reads `$$` as a dollar once the directory is merged.
-        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&first).expect("YAML");
-        let a = &v["announcements"][0];
+        let a = entry(&file);
         assert_eq!(a["type"].as_str(), Some("outage"));
         assert_eq!(
             a["message"].as_str(),
@@ -590,21 +739,130 @@ mod tests {
         announce(dir, &ack(id));
         assert_eq!(std::fs::read_to_string(&file).expect("kept"), first);
 
-        announce(dir, &alert(true));
+        // Resolved: the same entry, archived, the house's "up" words after the hour —
+        // one incident, one announcement, for whatever mirrors the page.
+        announce(dir, &alert(id, true));
         let names = announced(dir);
         assert_eq!(names.len(), 1, "{names:?}");
-        let past = std::fs::read_to_string(dir.join("announced").join(&names[0])).expect("past");
-        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&past).expect("YAML");
-        let list = v["announcements"].as_sequence().expect("two");
-        assert_eq!(list.len(), 2, "{past}");
-        assert_eq!(list[0]["timestamp"], a["timestamp"]);
-        assert_eq!(list[1]["type"].as_str(), Some("operational"));
-        assert_eq!(list[1]["message"].as_str(), Some("Budget $$HOME is back."));
-        assert!(list.iter().all(|e| e["archived"].as_bool() == Some(true)));
+        let past = entry(&dir.join("announced").join(&names[0]));
+        assert_eq!(past["timestamp"], a["timestamp"]);
+        assert_eq!(past["type"].as_str(), Some("outage"));
+        assert_eq!(past["archived"].as_bool(), Some(true));
+        let message = past["message"].as_str().expect("message");
+        let (down, up) = message.split_once(" UTC] ").expect("the hour");
+        assert!(
+            down.starts_with(
+                "Budget $$HOME is unavailable at the moment. We know, and we are on it. ["
+            ),
+            "{message}"
+        );
+        assert_eq!(up, "Budget $$HOME is back.");
 
         // Pressed once it is over: nothing new is announced.
         announce(dir, &ack(id));
         assert_eq!(announced(dir), names);
+    }
+
+    #[test]
+    fn the_owner_replaces_or_follows_what_the_page_says_while_it_says_it() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path();
+        let id = budget_page(dir);
+        let file = dir.join("announced").join(format!("{id}.yaml"));
+        let say = |how: &str, words: &str| script(dir, &["--say", id, how, words]);
+
+        // Nothing on the page yet: nothing to change, and it is said.
+        announce(dir, &alert(id, false));
+        let out = say("follow", "Disk replaced.");
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("not on the page"),
+            "{out:?}"
+        );
+        assert_eq!(announced(dir), vec![format!(".open-{id}")]);
+
+        announce(dir, &ack(id));
+        let since = entry(&file)["timestamp"].clone();
+
+        // Every character YAML or Gatus would read, read back as written.
+        let words = r#"Back by 18:00 — "probably"; C:\temp costs $5, 100% sure: ok #1"#;
+        let out = say("replace", words);
+        assert!(out.status.success(), "{out:?}");
+        let e = entry(&file);
+        assert_eq!(e["timestamp"], since);
+        assert_eq!(e["type"].as_str(), Some("outage"));
+        assert_eq!(
+            e["message"]
+                .as_str()
+                .map(|m| m.replace("$$", "$"))
+                .as_deref(),
+            Some(words)
+        );
+
+        let out = say("follow", "Disk replaced, restoring.");
+        assert!(out.status.success(), "{out:?}");
+        let followed = entry(&file)["message"]
+            .as_str()
+            .expect("message")
+            .to_string();
+        let (before, after) = followed.split_once(" UTC] ").expect("the hour");
+        assert!(before.starts_with(&words.replace('$', "$$")), "{followed}");
+        assert_eq!(after, "Disk replaced, restoring.");
+
+        // What the page cannot show as written is refused, the page untouched.
+        for (how, bad) in [
+            ("follow", "two\nlines"),
+            ("follow", "a\u{7}bell"),
+            ("follow", "a\ttab"),
+            ("follow", ""),
+            ("replace", "   "),
+            ("append", "words"),
+        ] {
+            let out = say(how, bad);
+            assert!(!out.status.success(), "{how} {bad:?} accepted");
+            assert_eq!(
+                entry(&file)["message"].as_str(),
+                Some(followed.as_str()),
+                "{how} {bad:?}"
+            );
+            if how != "append" {
+                assert!(refuse_words(bad).is_some(), "{bad:?} passes the CLI");
+            }
+        }
+        for bad_id in ["../texts", "Services-budget-home", ""] {
+            assert!(!script(dir, &["--say", bad_id, "follow", "x"])
+                .status
+                .success());
+        }
+        assert!(!script(dir, &["--say", id, "follow"]).status.success());
+        assert_eq!(refuse_words(words), None);
+
+        let listed = String::from_utf8(script(dir, &["--list"]).stdout).expect("UTF-8");
+        let line = listed
+            .lines()
+            .find(|l| l.starts_with(&format!("{id}\t")))
+            .expect("listed");
+        assert_eq!(
+            line.splitn(3, '\t').collect::<Vec<_>>(),
+            vec![
+                id,
+                "announced",
+                &format!(
+                    "\"{}",
+                    followed.replace('\\', "\\\\").replace('"', "\\\"") + "\""
+                )
+            ]
+        );
+
+        // Resolved: the owner's words stay, the house's "up" words after them.
+        announce(dir, &alert(id, true));
+        let names = announced(dir);
+        let past = entry(&dir.join("announced").join(&names[0]));
+        let message = past["message"].as_str().expect("message");
+        assert!(message.starts_with(&followed), "{message}");
+        assert!(message.ends_with("Budget $$HOME is back."), "{message}");
+        let out = say("follow", "Late.");
+        assert!(!out.status.success());
     }
 
     #[test]

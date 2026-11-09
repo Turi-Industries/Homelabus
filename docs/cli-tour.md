@@ -322,7 +322,9 @@ minute, on a public page of the site's own name (`status.` of the house's domain
 sends alerts to an ntfy of its own (`alerts.`), which the owner's phone subscribes to —
 nothing goes through the house, nor a third party. Each alert carries an "Announce"
 button: pressed, the page tells its readers the outage is known, in words the house
-wrote, and archives them when the alert resolves.
+wrote, and archives them when the alert resolves. Until then the owner may replace
+those words or add to them, with the hour — from `hlb`, or over SSH to the VPS with
+`hlb-site-announce` when the house is down; the incident stays one entry on the page.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
@@ -335,6 +337,9 @@ wrote, and archives them when the alert resolves.
 ./target/debug/hlb site promote --apply      # the site serves them; private ones open to the internet
 ./target/debug/hlb site return               # what comes home, and from which snapshot
 ./target/debug/hlb site return --apply       # the site's writes replace the house's; the door goes home
+./target/debug/hlb site announce             # each alert open, and what the page says of it
+./target/debug/hlb site announce services-budget --follow "Power cut in the street." --apply
+./target/debug/hlb site announce services-budget --replace "Back tonight." --apply
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the

@@ -1,10 +1,12 @@
 //! An alert's "Announce" button, end to end on the real images: Gatus raises the
 //! alert through the site's ntfy, the button is pressed as the phone presses it — the
 //! request the alert itself describes —, the announcer puts the house's words on the
-//! page, and the alert's resolution archives them.
+//! page, the owner replaces and follows them through the site's command, and the
+//! alert's resolution archives that one entry.
 //!
 //! The files are the ones `hlb site sync` writes: ntfy's `server.yml`, the page, the
-//! announcer's script, client and table. Only the probe's pace is shortened.
+//! announcer's script, client and table, the owner's command. Only the probe's pace is
+//! shortened.
 //!
 //! ```sh
 //! cargo test -p hlb-engine --test live_announce -- --ignored --nocapture
@@ -181,6 +183,9 @@ fn a_pressed_button_puts_the_house_s_words_on_the_page_until_it_is_over() {
         "--read-only",
         "--cap-drop",
         "ALL",
+        // What the owner's command finds the running task by, as Swarm labels it.
+        "--label",
+        &format!("com.docker.swarm.service.name={announcer}"),
         "-v",
         &format!("{}:/hlb:ro", hlb.display()),
         "-v",
@@ -284,6 +289,47 @@ fn a_pressed_button_puts_the_house_s_words_on_the_page_until_it_is_over() {
          are on it."
     );
 
+    // The owner's words, by the command the site keeps for them — the way a phone
+    // over SSH reaches the running announcer.
+    let command = site_watch::announce_command();
+    let owner = |args: &[&str]| {
+        let out = Command::new("sh")
+            .args(["-c", &command, "hlb-site-announce"])
+            .args(args)
+            .output()
+            .expect("sh");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let (ok, listed, err) = owner(&[]);
+    assert!(ok, "{err}");
+    let id = listed
+        .lines()
+        .find(|l| l.contains("\tannounced\t"))
+        .and_then(|l| l.split('\t').next())
+        .expect("an announced notice")
+        .to_string();
+    let words = "Power cut in the street: back with \"the grid\", $0 lost.";
+    let (ok, _, err) = owner(&[&id, "replace", words]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = owner(&[&id, "follow", "The grid is back, starting."]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = owner(&[&id, "follow", "two\nlines"]);
+    assert!(!ok && err.contains("line break"), "{err}");
+    let said = format!("{words} [");
+    let list = within(60, "the owner's words are not on the page", || {
+        shown(false).filter(|l| {
+            l.len() == 1
+                && l[0]["message"].as_str().is_some_and(|m| {
+                    m.starts_with(&said) && m.ends_with("UTC] The grid is back, starting.")
+                })
+        })
+    });
+    let since = list[0]["timestamp"].clone();
+
     // The house answers again: the alert resolves, and the page archives what it said.
     docker(&[
         "run",
@@ -301,11 +347,16 @@ fn a_pressed_button_puts_the_house_s_words_on_the_page_until_it_is_over() {
     let list = within(120, "the announcement is not archived", || {
         shown(true).filter(|l| l.iter().all(|a| a["archived"] == true))
     });
-    assert_eq!(list.len(), 2, "{list:?}");
+    // One incident, one entry: its time kept, the owner's words, then the house's.
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0]["timestamp"], since);
+    assert_eq!(list[0]["type"], "outage");
+    let message = list[0]["message"].as_str().expect("message");
+    assert!(message.starts_with(&said), "{message}");
     assert!(
-        list.iter().any(
-            |a| a["type"] == "operational" && a["message"] == "The house can be reached again."
-        ),
-        "{list:?}"
+        message.ends_with("UTC] The house can be reached again."),
+        "{message}"
     );
+    let (ok, _, err) = owner(&[&id, "follow", "Late."]);
+    assert!(!ok && err.contains("not on the page"), "{err}");
 }

@@ -395,6 +395,14 @@ pub async fn deploy(state: &State, vault: &Vault, s: &Site) -> Result<Watching> 
     site.deploy(&announcer).await?;
     site.wait_healthy(&announcer.name, HEALTHY_WITHIN_SECS)
         .await?;
+    // The owner's words reach the page from the site itself: the house may be down.
+    provision::install_file(
+        &ssh,
+        site_watch::ANNOUNCE_COMMAND,
+        &site_watch::announce_command(),
+        0o700,
+    )
+    .await?;
 
     let hosts: Vec<String> = probes.iter().map(|p| p.host.clone()).collect();
     let acme_root = e.acme_ca_root.as_deref();

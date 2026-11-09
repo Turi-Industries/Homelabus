@@ -2204,6 +2204,24 @@ enum SiteCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// What the site's status page says of an outage, once its alert's button announced
+    /// it: the owner's words instead of the house's, or after them with the hour, until
+    /// the alert resolves. Without an id, each alert open and what the page says. Runs the
+    /// command the watch leaves on the VPS — `hlb-site-announce` over SSH the night the
+    /// house is down. Preview by default.
+    Announce {
+        /// The notice, as listed.
+        #[arg(requires = "words")]
+        id: Option<String>,
+        /// Say these words instead of what the page says.
+        #[arg(long, group = "words", requires = "id")]
+        replace: Option<String>,
+        /// Add these words after what the page says, with the hour.
+        #[arg(long, group = "words", requires = "id")]
+        follow: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -9869,6 +9887,19 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
                     SiteCmd::Promote { apply } => site::promote::run(&cli, *apply).await,
                     SiteCmd::Return { apply } => site::homecoming::run(&cli, *apply).await,
+                    SiteCmd::Announce {
+                        id,
+                        replace,
+                        follow,
+                        apply,
+                    } => {
+                        let words = match (replace, follow) {
+                            (Some(w), _) => Some(site::announce::Words::Replace(w.clone())),
+                            (_, Some(w)) => Some(site::announce::Words::Follow(w.clone())),
+                            _ => None,
+                        };
+                        site::announce::run(&cli, id.as_deref(), words, *apply).await
+                    }
                 }
             })
         }
