@@ -136,6 +136,8 @@ fn gatus_judges_a_public_app_by_its_answer_and_a_private_one_by_its_refusal() {
         token: "tk_0123456789abcdefghijklmnopqrs".into(),
         url: "https://status.example.test".into(),
         push_token: "push-0123456789abcdef".into(),
+        alerts_url: "https://alerts.example.test".into(),
+        ack_token: "tk_ack456789abcdefghijklmnopqrs".into(),
     };
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(

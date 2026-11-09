@@ -320,7 +320,9 @@ the night no `hlb` can run, `/usr/local/sbin/hlb-site-promote --apply` over SSH 
 same promotion. Its watch probes every name the house serves through the door each
 minute, on a public page of the site's own name (`status.` of the house's domain), and
 sends alerts to an ntfy of its own (`alerts.`), which the owner's phone subscribes to —
-nothing goes through the house, nor a third party.
+nothing goes through the house, nor a third party. Each alert carries an "Announce"
+button: pressed, the page tells its readers the outage is known, in words the house
+wrote, and archives them when the alert resolves.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply

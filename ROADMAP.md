@@ -299,8 +299,10 @@ exported — Homelabus never bills.
   owner's Android phone subscribes to — never ntfy.sh, which an iPhone would need to be
   woken through. The status page is public, on a name the VPS serves with a
   certificate of its own: the VPS's name, no house app's. Healthchecks' interface is
-  reached by an SSH tunnel only, never published. Three pull requests: 5a Gatus, the
-  probes and the alerts; 5b the heartbeats; 5c the announcement on acknowledgement.
+  reached by an SSH tunnel only, never published. Four pull requests: 5a Gatus, the
+  probes and the alerts; 5b the heartbeats; 5c the announcement on acknowledgement —
+  a button on the alert, the owner's choice (2026-11-09), in words written beforehand;
+  5d those words changed by the owner, and the announcement shown in the portal too.
 - **The heartbeats go to Gatus, not Healthchecks** (2026-11-09): Gatus's own
   `external-endpoints` with a `heartbeat` — one service less on the VPS, no
   administration interface to guard. Measured on v5.38 with the real ntfy first: a
@@ -1520,6 +1522,23 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the lifeboat's heartbeat waits for its nightly run from the controller; which
      node's link is down needs the hub's handshakes, read over SSH, which the daemon
      has not.
+     5c built 2026-11-09: each alert carries an "Announce" button (the owner's choice
+     over a command over SSH: one press, from the notification). Gatus's ntfy alert
+     has no buttons, so its `custom` one sends ntfy the JSON ntfy publishes, each
+     alert's part its own (`provider-override`). Pressed, the phone publishes the
+     alert's notice id to `homelabus-acks` with a token that can do nothing else; the
+     announcer — the ntfy image subscribed to both topics, listening on nothing —
+     looks the id up in a table the house wrote and puts those words, never the
+     button's, into `live/announced/`, merged into the page by Gatus (which reads
+     `live/` as a directory, the two waiting pages outside it). Announced only while
+     the alert is open; its resolution archives it beside an "it is back". A private
+     app's notice never says its door is open. Measured first: ntfy runs a
+     subscription's command from `/tmp`, `noexec` under Swarm, so the script reads
+     ntfy's JSON lines; Gatus expands `$NAME` in its files, so a `$` is written `$$`;
+     it reloads a directory to the second, so each file is dated two seconds ahead.
+     End to end on the real images (`hlb-engine/tests/live_announce.rs`). Left (5d):
+     the words changed by the owner, and the announcement copied into the house's
+     portal once it answers.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
   7. **The gate on the lab**, timed both ways.
