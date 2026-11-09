@@ -16,7 +16,7 @@
 # `dns <provider>`, `crowdsec` or `rate_limit`. Every provider
 # `hlb_ingress::dns::PROVIDERS` offers is compiled in here, and a test holds the two
 # together — a provider offered and not built would be refused by Caddy at reload.
-FROM caddy:2.11.7-builder-alpine@sha256:ef9b65adf9a224770c6d5f6d1ae1bf99bc3caaa78d8c4bae3ea949ee6984f301 AS caddy-build
+FROM caddy:2.11.7-builder-alpine@sha256:95a5e7e2692b5eb9545aadc5b90a39f6f509bee59c9508a493f83ee902eaef63 AS caddy-build
 RUN xcaddy build v2.11.4 \
     --with github.com/caddy-dns/cloudflare@v0.2.4 \
     --with github.com/caddy-dns/desec@v1.1.0 \
