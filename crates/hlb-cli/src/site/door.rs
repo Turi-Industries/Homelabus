@@ -481,7 +481,7 @@ mod tests {
             assert!(create.contains(want), "{want} missing: {create}");
         }
         assert_eq!(
-            vps.files.lock().expect("lock").get(&at(LIVE)),
+            vps.files.lock().expect("lock").get(&super::at(LIVE)),
             Some(&config(&s))
         );
     }
@@ -502,7 +502,10 @@ mod tests {
         assert!(r.is_err(), "{r:?}");
         assert!(!vps.ran_any(&put_in_place()), "{:#?}", vps.ran());
         assert!(!vps.ran_any("docker kill"), "{:#?}", vps.ran());
-        assert_eq!(vps.files.lock().expect("lock").get(&at(LIVE)), Some(&old));
+        assert_eq!(
+            vps.files.lock().expect("lock").get(&super::at(LIVE)),
+            Some(&old)
+        );
     }
 
     #[tokio::test]
@@ -601,13 +604,13 @@ mod tests {
         let more = site(&[("deb1", 2), ("deb2", 3)]);
         assert_eq!(deploy(&vps, &more, &names()).await, Ok(Outcome::Reloaded));
         assert_eq!(
-            vps.files.lock().expect("lock").get(&at(LIVE)),
+            vps.files.lock().expect("lock").get(&super::at(LIVE)),
             Some(&promoted(&more, &names()))
         );
         // Promoted with nothing to serve: left alone, said.
         assert!(deploy(&vps, &more, &[]).await.is_err());
         assert_eq!(
-            vps.files.lock().expect("lock").get(&at(LIVE)),
+            vps.files.lock().expect("lock").get(&super::at(LIVE)),
             Some(&promoted(&more, &names()))
         );
     }

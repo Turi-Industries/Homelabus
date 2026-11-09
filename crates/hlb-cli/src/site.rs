@@ -27,6 +27,7 @@ use crate::{
 
 mod door;
 pub mod lifeboat;
+pub mod promote;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -625,6 +626,10 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
     );
 
     let (_key_dir, hub) = reach(&state, &vault, &s).await?;
+    // Said first: while promoted, the site serves, and the link only carries the rest.
+    if let Ok(Some(since)) = promote::since(hub.as_ref()).await {
+        println!("  ⚠️  promoted since {since}: the site serves the vital apps");
+    }
     let out = hub
         .run(&[
             "wg".into(),

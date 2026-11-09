@@ -2187,6 +2187,15 @@ enum SiteCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Serve the vital apps from the site while the house is down: start its lifeboat
+    /// and its own Caddy, and send their names there from the front door. The private
+    /// apps among them are open to the internet until the return. Runs the script the
+    /// lifeboat leaves on the VPS, which SSH alone can run the night there is no house.
+    /// Preview by default.
+    Promote {
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -9850,6 +9859,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     SiteCmd::Status => site::status(&cli).await,
                     SiteCmd::Sync { apply } => site::sync(&cli, *apply).await,
                     SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
+                    SiteCmd::Promote { apply } => site::promote::run(&cli, *apply).await,
                 }
             })
         }

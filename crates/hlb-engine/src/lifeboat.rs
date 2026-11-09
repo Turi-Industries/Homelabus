@@ -394,7 +394,7 @@ pub fn promote_script(services: &[String], names: &[String]) -> String {
 # The site serves the house's vital apps while the house is down.
 #   {PROMOTE_SCRIPT}           says what it would do
 #   {PROMOTE_SCRIPT} --apply   does it
-# Undone from the house, once it is back: hlb site return --apply
+# Undone from the house, once it is back.
 set -eu
 SERVICES="{svc}"
 NAMES="{listed}"

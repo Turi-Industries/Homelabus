@@ -314,7 +314,10 @@ port 10443 only. Its front door, HAProxy, relays 80 and 443 home without decrypt
 them — the certificates stay at home — once the house's names point at the VPS. Its
 lifeboat is the vital apps rebuilt there from their latest backups, PocketID with them,
 started once until healthy and stopped: the house reads the backups and pushes, so the
-VPS never holds the restic password.
+VPS never holds the restic password. Promoted, the site starts them with a Caddy of its
+own, which asks for their certificates over HTTP, and the door sends their names there;
+the night no `hlb` can run, `/usr/local/sbin/hlb-site-promote --apply` over SSH is the
+same promotion.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
@@ -322,6 +325,8 @@ VPS never holds the restic password.
 ./target/debug/hlb site sync --apply         # a node joined or left: the link and the door
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
+./target/debug/hlb site promote              # what the site would start and serve
+./target/debug/hlb site promote --apply      # the site serves them; private ones open to the internet
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the

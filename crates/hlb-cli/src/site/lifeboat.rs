@@ -296,7 +296,7 @@ async fn rebuild(
     if let Some(since) = ssh.read_file(lifeboat::PROMOTED_MARK).await? {
         return Err(format!(
             "{} is promoted since {}: its lifeboat is serving, and is left as it is \
-             until `hlb site return`",
+             until it is brought home",
             s.name,
             since.trim()
         )
