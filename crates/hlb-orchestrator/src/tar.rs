@@ -27,15 +27,21 @@ fn octal(field: &mut [u8], value: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// An entry's owner, permissions and modification time — what `restic ls` reports of a
+/// node, and what an unpacked file keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Attrs {
+    pub uid: u32,
+    pub gid: u32,
+    /// The permission bits; anything above `0o7777` is left out.
+    pub mode: u32,
+    /// Seconds since the epoch.
+    pub mtime: u64,
+}
+
 /// A ustar header. `path` is relative, at most 100 bytes; a directory's ends without
 /// its slash, as GNU tar reads either.
-pub fn header(
-    path: &str,
-    kind: Kind,
-    uid: u32,
-    gid: u32,
-    mode: u32,
-) -> Result<[u8; BLOCK], String> {
+pub fn header(path: &str, kind: Kind, a: &Attrs) -> Result<[u8; BLOCK], String> {
     let name = match kind {
         Kind::Dir => format!("{}/", path.trim_end_matches('/')),
         Kind::File(_) => path.to_string(),
@@ -45,15 +51,15 @@ pub fn header(
     }
     let mut h = [0u8; BLOCK];
     h[..name.len()].copy_from_slice(name.as_bytes());
-    octal(&mut h[100..108], u64::from(mode & 0o7777))?;
-    octal(&mut h[108..116], u64::from(uid))?;
-    octal(&mut h[116..124], u64::from(gid))?;
+    octal(&mut h[100..108], u64::from(a.mode & 0o7777))?;
+    octal(&mut h[108..116], u64::from(a.uid))?;
+    octal(&mut h[116..124], u64::from(a.gid))?;
     let (size, flag) = match kind {
         Kind::Dir => (0, b'5'),
         Kind::File(n) => (n, b'0'),
     };
     octal(&mut h[124..136], size)?;
-    octal(&mut h[136..148], 0)?;
+    octal(&mut h[136..148], a.mtime)?;
     h[156] = flag;
     h[257..263].copy_from_slice(b"ustar\0");
     h[263..265].copy_from_slice(b"00");
@@ -83,13 +89,21 @@ pub fn end() -> [u8; 2 * BLOCK] {
 mod tests {
     use super::*;
 
+    const APP: Attrs = Attrs {
+        uid: 1000,
+        gid: 1001,
+        mode: 0o700,
+        mtime: 1_762_000_000,
+    };
+
     #[test]
     fn a_header_checks_out_as_tar_reads_it() {
-        let h = header("donnees/vol", Kind::Dir, 1000, 1001, 0o700).expect("header");
+        let h = header("donnees/vol", Kind::Dir, &APP).expect("header");
         assert_eq!(&h[..12], b"donnees/vol/");
         assert_eq!(&h[100..108], b"0000700\0");
         assert_eq!(&h[108..116], b"0001750\0");
         assert_eq!(h[156], b'5');
+        assert_eq!(&h[136..148], format!("{:011o}\0", APP.mtime).as_bytes());
         // Recomputed the way a reader does: the field as spaces.
         let mut copy = h;
         copy[148..156].copy_from_slice(b"        ");
@@ -100,8 +114,8 @@ mod tests {
 
     #[test]
     fn a_path_tar_cannot_hold_is_refused() {
-        assert!(header(&"x".repeat(101), Kind::File(0), 0, 0, 0o644).is_err());
-        assert!(header("/etc/passwd", Kind::File(0), 0, 0, 0o644).is_err());
+        assert!(header(&"x".repeat(101), Kind::File(0), &APP).is_err());
+        assert!(header("/etc/passwd", Kind::File(0), &APP).is_err());
     }
 
     #[test]

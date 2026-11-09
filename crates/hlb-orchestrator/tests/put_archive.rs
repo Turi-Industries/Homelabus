@@ -3,7 +3,9 @@
 //! Needs a Docker daemon (no Swarm): `#[ignore]`d, run with
 //! `cargo test -p hlb-orchestrator --test put_archive -- --ignored`.
 
-use hlb_orchestrator::tar::{self, Kind};
+#![allow(clippy::expect_used)]
+
+use hlb_orchestrator::tar::{self, Attrs, Kind};
 use hlb_orchestrator::{Orchestrator as _, SwarmOrchestrator, VolumeSpec};
 
 /// An image with `sh`, pinned; any would do, since the container never starts.
@@ -12,16 +14,20 @@ const IMAGE: &str =
 
 fn archive() -> Vec<u8> {
     let mut out = Vec::new();
+    let attrs = |mode| Attrs {
+        uid: 1000,
+        gid: 1001,
+        mode,
+        mtime: 1_762_000_000,
+    };
     // The root first, as `restic dump` never writes it.
-    out.extend(tar::header("donnees/vol", Kind::Dir, 1000, 1001, 0o700).expect("root"));
+    out.extend(tar::header("donnees/vol", Kind::Dir, &attrs(0o700)).expect("root"));
     let content = b"hello\n";
     out.extend(
         tar::header(
             "donnees/vol/a.txt",
             Kind::File(content.len() as u64),
-            1000,
-            1001,
-            0o640,
+            &attrs(0o640),
         )
         .expect("file"),
     );
@@ -52,10 +58,13 @@ async fn an_archive_lands_in_the_volume_with_its_owners_and_modes() {
         .args(["run", "--rm", "--entrypoint", "sh", "-v"])
         .arg(format!("{volume}:/v"))
         .arg(IMAGE)
-        .args(["-c", "stat -c '%u:%g %a' /v /v/a.txt && cat /v/a.txt"])
+        .args(["-c", "stat -c '%u:%g %a %Y' /v /v/a.txt && cat /v/a.txt"])
         .output()
         .expect("docker run");
     let _ = o.remove_volume(&volume).await;
     let out = String::from_utf8_lossy(&read.stdout);
-    assert_eq!(out, "1000:1001 700\n1000:1001 640\nhello\n", "{read:?}");
+    assert_eq!(
+        out, "1000:1001 700 1762000000\n1000:1001 640 1762000000\nhello\n",
+        "{read:?}"
+    );
 }
