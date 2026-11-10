@@ -2194,8 +2194,9 @@ enum SiteCmd {
     },
     /// Each house node's tunnel to the site, read off the VPS.
     Status,
-    /// Push the link again: a node joined or left the house, or one was unreachable.
-    /// Preview by default.
+    /// Push the link again: a node joined or left the house, or one was unreachable —
+    /// and the vital apps' own PostgreSQL, installed and their databases moved into it
+    /// when the site predates it. Preview by default.
     Sync {
         #[arg(long)]
         apply: bool,

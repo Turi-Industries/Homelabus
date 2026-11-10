@@ -340,13 +340,14 @@ A site also gives the vital apps a PostgreSQL of their own at home, `postgres-vi
 nothing else of the shared server. `site add` installs it and moves each vital app's
 database into it — the app stopped meanwhile, the database copied to its backups as it
 is, restored on the new server, the app redeployed onto it, and the old one dropped
-only once the app answers. A vital app installed afterwards is placed there directly.
+only once the app answers; `site sync` does the same for a site added before. A vital
+app installed afterwards is placed there directly.
 No plan ever moves a database: one planned elsewhere than it lives is refused.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake; each vital name's public records
-./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch
+./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server
 ./target/debug/hlb secret-get site-ntfy-reader-password   # the phone's, for the site's alerts
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
