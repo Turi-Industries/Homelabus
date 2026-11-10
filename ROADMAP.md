@@ -1582,6 +1582,24 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      read in `live_announce.rs`.
   6. **Downtime**: stop-first with Caddy's maintenance page, two replicas of stateless
      services, the disruption budget, the migration undone in one command.
+     Measured first (2026-11-10): stop-first was there already, from where the data is;
+     two apps of thirteen keep nothing on a node (LibreSpeed, and Immich, whose start
+     migrates its database); one app is `vital` (Vaultwarden), its data on its node; the
+     copy before an update was taken, and undoing one meant an image and each volume and
+     database by hand. The owner's choices: the page for every 502/503/504, not only
+     during an update; two replicas for oauth2-proxy alone — every private app's door —;
+     the node holding a vital app never rebooted with nobody there, whatever downtime
+     the house accepts; and `hlb update undo <app>` keeping what it replaces aside, the
+     last update only.
+     6a built 2026-11-10: every site block answers Caddy's own failure to reach an app
+     — none running during a stop-first update, a node gone, the portal down — with a
+     page saying it is back in a moment (503, `Retry-After: 30`, `no-store`, reloading
+     itself). An app's own 5xx passes as it is. The page names no host, service or
+     cause: Caddy's error message holds the overlay's names and its resolver. Measured
+     on the real image (`hlb-ingress/tests/maintenance.rs`): an error starts a NEW answer,
+     the route's security headers gone and `Server` back — said again inside. Left: the
+     gap in front of a Swarm VIP with no task is Caddy's dial timeout, to be read on the
+     lab.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 

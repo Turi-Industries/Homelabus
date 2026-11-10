@@ -567,6 +567,7 @@ fn render_blocks(
         }
         let _ = writeln!(out, "\t}}");
         render_log(out, cfg, "\t");
+        render_maintenance(out, "\t");
         for r in covered {
             let m = sanitize(&r.host);
             let _ = writeln!(out, "\n\t@{m} host {}", r.host);
@@ -588,9 +589,85 @@ fn render_blocks(
             on_listener(std::slice::from_ref(&r.host), relayed)
         );
         render_log(out, cfg, "\t");
+        render_maintenance(out, "\t");
         render_route(out, r, cfg, "\t", relayed);
         let _ = writeln!(out, "}}\n");
     }
+}
+
+/// The headers every answer carries, the app's and the maintenance page's.
+fn render_security_headers(out: &mut String, indent: &str) {
+    let _ = writeln!(out, "{indent}header {{");
+    let _ = writeln!(
+        out,
+        "{indent}\tStrict-Transport-Security \"max-age=31536000; includeSubDomains\""
+    );
+    let _ = writeln!(out, "{indent}\tX-Content-Type-Options nosniff");
+    let _ = writeln!(
+        out,
+        "{indent}\tReferrer-Policy strict-origin-when-cross-origin"
+    );
+    let _ = writeln!(out, "{indent}\t-Server");
+    let _ = writeln!(out, "{indent}}}");
+}
+
+/// How long a visitor is told to wait, and the page waits before it asks again: about a
+/// stop-first update's gap — Swarm's 30 s watch of the new task, plus its start.
+pub const MAINTENANCE_RETRY_SECS: u32 = 30;
+
+/// What a visitor reads while an app is not there to answer. No host, no service, no
+/// cause: `{http.error.message}` holds the overlay's names and resolver
+/// (`dial tcp: lookup gitea on 127.0.0.11:53`).
+pub const MAINTENANCE_PAGE: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="RETRY">
+<title>Back in a moment</title>
+<style>
+:root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1b; --muted: #5d5b55; }
+@media (prefers-color-scheme: dark) { :root { --bg: #1b1b1a; --fg: #ecebe7; --muted: #a9a69e; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font: 1.05rem/1.5 system-ui, sans-serif; }
+main { max-width: 32rem; padding: 2rem 1rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
+p { margin: 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1>Back in a moment</h1>
+<p>This service is restarting, usually for an update. This page tries again by itself every RETRY seconds.</p>
+</main>
+</body>
+</html>"#;
+
+/// Caddy's own failures to reach an app — none running during a stop-first update, a
+/// node gone, the portal down — answered with [`MAINTENANCE_PAGE`] rather than a blank
+/// 502. 503 and `Retry-After` keep a client reading the status (a Bitwarden app, the
+/// status page's probe) telling it is down. An app's OWN 5xx is passed through as it
+/// is: `handle_errors` sees Caddy's errors, never an answer (`tests/maintenance.rs`).
+/// A site-level directive: it cannot sit in the `handle` of a host under a wildcard.
+fn render_maintenance(out: &mut String, indent: &str) {
+    let _ = writeln!(out, "\n{indent}handle_errors 502 503 504 {{");
+    // 🔴 An error starts a new answer: the route's headers are gone from it, the
+    // `Server` header back (measured, `tests/maintenance.rs`).
+    render_security_headers(out, &format!("{indent}\t"));
+    let _ = writeln!(out, "{indent}\theader Retry-After {MAINTENANCE_RETRY_SECS}");
+    let _ = writeln!(out, "{indent}\theader Cache-Control no-store");
+    let _ = writeln!(
+        out,
+        "{indent}\theader Content-Type \"text/html; charset=utf-8\""
+    );
+    // A heredoc: the page's quotes and CSS braces need no escaping (Caddy leaves a
+    // brace naming no placeholder as it is), its lines indented as its closing marker.
+    let _ = writeln!(out, "{indent}\trespond <<HTML");
+    let page = MAINTENANCE_PAGE.replace("RETRY", &MAINTENANCE_RETRY_SECS.to_string());
+    for line in page.lines() {
+        let _ = writeln!(out, "{indent}\t\t{line}");
+    }
+    let _ = writeln!(out, "{indent}\t\tHTML 503");
+    let _ = writeln!(out, "{indent}}}");
 }
 
 /// Where CrowdSec reads what happened: Caddy's `logs` volume, mounted by CrowdSec too.
@@ -658,18 +735,7 @@ fn render_route(out: &mut String, r: &Route, cfg: &Config, indent: &str, relayed
     }
 
     // Security headers, set once, at the entry point.
-    let _ = writeln!(out, "{indent}header {{");
-    let _ = writeln!(
-        out,
-        "{indent}\tStrict-Transport-Security \"max-age=31536000; includeSubDomains\""
-    );
-    let _ = writeln!(out, "{indent}\tX-Content-Type-Options nosniff");
-    let _ = writeln!(
-        out,
-        "{indent}\tReferrer-Policy strict-origin-when-cross-origin"
-    );
-    let _ = writeln!(out, "{indent}\t-Server");
-    let _ = writeln!(out, "{indent}}}");
+    render_security_headers(out, indent);
 
     render_auth_routes(out, r, &m, indent);
 
@@ -988,6 +1054,51 @@ mod tests {
         let a = render(&[vikunja(), gitea()], &cfg);
         let b = render(&[gitea(), vikunja()], &cfg);
         assert_eq!(a, b, "input order must not change the output");
+    }
+
+    #[test]
+    fn every_site_block_answers_an_absent_app_with_the_maintenance_page() {
+        let wildcard = Config {
+            tls: Tls::Acme {
+                email: "admin@example.fr".into(),
+                staging: false,
+                ca: None,
+                ca_root: false,
+                wildcard: Some(Wildcard {
+                    base_domain: "example.fr".into(),
+                    provider: crate::dns::provider("cloudflare").expect("known"),
+                    credentials: vec!["token".into()],
+                }),
+            },
+            ..Config::default()
+        };
+        let mut outside = gitea();
+        outside.host = "git.other.org".into();
+        for cfg in [Config::default(), wildcard] {
+            let out = render(&[gitea(), vikunja(), outside.clone()], &cfg);
+            // Walks the blocks Caddy reads, not the routes: a block rendered by a path
+            // added tomorrow is counted too. The global options and the plain-HTTP
+            // redirect proxy nothing.
+            let sites: Vec<&str> = out
+                .split("\n}")
+                .filter_map(|b| b.trim_start().lines().next())
+                .filter(|l| l.ends_with(" {") && !l.starts_with('#') && !l.starts_with("http://"))
+                .collect();
+            assert!(sites.len() >= 2, "{out}");
+            for site in &sites {
+                let body = out
+                    .split(&format!("{site}\n"))
+                    .nth(1)
+                    .and_then(|s| s.split("\n}").next())
+                    .expect("the block");
+                assert!(
+                    body.contains("handle_errors 502 503 504 {"),
+                    "{site} has no maintenance page:\n{body}"
+                );
+            }
+            assert!(!out.contains("{http.error"), "the cause stays out: {out}");
+            assert!(!out.contains("RETRY"), "the delay is written: {out}");
+        }
     }
 
     #[test]
