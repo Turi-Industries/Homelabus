@@ -132,6 +132,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   drained node stops its data and the ingress; an undrained one everything on it. On a
   one-node house that is every unattended reboot. Tasks that cannot be listed are not
   "none": no reboot starts.
+- **🔴 Swarm schedules nothing on a drained node — a job neither.** The reboot was sent
+  as a job AFTER the drain: it waited 300 s on "no suitable node" and was given up, on
+  the lab's first unattended reboot (2026-11-10); the unit tests' orchestrator ran it.
+  It is armed BEFORE the drain (`reboot::armed_reboot_job`): `docker run -d` leaves a
+  plain container the drain does not stop, which reboots once no task container RUNS
+  there, or gives up at a deadline two minutes under the daemon's. The node is put
+  back before it is asked (the probe is a job too), and only past that deadline
+  (`armed_until`); it proves the reboot by an uptime shorter than the time since the
+  reboot BEGAN — it often reboots before the next pass sees it empty.
 - **A reboot given up blocks every other**, until `hlb node upgrade` succeeds on that
   node: whatever stopped it — a service that would not move, a node that did not come
   back — may stop the next the same way. A node not `active` is never picked: a person

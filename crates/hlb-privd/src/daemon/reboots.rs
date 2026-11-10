@@ -74,49 +74,46 @@ async fn under_way(
         Advance::GiveUp { why, undrain } => {
             give_up(state, orchestrator, r, &why, undrain, now).await
         }
+        // Its command was armed before the drain, and fires as its last task stops: a job
+        // sent now would wait on a node Swarm schedules nothing on.
         Advance::Reboot => {
-            let Some(node) = node else {
-                return Ok(Vec::new());
-            };
-            match send(orchestrator, node).await {
-                Ok(()) => {
-                    state
-                        .set_node_reboot_phase(&r.node_id, RebootPhase::Rebooting, now, None)
-                        .await?;
-                    tracing::info!(node = r.hostname, "reboot: drained, command sent");
-                    Ok(Vec::new())
-                }
-                Err(why) => give_up(state, orchestrator, r, &why, true, now).await,
-            }
+            state
+                .set_node_reboot_phase(&r.node_id, RebootPhase::Rebooting, now, None)
+                .await?;
+            tracing::info!(node = r.hostname, "reboot: drained, it reboots itself");
+            Ok(Vec::new())
         }
         Advance::Check => {
             let Some(node) = node else {
                 return Ok(Vec::new());
             };
+            // 🔴 Asked drained, the probe never runs: put back first. Its armed command is
+            // past its deadline by now (`reboot::armed_until`), so none can follow.
+            if r.drained {
+                if let Err(e) = orchestrator
+                    .set_node_availability(&r.node_id, "active")
+                    .await
+                {
+                    let why = format!("{} could not be put back: {e}", r.hostname);
+                    return give_up(state, orchestrator, r, &why, false, now).await;
+                }
+            }
             let probe = match ask(orchestrator, node).await {
                 Ok(p) if p.uptime_s.is_some() => p,
                 Ok(_) | Err(_) if now - r.phase_at < reboot::BACK_WITHIN_S => {
                     // Back, but its Docker may still be starting: the next pass.
                     return Ok(Vec::new());
                 }
+                // Put back already, to be asked: said so, never "it stays drained".
                 Ok(_) => {
                     let why = format!("{} does not say how long it has been up", r.hostname);
-                    return give_up(state, orchestrator, r, &why, false, now).await;
+                    return give_up(state, orchestrator, r, &why, true, now).await;
                 }
-                Err(why) => return give_up(state, orchestrator, r, &why, false, now).await,
+                Err(why) => return give_up(state, orchestrator, r, &why, true, now).await,
             };
             if let Err(why) = reboot::came_back(r, &probe, now) {
                 // It never went down: its services may come back.
                 return give_up(state, orchestrator, r, &why, true, now).await;
-            }
-            if r.drained {
-                if let Err(e) = orchestrator
-                    .set_node_availability(&r.node_id, "active")
-                    .await
-                {
-                    let why = format!("{} rebooted, and could not be put back: {e}", r.hostname);
-                    return give_up(state, orchestrator, r, &why, false, now).await;
-                }
             }
             state.clear_node_reboot(&r.node_id).await?;
             let still = probe.required == Some(true);
@@ -270,6 +267,10 @@ async fn start(
         )
         .await?;
     if drain {
+        // 🔴 Armed while the node still takes a job: drained, it takes none.
+        if let Err(why) = arm(orchestrator, &node, reboot::armed_deadline(&begun)).await {
+            return give_up(state, orchestrator, &begun, &why, true, now).await;
+        }
         if let Err(e) = orchestrator.set_node_availability(&node.id, "drain").await {
             let why = format!("{} could not be drained: {e}", node.hostname);
             return give_up(state, orchestrator, &begun, &why, true, now).await;
@@ -340,6 +341,21 @@ async fn ask(orchestrator: &dyn Orchestrator, node: &NodeInfo) -> Result<reboot:
         .await
         .map_err(|e| e.to_string())?;
     reboot::read_probe(&out)
+}
+
+async fn arm(
+    orchestrator: &dyn Orchestrator,
+    node: &NodeInfo,
+    deadline: i64,
+) -> Result<(), String> {
+    let out = orchestrator
+        .run_job(
+            &reboot::armed_reboot_job(node, deadline),
+            reboot::JOB_TIMEOUT_S,
+        )
+        .await
+        .map_err(|e| format!("the reboot could not be armed: {e}"))?;
+    reboot::read_reboot(&out).map_err(|e| format!("the reboot could not be armed: {e}"))
 }
 
 async fn send(orchestrator: &dyn Orchestrator, node: &NodeInfo) -> Result<(), String> {

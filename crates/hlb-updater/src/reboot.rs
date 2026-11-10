@@ -26,6 +26,12 @@ use crate::window::{MaintenanceWindow, ParseError};
 
 /// How long a drained node's services have to leave it.
 pub const DRAIN_WAIT_S: i64 = 600;
+/// How long a node's armed reboot waits for its tasks to stop before giving up by
+/// itself: two minutes under [`DRAIN_WAIT_S`], so a drain the daemon gives up on and
+/// puts back can never reboot after — a node's clock a minute off included.
+pub const ARMED_WAIT_S: i64 = DRAIN_WAIT_S - 120;
+/// What a node's clock may be off from the daemon's.
+const CLOCK_SLACK_S: i64 = 60;
 /// Swarm sees a node ready for a few seconds after the command, before it goes down.
 pub const SETTLE_S: i64 = 120;
 /// How long a node has to come back before a person is told.
@@ -105,6 +111,33 @@ pub fn probe_job(node: &NodeInfo) -> ServiceSpec {
 /// The job rebooting `node`. Detached: the job ends before the node does.
 pub fn reboot_job(node: &NodeInfo) -> ServiceSpec {
     host_job(node, "reboot", true, REBOOT_SCRIPT)
+}
+
+/// The job arming `node`'s reboot BEFORE it is drained: a detached container waits until
+/// no Swarm task runs there, then reboots it — or, at `deadline` (epoch seconds), gives up.
+///
+/// 🔴 Swarm schedules nothing on a drained node, a job neither: sent after the drain, the
+/// reboot waited 300 s on "no suitable node" and was given up (lab, 2026-11-10). The
+/// container `docker run -d` starts is no task, so the drain leaves it; it counts the
+/// task containers still RUNNING, which waits for a stopping database where the tasks'
+/// desired state would not.
+pub fn armed_reboot_job(node: &NodeInfo, deadline: i64) -> ServiceSpec {
+    let script = format!(
+        "while [ -n \"$(docker ps -q --filter label=com.docker.swarm.task.id)\" ]; do \
+         [ \"$(date +%s)\" -ge {deadline} ] && exit 0; sleep 5; done; {REBOOT_SCRIPT}"
+    );
+    host_job(node, "reboot", true, &script)
+}
+
+/// When a drained node's armed reboot has certainly either happened or given up: from
+/// then on, putting the node back cannot be followed by a late reboot.
+pub fn armed_until(r: &NodeReboot) -> i64 {
+    armed_deadline(r) + CLOCK_SLACK_S
+}
+
+/// The deadline [`armed_reboot_job`] is given, from the reboot's own row.
+pub fn armed_deadline(r: &NodeReboot) -> i64 {
+    r.started_at + ARMED_WAIT_S
 }
 
 /// What a node said.
@@ -361,7 +394,13 @@ pub fn advance(r: &NodeReboot, nodes: &[NodeInfo], left: usize, now: i64) -> Adv
             undrain: true,
         },
         RebootPhase::Draining => Advance::Wait,
-        RebootPhase::Rebooting if node.is_some_and(|n| n.is_ready()) && waited >= SETTLE_S => {
+        // A drained node is put back to be asked (a job runs nowhere else): not while
+        // its armed command may still fire.
+        RebootPhase::Rebooting
+            if node.is_some_and(|n| n.is_ready())
+                && waited >= SETTLE_S
+                && (!r.drained || now >= armed_until(r)) =>
+        {
             Advance::Check
         }
         RebootPhase::Rebooting if waited >= BACK_WITHIN_S => Advance::GiveUp {
@@ -376,13 +415,16 @@ pub fn advance(r: &NodeReboot, nodes: &[NodeInfo], left: usize, now: i64) -> Adv
     }
 }
 
-/// Whether the node booted since the command, by its own uptime.
+/// Whether the node booted since its reboot began, by its own uptime.
+///
+/// Since it BEGAN, not since the phase changed: an armed node reboots as soon as its
+/// tasks are gone, often before the next pass sees it empty.
 pub fn came_back(r: &NodeReboot, probe: &Probe, now: i64) -> Result<(), String> {
-    let since = (now - r.phase_at).max(0) as u64;
+    let since = (now - r.started_at).max(0) as u64;
     match probe.uptime_s {
         Some(up) if up < since => Ok(()),
         Some(up) => Err(format!(
-            "{} did not reboot: up for {} min, the command was sent {} min ago",
+            "{} did not reboot: up for {} min, its reboot began {} min ago",
             r.hostname,
             up / 60,
             since / 60
@@ -628,6 +670,29 @@ spec:
     }
 
     #[test]
+    fn a_drained_node_reboots_by_a_command_armed_before_the_drain() {
+        let n = &cluster()[1];
+        let job = armed_reboot_job(n, 1_480);
+        assert_eq!(job.constraints, vec!["node.id==id-deb2".to_string()]);
+        let c = &job.command;
+        // Detached: the drain stops the job's task, never the container it started.
+        assert!(c.iter().any(|a| a == "-d"), "{c:?}");
+        let script = c.last().expect("a script");
+        // It waits for the task containers still RUNNING, gives up at its deadline, and
+        // only then reboots.
+        let wait = script
+            .find("com.docker.swarm.task.id")
+            .expect("waits for the tasks");
+        let deadline = script.find("-ge 1480 ] && exit 0").expect("gives up");
+        let reboot = script.find("systemctl reboot").expect("reboots");
+        assert!(wait < reboot && deadline < reboot, "{script}");
+
+        // Its deadline falls before the daemon gives the drain up and puts the node back.
+        let r = row(RebootPhase::Draining, 1_000);
+        assert!(armed_deadline(&r) + CLOCK_SLACK_S < r.started_at + DRAIN_WAIT_S);
+    }
+
+    #[test]
     fn a_probe_says_the_kernel_waiting_and_how_long_the_node_has_been_up() {
         let waiting = out(
             true,
@@ -778,6 +843,24 @@ spec:
     }
 
     #[test]
+    fn a_drained_node_is_not_put_back_while_its_armed_reboot_may_fire() {
+        let nodes = cluster();
+        // Begun at 1 000, found empty at 1 300: settled, but its command may still fire.
+        let r = NodeReboot {
+            started_at: 1_000,
+            ..row(RebootPhase::Rebooting, 1_300)
+        };
+        assert_eq!(advance(&r, &nodes, 0, 1_300 + SETTLE_S), Advance::Wait);
+        assert_eq!(advance(&r, &nodes, 0, armed_until(&r)), Advance::Check);
+        // Not drained, nothing was armed: checked once settled.
+        let sent = NodeReboot {
+            drained: false,
+            ..r
+        };
+        assert_eq!(advance(&sent, &nodes, 0, 1_300 + SETTLE_S), Advance::Check);
+    }
+
+    #[test]
     fn a_node_proves_it_rebooted_by_its_own_uptime() {
         let r = row(RebootPhase::Rebooting, 1_000);
         let up = |s| Probe {
@@ -792,5 +875,20 @@ spec:
             required: None,
         };
         assert!(came_back(&r, &unknown, 1_200).is_err());
+    }
+
+    #[test]
+    fn a_node_that_rebooted_before_the_pass_saw_it_empty_came_back() {
+        // Armed at 1 000, rebooted by itself at 1 100, seen empty at 1 300: asked at
+        // 1 600, up 500 s — after the reboot began, before the phase changed.
+        let r = NodeReboot {
+            started_at: 1_000,
+            ..row(RebootPhase::Rebooting, 1_300)
+        };
+        let up = Probe {
+            uptime_s: Some(500),
+            required: Some(false),
+        };
+        assert!(came_back(&r, &up, 1_600).is_ok());
     }
 }
