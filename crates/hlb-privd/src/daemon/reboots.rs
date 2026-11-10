@@ -8,7 +8,7 @@
 use hlb_notify::{Level, Notification};
 use hlb_orchestrator::{NodeInfo, Orchestrator};
 use hlb_state::{NodeReboot, RebootPhase, State};
-use hlb_updater::reboot::{self, Advance, Choice};
+use hlb_updater::reboot::{self, Advance, Choice, Vital};
 
 const ACTOR: &str = "controller";
 const ACTION: &str = "node-reboot";
@@ -200,7 +200,33 @@ async fn start(
             return Ok(Vec::new());
         }
     };
-    let (chosen, left) = reboot::choose(&nodes, &waiting, Some(&local), policy.accept_downtime);
+    // 🔴 The same for what runs where and what is vital: read as nothing, a reboot
+    // would stop Vaultwarden.
+    let tasks = match orchestrator.tasks(None).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("reboot: the tasks could not be listed: {e}: none started");
+            return Ok(Vec::new());
+        }
+    };
+    let mut installed = Vec::new();
+    for (app, _) in state.installed_apps().await? {
+        match state.app_manifest(&app).await {
+            Ok(m) => installed.push((app, m)),
+            Err(e) => {
+                tracing::warn!(app, "reboot: its manifest does not read: {e}: none started");
+                return Ok(Vec::new());
+            }
+        }
+    }
+    let (chosen, left) = reboot::choose(
+        &nodes,
+        &waiting,
+        Some(&local),
+        policy.accept_downtime,
+        &Vital::of(&installed),
+        &tasks,
+    );
     for (host, why) in &left {
         // The agent's reading puts it in the inbox (`node_reboot_pending`): a person's.
         tracing::info!(node = host, "reboot: left to a person: {why}");

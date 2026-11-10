@@ -1608,6 +1608,14 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      failure domains first (a Swarm placement preference on `hlb.failureDomain`);
      replicas on a one-node house are no anti-affinity finding — nowhere else to go.
      An installed house takes it with `hlb upgrade oauth2-proxy`.
+     6c built 2026-11-10: a node whose reboot would stop a vital app is never rebooted
+     with nobody there, whatever downtime the house accepts. What the app needs counts
+     as much as the app (the owner's choice): the dependency graph's closure — its
+     PostgreSQL, PocketID, Stalwart — its companions, and Caddy for an app with a route,
+     the router forwarding to one machine. What a reboot stops: the node's data and the
+     ingress always, and, when it is not drained, every task running there. On a one- or
+     two-node house the main node's reboot stays a person's, said in the inbox like any
+     reboot left. Tasks unknown or a manifest unread starts no reboot.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 

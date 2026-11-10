@@ -2109,6 +2109,7 @@ dependencies = [
  "hlb-notify",
  "hlb-orchestrator",
  "hlb-registry",
+ "hlb-resolver",
  "hlb-state",
  "hlb-types",
  "serde_json",
