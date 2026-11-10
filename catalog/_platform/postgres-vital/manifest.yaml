@@ -32,6 +32,26 @@ spec:
     - tcp_keepalives_count=3
     - -c
     - max_connections=50
+    # Its WAL archived, compressed, into its own volume, a segment switched every 30 s
+    # when anything was written: what the site's standby replays (`hlb_backup::wal_ship`,
+    # which a test holds these four to). Locally, never to the site: an archive failing
+    # keeps every segment in `pg_wal` until the disk is full.
+    - -c
+    - wal_level=replica
+    - -c
+    - archive_mode=on
+    - -c
+    - 'archive_command=d=/var/lib/postgresql/wal; if [ -f $d/%f.zst ]; then zstd -qdc $d/%f.zst | cmp -s - %p; else zstd -qf -o $d/%f.zst.tmp %p && mv $d/%f.zst.tmp $d/%f.zst; fi'
+    - -c
+    - archive_timeout=30
+  # The archive's volume is created root's, and PostgreSQL archives as `postgres`: the
+  # directory is given to it, then the image's own entrypoint runs as it would. ⚠️ Its
+  # path is the pinned image's: `hlb-backup-run/tests/wal_ship.rs` starts the image so.
+  command:
+    - /bin/sh
+    - -c
+    - install -d -o postgres -g postgres -m 700 /var/lib/postgresql/wal && exec /usr/local/bin/immich-docker-entrypoint.sh "$@"
+    - postgres-vital
   requires:
     # Never on NFS: file locking is not reliable there. Copied by `pg_basebackup`,
     # never by restic reading the directory.
@@ -41,6 +61,13 @@ spec:
       tier: local
       backup: true
       copy: pg-basebackup
+    # What waits for the site, emptied by the pusher as the site acknowledges. Not
+    # backed up: the base backup carries what it needs, and this is gone in seconds.
+    - kind: storage
+      name: wal
+      path: /var/lib/postgresql/wal
+      tier: local
+      backup: false
   security:
     readOnlyRootfs: false
     capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
