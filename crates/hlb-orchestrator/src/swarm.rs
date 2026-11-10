@@ -16,7 +16,8 @@ use bollard::models::{
     ServiceSpecModeReplicated, ServiceSpecModeReplicatedJob, ServiceSpecRollbackConfig,
     ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
     ServiceSpecUpdateConfigOrderEnum, SwarmInitRequest, TaskSpec, TaskSpecContainerSpec,
-    TaskSpecContainerSpecPrivileges, TaskSpecPlacement, TaskSpecResources, TaskSpecRestartPolicy,
+    TaskSpecContainerSpecPrivileges, TaskSpecPlacement, TaskSpecPlacementPreferences,
+    TaskSpecPlacementSpread, TaskSpecResources, TaskSpecRestartPolicy,
     TaskSpecRestartPolicyConditionEnum,
 };
 use bollard::query_parameters::{
@@ -795,6 +796,20 @@ impl SwarmOrchestrator {
                 }),
                 placement: Some(TaskSpecPlacement {
                     constraints: Some(spec.constraints.clone()),
+                    // Several replicas go to different HARDWARE first: Swarm spreads by
+                    // node alone, and two VMs of one server are one failure. A node
+                    // without the label is a group of its own.
+                    preferences: (spec.mode == crate::ServiceMode::Replicated && spec.replicas > 1)
+                        .then(|| {
+                            vec![TaskSpecPlacementPreferences {
+                                spread: Some(TaskSpecPlacementSpread {
+                                    spread_descriptor: Some(format!(
+                                        "node.labels.{}",
+                                        cluster::LABEL_FAILURE_DOMAIN
+                                    )),
+                                }),
+                            }]
+                        }),
                     ..Default::default()
                 }),
                 // The reservation is what Swarm places by — a node without that much
@@ -2461,6 +2476,28 @@ mod tests {
         let long = super::job_name(&"x".repeat(80));
         assert!(long.len() <= 63, "{} characters", long.len());
         assert!(super::is_run_of(&long, &"x".repeat(80)));
+    }
+
+    #[test]
+    fn several_replicas_spread_over_failure_domains() {
+        let spread = |spec: &ServiceSpec| {
+            SwarmOrchestrator::to_bollard(spec)
+                .task_template
+                .and_then(|t| t.placement)
+                .and_then(|p| p.preferences)
+                .map(|p| {
+                    p.into_iter()
+                        .filter_map(|p| p.spread.and_then(|s| s.spread_descriptor))
+                        .collect::<Vec<_>>()
+                })
+        };
+        let mut portal = ServiceSpec::new("oauth2-proxy", "quay.io/oauth2-proxy/oauth2-proxy:v7");
+        assert_eq!(spread(&portal), None, "one replica has nothing to spread");
+        portal.replicas = 2;
+        assert_eq!(
+            spread(&portal),
+            Some(vec!["node.labels.hlb.failureDomain".to_string()])
+        );
     }
 
     #[test]

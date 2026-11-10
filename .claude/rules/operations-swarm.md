@@ -31,7 +31,9 @@ Most of these fail behind a healthy task.
 - **Anti-affinity is about HARDWARE, never `node.id`.** Two VMs on one server are two
   Swarm nodes and **one** point of failure: two replicas "across two nodes" protect
   nothing. The domain is declared at `hlb node add` (label `hlb.failureDomain`) —
-  neither Swarm nor the agent can guess it.
+  neither Swarm nor the agent can guess it. Swarm spreads by node alone: several
+  replicas carry a placement preference spreading them over that label first. A
+  one-node house is never flagged — its replicas have nowhere else to go.
 - **An undeclared domain is not an isolated domain.** Assuming isolation is exactly the
   optimistic assumption that creates the illusion. Nodes without a domain form a
   "we do not know" group, displayed as such.

@@ -23,11 +23,12 @@ spec:
     capDrop: [ALL]
   swarm:
     memory: { reserve: 32M, limit: 128M }
-    # 🔴 Several replicas require ALL instances to share the same `--cookie-secret`,
-    # or a user authenticated by one is rejected by the other — one session out of
-    # two, at random. The secret comes from the vault, so it is possible; we stay at
-    # 1 until it is verified for real.
-    replicas: 1
+    # Two: it is every private app's door, and one crashed or on a node going down
+    # shuts them all. 🔴 Swarm's VIP sends a sign-in's start and its callback to
+    # either replica, so ALL must share `cookie-secret` — the vault's, one value — or
+    # one sign-in in two fails. Measured on PocketID 2.19 and this image: begun on
+    # one, finished on the other, kept by both (`hlb-identity/tests/live_portal_replicas.rs`).
+    replicas: 2
     tier: light
     # No probe: the image is distroless — no shell, no wget — and a probe it cannot
     # run never passes, so every install timed out waiting for it. Swarm's own

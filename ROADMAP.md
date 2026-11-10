@@ -1600,6 +1600,14 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the route's security headers gone and `Server` back — said again inside. Left: the
      gap in front of a Swarm VIP with no task is Caddy's dial timeout, to be read on the
      lab.
+     6b built 2026-11-10: oauth2-proxy runs two replicas. Swarm's VIP sends a sign-in's
+     start and its callback to either: measured on PocketID 2.19 and the pinned image,
+     a sign-in begun on one is finished by the other and its session kept by both,
+     while a replica with another `cookie-secret` refuses both cookies
+     (`hlb-identity/tests/live_portal_replicas.rs`). Several replicas are spread over
+     failure domains first (a Swarm placement preference on `hlb.failureDomain`);
+     replicas on a one-node house are no anti-affinity finding — nowhere else to go.
+     An installed house takes it with `hlb upgrade oauth2-proxy`.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
