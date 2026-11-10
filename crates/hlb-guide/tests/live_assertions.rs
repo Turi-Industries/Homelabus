@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 use hlb_api::assertions::Verdict;
 use hlb_guide::assertions::{read_all, Credential, LiveReader, Reader, Refused};
-use hlb_types::DbEngine;
+use hlb_types::DbServer;
 
 struct Container {
     name: String,
@@ -57,7 +57,7 @@ impl Reader for Container {
             serde_json::from_str(&json).map_err(|e| e.to_string())?,
         ))
     }
-    async fn sql(&self, e: DbEngine, db: &str, q: &str) -> Result<Option<String>, String> {
+    async fn sql(&self, e: DbServer, db: &str, q: &str) -> Result<Option<String>, String> {
         self.live.sql(e, db, q).await
     }
 }
@@ -99,6 +99,7 @@ async fn the_catalog_assertions_hold_on_the_real_image() {
     let read = read_all(
         &Container { name, live },
         &m,
+        &hlb_guide::assertions::Placed::new(),
         &credentials,
         Refused::TryAgain,
         0,

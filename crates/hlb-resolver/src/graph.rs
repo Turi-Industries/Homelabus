@@ -34,6 +34,9 @@ impl DependencyGraph {
     /// that depends on a new service updates the graph on its own.
     pub fn from_manifests(manifests: &[Manifest]) -> Self {
         let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let vital_server = manifests
+            .iter()
+            .any(|m| m.metadata.name == hlb_types::VITAL_POSTGRES);
 
         for m in manifests {
             let name = m.metadata.name.clone();
@@ -57,6 +60,14 @@ impl DependencyGraph {
                     if svc != name {
                         entry.insert(svc.to_string());
                     }
+                }
+                // Placed on the vital server once there is one — and kept on the shared
+                // one too: an app installed before stays there until it is moved, and
+                // waiting for both orders it right either way.
+                if let hlb_types::Capability::Database { engine, .. } = cap {
+                    let placed =
+                        hlb_types::DbServer::placed(*engine, m.criticality(), vital_server);
+                    entry.insert(placed.service_name().to_string());
                 }
             }
         }
@@ -228,6 +239,33 @@ mod tests {
         let pos = |n: &str| order.iter().position(|x| x == n).expect("present");
         assert!(pos("postgres") < pos("gitea"));
         assert!(pos("postgres") < pos("vikunja"));
+    }
+
+    #[test]
+    fn a_vital_app_waits_for_the_vital_server_only_once_the_house_runs_one() {
+        let vital = || {
+            m(
+                "vaultwarden, criticality: vital",
+                "  requires:\n    - kind: database\n      engine: postgres\n",
+            )
+        };
+        let g = DependencyGraph::from_manifests(&[vital(), plain("postgres")]);
+        g.check_complete()
+            .expect("no vital server asked for without one");
+        let g = DependencyGraph::from_manifests(&[
+            vital(),
+            with_db("gitea"),
+            plain("postgres"),
+            plain("postgres-vital"),
+        ]);
+        let d = g.dependencies_of("vaultwarden").expect("vaultwarden");
+        // Both: one installed before the site stays on the shared server until moved.
+        assert!(
+            d.contains("postgres") && d.contains("postgres-vital"),
+            "{d:?}"
+        );
+        let gitea = g.dependencies_of("gitea").expect("gitea");
+        assert!(!gitea.contains("postgres-vital"), "{gitea:?}");
     }
 
     #[test]

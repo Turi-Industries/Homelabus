@@ -1,0 +1,68 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: postgres-vital
+  hlb: ">=0.4.9"
+  displayName: PostgreSQL (vital apps)
+  category: platform
+spec:
+  # The vital apps' own server, which exists only once the house has a site: the
+  # lifeboat streams its WAL to the site, so it holds what must survive the house and
+  # nothing else — the shared server's carries Immich's, n8n's credentials and Fluxer's
+  # conversations.
+  #
+  # 🔴 The shared server's image, digest for digest. A database moves between the two
+  # by dump and restore: under another libc its text indexes would be incoherent
+  # (musl and glibc do not sort alike), and PostgreSQL would only warn.
+  image: { repo: ghcr.io/immich-app/postgres, tag: "17-vectorchord0.4.3-pgvector0.8.0", digest: "sha256:51f6abbfc720dde5cad9a39133d1c5247da8f073a449004da781c07b2cd9ee9c" }
+  # The shared server's settings, keepalives included (Swarm's VIP forgets a
+  # connection idle for 900 s); a smaller limit, the catalog summing the vital apps'
+  # `connections` against it.
+  args:
+    - postgres
+    - -c
+    - config_file=/etc/postgresql/postgresql.conf
+    - -c
+    - hba_file=/etc/postgresql/hlb_hba.conf
+    - -c
+    - tcp_keepalives_idle=300
+    - -c
+    - tcp_keepalives_interval=30
+    - -c
+    - tcp_keepalives_count=3
+    - -c
+    - max_connections=50
+  requires:
+    # Never on NFS: file locking is not reliable there. Copied by `pg_basebackup`,
+    # never by restic reading the directory.
+    - kind: storage
+      name: data
+      path: /var/lib/postgresql/data
+      tier: local
+      backup: true
+      copy: pg-basebackup
+  security:
+    readOnlyRootfs: false
+    capAdd: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+  swarm:
+    # A few small databases: Vaultwarden's is 8 MB. What a 4 GB `light` node feels is
+    # the reservation, so it is kept low.
+    memory: { reserve: 64M, limit: 512M }
+    replicas: 1
+    tier: heavy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+  update:
+    channel: minor
+    maturationDays: 14
+  env:
+    POSTGRES_PASSWORD_FILE: /run/secrets/admin-password
+  files:
+    - path: /run/secrets/admin-password
+      content: "{{ secret.admin-password }}"
+    # 🔴 The image allows replication from 127.0.0.1 only: `pg_basebackup` from
+    # another container is refused while `psql` connects fine.
+    - path: /etc/postgresql/hlb_hba.conf
+      content: |
+        include_if_exists /var/lib/postgresql/data/pg_hba.conf
+        host replication postgres all scram-sha-256

@@ -794,12 +794,21 @@ impl RoleSync<'_> {
                 let (engine, db) = database_of(m, database.as_deref())
                     .ok_or_else(|| "the app requires no database".to_string())?;
                 let statement = fill(statement, *unit, "NULL");
+                // The server it lives on: a vital app's may be the vital one.
+                let server = self
+                    .state
+                    .database_server(&m.metadata.name, &db)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_else(|| hlb_types::DbServer::shared(engine));
+                let url = access.database_admin(server).ok_or_else(|| {
+                    format!(
+                        "{}'s administrator is not in the vault",
+                        server.service_name()
+                    )
+                })?;
                 let rows = match engine {
                     DbEngine::Postgres => {
-                        let url = access
-                            .postgres_admin
-                            .as_deref()
-                            .ok_or("PostgreSQL's administrator is not in the vault")?;
                         hlb_platform::PostgresProvisioner::connect(&(self.reach)(url))
                             .await
                             .map_err(|e| e.to_string())?
@@ -807,10 +816,6 @@ impl RoleSync<'_> {
                             .await
                     }
                     DbEngine::Mariadb => {
-                        let url = access
-                            .mariadb_admin
-                            .as_deref()
-                            .ok_or("MariaDB's administrator is not in the vault")?;
                         hlb_platform::MariadbProvisioner::connect(&(self.reach)(url))
                             .await
                             .map_err(|e| e.to_string())?

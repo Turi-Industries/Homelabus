@@ -62,6 +62,11 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POSTGRES_ADMIN")]
     postgres_admin: Option<String>,
 
+    /// The vital apps' own PostgreSQL's admin URL — `postgres-vital`, installed with a
+    /// site. Read from the vault like the others.
+    #[arg(long, global = true, env = "HLB_POSTGRES_VITAL_ADMIN")]
+    postgres_vital_admin: Option<String>,
+
     /// MariaDB admin URL, same principle.
     #[arg(long, global = true, env = "HLB_MARIADB_ADMIN")]
     mariadb_admin: Option<String>,
@@ -2838,6 +2843,7 @@ async fn build_backup_provider(
 ) -> Result<Option<hlb_backup_run::PlacedProvider>, Box<dyn std::error::Error>> {
     let admins = hlb_backup_run::Admins {
         postgres: cli.postgres_admin.as_deref(),
+        postgres_vital: cli.postgres_vital_admin.as_deref(),
         mariadb: cli.mariadb_admin.as_deref(),
     };
     // Garage does not resolve on a host: a relay, opened only for an app keeping a bucket.
@@ -5995,6 +6001,24 @@ async fn execute_plan(
         None => None,
     };
 
+    let pg_vital = match &cli.postgres_vital_admin {
+        Some(url) => match hlb_platform::PostgresProvisioner::connect(&relay::reach(
+            url,
+            &cli.platform_network,
+        ))
+        .await
+        {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  The vital apps' PostgreSQL unreachable ({e}) — provisioning skipped."
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     let mariadb = match &cli.mariadb_admin {
         Some(url) => match hlb_platform::MariadbProvisioner::connect(&relay::reach(
             url,
@@ -6036,6 +6060,9 @@ async fn execute_plan(
         .apply(apply);
     if let Some(p) = &pg {
         exec = exec.with_postgres(p);
+    }
+    if let Some(p) = &pg_vital {
+        exec = exec.with_postgres_vital(p);
     }
     if let Some(m) = &mariadb {
         exec = exec.with_mariadb(m);
@@ -6218,6 +6245,9 @@ fn with_platform_access(mut cli: Cli) -> Cli {
     if let Some(a) = access {
         if cli.postgres_admin.is_none() {
             cli.postgres_admin = a.postgres_admin;
+        }
+        if cli.postgres_vital_admin.is_none() {
+            cli.postgres_vital_admin = a.postgres_vital_admin;
         }
         if cli.mariadb_admin.is_none() {
             cli.mariadb_admin = a.mariadb_admin;
@@ -7180,9 +7210,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             .collect(),
                     };
                     // A person asked: a refused sign-in is tried again, once.
+                    let placed = state.databases_of(&name).await?;
                     let results = hlb_guide::assertions::read_all(
                         &reader,
                         &m,
+                        &placed,
                         &credentials,
                         hlb_guide::assertions::Refused::TryAgain,
                         now,
@@ -12277,6 +12309,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             fallback_repo: cli.backup_repo.as_deref(),
                             network: &cli.platform_network,
                             postgres_admin: cli.postgres_admin.as_deref(),
+                            postgres_vital_admin: cli.postgres_vital_admin.as_deref(),
                             mariadb_admin: cli.mariadb_admin.as_deref(),
                             schedule: sched,
                             force: *force,

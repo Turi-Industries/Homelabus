@@ -15,7 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hlb_api::assertions::{AssertionResult, Verdict};
 use hlb_orchestrator::Orchestrator;
-use hlb_types::{Assertion, Capability, Check, DbEngine, Manifest, RecoveryLogin};
+use hlb_types::{Assertion, Capability, Check, DbEngine, DbServer, Manifest, RecoveryLogin};
 
 /// Where the app's answers come from.
 #[async_trait]
@@ -35,10 +35,11 @@ pub trait Reader: Send + Sync {
     ) -> Result<(u16, String), String>;
     /// The running task's environment, `NAME=value`; `None` when no task runs.
     async fn task_env(&self, service: &str) -> Result<Option<Vec<String>>, String>;
-    /// The first column of the first row, in one of the app's databases.
+    /// The first column of the first row, in one of the app's databases, on the server
+    /// it lives on.
     async fn sql(
         &self,
-        engine: DbEngine,
+        server: DbServer,
         database: &str,
         query: &str,
     ) -> Result<Option<String>, String>;
@@ -122,6 +123,7 @@ pub fn declared(m: &Manifest) -> Vec<Declared> {
 pub async fn read_all(
     reader: &dyn Reader,
     m: &Manifest,
+    placed: &Placed,
     credentials: &[Credential],
     refused: Refused<'_>,
     now: i64,
@@ -139,7 +141,7 @@ pub async fn read_all(
     };
     let mut out = Vec::with_capacity(declared.len());
     for a in &m.spec.assertions {
-        let (verdict, observed) = read(reader, m, a).await;
+        let (verdict, observed) = read(reader, m, placed, a).await;
         out.push(AssertionResult {
             id: a.id.clone(),
             holds: a.holds.clone(),
@@ -329,7 +331,16 @@ pub fn judge_sign_in(code: u16, body: &str, pointer: &str) -> (Verdict, String) 
 }
 
 /// One assertion: its verdict, and what the app said.
-pub async fn read(reader: &dyn Reader, m: &Manifest, a: &Assertion) -> (Verdict, String) {
+/// Where each of the app's databases lives, by name — the state's word
+/// (`hlb_state::State::app_databases`). One absent is on its engine's shared server.
+pub type Placed = std::collections::BTreeMap<String, DbServer>;
+
+pub async fn read(
+    reader: &dyn Reader,
+    m: &Manifest,
+    placed: &Placed,
+    a: &Assertion,
+) -> (Verdict, String) {
     let app = m.metadata.name.as_str();
     match &a.check {
         Check::Http {
@@ -371,7 +382,12 @@ pub async fn read(reader: &dyn Reader, m: &Manifest, a: &Assertion) -> (Verdict,
             let Some((engine, db)) = database_of(m, database.as_deref()) else {
                 return (Verdict::Unknown, "the app requires no such database".into());
             };
-            match reader.sql(engine, &db, query).await {
+            let server = placed
+                .get(&db)
+                .copied()
+                .filter(|s| s.engine() == engine)
+                .unwrap_or_else(|| DbServer::shared(engine));
+            match reader.sql(server, &db, query).await {
                 Ok(value) => judge_sql(value.as_deref(), equals),
                 Err(e) => (Verdict::Unknown, short(&format!("not read: {e}"))),
             }
@@ -487,6 +503,7 @@ pub struct LiveReader {
     http: reqwest::Client,
     orchestrator: Option<Arc<dyn Orchestrator>>,
     postgres_admin: Option<String>,
+    postgres_vital_admin: Option<String>,
     mariadb_admin: Option<String>,
     /// Rewrites an overlay address into one this process reaches: the identity on the
     /// overlay, a relay from a manager's shell.
@@ -507,9 +524,16 @@ impl LiveReader {
                 .unwrap_or_default(),
             orchestrator,
             postgres_admin,
+            postgres_vital_admin: None,
             mariadb_admin,
             reach: Box::new(str::to_string),
         }
+    }
+
+    /// The vital apps' own PostgreSQL, installed with a site.
+    pub fn with_postgres_vital(mut self, admin: Option<String>) -> Self {
+        self.postgres_vital_admin = admin;
+        self
     }
 
     pub fn reaching(mut self, reach: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
@@ -563,19 +587,23 @@ impl Reader for LiveReader {
 
     async fn sql(
         &self,
-        engine: DbEngine,
+        server: DbServer,
         database: &str,
         query: &str,
     ) -> Result<Option<String>, String> {
-        let admin = match engine {
-            DbEngine::Postgres => &self.postgres_admin,
-            DbEngine::Mariadb => &self.mariadb_admin,
+        let admin = match server {
+            DbServer::Postgres => &self.postgres_admin,
+            DbServer::PostgresVital => &self.postgres_vital_admin,
+            DbServer::Mariadb => &self.mariadb_admin,
         };
         let Some(url) = admin else {
-            return Err(format!("no {engine:?} admin connection given"));
+            return Err(format!(
+                "no admin connection to {} given",
+                server.service_name()
+            ));
         };
         let url = (self.reach)(url);
-        match engine {
+        match server.engine() {
             DbEngine::Postgres => hlb_platform::PostgresProvisioner::connect(&url)
                 .await
                 .map_err(|e| e.to_string())?
@@ -706,7 +734,7 @@ mod tests {
         async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
             Err("no Swarm here".into())
         }
-        async fn sql(&self, _: DbEngine, db: &str, _: &str) -> Result<Option<String>, String> {
+        async fn sql(&self, _: DbServer, db: &str, _: &str) -> Result<Option<String>, String> {
             Ok(Some(db.to_string()))
         }
     }
@@ -740,7 +768,7 @@ spec:
 "#,
         )
         .expect("manifest");
-        let read = read_all(&Answers, &m, &[], Refused::TryAgain, 7).await;
+        let read = read_all(&Answers, &m, &Placed::new(), &[], Refused::TryAgain, 7).await;
         assert_eq!(
             read.iter().map(|r| r.verdict).collect::<Vec<_>>(),
             [
@@ -833,7 +861,7 @@ spec:
         async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
             Err("no".into())
         }
-        async fn sql(&self, _: DbEngine, _: &str, _: &str) -> Result<Option<String>, String> {
+        async fn sql(&self, _: DbServer, _: &str, _: &str) -> Result<Option<String>, String> {
             Err("no".into())
         }
     }
@@ -869,6 +897,7 @@ spec:
         let read = read_all(
             &FormOnly,
             &manifest(true),
+            &Placed::new(),
             &credentials,
             Refused::TryAgain,
             1,
@@ -879,6 +908,7 @@ spec:
         let read = read_all(
             &FormOnly,
             &manifest(false),
+            &Placed::new(),
             &credentials,
             Refused::TryAgain,
             1,
@@ -914,7 +944,7 @@ spec:
         async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
             Err("no".into())
         }
-        async fn sql(&self, _: DbEngine, _: &str, _: &str) -> Result<Option<String>, String> {
+        async fn sql(&self, _: DbServer, _: &str, _: &str) -> Result<Option<String>, String> {
             Err("no".into())
         }
     }
@@ -949,7 +979,7 @@ spec:
             sign_in: Ok(("admin".into(), "Trial-pass-1".into())),
         }];
         let app = Refusing::default();
-        let asked = read_all(&app, &m, &credentials, Refused::TryAgain, 1).await;
+        let asked = read_all(&app, &m, &Placed::new(), &credentials, Refused::TryAgain, 1).await;
         assert_eq!(asked.len(), 1);
         assert_eq!(asked[0].id, "recovery:admin-password");
         assert_eq!(asked[0].verdict, Verdict::Broken);
@@ -959,8 +989,24 @@ spec:
             .is_some_and(|f| f.contains("hlb secret-get jellyfin-admin-password")));
         // 🔴 Jellyfin disables an administrator after five refusals: the night keeps
         // the refusal it has, and says so — once.
-        let night = read_all(&app, &m, &credentials, Refused::Keep(&asked), 2).await;
-        let again = read_all(&app, &m, &credentials, Refused::Keep(&night), 3).await;
+        let night = read_all(
+            &app,
+            &m,
+            &Placed::new(),
+            &credentials,
+            Refused::Keep(&asked),
+            2,
+        )
+        .await;
+        let again = read_all(
+            &app,
+            &m,
+            &Placed::new(),
+            &credentials,
+            Refused::Keep(&night),
+            3,
+        )
+        .await;
         assert_eq!(*app.0.lock().expect("lock"), 1, "tried again at night");
         assert_eq!(again[0].verdict, Verdict::Broken);
         assert_eq!(
@@ -978,7 +1024,15 @@ spec:
             verdict: Verdict::Unknown,
             ..asked[0].clone()
         };
-        read_all(&app, &m, &credentials, Refused::Keep(&[unread]), 4).await;
+        read_all(
+            &app,
+            &m,
+            &Placed::new(),
+            &credentials,
+            Refused::Keep(&[unread]),
+            4,
+        )
+        .await;
         assert_eq!(*app.0.lock().expect("lock"), 2);
     }
 
@@ -991,7 +1045,7 @@ spec:
         }];
         let app = Refusing::default();
         for credentials in [&waiting[..], &[]] {
-            let read = read_all(&app, &m, credentials, Refused::TryAgain, 1).await;
+            let read = read_all(&app, &m, &Placed::new(), credentials, Refused::TryAgain, 1).await;
             assert_eq!(read[0].verdict, Verdict::Unknown, "{}", read[0].observed);
             assert_eq!(read[0].fix, None);
         }
@@ -1034,7 +1088,7 @@ spec:
             sign_in: Ok(("admin".into(), "Trial-pass-1".into())),
         }];
         let app = Refusing::default();
-        let read = read_all(&app, &m, &credentials, Refused::TryAgain, 1).await;
+        let read = read_all(&app, &m, &Placed::new(), &credentials, Refused::TryAgain, 1).await;
         assert_eq!(read[0].verdict, Verdict::Unknown);
         assert!(
             read[0].observed.contains("hlb upgrade seafile"),

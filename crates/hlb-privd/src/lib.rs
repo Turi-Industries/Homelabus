@@ -61,6 +61,8 @@ pub struct InstallContext {
     pub vault: hlb_secrets::Vault,
     pub registry: hlb_registry::RegistryClient,
     pub postgres: Option<hlb_platform::PostgresProvisioner>,
+    /// The vital apps' own server, installed with a site.
+    pub postgres_vital: Option<hlb_platform::PostgresProvisioner>,
     pub mariadb: Option<hlb_platform::MariadbProvisioner>,
     /// Where the volumes live. 🔴 An app declaring `tier: nfs` is refused when this
     /// carries no server — see `hlb_engine::StorageConfig`.

@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use hlb_types::{DbEngine, StorageTier};
+use hlb_types::{DbServer, StorageTier};
 
 /// An atomic action. Deliberately descriptive: execution lives elsewhere.
 ///
@@ -21,7 +21,9 @@ use hlb_types::{DbEngine, StorageTier};
 pub enum Action {
     /// One database and one role per app, never a shared superuser.
     ProvisionDatabase {
-        engine: DbEngine,
+        /// Placed by the house, never named by the manifest: a vital app's PostgreSQL
+        /// goes to the vital server once the house has a site.
+        server: DbServer,
         database: String,
         role: String,
         /// The secret carrying the password. It must be generated BEFORE.
@@ -177,7 +179,7 @@ impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProvisionDatabase {
-                engine,
+                server,
                 database,
                 role,
                 password_secret,
@@ -188,7 +190,7 @@ impl fmt::Display for Action {
                     f,
                     "create database {database} on {} with role {role} \
                      (isolated, password {password_secret})",
-                    engine.service_name()
+                    server.service_name()
                 )?;
                 if !extensions.is_empty() {
                     write!(f, " + extensions {}", extensions.join(", "))?;

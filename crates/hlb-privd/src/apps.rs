@@ -272,6 +272,9 @@ fn platform_executor<'a>(
     if let Some(pg) = &ctx.postgres {
         ex = ex.with_postgres(pg);
     }
+    if let Some(pg) = &ctx.postgres_vital {
+        ex = ex.with_postgres_vital(pg);
+    }
     if let Some(my) = &ctx.mariadb {
         ex = ex.with_mariadb(my);
     }

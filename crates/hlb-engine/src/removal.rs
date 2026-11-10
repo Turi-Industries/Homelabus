@@ -84,7 +84,11 @@ pub fn kept_elsewhere(app: &str, manifest: &Manifest) -> Vec<String> {
                 connections: _,
             } => Some(format!(
                 "the {} database \"{}\" is KEPT, and the role \"{app}\" that opens it",
-                engine.service_name(),
+                // The engine, not a server: a vital app's may be on its own.
+                match engine {
+                    hlb_types::DbEngine::Postgres => "PostgreSQL",
+                    hlb_types::DbEngine::Mariadb => "MariaDB",
+                },
                 name.as_deref().unwrap_or(app)
             )),
             Capability::Sso {

@@ -328,6 +328,11 @@ exported — Homelabus never bills.
   it starts them again. The other choice keeps them serving the LAN and has the return
   compare positions and ask which side keeps its writes, the other kept as a named
   snapshot. "Ça serait sympa d'avoir l'option, et par défaut la 2."
+- **The vital apps' own PostgreSQL exists only with a site**: `hlb site add` creates it
+  and moves the vital databases into it, their copy taken first; `hlb site remove` moves
+  them back to the shared server. A house without a VPS pays nothing for it — a second
+  PostgreSQL is ~60–150 MB, felt on a 4 GB `light` node — against two moves to write
+  and prove instead of one.
 
 #### The phases
 

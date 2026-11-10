@@ -248,6 +248,86 @@ impl DbEngine {
     }
 }
 
+/// The server a database lives on. A manifest names an engine, never a server: the
+/// house places it.
+///
+/// The vital apps get a PostgreSQL of their own once the house has a site (the owner's
+/// decision, 2026-11-10), so the lifeboat streams their data and nobody else's: the
+/// shared server's WAL carries Immich's, n8n's credentials and Fluxer's conversations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DbServer {
+    Postgres,
+    PostgresVital,
+    Mariadb,
+}
+
+impl DbServer {
+    /// The server every app of `engine` shares.
+    pub fn shared(engine: DbEngine) -> Self {
+        match engine {
+            DbEngine::Postgres => Self::Postgres,
+            DbEngine::Mariadb => Self::Mariadb,
+        }
+    }
+
+    /// Where a new database goes: a vital app's PostgreSQL on the vital server once the
+    /// house runs one, every other on its engine's shared server.
+    ///
+    /// ⚠️ An installed app's database stays where it was provisioned until it is moved:
+    /// the executor refuses a plan placing it elsewhere, which would provision an empty
+    /// one beside it.
+    pub fn placed(engine: DbEngine, criticality: crate::Criticality, vital_server: bool) -> Self {
+        match (engine, criticality) {
+            (DbEngine::Postgres, crate::Criticality::Vital) if vital_server => Self::PostgresVital,
+            (DbEngine::Postgres | DbEngine::Mariadb, _) => Self::shared(engine),
+        }
+    }
+
+    pub fn engine(&self) -> DbEngine {
+        match self {
+            Self::Postgres | Self::PostgresVital => DbEngine::Postgres,
+            Self::Mariadb => DbEngine::Mariadb,
+        }
+    }
+
+    /// The platform service, which is also its host on the overlay. ⚠️ A stored value
+    /// (`database_servers.server`).
+    pub fn service_name(&self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres",
+            Self::PostgresVital => VITAL_POSTGRES,
+            Self::Mariadb => "mariadb",
+        }
+    }
+
+    /// Every server. A list: `every_server_is_in_all` breaks on a variant added.
+    pub const ALL: [Self; 3] = [Self::Postgres, Self::PostgresVital, Self::Mariadb];
+
+    pub fn from_service_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.service_name() == name)
+    }
+
+    /// The name its manifest generates its administrator's password under.
+    pub fn admin_password_name(&self) -> &'static str {
+        match self.engine() {
+            DbEngine::Postgres => "admin-password",
+            DbEngine::Mariadb => "root-password",
+        }
+    }
+
+    /// Its administrator's URL, from that password.
+    pub fn admin_url(&self, password: &str) -> String {
+        let host = self.service_name();
+        match self.engine() {
+            DbEngine::Postgres => format!("postgres://postgres:{password}@{host}:5432/postgres"),
+            DbEngine::Mariadb => format!("mysql://root:{password}@{host}:3306"),
+        }
+    }
+}
+
+/// The vital apps' own PostgreSQL, which exists only once the house has a site.
+pub const VITAL_POSTGRES: &str = "postgres-vital";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheEngine {
@@ -354,6 +434,51 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Criticality;
+
+    #[test]
+    fn only_a_vital_apps_postgres_goes_to_the_vital_server_and_only_once_it_runs() {
+        use DbEngine::{Mariadb, Postgres};
+        let vital = Criticality::Vital;
+        assert_eq!(
+            DbServer::placed(Postgres, vital, true),
+            DbServer::PostgresVital
+        );
+        assert_eq!(DbServer::placed(Postgres, vital, false), DbServer::Postgres);
+        assert_eq!(
+            DbServer::placed(Postgres, Criticality::Important, true),
+            DbServer::Postgres
+        );
+        // No vital MariaDB exists: the catalog refuses a vital app asking for one.
+        assert_eq!(DbServer::placed(Mariadb, vital, true), DbServer::Mariadb);
+    }
+
+    /// `ALL` is a list: a variant added to the enum breaks this match, so whoever adds
+    /// one is brought here to add its arm, and its assertion.
+    #[test]
+    fn every_server_is_in_all() {
+        fn listed(s: DbServer) -> bool {
+            match s {
+                DbServer::Postgres => DbServer::ALL.contains(&DbServer::Postgres),
+                DbServer::PostgresVital => DbServer::ALL.contains(&DbServer::PostgresVital),
+                DbServer::Mariadb => DbServer::ALL.contains(&DbServer::Mariadb),
+            }
+        }
+        assert!(listed(DbServer::Postgres) && listed(DbServer::PostgresVital));
+        assert!(listed(DbServer::Mariadb));
+    }
+
+    #[test]
+    fn a_server_is_found_again_by_its_stored_name() {
+        for s in DbServer::ALL {
+            assert_eq!(DbServer::from_service_name(s.service_name()), Some(s));
+        }
+        assert_eq!(DbServer::from_service_name("valkey"), None);
+        assert_eq!(
+            DbServer::PostgresVital.admin_url("pw"),
+            "postgres://postgres:pw@postgres-vital:5432/postgres"
+        );
+    }
 
     #[test]
     fn database_yaml_roundtrip() {

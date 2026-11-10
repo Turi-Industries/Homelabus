@@ -158,6 +158,7 @@ spec:
         fallback_repo: None,
         network: NETWORK,
         postgres_admin: Some(&admin),
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,

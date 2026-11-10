@@ -82,7 +82,6 @@ mod tests {
     use async_trait::async_trait;
     use hlb_api::Attention;
     use hlb_privd::daemon::assertions::read_every_app;
-    use hlb_types::DbEngine;
 
     struct Termix {
         registration_open: bool,
@@ -106,7 +105,12 @@ mod tests {
         async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
             Err("no Swarm".into())
         }
-        async fn sql(&self, _: DbEngine, _: &str, _: &str) -> Result<Option<String>, String> {
+        async fn sql(
+            &self,
+            _: hlb_types::DbServer,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<String>, String> {
             Err("no database".into())
         }
     }
@@ -221,7 +225,12 @@ spec:
         async fn task_env(&self, _: &str) -> Result<Option<Vec<String>>, String> {
             Err("no Swarm".into())
         }
-        async fn sql(&self, _: DbEngine, _: &str, _: &str) -> Result<Option<String>, String> {
+        async fn sql(
+            &self,
+            _: hlb_types::DbServer,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<String>, String> {
             Err("no database".into())
         }
     }

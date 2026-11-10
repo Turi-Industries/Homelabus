@@ -35,6 +35,7 @@ pub struct Pass<'a> {
     pub catalog: &'a BTreeMap<String, Manifest>,
     pub network: &'a str,
     pub postgres_admin: Option<&'a str>,
+    pub postgres_vital_admin: Option<&'a str>,
     pub mariadb_admin: Option<&'a str>,
     pub fallback_repo: Option<&'a str>,
     pub scanner: &'a dyn hlb_updater::run::Scanner,
@@ -241,6 +242,7 @@ impl Pass<'_> {
             self.network,
             hlb_backup_run::Admins {
                 postgres: self.postgres_admin,
+                postgres_vital: self.postgres_vital_admin,
                 mariadb: self.mariadb_admin,
             },
             s3,
