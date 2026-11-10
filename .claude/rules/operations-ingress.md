@@ -47,6 +47,12 @@ some mistakes loudly; the others are a 502, or a door left open.
   every visitor would be `10.43.0.1`, which is why the site network is cut out of the
   private ranges.
 
+- **🔴 An error is a NEW answer.** `handle_errors` starts from nothing: the route's
+  `header` block (HSTS, `nosniff`, `-Server`) is gone and `Server: Caddy` is back, so
+  the maintenance page says them again. It sees Caddy's own failures only — an app's
+  own 502 passes through — and `{http.error.message}` is never shown: it holds the
+  overlay's names and resolver (`tests/maintenance.rs`, real image).
+
 ## Publishing
 
 - **A route change restarts nothing.** The Caddyfile lives in Caddy's `config` volume;
