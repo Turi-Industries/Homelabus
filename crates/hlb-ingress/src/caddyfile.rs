@@ -839,6 +839,9 @@ pub const AUTH_MARK: &str = "hlb_auth";
 /// The field carrying the status that app answers a wrong secret with.
 pub const AUTH_FAILS_MARK: &str = "hlb_auth_fails";
 
+/// The portal's own paths: its sign-in, callback and check.
+pub const PORTAL_PATHS: &str = "/oauth2/*";
+
 /// A route's forward-auth block.
 ///
 /// The order of the directives inside carries two security decisions:
@@ -872,24 +875,27 @@ fn render_forward_auth(
 
     // The portal must be reachable without going through itself.
     let _ = writeln!(out, "\n{indent}# The portal itself, or sign-in loops.");
-    let _ = writeln!(out, "{indent}handle /oauth2/* {{");
+    let _ = writeln!(out, "{indent}handle {PORTAL_PATHS} {{");
     let _ = writeln!(out, "{indent}\treverse_proxy {}", fa.upstream);
     let _ = writeln!(out, "{indent}}}");
 
-    // What the manifest opens to anyone is the one place the portal is not asked.
-    let gated = if open.is_empty() {
-        String::new()
-    } else {
-        let _ = writeln!(
-            out,
-            "\n{indent}# Open to anyone, by the manifest: not through the portal."
-        );
-        let _ = writeln!(out, "{indent}@gated_{m} {{");
+    // 🔴 Caddy orders `forward_auth` BEFORE every `handle`: the block above is reached
+    // only by what this matcher leaves out. Without it the sign-in page asked the
+    // portal, which sent it to the sign-in page — a loop on every sign-in, on the lab's
+    // first one (2026-11-10). The same `path` as the `handle`, so whatever skips the
+    // portal this way is answered BY the portal, never by the app. And what the manifest
+    // opens to anyone.
+    let _ = writeln!(
+        out,
+        "\n{indent}# The portal's own paths, and what the manifest opens to anyone."
+    );
+    let _ = writeln!(out, "{indent}@gated_{m} {{");
+    let _ = writeln!(out, "{indent}\tnot path {PORTAL_PATHS}");
+    if !open.is_empty() {
         write_not_open(out, open, &format!("{indent}\t"));
-        let _ = writeln!(out, "{indent}}}");
-        format!("@gated_{m} ")
-    };
-    let _ = writeln!(out, "\n{indent}forward_auth {gated}{} {{", fa.upstream);
+    }
+    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(out, "\n{indent}forward_auth @gated_{m} {} {{", fa.upstream);
     // The roles the app lets in, checked by oauth2-proxy at every request against the
     // groups PocketID put in the session. Names are `hlb-<role id>`: nothing to escape.
     let _ = writeln!(
@@ -1268,13 +1274,25 @@ mod tests {
         );
         let external = matcher("@external_n8n_example_fr");
         assert!(external.contains(&not_open), "{external}");
-        // Without one, the portal and the 403 cover the whole host, as before.
+        // Without one, the portal covers the whole host but its own paths.
         r.open_paths.clear();
         let closed = render(&[r], &cfg);
-        assert!(!closed.contains("gated"), "{closed}");
+        let lines = |b: &str| b.lines().map(str::trim).collect::<Vec<_>>().join("\n");
+        let gated = lines(
+            closed
+                .split("@gated_n8n_example_fr {\n")
+                .nth(1)
+                .expect("a matcher"),
+        );
+        assert!(gated.starts_with("not path /oauth2/*\n}"), "{gated}");
+        // Not `{closed}`: the whole Caddyfile carries the bouncer's key.
         assert!(
-            closed.contains("forward_auth oauth2-proxy:4180 {"),
-            "{closed}"
+            !closed.contains("not vars_regexp"),
+            "an open path left with none"
+        );
+        assert!(
+            closed.contains("forward_auth @gated_n8n_example_fr oauth2-proxy:4180 {"),
+            "the portal asked without its matcher"
         );
     }
 
@@ -1571,6 +1589,20 @@ mod tests {
             b.trim_start()
                 .starts_with("reverse_proxy oauth2-proxy:4180"),
             "{b}"
+        );
+        // 🔴 And the portal does not ask itself: Caddy runs `forward_auth` before any
+        // `handle`, so only its matcher keeps the sign-in page out of it.
+        let gated = out
+            .split("@gated_tasks_example_fr {")
+            .nth(1)
+            .expect("a matcher");
+        assert!(
+            gated.trim_start().starts_with("not path /oauth2/*"),
+            "{gated}"
+        );
+        assert!(
+            out.contains("forward_auth @gated_tasks_example_fr oauth2-proxy:4180 {"),
+            "the portal asked without its matcher"
         );
     }
 

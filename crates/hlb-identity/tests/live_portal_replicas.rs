@@ -228,7 +228,7 @@ async fn a_sign_in_begun_on_one_portal_replica_is_finished_and_kept_by_the_other
         .create(
             "oauth2-proxy",
             &[format!("https://{APP}/oauth2/callback")],
-            false,
+            hlb_identity::CLIENTS_REQUIRE_PKCE,
         )
         .await
         .expect("client");

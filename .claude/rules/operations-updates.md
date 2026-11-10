@@ -93,6 +93,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   The inbox says it per app (`flaw_exploitable`, critical, from `flaw_alerts`) and an
   image with no good reading for two days (`flaws_unknown`) — 🔴 one running by its tag
   alone included: no digest to read is not clean.
+- **🔴 Syft lists an image in memory, and unbounded it takes the node down.** The lab's
+  4 GB manager listing `n8nio/n8n:3.0.0` (1.9 GB, its `node_modules`) went into the
+  kernel's OOM killer for seven minutes — Caddy, PocketID and the daemon with it, every
+  app 0/1 —, then froze outright at the next pass (2026-11-10). Measured under a cgroup
+  limit: n8n needs more than 2 GiB (killed at 2, done at 3), `postgres:17` peaks at
+  660 MiB. Each Syft job may take a quarter of its node (`grype::syft_memory`, no
+  reservation); killed at it, the image is "not checked" and says so (`syft_failed`:
+  Swarm says only `exit (137)`). A pass runs ten minutes after the daemon STARTS: a
+  daemon restarted three times scanned three times in an hour.
 - **A machine's own packages are read by the same rule, and 🔴 a system Grype holds no
   advisories for reads CLEAN.** Measured 2026-11-08 on old images: openSUSE Leap 15.5
   gave 0 fixable flaws, Arch 5 from sources not its own, where Debian 12.8 gave 97 and
@@ -132,6 +141,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   drained node stops its data and the ingress; an undrained one everything on it. On a
   one-node house that is every unattended reboot. Tasks that cannot be listed are not
   "none": no reboot starts.
+- **🔴 Swarm schedules nothing on a drained node — a job neither.** The reboot was sent
+  as a job AFTER the drain: it waited 300 s on "no suitable node" and was given up, on
+  the lab's first unattended reboot (2026-11-10); the unit tests' orchestrator ran it.
+  It is armed BEFORE the drain (`reboot::armed_reboot_job`): `docker run -d` leaves a
+  plain container the drain does not stop, which reboots once no task container RUNS
+  there, or gives up at a deadline two minutes under the daemon's. The node is put
+  back before it is asked (the probe is a job too), and only past that deadline
+  (`armed_until`); it proves the reboot by an uptime shorter than the time since the
+  reboot BEGAN — it often reboots before the next pass sees it empty.
 - **A reboot given up blocks every other**, until `hlb node upgrade` succeeds on that
   node: whatever stopped it — a service that would not move, a node that did not come
   back — may stop the next the same way. A node not `active` is never picked: a person

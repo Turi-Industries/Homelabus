@@ -44,9 +44,14 @@ impl Drop for Stand {
     }
 }
 
-/// The status Caddy answered `GET path`.
+/// The status Caddy answered `GET path` on n8n's name.
 fn status(port: &str, path: &str) -> u16 {
-    let resolve = format!("n8n.example.fr:{port}:127.0.0.1");
+    status_at(port, "n8n.example.fr", path)
+}
+
+/// The status Caddy answered `GET path` on `host`.
+fn status_at(port: &str, host: &str, path: &str) -> u16 {
+    let resolve = format!("{host}:{port}:127.0.0.1");
     let out = Command::new("curl")
         .args([
             "-sk",
@@ -59,7 +64,7 @@ fn status(port: &str, path: &str) -> u16 {
             "--resolve",
             &resolve,
         ])
-        .arg(format!("https://n8n.example.fr:{port}{path}"))
+        .arg(format!("https://{host}:{port}{path}"))
         .output()
         .expect("curl");
     String::from_utf8_lossy(&out.stdout)
@@ -105,8 +110,12 @@ fn an_open_path_reaches_the_app_and_the_rest_asks_the_portal() {
     route.needs_forward_auth = true;
     route.allowed_groups = vec!["hlb-admin".into()];
     route.open_paths = vec!["/webhook/*".into()];
+    // The same app at a name opening nothing: the portal covers it all but its own paths.
+    let mut closed = route.clone();
+    closed.host = "closed.example.fr".into();
+    closed.open_paths.clear();
     let caddyfile = render(
-        &[route],
+        &[route, closed],
         &Config {
             tls: Tls::Internal { own_root: false },
             forward_auth: Some(ForwardAuth::default()),
@@ -161,5 +170,33 @@ fn an_open_path_reaches_the_app_and_the_rest_asks_the_portal() {
     // Cleaned, these are `/webhook/a`; the app would receive them raw.
     assert_eq!(status(&port, "/rest/x/..%2F..%2Fwebhook/a"), 302);
     assert_eq!(status(&port, "/rest/x/%2e%2e/%2e%2e/webhook/a"), 302);
-    println!("✓ /webhook/* past the portal, the rest sent to sign in");
+
+    // 🔴 The portal's own pages reach the portal (its 401 here), not the portal's check
+    // and a redirect to themselves: every sign-in looped so on the lab. Caddy runs
+    // `forward_auth` before any `handle`.
+    for host in ["n8n.example.fr", "closed.example.fr"] {
+        assert_eq!(
+            status_at(&port, host, "/oauth2/sign_in?rd=%2F"),
+            401,
+            "{host}"
+        );
+        assert_eq!(
+            status_at(&port, host, "/oauth2/callback?code=x"),
+            401,
+            "{host}"
+        );
+        assert_eq!(status_at(&port, host, "/"), 302, "{host}");
+        // Cleaned into the portal's paths, it reaches the portal — never the app.
+        assert_eq!(
+            status_at(&port, host, "/workflows/..%2F..%2Foauth2/start"),
+            401,
+            "{host}"
+        );
+        assert_eq!(
+            status_at(&port, host, "/workflows/%2e%2e/oauth2/start"),
+            401,
+            "{host}"
+        );
+    }
+    println!("✓ /webhook/* past the portal, its own pages reach it, the rest sent to sign in");
 }

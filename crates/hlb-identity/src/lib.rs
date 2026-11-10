@@ -25,6 +25,13 @@
 //! secret. Either way [`PocketId::ensure`] never asks again for an existing client.
 
 pub mod groups;
+/// Whether the clients `hlb` registers require PKCE: every one, the portal's included.
+///
+/// 🔴 A client that requires it refuses a sign-in sent without a `code_challenge`, AT
+/// PocketID, after the person chose an account: oauth2-proxy sends one only when told
+/// (`OAUTH2_PROXY_CODE_CHALLENGE_METHOD`). A test making its client otherwise proves a
+/// sign-in no house runs — the portal's did, while every lab sign-in failed (2026-11-10).
+pub const CLIENTS_REQUIRE_PKCE: bool = true;
 pub mod oidc;
 
 use serde::{Deserialize, Serialize};

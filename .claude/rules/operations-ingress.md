@@ -13,6 +13,12 @@ some mistakes loudly; the others are a 502, or a door left open.
 ## Caddy
 
 - **`*.example.org` does not cover `example.org`.** Both names must be requested.
+- **🔴 Caddy runs `forward_auth` before every `handle`.** The portal's `handle /oauth2/*`
+  was never reached: its sign-in page asked the portal, which sent it to the sign-in
+  page — every sign-in looped, found at the lab's first one (2026-11-10), while
+  `open_paths.rs` (a fake portal, a status read) and `live_portal_replicas.rs` (no
+  Caddy) passed. `forward_auth` takes a matcher leaving out `PORTAL_PATHS` — the same
+  `path` as the `handle`, so what skips the portal that way is answered by it.
 - **Caddy's `status` matcher only exists inside a `forward_auth` block.** At site level,
   Caddy refuses to start with "module not registered".
 - **A route beside a wildcard gets a certificate of its own.** A site block per host,

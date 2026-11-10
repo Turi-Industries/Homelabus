@@ -1633,6 +1633,23 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the app healthy, what each held kept as a snapshot. A pass had dumped Mealie two
      minutes before the copy: the undo took the copy's dump, by its id. A second undo,
      a run recorded before 0068 and an inconclusive one were refused as written.
+     6a-6c run on the lab 2026-11-10, five nodes. 6a: a Swarm service with no task is no
+     dial timeout — Docker's DNS stops resolving it and Caddy fails at once: the page in
+     3 ms (503, `Retry-After: 30`); `hlb stop mealie` then `scale 1` showed it until the
+     app answered 200, 31 s later, never a bare 502 or a hang. 6b: signed in to n8n
+     through the portal, one oauth2-proxy replica killed: the cookie passed every request
+     while Swarm replaced it; enc2, carrying the other, rebooted with no gap seen. 6c:
+     deb1 left to a person ("stops vaultwarden — vital — through caddy, pocket-id,
+     stalwart, vaultwarden"), deb2 too (through postgres); enc2 then enc3 drained,
+     rebooted alone, put back and proved by their uptime; enc3's reboot row outlived the
+     manager's crash and two daemon restarts, and it rebooted once. Four faults no test
+     had seen, each fixed: the reboot sent after the drain never ran (armed before it
+     now); every portal sign-in looped on `/oauth2/sign_in`; PocketID refused every one
+     after, the portal sending no PKCE challenge to a client requiring one — the live
+     test had made its client without; and Syft listing n8n's image (more than 2 GiB)
+     took the 4 GB manager into the OOM killer, the whole house 0/1 for seven minutes,
+     then froze it at the next pass — each Syft job now takes a quarter of its node at
+     most, and n8n reads "not checked", saying why.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
