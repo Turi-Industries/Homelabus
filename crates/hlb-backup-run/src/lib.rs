@@ -220,7 +220,7 @@ struct PriorBuckets {
 
 #[async_trait::async_trait]
 impl hlb_updater::BackupProvider for PlacedProvider {
-    async fn snapshot(&self, app: &str) -> std::result::Result<String, String> {
+    async fn snapshot(&self, app: &str) -> std::result::Result<Vec<String>, String> {
         let orch = hlb_orchestrator::SwarmOrchestrator::connect().await.ok();
         self.copy(
             orch.as_ref()
@@ -234,12 +234,13 @@ impl hlb_updater::BackupProvider for PlacedProvider {
 impl PlacedProvider {
     /// The app's volumes and buckets, then each of its databases: a migration is undone by
     /// the database, and one as old as the last pass loses what was written since. Every
-    /// refusal comes before anything is stopped or copied. The last snapshot's id.
+    /// refusal comes before anything is stopped or copied. Every snapshot taken: an undo
+    /// restores each.
     pub async fn copy(
         &self,
         orch: Option<&dyn hlb_orchestrator::Orchestrator>,
         app: &str,
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<Vec<String>, String> {
         let databases = self.databases_to_dump(app).await?;
         let buckets = self.buckets_to_read(app).await?;
         let volumes = self.volumes.get(app);
@@ -250,22 +251,25 @@ impl PlacedProvider {
                 "no known volume or database for \"{app}\" — the backup cannot be guaranteed"
             ));
         }
-        let mut last = None;
+        let mut taken = Vec::new();
         if let Some(volumes) = volumes {
             let Some(to) = &self.volumes_to else {
                 return Err(format!(
                     "no destination accepts bulky data: {app}'s volumes cannot be copied first"
                 ));
             };
-            last = Some(self.copy_volumes(orch, app, volumes, to).await?);
+            taken.extend(self.copy_volumes(orch, app, volumes, to).await?);
         }
         if let (false, Some(to)) = (buckets.is_empty(), &self.volumes_to) {
-            last = Some(self.copy_buckets(app, &buckets, to).await?);
+            taken.extend(self.copy_buckets(app, &buckets, to).await?);
         }
         for db in &databases {
-            last = Some(self.dump_first(app, db).await?);
+            taken.push(self.dump_first(app, db).await?);
         }
-        last.ok_or_else(|| format!("nothing of {app} was copied"))
+        if taken.is_empty() {
+            return Err(format!("nothing of {app} was copied"));
+        }
+        Ok(taken)
     }
 }
 
@@ -310,18 +314,18 @@ impl PlacedProvider {
         app: &str,
         buckets: &[(&str, hlb_objstore::s3::Bucket)],
         (dest, env): &(Destination, Vec<(String, String)>),
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<Vec<String>, String> {
         let (runner, location) = dest.runner(Some(&self.network));
         let repo = hlb_backup::Repository::new(runner, location, self.password.clone())
             .extra_env(env.clone());
         repo.init().await.map_err(|e| e.to_string())?;
         let tag = format!("app:{app}");
         let tags = [tag.as_str(), bucket::BUCKET_TAG];
-        let mut last = Err(format!("no bucket of {app} to back up"));
+        let mut taken = Vec::new();
         for (name, b) in buckets {
-            last = Ok(bucket_snapshot(&repo, (&self.state, &dest.name), b, name, &tags).await?);
+            taken.push(bucket_snapshot(&repo, (&self.state, &dest.name), b, name, &tags).await?);
         }
-        last
+        Ok(taken)
     }
 
     /// What the copy must dump of `app`. Refused here, not halfway through: an app's
@@ -403,7 +407,7 @@ impl PlacedProvider {
         app: &str,
         volumes: &[String],
         to: &(Destination, Vec<(String, String)>),
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<Vec<String>, String> {
         let services = self.services.get(app).cloned().unwrap_or_default();
         let places = locate_volumes(orch, volumes, &services).await;
         // The copy a rollback restores: one taken live from a store that needs its
@@ -436,7 +440,7 @@ impl PlacedProvider {
         places: &BTreeMap<placement::Place, Vec<String>>,
         (dest, env): &(Destination, Vec<(String, String)>),
         stopped: bool,
-    ) -> std::result::Result<String, String> {
+    ) -> std::result::Result<Vec<String>, String> {
         let copies = engine_copy::declared(&self.state, app)
             .await
             .map_err(|e| e.to_string())?;
@@ -597,8 +601,8 @@ async fn locate_volumes(
     }
 }
 
-/// Backs up an app's volumes to `d`, each set on the machine holding it. The last
-/// snapshot's id. `pass`: the tag of the pass taking them, or what an update's prior copy
+/// Backs up an app's volumes to `d`, each set on the machine holding it. One snapshot
+/// per machine, each id. `pass`: the tag of the pass taking them, or what an update's prior copy
 /// says of itself: [`STOPPED_TAG`], `None`. `sources`: a volume read from another in its place — its engine's copy —,
 /// at its own path.
 #[allow(clippy::too_many_arguments)]
@@ -612,16 +616,19 @@ async fn back_up_where_they_are(
     places: &BTreeMap<placement::Place, Vec<String>>,
     sources: &BTreeMap<String, String>,
     pass: Option<&str>,
-) -> std::result::Result<String, String> {
-    let mut last = Err(format!("no volume of {app} to back up"));
+) -> std::result::Result<Vec<String>, String> {
+    if places.is_empty() {
+        return Err(format!("no volume of {app} to back up"));
+    }
     let tags: Vec<&str> = std::iter::once(BACKED_UP).chain(pass).collect();
+    let mut taken = Vec::new();
     for (place, volumes) in places {
         let paths: Vec<String> = volumes.iter().map(|v| volume_path(v)).collect();
         let (runner, location) = runner_at(orch, network, d, app, place, volumes, sources, false)?;
         let repo = hlb_backup::Repository::new(runner, location, password).extra_env(env.to_vec());
-        last = Ok(snapshot(&repo, (state, &d.name), app, &paths, &tags).await?);
+        taken.push(snapshot(&repo, (state, &d.name), app, &paths, &tags).await?);
     }
-    last
+    Ok(taken)
 }
 
 /// restic where `volumes` are, `place`, with each mounted at its [`volume_path`] —
@@ -1434,6 +1441,11 @@ impl Pass<'_> {
             Some(pass),
         )
         .await
+        // A pass reports one id per app and destination; each was recorded as taken.
+        .and_then(|mut ids| {
+            ids.pop()
+                .ok_or_else(|| format!("no volume of {app} to back up"))
+        })
     }
 
     /// Backs up each of `buckets` to `d`, each its own snapshot, recorded as taken. The

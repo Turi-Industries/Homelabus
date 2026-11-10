@@ -42,7 +42,7 @@ impl<R: Runner> ResticBackupProvider<R> {
 
 #[async_trait::async_trait]
 impl<R: Runner> hlb_updater::BackupProvider for ResticBackupProvider<R> {
-    async fn snapshot(&self, app: &str) -> std::result::Result<String, String> {
+    async fn snapshot(&self, app: &str) -> std::result::Result<Vec<String>, String> {
         let Some((repo, paths)) = (self.make)(app) else {
             // 🔴 No "nothing to back up, so we are fine". If the manifest requires a
             // backup and we do not know what to back up, that is an error.
@@ -54,16 +54,17 @@ impl<R: Runner> hlb_updater::BackupProvider for ResticBackupProvider<R> {
         repo.init().await.map_err(|e| e.to_string())?;
 
         let tag = format!("app:{app}");
-        let mut last = String::new();
+        let mut taken = Vec::new();
         for p in &paths {
             // An error here must surface as is: the pipeline must above all not carry
             // on believing the backup was made.
-            last = repo
-                .backup(p, &[&tag, "kind:pre-update"])
-                .await
-                .map_err(|e| e.to_string())?;
+            taken.push(
+                repo.backup(p, &[&tag, "kind:pre-update"])
+                    .await
+                    .map_err(|e| e.to_string())?,
+            );
         }
-        Ok(last)
+        Ok(taken)
     }
 }
 
@@ -101,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn a_successful_snapshot_returns_its_id() {
         let p = provider(r#"{"message_type":"summary","snapshot_id":"abc123"}"#, 0);
-        assert_eq!(p.snapshot("gitea").await.expect("snapshot"), "abc123");
+        assert_eq!(p.snapshot("gitea").await.expect("snapshot"), ["abc123"]);
     }
 
     #[tokio::test]

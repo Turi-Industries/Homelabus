@@ -897,7 +897,7 @@ async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped()
         postgres: None,
         mariadb: None,
     };
-    let id =
+    let ids =
         hlb_backup_run::provider_for_update(&state, &vault, "bridge", admins, None, None, "mail")
             .await
             .expect("read")
@@ -912,12 +912,9 @@ async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped()
         "stopped, then started"
     );
     assert_eq!(state.held("mail").await.expect("hold"), None, "released");
+    let taken = state.snapshots_taken("mail").await.expect("read");
     assert!(
-        state
-            .snapshots_taken("mail")
-            .await
-            .expect("read")
-            .contains(&id),
+        !ids.is_empty() && ids.iter().all(|id| taken.contains(id)),
         "a copy not recorded is one the restore refuses"
     );
     let password = hlb_backup_run::restic_password(&state, &vault)
@@ -934,7 +931,7 @@ async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped()
         "-r",
         "/repo",
         "ls",
-        &id,
+        &ids[0],
     ]);
     let out = String::from_utf8_lossy(&ls.stdout);
     assert!(
@@ -952,7 +949,7 @@ async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped()
     .find("mail", data, None, None)
     .await
     .expect("the copy");
-    assert_eq!(source.snapshot.id, id);
+    assert_eq!(std::slice::from_ref(&source.snapshot.id), ids.as_slice());
     assert!(hlb_backup_run::restore::copied_stopped(&source.snapshot));
 
     for v in [data, repo] {

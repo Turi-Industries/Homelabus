@@ -382,6 +382,7 @@ mod tests {
             to_image: "gitea/gitea:1.24.7@sha256:b".into(),
             outcome,
             detail: String::new(),
+            undo: None,
         }
     }
 

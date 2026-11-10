@@ -593,11 +593,11 @@ impl Scanner for Scans {
 }
 
 /// A copy that succeeds or fails, and counts what it was asked.
-struct Copy(Result<String, String>, Mutex<usize>);
+struct Copy(Result<Vec<String>, String>, Mutex<usize>);
 
 #[async_trait]
 impl BackupProvider for Copy {
-    async fn snapshot(&self, _: &str) -> Result<String, String> {
+    async fn snapshot(&self, _: &str) -> Result<Vec<String>, String> {
         *self.1.lock().unwrap() += 1;
         self.0.clone()
     }
@@ -803,7 +803,7 @@ async fn a_switched_update_is_copied_first_and_recorded() {
         needs_backup: true,
         ..candidate()
     };
-    let copy = Copy(Ok("0123456789".into()), Mutex::new(0));
+    let copy = Copy(Ok(vec!["0123456789".into()]), Mutex::new(0));
 
     let (ran, said) = run(
         &o,
@@ -837,6 +837,70 @@ async fn a_switched_update_is_copied_first_and_recorded() {
     let audit = s.audit_for("gitea", 5).await.unwrap();
     assert_eq!(audit[0].action, "update-applied");
     assert_eq!(audit[0].actor, "controller");
+}
+
+/// 🔴 Every snapshot of the copy, and each companion's image before, stay with the run:
+/// found later by tag or by time, a pass's snapshots would pass for the copy.
+#[tokio::test]
+async fn a_run_keeps_every_snapshot_of_its_copy_and_its_companions_images_before() {
+    let s = State::in_memory().await.unwrap();
+    let m: hlb_types::Manifest = serde_yaml_ng::from_str(WITH_COMPANION).unwrap();
+    s.upsert_app("gitea", &m, None).await.unwrap();
+    let o = Fake::returning(vec![
+        status("acme/ml:1.1@sha256:ml-update", None, 1),
+        status("gitea/gitea:1.25@sha256:update", None, 1),
+    ]);
+    let c = Candidate {
+        needs_backup: true,
+        ..with_companion()
+    };
+    let taken = vec!["volumes".to_string(), "bucket".into(), "dump".into()];
+    let copy = Copy(Ok(taken.clone()), Mutex::new(0));
+
+    let (ran, said) = run(
+        &o,
+        &s,
+        &c,
+        Verdict::Clean,
+        Some(&copy),
+        Overrides::default(),
+    )
+    .await;
+
+    assert!(ran_applied(&ran), "{ran:?}");
+    assert!(said
+        .iter()
+        .any(|p| matches!(p, Progress::Copied { snapshots } if *snapshots == taken)));
+    let last = s.last_update_run("gitea").await.unwrap().expect("recorded");
+    let undo = last.undo.expect("undo material");
+    assert_eq!(undo.copies, taken);
+    assert_eq!(
+        undo.companions,
+        [(
+            "ml".to_string(),
+            "acme/ml:1.0@sha256:ml-previous".to_string()
+        )]
+        .into()
+    );
+    // What the run froze is the NEW image: the material was read before the switch.
+    let frozen = s.app_manifest("gitea").await.unwrap();
+    assert_eq!(frozen.spec.companions[0].image.tag, "1.1");
+
+    // Nothing owed is an empty copy, still undo material.
+    let o = Fake::returning(vec![status("gitea/gitea:1.24@sha256:next", None, 1)]);
+    let c = Candidate {
+        needs_backup: false,
+        kind: UpdateKind::DigestOnly,
+        to_digest: "sha256:next".into(),
+        ..candidate()
+    };
+    let (_, _) = run(&o, &s, &c, Verdict::Clean, None, Overrides::default()).await;
+    let last = s.last_update_run("gitea").await.unwrap().expect("recorded");
+    assert_eq!(last.undo.map(|u| u.copies), Some(Vec::new()));
+}
+
+fn ran_applied(ran: &Ran) -> bool {
+    matches!(ran, Ran::Switched(UpdateOutcome::Applied { .. }))
 }
 
 /// 🔴 Reconciliation reads the frozen manifest, which moves only once the new image is

@@ -269,7 +269,9 @@ impl Pass<'_> {
             now: at,
         };
         let mut progress = |p: Progress| match p {
-            Progress::Copied { snapshot } => tracing::info!(app, %snapshot, "copied first"),
+            Progress::Copied { snapshots } => {
+                tracing::info!(app, snapshots = snapshots.join(" "), "copied first")
+            }
             Progress::Switching { describe } => tracing::info!(app, "{describe}"),
             _ => {}
         };

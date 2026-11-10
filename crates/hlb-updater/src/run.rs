@@ -5,7 +5,7 @@
 //! switch, the window, maturity, the copy first, and the run recorded whatever it gave.
 
 use hlb_orchestrator::Orchestrator;
-use hlb_state::{State, UpdateRun, UpdateRunOutcome};
+use hlb_state::{State, UpdateRun, UpdateRunOutcome, UpdateUndo};
 use hlb_types::{Image, ImageSigner, Role};
 
 use crate::scan::Report;
@@ -60,9 +60,9 @@ pub enum Progress {
     /// The app holds nothing to copy, or asks for no copy.
     NoCopyOwed,
     CopyStarted,
-    /// The copy taken, its snapshot.
+    /// The copy taken: every snapshot of it, kept with the run for an undo.
     Copied {
-        snapshot: String,
+        snapshots: Vec<String>,
     },
     /// The switch starts.
     Switching {
@@ -183,12 +183,20 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
                 .await?;
         }
 
-        match (c.needs_backup, self.backup) {
-            (false, _) => progress(Progress::NoCopyOwed),
+        let copies = match (c.needs_backup, self.backup) {
+            (false, _) => {
+                progress(Progress::NoCopyOwed);
+                Vec::new()
+            }
             (true, Some(p)) => {
                 progress(Progress::CopyStarted);
                 match p.snapshot(app).await {
-                    Ok(snapshot) => progress(Progress::Copied { snapshot }),
+                    Ok(snapshots) => {
+                        progress(Progress::Copied {
+                            snapshots: snapshots.clone(),
+                        });
+                        snapshots
+                    }
                     Err(error) => return Ok(Ran::Refused(Refusal::CopyFailed { error })),
                 }
             }
@@ -198,12 +206,21 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
                     app: app.to_string(),
                 })
             }
-        }
+        };
 
         progress(Progress::Switching {
             describe: c.describe(),
         });
         let from = installed.image.reference();
+        // Read before the switch: `apply` freezes the companions' new images.
+        let companions_from = c
+            .companions
+            .iter()
+            .filter_map(|m| {
+                let before = installed.companions.iter().find(|x| x.name == m.name)?;
+                Some((m.name.clone(), before.image.reference()))
+            })
+            .collect();
         let outcome = apply(self.orchestrator, self.state, c, SWITCH_TIMEOUT_SECS).await?;
 
         // Every outcome is recorded, success included: the controller notifies each, and an
@@ -234,6 +251,10 @@ impl<O: Orchestrator + ?Sized> Update<'_, O> {
                 to_image: to.clone(),
                 outcome: recorded,
                 detail,
+                undo: Some(UpdateUndo {
+                    copies,
+                    companions: companions_from,
+                }),
             })
             .await?;
         self.audit(

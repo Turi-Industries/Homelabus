@@ -171,12 +171,9 @@ spec:
         .snapshot("chat")
         .await
         .expect("the copy");
+    let taken = state.snapshots_taken("chat").await.expect("read");
     assert!(
-        state
-            .snapshots_taken("chat")
-            .await
-            .expect("read")
-            .contains(&copy),
+        copy.iter().all(|c| taken.contains(c)),
         "a copy not recorded is one the restore refuses"
     );
 
@@ -195,7 +192,11 @@ spec:
         .find_dump("chat", hlb_types::DbEngine::Postgres, "chat", None, None)
         .await
         .expect("a dump");
-    assert_eq!(source.snapshot.id, copy, "the newest dump is the copy");
+    assert_eq!(
+        std::slice::from_ref(&source.snapshot.id),
+        copy.as_slice(),
+        "the newest dump is the copy, and all of it"
+    );
     let db = Database {
         engine: hlb_types::DbEngine::Postgres,
         name: "chat",

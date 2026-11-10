@@ -9,6 +9,7 @@
 //! This database is not irreplaceable: it can be rebuilt from the Git repository and
 //! from the Swarm itself.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -100,6 +101,10 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+
+    /// What undoing an update puts back, written.
+    #[error("update run's undo material: {0}")]
+    UpdateUndo(#[source] serde_json::Error),
 
     #[error("no role \"{0}\" — `hlb role list` names them")]
     UnknownRole(String),
@@ -364,6 +369,18 @@ pub struct UpdateRun {
     pub to_image: String,
     pub outcome: UpdateRunOutcome,
     pub detail: String,
+    /// What undoing it puts back. `None`: recorded before it was kept, no undo.
+    pub undo: Option<UpdateUndo>,
+}
+
+/// What undoing an update puts back, kept with its run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateUndo {
+    /// Every snapshot its prior copy took, volumes, buckets and dumps: empty for an app
+    /// owing none.
+    pub copies: Vec<String>,
+    /// Each companion moved, with its image before.
+    pub companions: BTreeMap<String, String>,
 }
 
 /// A notification quiet hours held back, waiting for them to end.
@@ -4268,6 +4285,38 @@ fn civil_date(epoch: i64) -> String {
 /// How many characters of a fingerprint name a session.
 pub const SESSION_REFERENCE_LEN: usize = 8;
 
+/// The columns [`update_run`] reads — a macro, since `sqlx` takes a static query only.
+macro_rules! update_run_columns {
+    () => {
+        "id, app, ran_at, from_image, to_image, outcome, detail, copies, companions_from"
+    };
+}
+
+/// ⚠️ An outcome this version cannot read is `inconclusive`, and undo material it
+/// cannot read is none — never an error: a row refused here would stay unnotified
+/// forever, and no undo is the safe reading of material nobody can trust.
+fn update_run(r: &sqlx::sqlite::SqliteRow) -> Result<UpdateRun> {
+    let outcome: String = r.try_get("outcome")?;
+    let copies: Option<String> = r.try_get("copies")?;
+    let companions: Option<String> = r.try_get("companions_from")?;
+    let undo = copies.and_then(|c| {
+        Some(UpdateUndo {
+            copies: serde_json::from_str(&c).ok()?,
+            companions: serde_json::from_str(companions.as_deref().unwrap_or("{}")).ok()?,
+        })
+    });
+    Ok(UpdateRun {
+        id: r.try_get("id")?,
+        app: r.try_get("app")?,
+        ran_at: r.try_get("ran_at")?,
+        from_image: r.try_get("from_image")?,
+        to_image: r.try_get("to_image")?,
+        outcome: UpdateRunOutcome::parse(&outcome).unwrap_or(UpdateRunOutcome::Inconclusive),
+        detail: r.try_get("detail")?,
+        undo,
+    })
+}
+
 fn update_decision_of(r: &sqlx::sqlite::SqliteRow) -> Result<UpdateDecision> {
     Ok(UpdateDecision {
         app: r.try_get("app")?,
@@ -5520,8 +5569,9 @@ impl State {
     /// returned.
     pub async fn record_update_run(&self, run: &UpdateRun) -> Result<i64> {
         let r = sqlx::query(
-            "INSERT INTO update_runs (app, ran_at, from_image, to_image, outcome, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO update_runs
+                 (app, ran_at, from_image, to_image, outcome, detail, copies, companions_from)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(&run.app)
         .bind(run.ran_at)
@@ -5529,9 +5579,36 @@ impl State {
         .bind(&run.to_image)
         .bind(run.outcome.as_str())
         .bind(&run.detail)
+        .bind(
+            run.undo
+                .as_ref()
+                .map(|u| serde_json::to_string(&u.copies))
+                .transpose()
+                .map_err(Error::UpdateUndo)?,
+        )
+        .bind(
+            run.undo
+                .as_ref()
+                .map(|u| serde_json::to_string(&u.companions))
+                .transpose()
+                .map_err(Error::UpdateUndo)?,
+        )
         .execute(&self.pool)
         .await?;
         Ok(r.last_insert_rowid())
+    }
+
+    /// The newest update run of `app`, whatever its outcome: undo takes only that one.
+    pub async fn last_update_run(&self, app: &str) -> Result<Option<UpdateRun>> {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            update_run_columns!(),
+            " FROM update_runs WHERE app = ?1 ORDER BY id DESC LIMIT 1"
+        ))
+        .bind(app)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(update_run).transpose()
     }
 
     /// A pass proposed moving `app` to `digest`: its first sighting is kept, its last moves.
@@ -5605,31 +5682,15 @@ impl State {
     }
 
     /// The updates nobody has been told about yet, oldest first.
-    ///
-    /// ⚠️ An outcome this version cannot read is returned as `inconclusive`, never
-    /// dropped: a row skipped here would stay unnotified forever.
     pub async fn unnotified_update_runs(&self) -> Result<Vec<UpdateRun>> {
-        let rows = sqlx::query(
-            "SELECT id, app, ran_at, from_image, to_image, outcome, detail
-             FROM update_runs WHERE notified_at IS NULL ORDER BY id",
-        )
+        let rows = sqlx::query(concat!(
+            "SELECT ",
+            update_run_columns!(),
+            " FROM update_runs WHERE notified_at IS NULL ORDER BY id"
+        ))
         .fetch_all(&self.pool)
         .await?;
-        rows.iter()
-            .map(|r| {
-                let outcome: String = r.try_get("outcome")?;
-                Ok(UpdateRun {
-                    id: r.try_get("id")?,
-                    app: r.try_get("app")?,
-                    ran_at: r.try_get("ran_at")?,
-                    from_image: r.try_get("from_image")?,
-                    to_image: r.try_get("to_image")?,
-                    outcome: UpdateRunOutcome::parse(&outcome)
-                        .unwrap_or(UpdateRunOutcome::Inconclusive),
-                    detail: r.try_get("detail")?,
-                })
-            })
-            .collect()
+        rows.iter().map(update_run).collect()
     }
 
     /// Keeps a notification for when quiet hours end. A newer one on the same subject
@@ -6124,6 +6185,7 @@ mod tests {
             to_image: to.into(),
             outcome,
             detail: detail.into(),
+            undo: None,
         };
         // Seen on day 1 and again on day 3: the first sighting counts.
         s.note_update_seen("gitea", "sha256:a", day)
@@ -6528,6 +6590,7 @@ mod tests {
             to_image: "gitea/gitea:1.24.7@sha256:b".into(),
             outcome,
             detail: String::new(),
+            undo: None,
         };
         let applied = s
             .record_update_run(&run(UpdateRunOutcome::Applied))
@@ -6548,6 +6611,55 @@ mod tests {
         let pending = s.unnotified_update_runs().await.expect("read");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].outcome, UpdateRunOutcome::RolledBack);
+    }
+
+    #[tokio::test]
+    async fn an_update_run_keeps_what_undoing_it_puts_back() {
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(s.last_update_run("immich").await.expect("read"), None);
+        let undo = UpdateUndo {
+            copies: vec!["a1".into(), "b2".into(), "c3".into()],
+            companions: [("ml".to_string(), "immich-ml:3.1@sha256:old".to_string())].into(),
+        };
+        let run = |outcome, undo| UpdateRun {
+            id: 0,
+            app: "immich".into(),
+            ran_at: 100,
+            from_image: "immich:3.1@sha256:a".into(),
+            to_image: "immich:3.3@sha256:b".into(),
+            outcome,
+            detail: String::new(),
+            undo,
+        };
+        // Recorded before the material was kept: no undo.
+        s.record_update_run(&run(UpdateRunOutcome::Applied, None))
+            .await
+            .expect("recorded");
+        let last = s.last_update_run("immich").await.expect("read");
+        assert_eq!(last.expect("one").undo, None);
+
+        let id = s
+            .record_update_run(&run(UpdateRunOutcome::Applied, Some(undo.clone())))
+            .await
+            .expect("recorded");
+        let last = s
+            .last_update_run("immich")
+            .await
+            .expect("read")
+            .expect("one");
+        assert_eq!((last.id, last.undo), (id, Some(undo)));
+        // Nothing owed: an empty copy is still undo material, unlike none.
+        let none_owed = Some(UpdateUndo::default());
+        s.record_update_run(&run(UpdateRunOutcome::RolledBack, none_owed.clone()))
+            .await
+            .expect("recorded");
+        let last = s
+            .last_update_run("immich")
+            .await
+            .expect("read")
+            .expect("one");
+        assert_eq!(last.undo, none_owed);
+        assert_eq!(s.last_update_run("gitea").await.expect("read"), None);
     }
 
     #[tokio::test]
