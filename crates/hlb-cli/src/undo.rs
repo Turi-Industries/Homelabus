@@ -237,6 +237,7 @@ pub async fn run(
             nodes.push(restore.node_of(place).await);
         }
     }
+    nodes.sort();
     nodes.dedup();
     let at = match nodes.as_slice() {
         [Some(one)] => Some(one.clone()),
@@ -313,7 +314,15 @@ pub async fn run(
                 audit(state, app, "refused", &e).await?;
                 return Ok(ExitCode::FAILURE);
             }
-            Err(Failure::Refused(error)) | Err(Failure::Interrupted { error, .. }) => {
+            Err(failed) => {
+                let error = match failed {
+                    Failure::Refused(e) => e,
+                    // What it held before this write began: half written now.
+                    Failure::Interrupted { before: b, error } => {
+                        before.push(format!("{}: {b}", f.what.describe()));
+                        error
+                    }
+                };
                 eprintln!("🔴 {} could not be put back: {error}", f.what.describe());
                 stopped_halfway(app, &before, &again);
                 audit(state, app, "failed", &error).await?;
