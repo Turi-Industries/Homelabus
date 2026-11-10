@@ -6000,6 +6000,60 @@ async fn switch_manifest(
     }
 }
 
+/// One installed app brought to the catalog's manifest: what changes, said; applied
+/// with `apply`. `hlb upgrade <app>`, and `hlb site sync` for the vital server.
+pub(crate) async fn upgrade_app(
+    cli: &Cli,
+    state: &State,
+    c: &hlb_catalog::Catalog,
+    app: &str,
+    mail_domain: Option<String>,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use hlb_engine::upgrade;
+    let entry = c.followed(app, state.app_source(app).await?.as_deref())?;
+    let frozen = state.app_manifest(app).await?;
+    let next = upgrade::next(&frozen, &entry.manifest);
+    let mut changed = upgrade::changes(&frozen, &next);
+    changed.extend(upgrade::guide_changes(
+        state.app_guide(app).await?.as_ref(),
+        &entry.guide,
+    ));
+    // An upgrade that stopped after redeploying keeps the manifest it
+    // deployed: the catalog matches it, and its plan still has to finish.
+    let interrupted = upgrade::interrupted(state, app).await?;
+
+    println!("\"{app}\" against the catalog\n");
+    for line in &changed {
+        println!("  {line}");
+    }
+    for note in upgrade::image_notes(&frozen, &entry.manifest) {
+        println!("  · {note}");
+    }
+    if changed.is_empty() && !interrupted {
+        println!("  its manifest and guide match the catalog — nothing to apply");
+        return Ok(ExitCode::SUCCESS);
+    }
+    if changed.is_empty() {
+        println!("  its last upgrade stopped before its end — its plan runs again");
+    }
+    let refused = upgrade::refusals(&frozen, &next);
+    switch_manifest(
+        cli,
+        state,
+        app,
+        entry,
+        &frozen,
+        &next,
+        refused,
+        mail_domain,
+        apply,
+        "upgrade",
+        &format!("hlb upgrade {app} --apply"),
+    )
+    .await
+}
+
 /// `hlb install`: the app's plan previewed, or recorded and run.
 pub(crate) async fn install(
     cli: &Cli,
@@ -6994,47 +7048,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok::<_, Box<dyn std::error::Error>>(ExitCode::SUCCESS);
                 };
 
-                let entry = c.followed(app, state.app_source(app).await?.as_deref())?;
-                let frozen = state.app_manifest(app).await?;
-                let next = upgrade::next(&frozen, &entry.manifest);
-                let mut changed = upgrade::changes(&frozen, &next);
-                changed.extend(upgrade::guide_changes(
-                    state.app_guide(app).await?.as_ref(),
-                    &entry.guide,
-                ));
-                // An upgrade that stopped after redeploying keeps the manifest it
-                // deployed: the catalog matches it, and its plan still has to finish.
-                let interrupted = upgrade::interrupted(&state, app).await?;
-
-                println!("\"{app}\" against the catalog\n");
-                for line in &changed {
-                    println!("  {line}");
-                }
-                for note in upgrade::image_notes(&frozen, &entry.manifest) {
-                    println!("  · {note}");
-                }
-                if changed.is_empty() && !interrupted {
-                    println!("  its manifest and guide match the catalog — nothing to apply");
-                    return Ok(ExitCode::SUCCESS);
-                }
-                if changed.is_empty() {
-                    println!("  its last upgrade stopped before its end — its plan runs again");
-                }
-                let refused = upgrade::refusals(&frozen, &next);
-                switch_manifest(
-                    &cli,
-                    &state,
-                    app,
-                    entry,
-                    &frozen,
-                    &next,
-                    refused,
-                    mail_domain.clone(),
-                    *apply,
-                    "upgrade",
-                    &format!("hlb upgrade {app} --apply"),
-                )
-                .await
+                upgrade_app(&cli, &state, &c, app, mail_domain.clone(), *apply).await
             })
         }
 

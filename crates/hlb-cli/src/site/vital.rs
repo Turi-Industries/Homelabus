@@ -84,7 +84,7 @@ pub async fn run(cli: &Cli, state: &State, vault: &Vault, apply: bool) -> Result
             );
             println!("            its backups first, the old one dropped once it answers");
         }
-        return Ok(true);
+        return super::wal::ship(cli, state, vault, false).await;
     }
 
     if !installed {
@@ -96,9 +96,6 @@ pub async fn run(cli: &Cli, state: &State, vault: &Vault, apply: bool) -> Result
         }
     }
     let todo = moves(state, true).await?;
-    if todo.is_empty() {
-        return Ok(true);
-    }
     let orch = SwarmOrchestrator::connect().await?;
     let mut ok = true;
     let mut apps: Vec<&str> = todo.iter().map(|m| m.app.as_str()).collect();
@@ -121,7 +118,8 @@ pub async fn run(cli: &Cli, state: &State, vault: &Vault, apply: bool) -> Result
             }
         }
     }
-    Ok(ok)
+    // Moved or not, what the server holds goes to the site.
+    Ok(super::wal::ship(cli, state, vault, true).await? && ok)
 }
 
 const VITAL: &str = hlb_types::VITAL_POSTGRES;

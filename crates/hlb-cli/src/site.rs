@@ -31,6 +31,7 @@ pub mod homecoming;
 pub mod lifeboat;
 pub mod promote;
 pub mod vital;
+pub mod wal;
 pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
