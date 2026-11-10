@@ -12013,9 +12013,14 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                     "no backup first: {app} holds nothing to copy, or asks for none."
                                 ),
                                 Progress::CopyStarted => print!("backup first… "),
-                                Progress::Copied { snapshot } => {
-                                    println!("✓ {}", &snapshot[..8.min(snapshot.len())])
-                                }
+                                Progress::Copied { snapshots } => println!(
+                                    "✓ {}",
+                                    snapshots
+                                        .iter()
+                                        .map(|s| &s[..8.min(s.len())])
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                ),
                                 Progress::Switching { describe } => println!("{describe}…"),
                             })
                             .await?;

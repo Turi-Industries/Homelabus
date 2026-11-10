@@ -222,7 +222,10 @@ async fn a_bucket_backed_up_comes_back_whole_and_the_copy_taken_first_undoes_it(
         .find_bucket("chat", &bucket, None, None)
         .await
         .expect("a snapshot");
-    assert_eq!(newest.snapshot.id, copy, "the newest archive is the copy");
+    assert!(
+        copy.contains(&newest.snapshot.id),
+        "the newest archive is the copy: {copy:?}"
+    );
     restore
         .bucket_in_place("chat", &bucket, &s3_url, &newest)
         .await

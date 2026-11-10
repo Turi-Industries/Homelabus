@@ -642,8 +642,9 @@ async fn older_than_running(
 /// allowed.
 #[async_trait::async_trait]
 pub trait BackupProvider: Send + Sync {
-    /// Takes a snapshot of the app and returns its id.
-    async fn snapshot(&self, app: &str) -> std::result::Result<String, String>;
+    /// Copies the app and returns every snapshot taken — volumes, buckets, dumps: an
+    /// undo restores each, and the last alone names one of them.
+    async fn snapshot(&self, app: &str) -> std::result::Result<Vec<String>, String>;
 }
 
 /// Checks an update is allowed to be applied right now.

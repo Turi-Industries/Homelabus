@@ -212,6 +212,13 @@ during an outage.
   first bulky destination and dumps to the first critical one, as a pass routes them, and each
   refusal comes before anything stops. Tagged as a pass's dump: the newest, which a restore
   takes unasked, and retention's to forget.
+- **🔴 An update's prior copy is found again by the ids its run kept, never by tag or
+  time** (`update_runs.copies`, 2026-11-10). A pass's volume snapshots carry
+  `kind:pre-update` too and its dumps are tagged as the copy's are, and a pass between the
+  copy and an undo is newer: the provider returned only its LAST id, so the copy's other
+  snapshots were nowhere. `BackupProvider::snapshot` returns every id, and the run keeps
+  them beside each companion's image before (`companions_from`). NULL on a run recorded
+  before: no undo.
 - **An update's prior copy stops what writes SQLite, and reads the buckets**
   (`stopped_for_update_copy`, `PlacedProvider::copy_buckets`). Taken live, a rollback got three
   files restic read one after another: `restore::sqlite_after` puts back only a snapshot of the
