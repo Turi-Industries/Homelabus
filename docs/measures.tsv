@@ -68,3 +68,6 @@ date	hlb	measure	value	note
 2026-11-08	0.4.8	deploy-answers	7	the drill's ask calls
 2026-11-08	0.4.9-dev	cve-report-hours	at the first daily pass	KEV CVE-2026-111497 (brotli) alerted for 5 apps at the lab's first flaws pass; the hours from its KEV listing were not read — Grype's database and the pass are each daily, so up to 48 by their schedules
 2026-11-09	0.4.9-dev	updates-unattended	1 of 1	crowdsec v1.8.1 → v1.8.2 in its window, its volumes copied first; its first try (2026-11-08) was taken back mid-switch by reconciliation and ended inconclusive, fixed by #114
+2026-11-10	0.4.9-dev	available-alert-seconds	140	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; Gatus every minute, 3 failures
+2026-11-10	0.4.9-dev	available-promote-seconds	259	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; promoted over SSH at the alert, the owner's reaction not counted
+2026-11-10	0.4.9-dev	available-return-seconds	122	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; hlb site return at once, the site's writes brought home
