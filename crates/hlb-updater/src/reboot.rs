@@ -14,8 +14,13 @@
 
 use hlb_orchestrator::cluster::{maintenance, Maintenance};
 use hlb_orchestrator::swarm::DOCKER_CLI_IMAGE;
-use hlb_orchestrator::{JobOutcome, NodeInfo, ServiceSpec};
+use std::collections::{BTreeMap, BTreeSet};
+
+use hlb_orchestrator::{JobOutcome, NodeInfo, ServiceSpec, TaskInfo};
+use hlb_resolver::graph::DependencyGraph;
 use hlb_state::{NodeReboot, RebootPhase, RebootPolicy};
+use hlb_types::manifest::INGRESS_SERVICE;
+use hlb_types::{Criticality, Manifest};
 
 use crate::window::{MaintenanceWindow, ParseError};
 
@@ -165,6 +170,84 @@ pub fn due(
     Ok(open && last_probe.is_none_or(|t| now - t >= PROBE_EVERY_S))
 }
 
+/// The services whose stop cuts a vital app, each with the first vital app (by name) it
+/// cuts.
+///
+/// The owner's decision (2026-11-10): what the app NEEDS counts as much as the app —
+/// Vaultwarden is down whether its own task or PostgreSQL's stops. So the dependency
+/// graph's closure, and Caddy for an app with a route, since the router forwards to one
+/// machine. On a one- or two-node house this keeps the main node's reboot a person's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Vital(BTreeMap<String, String>);
+
+impl Vital {
+    pub fn of(installed: &[(String, Manifest)]) -> Self {
+        let manifests: Vec<Manifest> = installed.iter().map(|(_, m)| m.clone()).collect();
+        let graph = DependencyGraph::from_manifests(&manifests);
+        let mut vital: Vec<&(String, Manifest)> = installed
+            .iter()
+            .filter(|(_, m)| m.criticality() == Criticality::Vital)
+            .collect();
+        vital.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut cuts = BTreeMap::new();
+        for (app, m) in vital {
+            let mut seen = BTreeSet::new();
+            let mut next = vec![app.clone()];
+            if !m.spec.ingress.is_empty() {
+                next.push(INGRESS_SERVICE.to_string());
+            }
+            while let Some(name) = next.pop() {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(deps) = graph.dependencies_of(&name) {
+                    next.extend(deps.iter().cloned());
+                }
+                let companions = installed
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, m)| m.spec.companions.as_slice())
+                    .unwrap_or_default();
+                // An app's companions are Swarm services `<app>-<companion>`.
+                let services = std::iter::once(name.clone())
+                    .chain(companions.iter().map(|c| format!("{name}-{}", c.name)));
+                for service in services {
+                    cuts.entry(service).or_insert_with(|| app.clone());
+                }
+            }
+        }
+        Self(cuts)
+    }
+
+    /// What `node`'s reboot stops of a vital app: (app, service), sorted. Its data and
+    /// the ingress never move; when it is not `drained`, whatever runs there stops too.
+    pub fn cut_by(
+        &self,
+        node: &NodeInfo,
+        drained: bool,
+        tasks: &[TaskInfo],
+    ) -> Vec<(String, String)> {
+        let mut stopped: BTreeSet<&str> = node.data.iter().map(String::as_str).collect();
+        if node.ingress {
+            stopped.insert(INGRESS_SERVICE);
+        }
+        if !drained {
+            stopped.extend(
+                tasks
+                    .iter()
+                    .filter(|t| t.node_id.as_deref() == Some(node.id.as_str()) && t.is_alive())
+                    .map(|t| t.service.as_str()),
+            );
+        }
+        let mut cut: Vec<(String, String)> = stopped
+            .into_iter()
+            .filter_map(|s| Some((self.0.get(s)?.clone(), s.to_string())))
+            .collect();
+        cut.sort();
+        cut
+    }
+}
+
 /// The node to reboot, among those waiting for it, and whether to drain it first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
@@ -177,11 +260,17 @@ pub struct Choice {
 ///
 /// `local`: the node this daemon runs on. Drained, it stops the daemon — pinned there
 /// by the state it holds —, and nothing would put the node back: it counts as downtime.
+///
+/// 🔴 A reboot stopping a vital app (`vital`, by what runs where: `tasks`) is a
+/// person's, WHATEVER the house accepted: accepting downtime was said of the apps that
+/// can wait, and the password vault is the way back into every other.
 pub fn choose(
     nodes: &[NodeInfo],
     waiting: &[String],
     local: Option<&str>,
     accept_downtime: bool,
+    vital: &Vital,
+    tasks: &[TaskInfo],
 ) -> (Option<Choice>, Vec<(String, String)>) {
     let mut candidates: Vec<&NodeInfo> = nodes.iter().filter(|n| waiting.contains(&n.id)).collect();
     candidates.sort_by(|a, b| a.hostname.cmp(&b.hostname));
@@ -209,7 +298,20 @@ pub fn choose(
                 ),
                 Maintenance::Go => Ok(true),
             }
-        };
+        }
+        .and_then(|drain| match vital.cut_by(n, drain, tasks).as_slice() {
+            [] => Ok(drain),
+            cut => {
+                let apps: BTreeSet<&str> = cut.iter().map(|(a, _)| a.as_str()).collect();
+                let services: Vec<&str> = cut.iter().map(|(_, s)| s.as_str()).collect();
+                Err(format!(
+                    "its reboot stops {} — vital — through {}: a person reboots it, \
+                     whatever the house accepted",
+                    apps.into_iter().collect::<Vec<_>>().join(", "),
+                    services.join(", ")
+                ))
+            }
+        });
         match verdict {
             Ok(drain) => {
                 chosen = Some(Choice {
@@ -345,6 +447,164 @@ mod tests {
         }
     }
 
+    /// `choose` in a house with nothing vital.
+    fn pick(
+        nodes: &[NodeInfo],
+        waiting: &[String],
+        local: Option<&str>,
+        accept_downtime: bool,
+    ) -> (Option<Choice>, Vec<(String, String)>) {
+        choose(
+            nodes,
+            waiting,
+            local,
+            accept_downtime,
+            &Vital::default(),
+            &[],
+        )
+    }
+
+    fn manifest(name: &str, kind: &str, rest: &str) -> (String, Manifest) {
+        let m = serde_yaml_ng::from_str(&format!(
+            r#"
+apiVersion: hlb/v1
+kind: {kind}
+metadata: {{ name: {name}{} }}
+spec:
+  image: {{ repo: x/{name}, tag: "1" }}
+{rest}
+"#,
+            if name == "vaultwarden" {
+                ", criticality: vital"
+            } else {
+                ""
+            }
+        ))
+        .expect("manifest");
+        (name.to_string(), m)
+    }
+
+    /// Vaultwarden as the catalog has it, beside what it needs and an app it does not.
+    fn house() -> Vec<(String, Manifest)> {
+        vec![
+            manifest(
+                "vaultwarden",
+                "App",
+                r#"  requires:
+    - { kind: database, engine: postgres }
+    - { kind: sso, mode: native }
+    - { kind: smtp }
+  companions:
+    - { name: backup, image: { repo: x/b, tag: "1" } }
+  ingress: [{ host: vault, port: 80 }]"#,
+            ),
+            manifest(
+                "pocket-id",
+                "PlatformService",
+                "  requires: [{ kind: database, engine: postgres }]",
+            ),
+            manifest("postgres", "PlatformService", ""),
+            manifest("stalwart", "PlatformService", ""),
+            manifest(
+                "gitea",
+                "App",
+                "  requires: [{ kind: database, engine: mariadb }]\n  ingress: [{ host: git, port: 3000 }]",
+            ),
+            manifest("mariadb", "PlatformService", ""),
+        ]
+    }
+
+    fn task(service: &str, node: &str) -> TaskInfo {
+        TaskInfo {
+            id: format!("t-{service}"),
+            service: service.into(),
+            slot: Some(1),
+            node_id: Some(node.into()),
+            desired_state: "running".into(),
+            state: "running".into(),
+            image: String::new(),
+            message: None,
+            err: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn a_vital_app_counts_what_it_needs_and_its_companions() {
+        let vital = Vital::of(&house());
+        let mut services: Vec<&str> = vital.0.keys().map(String::as_str).collect();
+        services.sort();
+        // Transitively: PocketID's own PostgreSQL. Caddy for the route. Not Gitea's.
+        assert_eq!(
+            services,
+            [
+                "caddy",
+                "pocket-id",
+                "postgres",
+                "stalwart",
+                "vaultwarden",
+                "vaultwarden-backup"
+            ]
+        );
+        assert!(vital.0.values().all(|a| a == "vaultwarden"));
+        let without: Vec<_> = house()
+            .into_iter()
+            .filter(|(n, _)| n != "vaultwarden")
+            .collect();
+        assert_eq!(Vital::of(&without), Vital::default());
+    }
+
+    #[test]
+    fn a_reboot_stopping_a_vital_app_is_a_person_s_whatever_the_house_accepted() {
+        let vital = Vital::of(&house());
+        let nodes = cluster();
+        // deb3 keeps PostgreSQL's data: accepted downtime no longer reaches it.
+        let deb3 = vec!["id-deb3".to_string()];
+        let (chosen, left) = choose(&nodes, &deb3, None, true, &vital, &[]);
+        assert_eq!(chosen, None);
+        assert!(
+            left[0].1.contains("vaultwarden — vital — through postgres"),
+            "{left:?}"
+        );
+
+        // deb1, the only manager, is not drained: what runs there stops with it.
+        let deb1 = vec!["id-deb1".to_string()];
+        let gitea = [task("gitea", "id-deb1")];
+        let (chosen, _) = choose(&nodes, &deb1, None, true, &vital, &gitea);
+        assert_eq!(chosen.map(|c| c.drain), Some(false), "Gitea can wait");
+        let both = [
+            task("gitea", "id-deb1"),
+            task("vaultwarden-backup", "id-deb1"),
+        ];
+        let (chosen, left) = choose(&nodes, &deb1, None, true, &vital, &both);
+        assert_eq!(chosen, None);
+        assert!(left[0].1.contains("vaultwarden-backup"), "{left:?}");
+        // A task already gone stops nothing.
+        let mut gone = task("vaultwarden", "id-deb1");
+        gone.state = "shutdown".into();
+        assert!(choose(&nodes, &deb1, None, true, &vital, &[gone])
+            .0
+            .is_some());
+
+        // deb2 is drained: Vaultwarden's task moves with the rest.
+        let deb2 = vec!["id-deb2".to_string()];
+        let there = [task("vaultwarden", "id-deb2")];
+        let (chosen, _) = choose(&nodes, &deb2, None, false, &vital, &there);
+        assert_eq!(chosen.map(|c| c.drain), Some(true));
+        // Unless it is the ingress: the router forwards to that one machine.
+        let mut nodes = nodes;
+        nodes[1].ingress = true;
+        let (chosen, left) = choose(&nodes, &deb2, None, false, &vital, &[]);
+        assert_eq!(chosen, None);
+        assert!(left[0].1.contains("through caddy"), "{left:?}");
+
+        // A one-node house with Vaultwarden is never rebooted by itself.
+        let alone = vec![node("id-solo", "solo", hlb_orchestrator::NodeRole::Manager)];
+        let solo = vec!["id-solo".to_string()];
+        let runs = [task("vaultwarden", "id-solo")];
+        assert_eq!(choose(&alone, &solo, None, true, &vital, &runs).0, None);
+    }
+
     #[test]
     fn the_jobs_reach_the_host_on_that_node_and_nowhere_else() {
         let n = &cluster()[1];
@@ -423,7 +683,7 @@ mod tests {
     fn a_node_whose_services_can_move_is_drained_and_rebooted_alone() {
         let nodes = cluster();
         let waiting = vec!["id-deb3".to_string(), "id-deb2".to_string()];
-        let (chosen, left) = choose(&nodes, &waiting, Some("id-deb1"), false);
+        let (chosen, left) = pick(&nodes, &waiting, Some("id-deb1"), false);
         let chosen = chosen.expect("one");
         // deb3 is left for its data, and would be for its turn.
         // By hostname, one at a time.
@@ -433,7 +693,7 @@ mod tests {
         );
         assert_eq!(left.len(), 1);
         assert!(left[0].1.contains("one node at a time"), "{left:?}");
-        let (chosen, _) = choose(&nodes, &waiting[1..], Some("id-deb1"), false);
+        let (chosen, _) = pick(&nodes, &waiting[1..], Some("id-deb1"), false);
         assert_eq!(chosen.map(|c| c.node.hostname), Some("deb2".into()));
     }
 
@@ -444,18 +704,18 @@ mod tests {
         // nothing is scheduled, while either is down.
         for (id, said) in [("id-deb3", "postgres"), ("id-deb1", "managers")] {
             let one = vec![id.to_string()];
-            let (chosen, left) = choose(&nodes, &one, None, false);
+            let (chosen, left) = pick(&nodes, &one, None, false);
             assert_eq!(chosen, None);
             assert!(left[0].1.contains(said), "{left:?}");
-            let (chosen, _) = choose(&nodes, &one, None, true);
+            let (chosen, _) = pick(&nodes, &one, None, true);
             // Accepted: rebooted as it is — draining would move nothing that matters.
             assert_eq!(chosen.map(|c| c.drain), Some(false));
         }
 
         let alone = vec![node("id-solo", "solo", hlb_orchestrator::NodeRole::Manager)];
         let solo = vec!["id-solo".to_string()];
-        assert_eq!(choose(&alone, &solo, None, false).0, None);
-        assert!(choose(&alone, &solo, None, true).0.is_some());
+        assert_eq!(pick(&alone, &solo, None, false).0, None);
+        assert!(pick(&alone, &solo, None, true).0.is_some());
     }
 
     #[test]
@@ -463,10 +723,10 @@ mod tests {
         let nodes = cluster();
         let deb2 = vec!["id-deb2".to_string()];
         // 🔴 Drained, it stops the daemon that would put it back.
-        let (chosen, left) = choose(&nodes, &deb2, Some("id-deb2"), false);
+        let (chosen, left) = pick(&nodes, &deb2, Some("id-deb2"), false);
         assert_eq!(chosen, None);
         assert!(left[0].1.contains("Homelabus runs on it"), "{left:?}");
-        let (chosen, _) = choose(&nodes, &deb2, Some("id-deb2"), true);
+        let (chosen, _) = pick(&nodes, &deb2, Some("id-deb2"), true);
         assert_eq!(chosen.map(|c| c.drain), Some(false));
     }
 
@@ -475,7 +735,7 @@ mod tests {
         let mut nodes = cluster();
         nodes[1].availability = "drain".into();
         let both = vec!["id-deb2".to_string(), "id-deb3".to_string()];
-        let (chosen, left) = choose(&nodes, &both, None, true);
+        let (chosen, left) = pick(&nodes, &both, None, true);
         assert_eq!(chosen, None, "{left:?}");
         assert!(left[0].1.contains("a person is on it"), "{left:?}");
         // deb3 would be Go, but deb2 is out: one node at a time.

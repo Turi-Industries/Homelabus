@@ -379,7 +379,8 @@ A kernel installed is not a kernel running. The controller asks every node, insi
 house's window, whether one waits for a reboot, and reboots it on its own — drained first,
 one at a time, put back once it proves it booted. A node whose reboot stops applications
 (the only node, a manager the others are no majority without, one keeping data, the one
-Homelabus runs on) is left to a person unless the house accepts that downtime. One that
+Homelabus runs on) is left to a person unless the house accepts that downtime — and one
+whose reboot stops a vital app, or what it needs, is a person's whatever is accepted. One that
 does not drain or come back stops every automatic reboot, in the inbox, until `node
 upgrade` succeeds on it:
 

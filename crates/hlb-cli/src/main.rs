@@ -1118,7 +1118,8 @@ enum ConfigCmd {
         /// No machine reboots on its own; `hlb node upgrade` stays a person's.
         #[arg(long)]
         never: bool,
-        /// Reboot a machine whose applications stop meanwhile too, in the window.
+        /// Reboot a machine whose applications stop meanwhile too, in the window —
+        /// never one stopping a vital application or what it needs.
         #[arg(long, conflicts_with = "refuse_downtime")]
         accept_downtime: bool,
         /// Leave such a machine to a person (the default).
@@ -3872,7 +3873,7 @@ async fn config_reboots(
             None => "never on their own".to_string(),
         };
         let downtime = if p.accept_downtime {
-            "a machine whose applications stop meanwhile included"
+            "a machine whose applications stop meanwhile included, unless one is vital"
         } else {
             "a machine whose applications would stop is left to a person"
         };

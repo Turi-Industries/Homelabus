@@ -125,6 +125,13 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   downtime, like the only node, a manager without majority, or one keeping data — each
   left to a person unless `hlb config reboots --accept-downtime`. Where a reboot stands
   is a row of the state (`node_reboots`), written BEFORE the command, for the same reason.
+- **🔴 A reboot stopping a vital app is a person's, WHATEVER the house accepted**
+  (`reboot::Vital`, the owner's choice 2026-11-10). What the app needs counts as the app:
+  Vaultwarden is down whether its own task or PostgreSQL's stops, so the dependency
+  closure, its companions and Caddy (one machine behind the router) are guarded. A
+  drained node stops its data and the ingress; an undrained one everything on it. On a
+  one-node house that is every unattended reboot. Tasks that cannot be listed are not
+  "none": no reboot starts.
 - **A reboot given up blocks every other**, until `hlb node upgrade` succeeds on that
   node: whatever stopped it — a service that would not move, a node that did not come
   back — may stop the next the same way. A node not `active` is never picked: a person

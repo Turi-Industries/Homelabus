@@ -10,6 +10,8 @@ description = "Update watch, version policy, maintenance windows and rollback."
 [dependencies]
 serde_json.workspace = true
 hlb-types.workspace = true
+# The vital apps' dependencies: a node whose reboot stops one is a person's.
+hlb-resolver.workspace = true
 hlb-state.workspace = true
 hlb-registry.workspace = true
 hlb-orchestrator.workspace = true
