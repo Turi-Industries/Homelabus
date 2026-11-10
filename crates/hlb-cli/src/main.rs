@@ -11962,6 +11962,8 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             println!("  • {}  [{when}{backup_dir}]", c.describe());
                             let installed = state.app_manifest(&c.app).await?;
                             let house = state.update_automatic(&c.app).await?;
+                            let last = state.last_update_run(&c.app).await?;
+                            let undone = hlb_updater::undo::undone(last.as_ref(), &c.to_digest);
                             let exploited =
                                 hlb_updater::flaws::exploited(&state, &installed).await?;
                             if exploited {
@@ -11977,6 +11979,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             )
                             .await
                             {
+                                // The automatic pass refuses what a person undid: said
+                                // instead, or the two lines contradict each other.
+                                hlb_updater::policy::Decision::Automatic if undone => println!(
+                                    "      waits for a person: undone by hand, it goes once \
+                                     approved or applied"
+                                ),
                                 hlb_updater::policy::Decision::Automatic => {
                                     println!("      applies itself in its window")
                                 }
@@ -11989,13 +11997,6 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                             if let Some(why) = c.maturity.refusal(at).filter(|_| !exploited) {
                                 println!("      not yet: {why}");
-                            }
-                            let last = state.last_update_run(&c.app).await?;
-                            if hlb_updater::undo::undone(last.as_ref(), &c.to_digest) {
-                                println!(
-                                    "      undone by hand: it waits for a person, who approves it \
-                                     or applies it"
-                                );
                             }
                         }
                         println!("\n  hlb update apply <app> to apply.");

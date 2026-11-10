@@ -1627,6 +1627,12 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      a run of its own (`undone`), notified. Stopped halfway, the app stays stopped and the
      same command puts the whole copy back. The image undone then waits for a person: the
      automatic pass refuses it as of the undo (`UpdateRefusal::Undone`) until approved.
+     6d run on the lab 2026-11-10: Mealie v3.29.0 → v3.30.0 (copy: its volume and its
+     dump), then a table and a file written as witnesses, then undone in 55 s — schema
+     back to 3.29's alembic revision, both witnesses gone, the image of before frozen,
+     the app healthy, what each held kept as a snapshot. A pass had dumped Mealie two
+     minutes before the copy: the undo took the copy's dump, by its id. A second undo,
+     a run recorded before 0068 and an inconclusive one were refused as written.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
