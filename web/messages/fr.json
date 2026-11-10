@@ -2557,6 +2557,7 @@
 	"updates_refused_rolled_back": "Swarm l'a annulée : la version précédente tourne.",
 	"updates_refused_paused": "La bascule s'est mise en pause : regardez-la avant toute chose.",
 	"updates_refused_inconclusive": "Aucun résultat dans le temps imparti : vérifiez avec hlb ps.",
+	"updates_refused_undone": "Annulée à la main : elle ne s'applique de nouveau qu'une fois approuvée.",
 	"updates_approved": "Approuvée par {by}, {at}",
 	"updates_mark_waiting": "en attente",
 	"updates_mark_refused": "refusée",

@@ -256,6 +256,16 @@ pub fn update_notice(run: &hlb_state::UpdateRun) -> hlb_notify::Notification {
                 run.from_image, run.to_image
             ),
         ),
+        // A person's act, said all the same: whoever else looks after the house learns
+        // the data went back to the copy, and what was written since is gone.
+        O::Undone => hlb_notify::Notification::important(
+            &subject,
+            &format!("{}'s update was undone", run.app),
+            &format!(
+                "{} → {}, its data put back as copied before the update{detail}",
+                run.from_image, run.to_image
+            ),
+        ),
     }
 }
 

@@ -217,6 +217,7 @@ impl Pass<'_> {
             })
             .await
             .map_err(|e| e.to_string())?;
+        hold_undone(self.state, &c.app, &c.to_digest).await?;
         // Read back: the approval and the refusal are the state's, kept across passes.
         let recorded = self
             .state
@@ -287,6 +288,37 @@ impl Pass<'_> {
             Err(e) => failed(c, e),
         }
     }
+}
+
+/// 🔴 The image a person undid is a person's to put back: automatic, the next pass would
+/// apply it again within the hour, over the data the undo restored. Refused as of the
+/// undo, so only an approval given after it lets it go. Called once the pass recorded its
+/// decision, which a refusal needs to sit on.
+async fn hold_undone(state: &State, app: &str, digest: &str) -> Result<(), String> {
+    let last = state
+        .last_update_run(app)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(run) = last
+        .as_ref()
+        .filter(|_| hlb_updater::undo::undone(last.as_ref(), digest))
+    else {
+        return Ok(());
+    };
+    let refused = state
+        .update_decision(app)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some_and(|d| d.digest == digest && d.refused_at.is_some_and(|r| r >= run.ran_at));
+    if refused {
+        return Ok(());
+    }
+    let json = serde_json::to_string(&hlb_api::updates::UpdateRefusal::Undone)
+        .map_err(|e| e.to_string())?;
+    state
+        .refuse_update(app, digest, &json, run.ran_at)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Whether an update decided to go alone goes this pass: in its window, and mature — or
@@ -483,5 +515,92 @@ mod tests {
             refusal(&failed),
             Some(UpdateRefusal::Failed { .. })
         ));
+    }
+    #[tokio::test]
+    async fn the_image_a_person_undid_waits_for_a_person_again() {
+        use hlb_api::updates::{UpdateNeed, UpdateRefusal};
+        let s = State::in_memory().await.expect("state");
+        let decide = |digest: &str| hlb_state::UpdateDecision {
+            app: "gitea".into(),
+            digest: digest.into(),
+            from_tag: "1.24.3".into(),
+            kind: "version".into(),
+            to_tag: Some("1.24.4".into()),
+            who: "automatic".into(),
+            why: None,
+            notes: None,
+            decided_at: 300,
+            refused: None,
+            refused_at: None,
+            approved_by: None,
+            approved_at: None,
+        };
+        let needs = |s: &State| {
+            let s = s.clone();
+            async move {
+                s.update_decision("gitea")
+                    .await
+                    .expect("read")
+                    .and_then(|d| d.waiting())
+                    .expect("waiting")
+            }
+        };
+        let run = |outcome, from: &str, to: &str| hlb_state::UpdateRun {
+            id: 0,
+            app: "gitea".into(),
+            ran_at: 200,
+            from_image: from.into(),
+            to_image: to.into(),
+            outcome,
+            detail: String::new(),
+            undo: None,
+        };
+        s.record_update_run(&run(
+            hlb_state::UpdateRunOutcome::Applied,
+            "gitea:1.24.3@sha256:old",
+            "gitea:1.24.4@sha256:new",
+        ))
+        .await
+        .expect("applied");
+        s.record_update_decision(&decide("sha256:new"))
+            .await
+            .expect("decided");
+        hold_undone(&s, "gitea", "sha256:new").await.expect("held");
+        assert_eq!(
+            needs(&s).await.needs(),
+            None,
+            "applied, not undone: it goes alone"
+        );
+
+        s.record_update_run(&run(
+            hlb_state::UpdateRunOutcome::Undone,
+            "gitea:1.24.4@sha256:new",
+            "gitea:1.24.3@sha256:old",
+        ))
+        .await
+        .expect("undone");
+        hold_undone(&s, "gitea", "sha256:new").await.expect("held");
+        let w = needs(&s).await;
+        assert_eq!(w.refused, Some(UpdateRefusal::Undone));
+        assert_eq!(w.needs(), Some(UpdateNeed::Look));
+
+        // Approved after the undo, it goes; the next pass does not refuse it again.
+        s.approve_update("gitea", "sha256:new", "alice", 400)
+            .await
+            .expect("approved");
+        s.record_update_decision(&decide("sha256:new"))
+            .await
+            .expect("decided again");
+        hold_undone(&s, "gitea", "sha256:new").await.expect("held");
+        assert_eq!(needs(&s).await.needs(), None);
+
+        // Another image is another decision.
+        s.record_update_decision(&decide("sha256:newer"))
+            .await
+            .expect("decided");
+        hold_undone(&s, "gitea", "sha256:newer")
+            .await
+            .expect("held");
+        assert_eq!(needs(&s).await.needs(), None);
     }
 }

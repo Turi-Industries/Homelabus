@@ -28,6 +28,7 @@ pub mod policy;
 pub mod reboot;
 pub mod run;
 pub mod scan;
+pub mod undo;
 pub mod window;
 
 pub use apply::{apply, UpdateOutcome};

@@ -20,6 +20,7 @@ mod site;
 mod sources;
 mod storage;
 mod termix;
+mod undo;
 mod ups;
 mod verify_boot;
 
@@ -945,6 +946,20 @@ enum UpdateCmd {
         /// urgent fix. Recorded in the audit log.
         #[arg(long)]
         before_maturity: bool,
+    },
+    /// Take back an app's last update: its images as they were, its data as the copy
+    /// taken before it held them. What was written since is lost.
+    ///
+    /// 🔴 The name must be repeated with --confirm: an undo on the wrong app loses that
+    /// app's writes since its update.
+    Undo {
+        app: String,
+        /// Repeat the app's name. Required by --apply.
+        #[arg(long)]
+        confirm: Option<String>,
+        /// Actually undo it.
+        #[arg(long, requires = "confirm")]
+        apply: bool,
     },
     /// How far updates go with nobody there: patches by default, a minor with a click, a
     /// major by hand. Shows the settings without `--automatic`.
@@ -11809,6 +11824,27 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return update_policy(&state, app.as_deref(), automatic.as_deref()).await;
                 }
 
+                // Reads no registry: what it puts back is the run's, kept when it ran.
+                if let UpdateCmd::Undo {
+                    app,
+                    confirm,
+                    apply,
+                } = cmd
+                {
+                    let vault = open_vault(&cli)?;
+                    return undo::run(
+                        &cli,
+                        &state,
+                        &vault,
+                        undo::Request {
+                            app,
+                            confirm: confirm.as_deref(),
+                            apply: *apply,
+                        },
+                    )
+                    .await;
+                }
+
                 if matches!(cmd, UpdateCmd::Lag) {
                     print!(
                         "{}",
@@ -11899,6 +11935,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     UpdateCmd::Scan { .. } => unreachable!(),
                     UpdateCmd::Lag => unreachable!(),
                     UpdateCmd::Policy { .. } => unreachable!(),
+                    UpdateCmd::Undo { .. } => unreachable!(),
                     UpdateCmd::Check => {
                         if candidates.is_empty() && checked.unreadable.is_empty() {
                             if !checked.held.is_empty() {
@@ -11952,6 +11989,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                             if let Some(why) = c.maturity.refusal(at).filter(|_| !exploited) {
                                 println!("      not yet: {why}");
+                            }
+                            let last = state.last_update_run(&c.app).await?;
+                            if hlb_updater::undo::undone(last.as_ref(), &c.to_digest) {
+                                println!(
+                                    "      undone by hand: it waits for a person, who approves it \
+                                     or applies it"
+                                );
                             }
                         }
                         println!("\n  hlb update apply <app> to apply.");

@@ -7538,6 +7538,21 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "description": "A person undid this very image (`hlb update undo`): it goes back only when a\nperson says so again.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "undone"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },

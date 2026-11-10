@@ -199,6 +199,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   container uses goes, whatever its origin: the lab's `hlb-runner:bookworm`, built on
   deb1 and run only with `--rm`, was gone the next day — one that cannot be pulled again
   is kept by a container, or rebuilt.
+- **🔴 An undo is the last update, put back whole, once.** `hlb update undo` takes the
+  copy by the ids its run kept and refuses unless every volume, bucket and database the
+  app backs up is among them — half a copy is neither day; nor an app moved since the
+  run, or a run already undone: either restores a copy older than what is there. The
+  images go back while the app is stopped, so no task starts the new image on the old
+  data. And the image undone is a person's from then on (`hlb_updater::undo::undone`):
+  `update_lags` reads it as applied, but a companion's move or a pass recomputing the
+  candidate would have the automatic pass apply it again within the hour, over the data
+  the undo gave back.
 
 ## The catalog's signed index
 
