@@ -1285,10 +1285,14 @@ mod tests {
                 .expect("a matcher"),
         );
         assert!(gated.starts_with("not path /oauth2/*\n}"), "{gated}");
-        assert!(!closed.contains("not vars_regexp"), "{closed}");
+        // Not `{closed}`: the whole Caddyfile carries the bouncer's key.
+        assert!(
+            !closed.contains("not vars_regexp"),
+            "an open path left with none"
+        );
         assert!(
             closed.contains("forward_auth @gated_n8n_example_fr oauth2-proxy:4180 {"),
-            "{closed}"
+            "the portal asked without its matcher"
         );
     }
 
@@ -1598,7 +1602,7 @@ mod tests {
         );
         assert!(
             out.contains("forward_auth @gated_tasks_example_fr oauth2-proxy:4180 {"),
-            "{out}"
+            "the portal asked without its matcher"
         );
     }
 
