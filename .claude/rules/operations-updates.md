@@ -93,6 +93,15 @@ manifest is re-frozen). A wrong answer here reads as "up to date".
   The inbox says it per app (`flaw_exploitable`, critical, from `flaw_alerts`) and an
   image with no good reading for two days (`flaws_unknown`) — 🔴 one running by its tag
   alone included: no digest to read is not clean.
+- **🔴 Syft lists an image in memory, and unbounded it takes the node down.** The lab's
+  4 GB manager listing `n8nio/n8n:3.0.0` (1.9 GB, its `node_modules`) went into the
+  kernel's OOM killer for seven minutes — Caddy, PocketID and the daemon with it, every
+  app 0/1 —, then froze outright at the next pass (2026-11-10). Measured under a cgroup
+  limit: n8n needs more than 2 GiB (killed at 2, done at 3), `postgres:17` peaks at
+  660 MiB. Each Syft job may take a quarter of its node (`grype::syft_memory`, no
+  reservation); killed at it, the image is "not checked" and says so (`syft_failed`:
+  Swarm says only `exit (137)`). A pass runs ten minutes after the daemon STARTS: a
+  daemon restarted three times scanned three times in an hour.
 - **A machine's own packages are read by the same rule, and 🔴 a system Grype holds no
   advisories for reads CLEAN.** Measured 2026-11-08 on old images: openSUSE Leap 15.5
   gave 0 fixable flaws, Arch 5 from sources not its own, where Debian 12.8 gave 97 and

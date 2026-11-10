@@ -1694,7 +1694,9 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // Idempotent: an existing client is kept, and its secret is NEVER
                 // regenerated - it is already injected into the running app. Its
                 // callbacks are brought to the ones computed from today's domain.
-                let creds = pid.ensure(client, redirect_uris, true).await?;
+                let creds = pid
+                    .ensure(client, redirect_uris, hlb_identity::CLIENTS_REQUIRE_PKCE)
+                    .await?;
 
                 keep_oidc_credentials(
                     self.state,

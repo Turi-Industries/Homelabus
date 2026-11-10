@@ -17,7 +17,9 @@ use hlb_bootstrap::{Distro, PackageManager};
 use hlb_orchestrator::swarm::DOCKER_CLI_IMAGE;
 use hlb_orchestrator::{JobOutcome, NodeInfo, ServiceSpec};
 
-use crate::grype::{grype_reading, report, tail, Finding, Grype, SYFT_IMAGE};
+use crate::grype::{
+    grype_reading, report, syft_failed, syft_memory, tail, Finding, Grype, SYFT_IMAGE,
+};
 
 /// The `ID`s whose advisories Grype reads, each measured 2026-11-08 against an old image
 /// of it (fixable flaws found: Debian 12.8 97, Ubuntu 24.04 9, Rocky 9.3 517, AlmaLinux
@@ -109,6 +111,7 @@ pub fn syft_job(node: &NodeInfo, db: &str) -> ServiceSpec {
         ]);
     // Syft writes its cache under the home directory.
     job.hardening.read_only_rootfs = false;
+    job.memory = Some(syft_memory(node.memory_mb));
     job
 }
 
@@ -213,7 +216,11 @@ impl Grype<'_> {
                 .ok_or_else(|| format!("/etc/os-release names no known system: {}", tail(&os)))?;
             system = distro.pretty_name.clone();
             let db = database(&distro)?;
-            let listed = output(&self.run(&syft_job(node, db)).await?, "Syft")?;
+            let listed = self.run(&syft_job(node, db)).await?;
+            if !listed.succeeded {
+                return Err(syft_failed(&listed, &syft_memory(node.memory_mb)));
+            }
+            let listed = listed.output;
             let packages = parse(&listed)?;
             if packages.purls.iter().map(|p| p.len() + 1).sum::<usize>() > PURLS_MAX {
                 return Err(format!(

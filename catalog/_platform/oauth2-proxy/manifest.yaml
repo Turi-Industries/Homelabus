@@ -59,6 +59,9 @@ spec:
     # Forward-auth only: it answers yes or no, it proxies nothing.
     OAUTH2_PROXY_UPSTREAMS: "static://202"
     OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+    # 🔴 Every client hlb registers requires PKCE (`hlb_identity::CLIENTS_REQUIRE_PKCE`):
+    # without a challenge PocketID refuses the sign-in after the account is chosen.
+    OAUTH2_PROXY_CODE_CHALLENGE_METHOD: "S256"
     # 🔴 Each route behind the portal lets in the groups of the roles its app allows
     # (`/oauth2/auth?allowed_groups=…`, written into the Caddyfile). PocketID gives the
     # `groups` claim only to a client asking for that scope: without it the session has

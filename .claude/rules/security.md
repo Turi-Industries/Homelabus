@@ -309,6 +309,12 @@ the outside, which is the whole problem.
   turning the restriction off CLEARS its groups, and restricted with no group it lets
   nobody in (2.18, `oidc_service.go`). `restrict_client` writes the groups first, then
   the flag — the other way round shuts out whoever is signed in between the two calls.
+- **🔴 Every client `hlb` registers requires PKCE, the portal's too**
+  (`hlb_identity::CLIENTS_REQUIRE_PKCE`). oauth2-proxy sends a challenge only when told
+  (`OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256`): without it PocketID refused every sign-in
+  through the portal AFTER the account was chosen, "This client requires PKCE" (lab,
+  2026-11-10). The live test had made its client without PKCE and proved a sign-in no
+  house runs; it reads the constant now.
 - **🔴 oauth2-proxy's `allowed_groups` left EMPTY is everyone signed in**
   (`checkAllowedGroups`, v7.15.3). A route behind the portal whose app lets no role in
   answers 403 in Caddy and never asks the portal. The portal asks PocketID for the

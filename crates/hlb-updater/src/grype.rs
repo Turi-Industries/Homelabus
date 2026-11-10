@@ -15,7 +15,8 @@
 use std::collections::BTreeMap;
 
 use hlb_orchestrator::{JobOutcome, Orchestrator, ServiceSpec};
-use hlb_types::ImageSigner;
+use hlb_types::manifest::Bytes;
+use hlb_types::{ImageSigner, Memory};
 
 use crate::scan::{Report, Verdict};
 use crate::Result;
@@ -185,8 +186,46 @@ fn job(kind: &str, image: &str, network: &str, node: Option<&str>) -> ServiceSpe
     job
 }
 
-fn sbom_job(image: &str, file: &str, network: &str, node: Option<&str>) -> ServiceSpec {
-    job("sbom", image, network, node).command([
+/// What a Syft job may take of the node it runs on: a quarter of it, a GiB when its size
+/// is unknown. No reservation — it would only make the job wait for room Swarm thinks
+/// is taken.
+///
+/// 🔴 Unbounded, Syft took the node down with it: listing `n8nio/n8n:3.0.0` needs more
+/// than 2 GiB (killed at 2, done at 3 — `postgres:17` peaks at 660 MiB), and on the
+/// lab's 4 GB manager it drove the whole house into the kernel's OOM killer for seven
+/// minutes, Caddy and the daemon included, then froze it at the next pass (2026-11-10).
+/// Killed at its own limit, the image is only "not checked", and says why.
+pub(crate) fn syft_memory(node_mb: Option<u64>) -> Memory {
+    const MIB: u64 = 1024 * 1024;
+    Memory {
+        reserve: Bytes(0),
+        limit: Bytes(node_mb.map_or(1024, |mb| mb / 4) * MIB),
+    }
+}
+
+/// Why a Syft job failed, a kill at its memory limit named as such: Swarm says only
+/// "non-zero exit (137)", and a killed process writes nothing.
+pub(crate) fn syft_failed(o: &JobOutcome, memory: &Memory) -> String {
+    if o.output.iter().any(|l| l.contains("exit (137)")) {
+        format!(
+            "Syft failed: it needed more than the {} MiB it may take on this node",
+            memory.limit.mib()
+        )
+    } else {
+        format!("Syft failed: {}", tail(&o.output))
+    }
+}
+
+fn sbom_job(
+    image: &str,
+    file: &str,
+    network: &str,
+    node: Option<&str>,
+    memory: Memory,
+) -> ServiceSpec {
+    let mut job = job("sbom", image, network, node);
+    job.memory = Some(memory);
+    job.command([
         "/syft".to_string(),
         "scan".to_string(),
         format!("registry:{image}"),
@@ -243,6 +282,16 @@ impl Grype<'_> {
             return Err("no digest: the scan would read whatever the tag names today".into());
         };
         let node = self.orchestrator.local_node().await.ok().flatten();
+        let node_mb = match &node {
+            Some(id) => self
+                .orchestrator
+                .nodes()
+                .await
+                .ok()
+                .and_then(|ns| ns.into_iter().find(|n| &n.id == id))
+                .and_then(|n| n.memory_mb),
+            None => None,
+        };
         let node = node.as_deref();
         if let Ok(found) = report(
             &self
@@ -251,11 +300,12 @@ impl Grype<'_> {
         ) {
             return Ok(found);
         }
+        let memory = syft_memory(node_mb);
         let listed = self
-            .run(&sbom_job(image, &file, self.network, node))
+            .run(&sbom_job(image, &file, self.network, node, memory))
             .await?;
         if !listed.succeeded {
-            return Err(format!("Syft failed: {}", tail(&listed.output)));
+            return Err(syft_failed(&listed, &memory));
         }
         report(
             &self
@@ -548,9 +598,44 @@ mod tests {
             .files
             .iter()
             .any(|(p, t)| p == TEMPLATE_PATH && t == TEMPLATE));
-        let sbom = sbom_job(&image, "/sbom/x.json", "hlb_platform", None);
+        let sbom = sbom_job(
+            &image,
+            "/sbom/x.json",
+            "hlb_platform",
+            None,
+            syft_memory(None),
+        );
         assert_eq!(sbom.image, SYFT_IMAGE);
         assert!(sbom.command.contains(&format!("registry:{image}")));
         assert!(sbom.constraints.is_empty());
+    }
+
+    #[test]
+    fn syft_takes_a_quarter_of_its_node_and_never_the_node() {
+        let image = format!("n8nio/n8n:3.0.0@sha256:{}", "c".repeat(64));
+        let sbom = sbom_job(&image, "/sbom/x.json", "n", None, syft_memory(Some(3_915)));
+        let memory = sbom.memory.expect("bounded");
+        assert_eq!(memory.limit.mib(), 978);
+        // Reserved, it would wait for room Swarm counts as taken, and time out.
+        assert_eq!(memory.reserve.0, 0);
+        assert_eq!(syft_memory(None).limit.mib(), 1_024);
+    }
+
+    #[test]
+    fn syft_killed_at_its_limit_says_so() {
+        let memory = syft_memory(Some(4_096));
+        let killed = JobOutcome {
+            succeeded: false,
+            output: vec!["task: non-zero exit (137)".into()],
+        };
+        assert_eq!(
+            syft_failed(&killed, &memory),
+            "Syft failed: it needed more than the 1024 MiB it may take on this node"
+        );
+        let refused = JobOutcome {
+            succeeded: false,
+            output: vec!["unauthorized".into()],
+        };
+        assert_eq!(syft_failed(&refused, &memory), "Syft failed: unauthorized");
     }
 }
