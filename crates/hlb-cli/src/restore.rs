@@ -434,18 +434,14 @@ async fn database(
         },
     };
     let (engine, db_name, extensions) = (found.0, found.1.as_str(), found.2);
-    // 🔴 Exhaustive: an engine added to `DbEngine` must decide where it is restored from.
-    let (admin, server, flag) = match engine {
-        hlb_types::DbEngine::Postgres => (cli.postgres_admin.as_deref(), "PostgreSQL", "postgres"),
-        hlb_types::DbEngine::Mariadb => (cli.mariadb_admin.as_deref(), "MariaDB", "mariadb"),
+    let admin = match cli.admin_of(state, app, db_name, engine).await? {
+        Ok(a) => a,
+        Err(none) => {
+            eprintln!("🔴 {none}: nothing can be restored.");
+            return Ok(ExitCode::FAILURE);
+        }
     };
-    let Some(admin) = admin else {
-        eprintln!(
-            "🔴 {server}'s administrator is in no vault here (--{flag}-admin): nothing can \
-             be restored."
-        );
-        return Ok(ExitCode::FAILURE);
-    };
+    let admin = admin.as_str();
 
     let orch = SwarmOrchestrator::connect().await.ok();
     let o = orch

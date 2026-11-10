@@ -925,6 +925,14 @@ impl State {
             source,
         })?;
 
+        // 🔴 Before the vital server is first recorded, since from then on a vital app's
+        // plan places its databases there: one provisioned before `database_servers`
+        // existed has no row, so nothing would refuse a plan provisioning it EMPTY on
+        // the vital server, and the app's next deployment would point at that.
+        if name == hlb_types::VITAL_POSTGRES && !self.is_recorded(name).await? {
+            self.pin_unplaced_databases().await?;
+        }
+
         sqlx::query(
             "INSERT INTO apps (name, manifest, domain, status)
              VALUES (?1, ?2, ?3, 'installing')
@@ -2927,6 +2935,41 @@ impl State {
         .bind(server.service_name())
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn is_recorded(&self, app: &str) -> Result<bool> {
+        Ok(sqlx::query("SELECT 1 FROM apps WHERE name = ?1")
+            .bind(app)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some())
+    }
+
+    /// Records the engine's shared server for every database a frozen manifest names
+    /// and nothing placed yet: before the vital server, there was nowhere else for it.
+    /// A failed app's too — a database provisioned before its failure lives there.
+    pub async fn pin_unplaced_databases(&self) -> Result<()> {
+        let placed = self.database_servers().await?;
+        for (app, _) in self.installed_apps().await? {
+            let Ok(m) = self.app_manifest(&app).await else {
+                continue;
+            };
+            for c in &m.spec.requires {
+                if let hlb_types::Capability::Database { engine, name, .. } = c {
+                    // The resolver's convention: unnamed, the database is the app's.
+                    let db = name.clone().unwrap_or_else(|| app.clone());
+                    if !placed.contains_key(&(app.clone(), db.clone())) {
+                        self.record_database_server(
+                            &app,
+                            &db,
+                            hlb_types::DbServer::shared(*engine),
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -7187,6 +7230,61 @@ mod tests {
             s.app_databases().await,
             Err(Error::UnknownDatabaseServer { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn the_vital_server_pins_every_older_database_to_the_shared_one() {
+        // A database provisioned before `database_servers` has no row: unpinned, a
+        // vital app's next plan would provision it empty on the vital server.
+        let s = st().await;
+        let y = |app: &str| {
+            format!(
+                "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: {app} }}\n\
+                 spec:\n  image: {{ repo: a/b, tag: \"1\" }}\n\
+                 \x20 requires:\n    - kind: database\n      engine: postgres\n"
+            )
+        };
+        let m = |app: &str| -> Manifest { serde_yaml_ng::from_str(&y(app)).expect("manifest") };
+        s.upsert_app("vaultwarden", &m("vaultwarden"), None)
+            .await
+            .expect("upsert");
+        assert_eq!(
+            s.database_server("vaultwarden", "vaultwarden")
+                .await
+                .expect("read"),
+            None
+        );
+
+        s.upsert_app(
+            hlb_types::VITAL_POSTGRES,
+            &manifest(hlb_types::VITAL_POSTGRES),
+            None,
+        )
+        .await
+        .expect("upsert");
+        assert_eq!(
+            s.database_server("vaultwarden", "vaultwarden")
+                .await
+                .expect("read"),
+            Some(hlb_types::DbServer::Postgres)
+        );
+
+        // Only the FIRST time: an app installing since is placed by its own plan, and
+        // the vital server recorded again (resumed, upgraded) must not pin it back.
+        s.upsert_app("gitea", &m("gitea"), None)
+            .await
+            .expect("upsert");
+        s.upsert_app(
+            hlb_types::VITAL_POSTGRES,
+            &manifest(hlb_types::VITAL_POSTGRES),
+            None,
+        )
+        .await
+        .expect("upsert");
+        assert_eq!(
+            s.database_server("gitea", "gitea").await.expect("read"),
+            None
+        );
     }
 
     #[tokio::test]

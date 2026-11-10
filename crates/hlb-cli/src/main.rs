@@ -2832,6 +2832,40 @@ fn main() -> ExitCode {
     }
 }
 
+impl Cli {
+    /// The database servers' administrators this run was given.
+    fn admins(&self) -> hlb_backup_run::Admins<'_> {
+        hlb_backup_run::Admins {
+            postgres: self.postgres_admin.as_deref(),
+            postgres_vital: self.postgres_vital_admin.as_deref(),
+            mariadb: self.mariadb_admin.as_deref(),
+        }
+    }
+
+    /// The administrator of the server `app`'s `database` lives on, or why there is
+    /// none. 🔴 Where the state recorded it, never the engine's shared server: a vital
+    /// app's database restored into the shared one is a copy beside it the app never
+    /// reads, and its live one is left as it was.
+    async fn admin_of(
+        &self,
+        state: &State,
+        app: &str,
+        database: &str,
+        engine: hlb_types::DbEngine,
+    ) -> Result<Result<String, String>, Box<dyn std::error::Error>> {
+        let server = state
+            .database_server(app, database)
+            .await?
+            .unwrap_or_else(|| hlb_types::DbServer::shared(engine));
+        let name = server.service_name();
+        Ok(self
+            .admins()
+            .of(server)
+            .map(str::to_string)
+            .ok_or_else(|| format!("{name}'s administrator is in no vault here (--{name}-admin)")))
+    }
+}
+
 /// The provider an update's prior copy goes through: the app's first bulky destination for
 /// its volumes and buckets and first critical one for its dumps, or `--backup-repo`. `None`
 /// refuses the update.
@@ -2841,11 +2875,7 @@ async fn build_backup_provider(
     state: &State,
     vault: &Vault,
 ) -> Result<Option<hlb_backup_run::PlacedProvider>, Box<dyn std::error::Error>> {
-    let admins = hlb_backup_run::Admins {
-        postgres: cli.postgres_admin.as_deref(),
-        postgres_vital: cli.postgres_vital_admin.as_deref(),
-        mariadb: cli.mariadb_admin.as_deref(),
-    };
+    let admins = cli.admins();
     // Garage does not resolve on a host: a relay, opened only for an app keeping a bucket.
     let s3_endpoint = if state.buckets_to_backup(app).await?.is_empty() {
         None
@@ -5895,6 +5925,7 @@ async fn switch_manifest(
         domain: domain.clone(),
         mail_domain,
         timezone: state.timezone().await?,
+        vital_postgres: hlb_engine::install::vital_postgres(state).await?,
         ..Default::default()
     };
     let guide = &entry.guide;
@@ -6194,6 +6225,7 @@ async fn plan_as_installed(
         // The one its install took: the exposure's of today may be another.
         mail_domain: hlb_engine::install::mail_domain(state, app, None).await?,
         timezone: state.timezone().await?,
+        vital_postgres: hlb_engine::install::vital_postgres(state).await?,
         ..Default::default()
     };
     Ok(hlb_resolver::resolve_with_guide(&frozen, &guide, &params)?)
@@ -6553,9 +6585,23 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok(ExitCode::FAILURE);
                 }
             };
+            // Read from an installation when there is one — never created here: with a
+            // site, a vital app's databases are placed on the vital server.
+            let vital_postgres = if cli.state.exists() {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(async {
+                    let state = State::open_read_only(&cli.state).await?;
+                    Ok::<_, Box<dyn std::error::Error>>(
+                        hlb_engine::install::vital_postgres(&state).await?,
+                    )
+                })?
+            } else {
+                false
+            };
             let params = InstallParams {
                 domain,
                 mail_domain,
+                vital_postgres,
                 ..Default::default()
             };
 
@@ -6852,6 +6898,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     domain: basis.domain.clone(),
                     mail_domain: basis.mail_domain.clone(),
                     timezone: state.timezone().await?,
+                    vital_postgres: hlb_engine::install::vital_postgres(&state).await?,
                     ..Default::default()
                 };
                 let plan =

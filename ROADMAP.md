@@ -1718,6 +1718,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.
+       `hlb backup pitr`, `hlb replication` and `hlb dr exercise` still speak to the
+       shared server alone: each takes the vital one here.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
        restored by the promotion.
      - 8d. The vital volumes pushed every minute, what changed only.

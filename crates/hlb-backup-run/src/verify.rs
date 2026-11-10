@@ -178,7 +178,13 @@ async fn databases(
                 .await?;
             snapshot.clone_from(&source.snapshot.id);
             destination.clone_from(&source.destination.name);
-            let server = engine.service_name();
+            // The server it lives on: the vital one is its own manifest.
+            let server = state
+                .database_server(app, &name)
+                .await
+                .map_err(|e| e.to_string())?
+                .unwrap_or_else(|| hlb_types::DbServer::shared(engine))
+                .service_name();
             let image = state
                 .app_manifest(server)
                 .await

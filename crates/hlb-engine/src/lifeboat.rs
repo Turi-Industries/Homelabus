@@ -55,6 +55,9 @@ pub async fn plan_of(state: &State, app: &str) -> crate::Result<Plan> {
         domain: state.app_domain(app).await?,
         mail_domain: crate::install::mail_domain(state, app, None).await?,
         timezone: state.timezone().await?,
+        // The site runs one PostgreSQL, `postgres`, and carries the vital server's
+        // databases into it.
+        vital_postgres: false,
         ..Default::default()
     };
     Ok(hlb_resolver::resolve_with_guide(

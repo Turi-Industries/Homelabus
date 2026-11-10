@@ -183,13 +183,19 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     for why in &refused {
         eprintln!("  🔴 {why}");
     }
-    let databases = all.iter().any(|c| !c.databases.is_empty());
-    if databases && cli.postgres_admin.is_none() {
-        refused.push("PostgreSQL's administrator is in no vault here (--postgres-admin)".into());
-        eprintln!(
-            "  🔴 {}",
-            refused.last().map(String::as_str).unwrap_or_default()
-        );
+    // Each into the server it lives on at home: a vital app's, the vital one.
+    for c in &all {
+        for (name, _) in &c.databases {
+            if let Err(none) = cli
+                .admin_of(&state, &c.app, name, DbEngine::Postgres)
+                .await?
+            {
+                if !refused.contains(&none) {
+                    eprintln!("  🔴 {none}");
+                    refused.push(none);
+                }
+            }
+        }
     }
     if !refused.is_empty() {
         eprintln!("\nNothing was changed: the site keeps serving.");
@@ -455,9 +461,12 @@ async fn bring(
     }
 
     // Restored over the house's, each backing up what it replaces.
-    let admin_url = cli.postgres_admin.as_deref().unwrap_or_default();
     for (c, (dbs, vols)) in all.iter().zip(&read) {
         for ((name, extensions), b) in c.databases.iter().zip(dbs) {
+            let admin_url = cli
+                .admin_of(state, &c.app, name, DbEngine::Postgres)
+                .await
+                .map_err(|e| e.to_string())??;
             let db = Database {
                 engine: DbEngine::Postgres,
                 name,
@@ -465,7 +474,7 @@ async fn bring(
                 extensions,
             };
             let before = restore
-                .database_in_place(&c.app, &db, admin_url, &b.source)
+                .database_in_place(&c.app, &db, &admin_url, &b.source)
                 .await
                 .map_err(|f| failed(&c.app, name, f))?;
             say(format!(
