@@ -1716,7 +1716,12 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      - 8a. A PostgreSQL of the vital apps' own at home, a vital app's database moved
        into it by `hlb site add`, its copy taken first. Built 2026-11-10; the move
        back waits for `hlb site remove`, which does not exist yet
-       (`site::vital::moves(state, false)` lists it).
+       (`site::vital::moves(state, false)` lists it). Proved on the lab the same
+       night, by `hlb site sync` on a site added before: Vaultwarden's 31 tables and
+       a witness row moved from deb2's shared server to `postgres-vital` on deb1, gone
+       from the first; the moving-house drill then went through the lifeboat, the
+       cut (268 s to the VPS) and the return (122 s home), the database coming back
+       onto `postgres-vital` with the witness.
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.
