@@ -109,6 +109,8 @@ fn answers_where(
     const NOERROR: u64 = 0;
     const NXDOMAIN: u64 = 3;
     let code = match kind {
+        "A" => 1,
+        "AAAA" => 28,
         "TXT" => 16,
         "MX" => 15,
         "NS" => 2,
@@ -169,6 +171,21 @@ mod tests {
             answers_at(&body, "NS", "DESEC.io.").expect("read"),
             ["ns1.desec.io.", "ns2.desec.org."]
         );
+    }
+
+    #[test]
+    fn an_address_behind_a_cname_is_the_names_address() {
+        // A name pointed at a site by a CNAME: what a visitor reaches is the target's.
+        let body = serde_json::json!({
+            "Status": 0,
+            "Answer": [
+                { "name": "vault.example.fr", "type": 5, "data": "vps.example.fr." },
+                { "name": "vps.example.fr", "type": 1, "data": "203.0.113.7" },
+                { "name": "vps.example.fr", "type": 28, "data": "2001:db8::7" },
+            ],
+        });
+        assert_eq!(answers(&body, "A").expect("read"), ["203.0.113.7"]);
+        assert_eq!(answers(&body, "AAAA").expect("read"), ["2001:db8::7"]);
     }
 
     #[test]
