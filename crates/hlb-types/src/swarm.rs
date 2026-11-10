@@ -187,6 +187,12 @@ pub fn anti_affinity_violations(
     placements: &[(String, String)],
     nodes: &[NodeInfo],
 ) -> Vec<Violation> {
+    // One machine has nowhere else to put a replica: said on every one-node house, the
+    // portal's two would be noise nobody can act on. Two VMs of one server still are
+    // two nodes, and still flagged.
+    if nodes.len() < 2 {
+        return Vec::new();
+    }
     let domain_of: std::collections::BTreeMap<&str, Option<&str>> = nodes
         .iter()
         .map(|n| (n.id.as_str(), n.failure_domain.as_deref()))
@@ -862,6 +868,19 @@ mod tests {
         let nodes = [node("vm-a", Some("big-01"))];
         let placements = [("valkey".to_string(), "vm-a".to_string())];
         assert!(anti_affinity_violations(&placements, &nodes).is_empty());
+    }
+
+    #[test]
+    fn replicas_on_the_only_node_are_never_flagged() {
+        let nodes = [node("vm-a", Some("big-01"))];
+        let placements = [
+            ("oauth2-proxy".to_string(), "vm-a".to_string()),
+            ("oauth2-proxy".to_string(), "vm-a".to_string()),
+        ];
+        assert!(anti_affinity_violations(&placements, &nodes).is_empty());
+        // A second node in the same box makes it a lie again.
+        let nodes = [node("vm-a", Some("big-01")), node("vm-b", Some("big-01"))];
+        assert_eq!(anti_affinity_violations(&placements, &nodes).len(), 1);
     }
 
     #[test]
