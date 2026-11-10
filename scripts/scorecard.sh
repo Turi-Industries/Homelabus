@@ -149,7 +149,14 @@ fi
 row "4 no Rust" "apps that reached an installed house through a catalog pull request, with no \`hlb\` release" "$catalog" "every app, once its index is signed"
 
 # 5. Always available ---------------------------------------------------------------
-row "5 available" "minutes until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: the lab's moving-house drill; no site, relay or lifeboat exists" "measured each release"
+# Phase 4's gate, both ways: the alert inside the first figure, said apart because the
+# owner's reaction comes after it and no drill can count that.
+promote=$(measured available-promote-seconds)
+if [[ -n $promote ]]; then
+    row "5 available" "seconds until the vital apps answer from the VPS, the house cut" "$promote, the alert after $(measured available-alert-seconds); home again $(measured available-return-seconds) after the line" "measured each release"
+else
+    row "5 available" "seconds until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: \`scripts/drills/available.sh\`" "measured each release"
+fi
 
 # 6. Up to date ----------------------------------------------------------------------
 # Every update, not only a fix's, and whoever applied it: the controller a patch in its
