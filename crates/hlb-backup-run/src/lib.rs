@@ -20,6 +20,7 @@ pub mod engine_copy;
 pub mod erasure;
 pub mod kit;
 pub mod lifeboat;
+pub mod moving;
 pub mod placement;
 pub mod restore;
 pub mod upkeep;

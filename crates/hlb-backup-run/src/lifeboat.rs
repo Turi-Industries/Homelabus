@@ -496,19 +496,33 @@ impl Restore<'_> {
         let dump = scheduled::produce(&dumper, app, &target, crate::now())
             .await
             .map_err(|e| format!("{} on the site: {e}", db.name))?;
+        self.archived(app, db, &dest, &dump, FROM_SITE).await
+    }
+
+    /// `dump` of `db` archived to `dest` tagged `kind`, recorded, and found again as
+    /// the source a restore reads.
+    pub(crate) async fn archived(
+        &self,
+        app: &str,
+        db: &Database<'_>,
+        dest: &hlb_backup::Destination,
+        dump: &hlb_backup::pgdump::scheduled::Dump,
+        kind: &str,
+    ) -> Result<Brought, String> {
+        use hlb_backup::pgdump::scheduled;
         let password = restic_password(self.state, self.vault)
             .await
             .map_err(|e| e.to_string())?;
-        let creds = crate::credentials(self.state, self.vault, &dest)
+        let creds = crate::credentials(self.state, self.vault, dest)
             .await
             .map_err(|e| e.to_string())?;
         let id = scheduled::archive_as(
-            &dest,
+            dest,
             creds.as_deref(),
             Some(self.network),
             &password,
-            &dump,
-            FROM_SITE,
+            dump,
+            kind,
         )
         .await
         .map_err(|e| format!("{} archived: {e}", db.name))?;

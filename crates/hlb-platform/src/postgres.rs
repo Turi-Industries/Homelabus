@@ -302,6 +302,17 @@ impl PostgresProvisioner {
         Ok(row.is_some())
     }
 
+    /// Drops a database, its connections closed first — a move's old copy, once the
+    /// app answers on the new one. The role stays: it may own another of the app's.
+    pub async fn drop_database(&self, database: &str) -> Result<()> {
+        let stmt = drop_database_statement(database)?;
+        sqlx::query(sqlx::AssertSqlSafe(stmt.as_str()))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Sql(e.to_string()))?;
+        Ok(())
+    }
+
     pub async fn version(&self) -> Result<String> {
         let row = sqlx::query("SELECT version()")
             .fetch_one(&self.pool)

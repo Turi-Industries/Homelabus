@@ -1714,7 +1714,9 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the last seconds, and both sides never written at once unless the house chose it.
      One pull request each:
      - 8a. A PostgreSQL of the vital apps' own at home, a vital app's database moved
-       into it by `hlb upgrade`, its copy taken first.
+       into it by `hlb site add`, its copy taken first. Built 2026-11-10; the move
+       back waits for `hlb site remove`, which does not exist yet
+       (`site::vital::moves(state, false)` lists it).
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.

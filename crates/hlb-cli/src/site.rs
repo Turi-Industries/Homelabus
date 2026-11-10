@@ -30,6 +30,7 @@ mod door;
 pub mod homecoming;
 pub mod lifeboat;
 pub mod promote;
+pub mod vital;
 pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -500,6 +501,7 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             "            both served by {} as status. and alerts. of the house's domain.",
             hlb_ingress::front_door::SITE_EDGE
         );
+        vital::run(cli, &state, &vault, false).await?;
         println!();
         if !provision_machine(first.as_ref(), &distro, false, false, false).await? {
             return Ok(ExitCode::FAILURE);
@@ -549,12 +551,14 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
     }
     let door = open_door(&state, &vault, ours.as_ref(), &s).await;
     let watched = watch_site(&state, &vault, &s).await;
+    // Last: what it pushes to the site follows, and a failed move leaves the site ready.
+    let vital = vital::run(cli, &state, &vault, true).await?;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
         s.name
     );
-    Ok(if linked && door && watched {
+    Ok(if linked && door && watched && vital {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
