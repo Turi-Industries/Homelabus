@@ -1650,7 +1650,35 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      took the 4 GB manager into the OOM killer, the whole house 0/1 for seven minutes,
      then froze it at the next pass — each Syft job now takes a quarter of its node at
      most, and n8n reads "not checked", saying why.
-  7. **The gate on the lab**, timed both ways.
+  7. **The gate on the lab**, timed both ways. ✅ 2026-11-10, three runs, the last by
+     `scripts/drills/available.sh`, which `docs/measures.tsv` and the scorecard read.
+     The house's line cut as a dead box cuts it (the lab's router dropping everything
+     between the house and the outside, the site link with it), the VPS promoted over
+     SSH the moment Gatus alerts, as the owner would, their reaction uncounted; a
+     visitor on the lab's internet tells the house's Caddy from the site's by the
+     certificate's serial. **Measured**: the first alert 140 to 175 s after the cut
+     (every minute, three failures); Vaultwarden and PocketID answered by the site
+     **259 s** after it, the promotion itself 93 to 119 s of that; the line back, both
+     answered from home **122 s** later, the maintenance page in between. A group
+     made through PocketID's API, a row in Vaultwarden's database and a file in its
+     volume, written on the site, were at home after the return, the row its role's.
+     The lab's ACME authority plays Let's Encrypt, so the cut spares it. Found:
+     - The first run's PocketID went without a certificate on the site for ten
+       minutes. The authority resolved its name to the house, not the door, and
+       `promote` said promoted all the same — the gap left in step 4. The lab's view
+       is corrected; a house whose public records still name its own address would
+       meet it for real. Left: the promotion waits for each name's certificate and
+       says which one is missing, and `site status` reads each vital name's public
+       records against the site's address.
+     - 🔴 What the house wrote between the backup the lifeboat carried and the cut is
+       replaced at the return, `returns: whole` meaning the site's copy wins. It is
+       kept, only in the `kind:pre-restore` snapshot the restore takes first; with
+       a nightly lifeboat, up to a day of the house's writes: a password changed in
+       Vaultwarden that morning, gone from it after the return. For the owner to
+       decide before a rented VPS.
+     - The house's own copies kept serving its LAN through the cut, the promotion
+       made over SSH alone (step 4b's gap): what they wrote was replaced at the
+       return and kept the same way.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
