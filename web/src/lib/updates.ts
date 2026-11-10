@@ -85,6 +85,8 @@ export function refused(r: Refusal): { said: string; detail: string | null } {
 			return { said: m.updates_refused_paused(), detail: null };
 		case 'inconclusive':
 			return { said: m.updates_refused_inconclusive(), detail: null };
+		case 'undone':
+			return { said: m.updates_refused_undone(), detail: null };
 	}
 	const _: never = r;
 	return _;

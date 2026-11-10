@@ -333,6 +333,9 @@ pub enum UpdateRunOutcome {
     Paused,
     /// No conclusion within the deadline.
     Inconclusive,
+    /// A person put back what an applied update replaced: its images and its copy
+    /// (`hlb update undo`). Recorded as a run of its own, from what ran to what came back.
+    Undone,
 }
 
 impl UpdateRunOutcome {
@@ -342,6 +345,7 @@ impl UpdateRunOutcome {
             Self::RolledBack => "rolled-back",
             Self::Paused => "paused",
             Self::Inconclusive => "inconclusive",
+            Self::Undone => "undone",
         }
     }
 
@@ -351,6 +355,7 @@ impl UpdateRunOutcome {
             Self::RolledBack,
             Self::Paused,
             Self::Inconclusive,
+            Self::Undone,
         ]
         .into_iter()
         .find(|o| o.as_str() == s)

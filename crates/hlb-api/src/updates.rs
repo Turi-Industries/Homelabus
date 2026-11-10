@@ -137,6 +137,9 @@ pub enum UpdateRefusal {
     Paused,
     /// No outcome within the time allotted.
     Inconclusive,
+    /// A person undid this very image (`hlb update undo`): it goes back only when a
+    /// person says so again.
+    Undone,
 }
 
 judged! {

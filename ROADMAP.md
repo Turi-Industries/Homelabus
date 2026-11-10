@@ -1616,6 +1616,17 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      ingress always, and, when it is not drained, every task running there. On a one- or
      two-node house the main node's reboot stays a person's, said in the inbox like any
      reboot left. Tasks unknown or a manifest unread starts no reboot.
+     6d built 2026-11-10: `hlb update undo <app> [--confirm <app> --apply]`, CLI only —
+     nothing on the web side applies an update either. It takes back the app's LAST run,
+     applied, and only while the app still runs the image that run left; a second undo is
+     refused. Its run keeps the ids of every snapshot its copy took and each companion's
+     image before (6d-1): every volume, bucket and database the app backs up is found
+     among those ids, never by tag or time, or nothing is touched. The app stopped, each
+     is put back by `hlb backup restore`'s own restore, which backs up first what it
+     replaces; the images of before are pushed while nothing runs and frozen; the undo is
+     a run of its own (`undone`), notified. Stopped halfway, the app stays stopped and the
+     same command puts the whole copy back. The image undone then waits for a person: the
+     automatic pass refuses it as of the undo (`UpdateRefusal::Undone`) until approved.
   7. **The gate on the lab**, timed both ways.
   8. Then Knot (the house signing, the VPS secondary) and OPNsense.
 

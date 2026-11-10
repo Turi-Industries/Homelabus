@@ -230,6 +230,14 @@ pub struct Source {
     pub set_aside: Vec<(Snapshot, SetAside)>,
 }
 
+/// One thing of an app a copy holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part<'a> {
+    Volume(&'a str),
+    Bucket(&'a str),
+    Database(DbEngine, &'a str),
+}
+
 /// An app's database, as its manifest and the resolver name it.
 pub struct Database<'a> {
     pub engine: DbEngine,
@@ -336,6 +344,42 @@ impl Restore<'_> {
             &format!("the database {database}"),
             from,
             wanted,
+        )
+        .await
+    }
+
+    /// The snapshot of `part` among `copy`: an update's prior copy, by the ids its run
+    /// kept. 🔴 Never by tag or time: a pass's volume snapshots carry the copy's tag, its
+    /// dumps are tagged as the copy's are, and a pass since is newer.
+    pub async fn find_in_copy(
+        &self,
+        app: &str,
+        part: &Part<'_>,
+        copy: &[String],
+    ) -> Result<Source, String> {
+        let (class, what) = match part {
+            Part::Volume(v) | Part::Bucket(v) => (Class::Bulky, v.to_string()),
+            Part::Database(_, d) => (Class::Critical, format!("the database {d}")),
+        };
+        let path = match part {
+            Part::Volume(v) => volume_path(v),
+            Part::Bucket(b) => crate::bucket::archive_path(b),
+            Part::Database(..) => String::new(),
+        };
+        let holds = |s: &Snapshot| match part {
+            Part::Volume(_) | Part::Bucket(_) => s.paths.contains(&path),
+            Part::Database(engine, d) => is_dump_of(s, *engine, d),
+        };
+        self.find_where(
+            app,
+            class,
+            |all, _, _| Picked {
+                snapshot: all.iter().rev().find(|s| copy.contains(&s.id) && holds(s)),
+                set_aside: Vec::new(),
+            },
+            &format!("{what} in the copy taken before the update"),
+            None,
+            None,
         )
         .await
     }

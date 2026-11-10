@@ -106,6 +106,8 @@ by the controller, success included:
 ./target/debug/hlb update lag                # from first seen to applied, and what still waits
 ./target/debug/hlb update apply gitea        # backup, then the switch Swarm rolls back on failure
 ./target/debug/hlb update apply gitea --before-maturity   # an urgent fix; audited
+./target/debug/hlb update undo gitea         # preview: its last update taken back, images and data
+./target/debug/hlb update undo gitea --confirm gitea --apply
 ./target/debug/hlb update policy                          # how far each app updates alone
 ./target/debug/hlb update policy --automatic none         # the whole house: nothing alone
 ./target/debug/hlb update policy gitea --automatic minor  # one app further; a major never
@@ -122,6 +124,13 @@ A companion the catalog moved — Immich's machine learning — moves with its a
 before it, in the same `update apply`; one that does not come up leaves the app as it
 was. An image the catalog declares a signer for (`signedBy`) is verified with `cosign`
 against it, and an unsigned digest is refused like a forged one.
+
+An applied update is undone by `update undo`: the app stopped, each volume, bucket and
+database put back from the copy taken before the update — found by the ids its run kept,
+never "the latest", and refused unless the copy holds every one of them — the images
+of before frozen back, then the app started. What each part held is backed up first, and
+what was written since the update is lost. Only the last update, once; and the image
+undone then waits for a person, never the automatic pass.
 
 The catalog's own images are pinned by digest, and moved by the same rules — the newest
 mature build of each image's tag shape within its major, the digest the tag names when

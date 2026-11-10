@@ -620,7 +620,7 @@ async fn post_restore_guide(
 }
 
 /// What a preview says will follow the restore.
-async fn announce_after(
+pub(crate) async fn announce_after(
     cli: &crate::Cli,
     state: &hlb_state::State,
     app: &str,
@@ -633,7 +633,7 @@ async fn announce_after(
 
 /// The post-restore steps, run on the app started again, and what each did. `false`
 /// when one did not: the data is back, and what was to follow it is not done.
-async fn after(
+pub(crate) async fn after(
     cli: &crate::Cli,
     state: &hlb_state::State,
     o: &dyn hlb_orchestrator::Orchestrator,
@@ -683,7 +683,7 @@ async fn after(
 }
 
 /// Says why a restore did not begin, and whether the app runs.
-fn say_not_stopped(not: &restore::NotStopped, app: &str) {
+pub(crate) fn say_not_stopped(not: &restore::NotStopped, app: &str) {
     match not {
         restore::NotStopped::Copying(why) => eprintln!("🔴 {why}. Nothing was restored."),
         restore::NotStopped::Failed(why) => {

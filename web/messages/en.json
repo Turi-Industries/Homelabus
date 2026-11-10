@@ -2553,6 +2553,7 @@
 	"updates_refused_rolled_back": "Swarm rolled it back: the previous version runs.",
 	"updates_refused_paused": "The switch paused: look at it before anything else.",
 	"updates_refused_inconclusive": "No outcome within the time allotted: check with hlb ps.",
+	"updates_refused_undone": "Undone by hand: it applies again only once approved.",
 	"updates_approved": "Approved by {by}, {at}",
 	"updates_mark_waiting": "waiting",
 	"updates_mark_refused": "refused",
