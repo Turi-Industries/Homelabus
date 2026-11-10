@@ -1500,8 +1500,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      authority validated against the house and the order hung (once over HTTP-01, once
      over TLS-ALPN-01); the promotion restarts it once the door is swapped. And the
      return left the site's PostgreSQL running until the next night, a copy of every
-     database it read; it is stopped once the door is home. Left: `promote` says
-     promoted before the certificate is there — nothing waits for it.
+     database it read; it is stopped once the door is home. `promote` said
+     promoted before the certificate was there — it waits for it since step 7.
   5. **Gatus on the VPS**, generated from the catalog, two probes per app, heartbeats
      from home, alerts that never go through the house.
      5a built 2026-11-09: `hlb site add` and `sync` put the site's watch in place after
@@ -1667,9 +1667,15 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        minutes. The authority resolved its name to the house, not the door, and
        `promote` said promoted all the same — the gap left in step 4. The lab's view
        is corrected; a house whose public records still name its own address would
-       meet it for real. Left: the promotion waits for each name's certificate and
-       says which one is missing, and `site status` reads each vital name's public
-       records against the site's address.
+       meet it for real. ✅ Closed the same evening: the promotion waits for each
+       name's certificate in the site Caddy's storage, 240 s for all, and exits
+       `PROMOTED_WITHOUT_CERTIFICATE` naming the missing ones — `hlb site promote`
+       says promoted, its door swapped, a name refused, never "stopped"; `site status`
+       reads each vital name's A and AAAA from a public resolver, CNAMEs followed,
+       against the site's address. Run on the lab: PocketID pointed home again, the
+       promotion named it alone after 240 s; pointed at the door, the rerun found
+       both certificates. The lab's names have no public records, and `site status`
+       says so for both.
      - 🔴 What the house wrote between the backup the lifeboat carried and the cut is
        replaced at the return, `returns: whole` meaning the site's copy wins. It is
        kept, only in the `kind:pre-restore` snapshot the restore takes first; with

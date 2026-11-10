@@ -3,6 +3,8 @@ paths:
   - "crates/hlb-engine/src/ingress.rs"
   - "crates/hlb-ingress/**/*.rs"
   - "crates/hlb-controller/src/exposure.rs"
+  - "crates/hlb-engine/src/lifeboat.rs"
+  - "crates/hlb-cli/src/site/**/*.rs"
 ---
 
 # Operations: routes and Caddy
@@ -85,3 +87,9 @@ some mistakes loudly; the others are a 502, or a door left open.
 - **An orphan route appears in no walk over installed apps.** A removed app whose route
   still answers is in no manifest, therefore in no loop: look for it from the PUBLISHED
   routes, not from the apps.
+- **A promoted site's certificate is validated where the name's public records point.**
+  The site's Caddy asks over HTTP-01; the authority resolves the name itself. One still
+  naming the house was never validated on the lab (2026-11-10), PocketID left without a
+  certificate for ten minutes while `promote` said promoted and Vaultwarden, pointed at
+  the door, answered. The promotion now waits for each name's certificate and exits
+  `PROMOTED_WITHOUT_CERTIFICATE` naming the missing; `site status` reads the records.

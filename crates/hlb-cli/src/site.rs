@@ -732,11 +732,69 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
             }
         }
     }
+
+    // Each vital name's public records, read as the authority reads them the night the
+    // site is promoted: a name still naming the house gets no certificate there.
+    match hub.read_file(hlb_engine::lifeboat::PROMOTE_SCRIPT).await {
+        Ok(Some(script)) => {
+            let names = hlb_engine::lifeboat::promoted_names(&script);
+            all &= public_names(&s, &names).await;
+        }
+        Ok(None) => println!("  … no vital name to read: the lifeboat never ran there"),
+        Err(e) => {
+            all = false;
+            println!("  🔴 its promotion could not be read: {e}");
+        }
+    }
     Ok(if all {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// Every A and AAAA record of `name`, CNAMEs followed, from a public resolver. Either
+/// type unread is no answer: an address left unread may be the one elsewhere.
+async fn addresses(
+    dns: &hlb_mail::public_dns::PublicDns,
+    name: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let mut all = dns.lookup(name, "A").await?;
+    all.extend(dns.lookup(name, "AAAA").await?);
+    Ok(all)
+}
+
+/// Says where each vital name's public records point; false when one is not the site.
+async fn public_names(s: &Site, names: &[String]) -> bool {
+    use hlb_engine::lifeboat::{pointing, Pointing};
+    let dns = hlb_mail::public_dns::PublicDns::default();
+    let ours = if s.endpoint.parse::<std::net::IpAddr>().is_ok() {
+        vec![s.endpoint.clone()]
+    } else {
+        addresses(&dns, &s.endpoint).await.unwrap_or_default()
+    };
+    let mut fine = true;
+    for name in names {
+        match pointing(addresses(&dns, name).await, &ours) {
+            Pointing::Site => println!("  ✓ {name} — its public records name the site"),
+            Pointing::Elsewhere(other) => {
+                fine = false;
+                println!(
+                    "  🔴 {name} — its public records name {}, not the site: promoted, \
+                     it would get no certificate",
+                    other.join(", ")
+                );
+            }
+            Pointing::Nowhere => {
+                fine = false;
+                println!("  🔴 {name} — no public address: promoted, it would get no certificate");
+            }
+            Pointing::Unread(e) => {
+                println!("  ⚠️  {name} — its public records could not be read: {e}")
+            }
+        }
+    }
+    fine
 }
 
 #[cfg(test)]

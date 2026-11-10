@@ -106,6 +106,9 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         }
         Err(e) => (false, e.to_string()),
     };
+    // Everything started and the door swapped, a name still without its certificate:
+    // promoted, which the message for a promotion that stopped would deny.
+    let uncertified = matches!(&out, Ok(o) if o.status == lifeboat::PROMOTED_WITHOUT_CERTIFICATE);
     if !apply {
         return Ok(if ok {
             ExitCode::SUCCESS
@@ -119,7 +122,13 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
             ACTOR_ROLE,
             "site-promote",
             &s.name,
-            if ok { "ok" } else { "failed" },
+            if ok {
+                "ok"
+            } else if uncertified {
+                "no-certificate"
+            } else {
+                "failed"
+            },
             (!detail.is_empty()).then_some(detail.as_str()),
         )
         .await?;
@@ -133,6 +142,15 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         println!("   nightly lifeboat leaves them as they are meanwhile. They hold what the");
         println!("   lifeboat's backups held: what the house wrote after is in its own copy.");
         Ok(ExitCode::SUCCESS)
+    } else if uncertified {
+        eprintln!();
+        eprintln!(
+            "🔴 {} is promoted, its door swapped, but a name above has no",
+            s.name
+        );
+        eprintln!("   certificate: its visitors are refused until one comes. Its public");
+        eprintln!("   records must name the site.  hlb site status");
+        Ok(ExitCode::FAILURE)
     } else {
         if let Err(e) = &out {
             eprintln!("🔴 {} unreachable over SSH: {e}", s.name);
