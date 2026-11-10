@@ -310,6 +310,25 @@ exported — Homelabus never bills.
   false "resolved" between. What Healthchecks had and this does not — a cron schedule
   rather than an interval, a ping's body kept — none of the house's heartbeats needs.
 
+#### Decided by the owner, 2026-11-10
+
+- **The lifeboat follows the house continuously** (after the gate found the return
+  replacing up to a day of the house's writes): pushed by the house, the vital apps'
+  data only. Measured first: the house's one PostgreSQL holds 219 MB, Vaultwarden's
+  8 — a stream of the whole server would put Immich's, n8n's credentials and Fluxer's
+  conversations on the VPS. So the vital apps get a PostgreSQL of their own at home,
+  whose WAL the house pushes to the VPS every 30 s at most, a standby replaying it
+  there; PocketID's SQLite is pushed continuously (Litestream); the volumes every
+  minute. Nothing of the house is opened to the VPS. Not the logical replication of
+  the shared server (the VPS would reach the house's 5432, and every schema change of
+  a vital app would break it until reapplied), nor the stream of the whole server.
+- **Both sides written at once is the house's choice, the house stopping by default**:
+  a house that loses the link to its site longer than a set delay stops its vital apps,
+  so a promoted site is the only one written; the link back and the site not promoted,
+  it starts them again. The other choice keeps them serving the LAN and has the return
+  compare positions and ask which side keeps its writes, the other kept as a named
+  snapshot. "Ça serait sympa d'avoir l'option, et par défaut la 2."
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1680,12 +1699,31 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        replaced at the return, `returns: whole` meaning the site's copy wins. It is
        kept, only in the `kind:pre-restore` snapshot the restore takes first; with
        a nightly lifeboat, up to a day of the house's writes: a password changed in
-       Vaultwarden that morning, gone from it after the return. For the owner to
-       decide before a rented VPS.
+       Vaultwarden that morning, gone from it after the return. Decided the same
+       evening: the continuous lifeboat, step 8.
      - The house's own copies kept serving its LAN through the cut, the promotion
        made over SSH alone (step 4b's gap): what they wrote was replaced at the
        return and kept the same way.
-  8. Then Knot (the house signing, the VPS secondary) and OPNsense.
+  8. **The continuous lifeboat** (decided 2026-11-10): what the gate found the return
+     replacing — the house's writes since the backup the lifeboat carried — reduced to
+     the last seconds, and both sides never written at once unless the house chose it.
+     One pull request each:
+     - 8a. A PostgreSQL of the vital apps' own at home, a vital app's database moved
+       into it by `hlb upgrade`, its copy taken first.
+     - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
+       the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
+       replaying what arrives. Promoted with the site; its position read by the return.
+     - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
+       restored by the promotion.
+     - 8d. The vital volumes pushed every minute, what changed only.
+     - 8e. Two sides: the house stops its vital apps once the link has been down past a
+       delay, and starts them again with the link back and the site not promoted; the
+       promotion waits until every house node's last handshake is older than that
+       delay, so a house that is up has stopped. The other choice, `hlb config`, keeps
+       the LAN served and has the return compare positions and ask.
+     - 8f. The gate again, the writes lost measured: a row written at home seconds
+       before the cut, found on the site.
+  9. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.
