@@ -1084,7 +1084,7 @@ mod tests {
                 .filter_map(|b| b.trim_start().lines().next())
                 .filter(|l| l.ends_with(" {") && !l.starts_with('#') && !l.starts_with("http://"))
                 .collect();
-            assert!(sites.len() >= 2, "{out}");
+            assert!(sites.len() >= 2, "{} site blocks", sites.len());
             for site in &sites {
                 let body = out
                     .split(&format!("{site}\n"))
@@ -1093,11 +1093,11 @@ mod tests {
                     .expect("the block");
                 assert!(
                     body.contains("handle_errors 502 503 504 {"),
-                    "{site} has no maintenance page:\n{body}"
+                    "{site} has no maintenance page"
                 );
             }
-            assert!(!out.contains("{http.error"), "the cause stays out: {out}");
-            assert!(!out.contains("RETRY"), "the delay is written: {out}");
+            assert!(!out.contains("{http.error"), "the cause stays out");
+            assert!(!out.contains("RETRY"), "the delay is written");
         }
     }
 

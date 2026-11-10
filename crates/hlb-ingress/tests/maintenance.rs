@@ -146,7 +146,8 @@ fn an_app_not_there_is_the_maintenance_page_and_an_apps_own_error_is_its_own() {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    assert!(up, "{caddyfile}\n{}", docker(&["logs", &ingress]));
+    // Caddy's own log says why, never the file: it may carry the bouncer's key.
+    assert!(up, "{}", docker(&["logs", &ingress]));
 
     let (status, _, body) = get(&port, "git.example.fr");
     assert_eq!(status, 502);
