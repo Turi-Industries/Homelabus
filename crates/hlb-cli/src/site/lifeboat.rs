@@ -558,6 +558,12 @@ async fn rebuild(
         }
     }
 
+    let sqlite_volumes: Vec<String> = state
+        .sqlite_volumes()
+        .await?
+        .into_iter()
+        .map(|(_, volume, _)| volume)
+        .collect();
     let mut vital_spec = None;
     for (app, plan) in &plans {
         let backed_up: Vec<String> = state
@@ -597,7 +603,10 @@ async fn rebuild(
                 );
                 if !sent.sqlite.is_empty() {
                     line.push_str(&format!(", SQLite {}", sent.sqlite.join(", ")));
-                    // What its replica must be newer than to replace it at the promotion.
+                }
+                // What its replica must be newer than to replace it at the promotion —
+                // a copy restic took live as much as one put back consistent.
+                if sqlite_volumes.contains(vol) {
                     let taken = sent.taken.ok_or_else(|| {
                         format!(
                             "{vol}: snapshot {} carries no readable time",
@@ -672,6 +681,21 @@ async fn rebuild(
 
     // The promotion, and the door's file it puts in place.
     let steps = super::litestream::promote_steps(state, &sel.apps).await?;
+    if !steps.is_empty() {
+        // Pulled now: the night of the promotion, a download is minutes the apps wait,
+        // and a registry out of reach leaves the replica unread (lab, 2026-11-11).
+        let pulled = ssh
+            .run(&[
+                "docker".into(),
+                "pull".into(),
+                "-q".into(),
+                hlb_backup::images::LITESTREAM.into(),
+            ])
+            .await?;
+        if !pulled.ok() {
+            return Err(format!("Litestream's image on the site: {}", pulled.stderr.trim()).into());
+        }
+    }
     let script = lifeboat::promote_script(
         &lifeboat::start_order(&apps_services),
         &ingress.names,

@@ -20,7 +20,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub struct Carried {
     pub app: String,
     pub volume: String,
-    /// Where the app mounts it.
+    /// Where the app mounts it, inside its container.
     pub mount: String,
 }
 
@@ -39,13 +39,29 @@ pub async fn carried(state: &State, vault: &Vault) -> Result<Vec<Carried>> {
 
 /// Every backed-up SQLite volume of `apps`.
 pub async fn carried_among(state: &State, apps: &[String]) -> Result<Vec<Carried>> {
-    Ok(state
-        .sqlite_volumes()
-        .await?
-        .into_iter()
-        .filter(|(app, _, _)| apps.contains(app))
-        .map(|(app, volume, mount)| Carried { app, volume, mount })
-        .collect())
+    let mut out = Vec::new();
+    for (app, volume, _) in state.sqlite_volumes().await? {
+        if !apps.contains(&app) {
+            continue;
+        }
+        // 🔴 The state's mountpoint is the volume's path on the HOST
+        // (`/var/lib/docker/volumes/…`): inside the app it is the manifest's `path`.
+        let m = state.app_manifest(&app).await?;
+        let mount = mount_in(&m, &app, &volume)
+            .ok_or_else(|| format!("{app}'s manifest mounts no volume {volume}"))?;
+        out.push(Carried { app, volume, mount });
+    }
+    Ok(out)
+}
+
+/// Where `app` mounts `volume` (`<app>-<name>`), from its manifest.
+fn mount_in(m: &hlb_types::Manifest, app: &str, volume: &str) -> Option<String> {
+    m.spec.requires.iter().find_map(|c| match c {
+        hlb_types::Capability::Storage { name, path, .. } if format!("{app}-{name}") == volume => {
+            Some(path.clone())
+        }
+        _ => None,
+    })
 }
 
 /// The databases `c`'s volume holds and their owner, asked of the app's running service.
@@ -392,6 +408,22 @@ pub async fn resume(state: &State, vault: &Vault, ssh: &dyn Runner, house: &Swar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_volume_is_found_where_the_app_mounts_it_not_on_the_host() {
+        // The catalog's own PocketID: the path its manifest gives is what is looked in.
+        let catalog = hlb_catalog::Catalog::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../catalog"
+        )))
+        .expect("catalog");
+        let m = &catalog.get("pocket-id").expect("in the catalog").manifest;
+        assert_eq!(
+            mount_in(m, "pocket-id", "pocket-id-data").as_deref(),
+            Some("/app/data")
+        );
+        assert_eq!(mount_in(m, "pocket-id", "pocket-id-other"), None);
+    }
 
     #[test]
     fn the_pusher_runs_on_the_app_s_node_as_its_user_with_no_capability() {

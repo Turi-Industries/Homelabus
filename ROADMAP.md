@@ -1771,7 +1771,15 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        nothing of the replay left behind.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site,
        as a user locked in its directory — decided 2026-11-11), restored by the
-       promotion.
+       promotion. Built and proved on the lab 2026-11-11: `hlb-ls-pocket-id`
+       (Litestream 0.5.18, uid 1000, 12 MiB) beside PocketID, a chrooted
+       `internal-sftp` account per app on the VPS (`hlb-ls-<app>`, one drop-in); a
+       PocketID user created at 20:33:43.5, the house frozen at 20:33:45, the
+       replica written to 20:33:44 — the promotion restored it over the nightly copy
+       in under a second, integrity checked, the user there; the return brought it
+       home, emptied the site's replica and restarted the pusher. 205 KB snapshot,
+       652 KB replica. One account per app rather than one `hlb-litestream`: a key
+       read beside one app cannot rewrite another vital app's replica.
      - 8d. The vital volumes pushed every minute, what changed only.
      - 8e. Two sides: the house stops its vital apps once the link has been down past a
        delay, and starts them again with the link back and the site not promoted; the

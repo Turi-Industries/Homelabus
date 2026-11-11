@@ -490,3 +490,11 @@ the outside, which is the whole problem.
 
 - **Secure by default.** `read_only_rootfs`, `cap_drop: [ALL]`, `no_new_privileges`, no
   published ports, `private` exposure. Defaults go the safe way.
+- **🔴 A key handed to a container next to an app opens one directory of the VPS, no
+  more** (`sqlite_ship`, 2026-11-11): its account is SFTP only, chrooted to its own
+  directory (`Match User hlb-ls-*`, `ChrootDirectory …/%u`, `internal-sftp`, no
+  forwarding, no TTY), its key root's outside the chroot. The drop-in is checked by
+  `sshd -t` before the reload and PROVED after by `sshd -T -C user=…`, which prints `%u`
+  unexpanded — an `sshd_config` without `Include` would read none of it. And Litestream
+  pins ONE host key, accepting any when given none: Go asks ECDSA first, then RSA, then
+  ed25519, so the ed25519 key of a server with an ECDSA one is a "host key mismatch".

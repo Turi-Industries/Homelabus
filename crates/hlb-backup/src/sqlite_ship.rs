@@ -283,16 +283,19 @@ pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str)
         echo "  ✓ $db: put in place by this promotion's first run, kept"
         return 0
     fi
-    mkdir -p {COPIED_DIR}
-    : > "$done"
+    # Marked once the choice is carried out, never before: a run cut mid-restore (an
+    # image still downloading) chooses again, nothing having started on the copy yet.
+    decided() {{ mkdir -p {COPIED_DIR} && : > "$done"; }}
     newest=$(find "$rep/$db" -name '*.ltx' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)
     copied=$(cat {COPIED_DIR}/"$vol" 2>/dev/null || echo 0)
     if [ -z "$newest" ]; then
         echo "  ⚠️  $db: the site never received its replica: last night's copy serves" >&2
+        decided
         return 0
     fi
     if [ "$newest" -le "$copied" ]; then
         echo "  ⚠️  $db: its replica stops at $(date -u -d "@$newest" +%H:%M), before last night's copy: the copy serves" >&2
+        decided
         return 0
     fi
     # Streamed in rather than mounted: the replica's directory is its account's, 0700,
@@ -316,6 +319,7 @@ pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str)
     else
         echo "  🔴 $db: its replica did not restore: last night's copy serves" >&2
     fi
+    decided
 }}
 {s}"#
     )
@@ -512,6 +516,11 @@ mod tests {
             "{s}"
         );
         assert!(!s.contains("exit"), "{s}");
+        // Marked decided once the restore ran, never before: a run cut while the image
+        // downloaded kept last night's copy for good on the lab.
+        let restore = s.find("if tar -C").expect("restore");
+        assert!(s.find("decided()").expect("defined") < restore, "{s}");
+        assert!(s.rfind("    decided\n").expect("marked") > restore, "{s}");
     }
 
     #[test]
