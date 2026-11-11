@@ -24,6 +24,9 @@ const VOLUMES: [&str; 5] = [
     "hlb-test-walship-site-dir",
 ];
 const PASSWORD: &str = "admin-password";
+/// The app's role, which owns its table and reads it off the promoted standby.
+const APP: &str = "keeper";
+const APP_PASSWORD: &str = "keeper-password";
 
 fn docker(args: &[&str]) -> std::process::Output {
     std::process::Command::new("docker")
@@ -268,9 +271,14 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
         Some("on"),
         "archiving on"
     );
+    // The app's own role owns its table, as provisioning and the restores leave it.
     psql(
         PRIMARY,
-        "CREATE TABLE vault (item text); INSERT INTO vault VALUES ('before-base')",
+        &format!(
+            "CREATE ROLE {APP} LOGIN PASSWORD '{APP_PASSWORD}'; \
+             CREATE TABLE vault (item text); ALTER TABLE vault OWNER TO {APP}; \
+             INSERT INTO vault VALUES ('before-base')"
+        ),
     )
     .expect("written");
 
@@ -326,6 +334,13 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
         psql(STANDBY, "SELECT pg_is_in_recovery()").as_deref(),
         Some("t")
     );
+    // An app migrating at start meets a standby that takes nothing, not even a table
+    // already there: why the lifeboat rehearses the apps on a copy of the base.
+    assert_eq!(
+        psql(STANDBY, "CREATE TABLE IF NOT EXISTS vault (item text)"),
+        None,
+        "a standby takes no write"
+    );
 
     // Written at home later: it reaches the site with the next push alone.
     write_then_switch("seconds-before-the-cut");
@@ -362,6 +377,56 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
         Some("f")
     );
     psql(STANDBY, "INSERT INTO vault VALUES ('written-on-the-site')").expect("writable");
+
+    // The return: what the house wrote past the takeover, said from the positions.
+    let history = ok(&[
+        "exec",
+        STANDBY,
+        "sh",
+        "-c",
+        "cat \"$PGDATA\"/pg_wal/*.history",
+    ]);
+    let at_cut = wal_ship::parse_position(
+        &psql(PRIMARY, wal_ship::POSITION_SQL).expect("the house's position"),
+    )
+    .expect("read");
+    let switch = wal_ship::switch_point(&history, at_cut.0).expect("timeline 1 followed");
+    assert!(switch <= at_cut.1, "{switch:x} past {at_cut:?}");
+    psql(PRIMARY, "INSERT INTO vault VALUES ('never-pushed')").expect("written");
+    let after = wal_ship::parse_position(
+        &psql(PRIMARY, wal_ship::POSITION_SQL).expect("the house's position"),
+    )
+    .expect("read");
+    let said = wal_ship::written_past(after, &history);
+    assert!(said.contains("past the point the site took over"), "{said}");
+
+    // Read off the promoted standby by the app's own role, as the return dumps it: the
+    // vital server's administrator never went to the site.
+    let dumped = docker(&[
+        "run",
+        "--rm",
+        "--network",
+        NETWORK,
+        "-e",
+        &format!("PGPASSWORD={APP_PASSWORD}"),
+        "--entrypoint",
+        "pg_dump",
+        &s.image,
+        "-h",
+        STANDBY,
+        "-U",
+        APP,
+        "-d",
+        "postgres",
+        "--format=custom",
+        "--no-password",
+    ]);
+    assert!(
+        dumped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dumped.stderr)
+    );
+    assert!(dumped.stdout.starts_with(b"PGDMP"), "a custom-format dump");
     assert_eq!(
         psql(
             STANDBY,

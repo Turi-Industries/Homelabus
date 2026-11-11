@@ -247,9 +247,94 @@ pub fn known_hosts_line(t: &Target, host_key: &str) -> String {
     format!("{host} {kind} {key}\n")
 }
 
+/// What a server is asked for its position: its timeline and where it writes,
+/// `psql -tA`'s `1|0/5000148`.
+pub const POSITION_SQL: &str =
+    "SELECT timeline_id, pg_current_wal_lsn() FROM pg_control_checkpoint()";
+
+/// A WAL position, `0/5000148`, as one number.
+pub fn parse_lsn(s: &str) -> Option<u64> {
+    let (hi, lo) = s.trim().split_once('/')?;
+    Some((u64::from_str_radix(hi, 16).ok()? << 32) | u64::from_str_radix(lo, 16).ok()?)
+}
+
+/// [`POSITION_SQL`]'s answer: `(timeline, position)`.
+pub fn parse_position(s: &str) -> Option<(u32, u64)> {
+    let (tli, lsn) = s.trim().split_once('|')?;
+    Some((tli.trim().parse().ok()?, parse_lsn(lsn)?))
+}
+
+/// Where the promoted standby left `timeline`, read from its timeline history files —
+/// each line `<parent timeline>\t<switch point>\t<reason>`, every file repeating its
+/// ancestors'. `None`: the site never followed that timeline.
+pub fn switch_point(history: &str, timeline: u32) -> Option<u64> {
+    history.lines().find_map(|l| {
+        let mut f = l.split_whitespace();
+        (f.next()?.parse::<u32>().ok()? == timeline)
+            .then(|| parse_lsn(f.next()?))
+            .flatten()
+    })
+}
+
+/// What the house's server wrote past the point the site took over, said for the
+/// person bringing it home: replaced by the return, kept in the copy it takes first.
+///
+/// 🔴 Never "nothing was lost" past zero bytes: a server writes its own records — the
+/// checkpoint of its restart — so a few bytes past are counted, and said as what they
+/// may be, rather than kept quiet as noise.
+pub fn written_past(house: (u32, u64), history: &str) -> String {
+    let (tli, at) = house;
+    let Some(switch) = switch_point(history, tli) else {
+        return format!(
+            "the house's server is on timeline {tli}, which the site never followed: what \
+             it wrote past the site's copy cannot be told"
+        );
+    };
+    match at.saturating_sub(switch) {
+        0 => "the house's server wrote nothing past the point the site took over".into(),
+        n => format!(
+            "the house's server wrote {} of WAL past the point the site took over — its \
+             own restart's records at least, and whatever its apps wrote after the last \
+             push: replaced, kept in the copy each restore takes first",
+            if n < 1024 {
+                format!("{n} bytes")
+            } else {
+                format!("{} KB", n.div_ceil(1024))
+            }
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_position_reads_as_postgresql_writes_it() {
+        assert_eq!(parse_lsn("0/5000148"), Some(0x500_0148));
+        assert_eq!(parse_lsn("1/0"), Some(1 << 32));
+        assert_eq!(parse_lsn("5000148"), None);
+        assert_eq!(parse_position("1|0/5000148\n"), Some((1, 0x500_0148)));
+        assert_eq!(parse_position(""), None);
+    }
+
+    #[test]
+    fn what_the_house_wrote_past_the_takeover_is_said() {
+        let history = "1\t0/5000148\tno recovery target specified\n";
+        assert!(
+            written_past((1, 0x500_0148), history).contains("wrote nothing"),
+            "at the switch point"
+        );
+        assert!(written_past((1, 0x500_0000), history).contains("wrote nothing"));
+        let past = written_past((1, 0x500_0148 + 4096), history);
+        assert!(past.contains("4 KB") && past.contains("replaced"), "{past}");
+        assert!(written_past((1, 0x500_0148 + 120), history).contains("120 bytes"));
+        // A timeline the site's history does not hold is not compared.
+        assert!(written_past((3, 1), history).contains("cannot be told"));
+        // Two history files, the second repeating the first.
+        let two = "1\t0/5000148\tx\n1\t0/5000148\tx\n2\t0/7000000\ty\n";
+        assert_eq!(switch_point(two, 2), Some(0x700_0000));
+    }
 
     #[test]
     fn what_postgresql_archives_is_named_and_nothing_else() {

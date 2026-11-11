@@ -52,6 +52,29 @@ pub struct Server<'a> {
     pub admin_password: &'a str,
 }
 
+impl<'a> Server<'a> {
+    /// Its administrator, reading off the site's `postgres`.
+    pub fn reader(&self) -> Reader<'a> {
+        Reader {
+            image: self.image,
+            host: "postgres",
+            user: "postgres",
+            password: self.admin_password,
+        }
+    }
+}
+
+/// Who reads a database off the site, and where: the server's service, and an account
+/// that may dump the database — on the vital server's standby, promoted, the app's own
+/// role, whose password the site was always given.
+pub struct Reader<'a> {
+    /// The server's image, which the client tools run from.
+    pub image: &'a str,
+    pub host: &'a str,
+    pub user: &'a str,
+    pub password: &'a str,
+}
+
 /// The decision on whether an archive of `bytes` fits in what the site has free:
 /// a tenth of its disk always left, as a verification leaves the house's.
 pub fn fits(bytes: u64, free: u64, total: u64) -> Result<(), String> {
@@ -503,7 +526,7 @@ impl Restore<'_> {
         app: &str,
         db: &Database<'_>,
         site: &Site<'_>,
-        server: &Server<'_>,
+        reader: &Reader<'_>,
     ) -> Result<Brought, String> {
         use hlb_backup::pgdump::scheduled;
         if db.engine != DbEngine::Postgres {
@@ -521,16 +544,16 @@ impl Restore<'_> {
         .next()
         .ok_or_else(|| format!("no destination accepts {app}'s dumps"))?;
         let dumper = hlb_backup::PgDumper::new(
-            hlb_backup::PgContainerRunner::new(server.image)
+            hlb_backup::PgContainerRunner::new(reader.image)
                 .network(site.network)
                 .docker_socket(site.socket),
         );
         let target = hlb_backup::PgTarget {
-            host: "postgres".into(),
+            host: reader.host.into(),
             port: 5432,
             database: db.name.to_string(),
-            user: "postgres".into(),
-            password: server.admin_password.to_string(),
+            user: reader.user.into(),
+            password: reader.password.to_string(),
         };
         let dump = scheduled::produce(&dumper, app, &target, crate::now())
             .await
