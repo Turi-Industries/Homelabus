@@ -52,6 +52,29 @@ pub struct Server<'a> {
     pub admin_password: &'a str,
 }
 
+impl<'a> Server<'a> {
+    /// Its administrator, reading off the site's `postgres`.
+    pub fn reader(&self) -> Reader<'a> {
+        Reader {
+            image: self.image,
+            host: "postgres",
+            user: "postgres",
+            password: self.admin_password,
+        }
+    }
+}
+
+/// Who reads a database off the site, and where: the server's service, and an account
+/// that may dump the database — on the vital server's standby, promoted, the app's own
+/// role, whose password the site was always given.
+pub struct Reader<'a> {
+    /// The server's image, which the client tools run from.
+    pub image: &'a str,
+    pub host: &'a str,
+    pub user: &'a str,
+    pub password: &'a str,
+}
+
 /// The decision on whether an archive of `bytes` fits in what the site has free:
 /// a tenth of its disk always left, as a verification leaves the house's.
 pub fn fits(bytes: u64, free: u64, total: u64) -> Result<(), String> {
@@ -130,6 +153,45 @@ async fn rewound(mut f: tokio::fs::File) -> Result<(tokio::fs::File, u64), Strin
         .map_err(|e| e.to_string())?;
     f.rewind().await.map_err(|e| e.to_string())?;
     Ok((f, size))
+}
+
+/// The archive putting an empty [`wal_ship::STANDBY_SIGNAL`], the server's user's, into
+/// the data directory mounted at `root`. No entry for the directory: its own owner and
+/// mode, the base's, stay as restored.
+///
+/// [`wal_ship::STANDBY_SIGNAL`]: hlb_backup::wal_ship::STANDBY_SIGNAL
+pub fn standby_signal(root: &str) -> Result<Vec<u8>, String> {
+    use hlb_backup::wal_ship::{POSTGRES_UID, STANDBY_SIGNAL};
+    let mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let a = Attrs {
+        uid: POSTGRES_UID,
+        gid: POSTGRES_UID,
+        mode: 0o600,
+        mtime,
+    };
+    let path = format!("{}/{STANDBY_SIGNAL}", root.trim_start_matches('/'));
+    let mut out = tar::header(&path, Kind::File(0), &a)?.to_vec();
+    out.extend_from_slice(&tar::end());
+    Ok(out)
+}
+
+/// `volume` on the site, a PostgreSQL directory a base backup filled, made to start as a
+/// standby. `image` is the server's, which the site has pulled already.
+pub async fn mark_standby(site: &Site<'_>, image: &str, volume: &str) -> Result<(), String> {
+    let root = volume_path(volume);
+    let tar = bytes::Bytes::from(standby_signal(&root)?);
+    site.docker
+        .put_archive(
+            image,
+            volume,
+            &root,
+            futures::stream::once(async move { Ok::<_, std::io::Error>(tar) }),
+        )
+        .await
+        .map_err(|e| format!("{volume} on the site: {}", causes(&e)))
 }
 
 impl Restore<'_> {
@@ -464,7 +526,7 @@ impl Restore<'_> {
         app: &str,
         db: &Database<'_>,
         site: &Site<'_>,
-        server: &Server<'_>,
+        reader: &Reader<'_>,
     ) -> Result<Brought, String> {
         use hlb_backup::pgdump::scheduled;
         if db.engine != DbEngine::Postgres {
@@ -482,16 +544,16 @@ impl Restore<'_> {
         .next()
         .ok_or_else(|| format!("no destination accepts {app}'s dumps"))?;
         let dumper = hlb_backup::PgDumper::new(
-            hlb_backup::PgContainerRunner::new(server.image)
+            hlb_backup::PgContainerRunner::new(reader.image)
                 .network(site.network)
                 .docker_socket(site.socket),
         );
         let target = hlb_backup::PgTarget {
-            host: "postgres".into(),
+            host: reader.host.into(),
             port: 5432,
             database: db.name.to_string(),
-            user: "postgres".into(),
-            password: server.admin_password.to_string(),
+            user: reader.user.into(),
+            password: reader.password.to_string(),
         };
         let dump = scheduled::produce(&dumper, app, &target, crate::now())
             .await
@@ -596,6 +658,34 @@ mod tests {
         assert!(
             fits(11 * gib, 10 * gib, 20 * gib).is_err(),
             "more than is free"
+        );
+    }
+
+    #[test]
+    fn the_standby_signal_is_postgres_s_file_and_leaves_the_directory_alone() {
+        use std::io::Write as _;
+        let archive = standby_signal("/donnees/postgres-vital-data").expect("archive");
+        let mut tar = std::process::Command::new("tar")
+            .args(["--numeric-owner", "-tvf", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("tar");
+        tar.stdin
+            .take()
+            .expect("stdin")
+            .write_all(&archive)
+            .expect("written");
+        let out = tar.wait_with_output().expect("listed");
+        assert!(out.status.success(), "{out:?}");
+        let listed = String::from_utf8_lossy(&out.stdout);
+        let lines: Vec<&str> = listed.lines().collect();
+        assert_eq!(lines.len(), 1, "one entry, no directory's: {listed}");
+        assert!(lines[0].starts_with("-rw-------"), "{listed}");
+        assert!(lines[0].contains("999/999"), "{listed}");
+        assert!(
+            lines[0].ends_with("donnees/postgres-vital-data/standby.signal"),
+            "{listed}"
         );
     }
 }

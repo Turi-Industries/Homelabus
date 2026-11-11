@@ -700,7 +700,8 @@ spec:
             &Server {
                 image: hlb_backup::images::POSTGRES_CLIENT,
                 admin_password: SITE_ADMIN,
-            },
+            }
+            .reader(),
         )
         .await
         .expect("read off the site");

@@ -13,7 +13,8 @@
 
 use std::process::ExitCode;
 
-use hlb_backup_run::lifeboat::{Brought, Server, Site as Target};
+use hlb_backup::wal_ship;
+use hlb_backup_run::lifeboat::{Brought, Reader, Server, Site as Target};
 use hlb_backup_run::placement::Place;
 use hlb_backup_run::restore::{self, Database, Failure, Restore};
 use hlb_bootstrap::Runner;
@@ -23,7 +24,7 @@ use hlb_resolver::Action;
 use hlb_secrets::Vault;
 use hlb_state::State;
 use hlb_types::manifest::Returns;
-use hlb_types::DbEngine;
+use hlb_types::{DbEngine, DbServer, VITAL_POSTGRES};
 
 use crate::{open_state, open_vault, Cli, ACTOR_ROLE};
 
@@ -35,11 +36,23 @@ const HEALTHY_WITHIN_SECS: u64 = 300;
 /// How long a site service may take to stop.
 const STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// One PostgreSQL database coming home.
+struct ComingDb {
+    name: String,
+    extensions: Vec<String>,
+    /// Where it lives at home, and so on the site: the shared server's restored there
+    /// by dump, the vital one's the standby the promotion made the server.
+    server: DbServer,
+    /// The app's role, and the vault entry of its password: what reads it off the
+    /// vital server, whose administrator never went to the site.
+    role: String,
+    password_secret: String,
+}
+
 /// One app coming home.
 struct Coming {
     app: String,
-    /// Its PostgreSQL databases: `(name, extensions)`.
-    databases: Vec<(String, Vec<String>)>,
+    databases: Vec<ComingDb>,
     /// Its backed-up volumes, each with the image of the service mounting it — which
     /// the site holds — and where it lives at home.
     volumes: Vec<(String, String, Place)>,
@@ -64,12 +77,40 @@ async fn coming(
             ))
         }
     }
+    let plan = lifeboat::plan_of(state, app)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut databases = Vec::new();
     for (engine, name, extensions) in restore::databases_of(&m, app) {
         match engine {
-            DbEngine::Postgres => databases.push((name, extensions.to_vec())),
+            DbEngine::Postgres => {}
             DbEngine::Mariadb => return Err(format!("{app}'s MariaDB: the site runs none")),
         }
+        let server = state
+            .database_server(app, &name)
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or(DbServer::Postgres);
+        let (role, password_secret) = plan
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                Action::ProvisionDatabase {
+                    database,
+                    role,
+                    password_secret,
+                    ..
+                } if *database == name => Some((role.clone(), password_secret.clone())),
+                _ => None,
+            })
+            .ok_or_else(|| format!("{app}'s database {name} is provisioned by no plan"))?;
+        databases.push(ComingDb {
+            name,
+            extensions: extensions.to_vec(),
+            server,
+            role,
+            password_secret,
+        });
     }
     let backed_up: Vec<String> = state
         .volumes_to_backup(app)
@@ -78,9 +119,6 @@ async fn coming(
         .into_iter()
         .map(|(n, _)| n)
         .collect();
-    let plan = lifeboat::plan_of(state, app)
-        .await
-        .map_err(|e| e.to_string())?;
     let mut volumes: Vec<(String, String, Place)> = Vec::new();
     let mut declared: Vec<(String, u64)> = Vec::new();
     for a in lifeboat::services(&plan) {
@@ -135,7 +173,7 @@ fn said(c: &Coming) -> String {
     let mut parts: Vec<String> = c
         .databases
         .iter()
-        .map(|(d, _)| format!("database {d}"))
+        .map(|d| format!("database {}", d.name))
         .collect();
     parts.extend(c.volumes.iter().map(|(v, _, _)| format!("volume {v}")));
     if parts.is_empty() {
@@ -185,9 +223,9 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     }
     // Each into the server it lives on at home: a vital app's, the vital one.
     for c in &all {
-        for (name, _) in &c.databases {
+        for d in &c.databases {
             if let Err(none) = cli
-                .admin_of(&state, &c.app, name, DbEngine::Postgres)
+                .admin_of(&state, &c.app, &d.name, DbEngine::Postgres)
                 .await?
             {
                 if !refused.contains(&none) {
@@ -259,9 +297,18 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     // Left running for the dumps, it would serve a copy of each database read until the
     // nightly lifeboat, which leaves everything stopped. Not before the door: a return
     // failing there gives the site its apps back, PostgreSQL first.
-    if all.iter().any(|c| !c.databases.is_empty()) {
-        if let Err(e) = site.scale(lifeboat::POSTGRES, 0).await {
-            eprintln!("⚠️  the site's PostgreSQL still runs ({e}): the next lifeboat stops it");
+    // The vital server's promoted standby too: it has left the house's timeline, and
+    // the next lifeboat seeds another.
+    for server in [DbServer::Postgres, DbServer::PostgresVital] {
+        if !all
+            .iter()
+            .any(|c| c.databases.iter().any(|d| d.server == server))
+        {
+            continue;
+        }
+        let name = server.service_name();
+        if let Err(e) = site.scale(name, 0).await {
+            eprintln!("⚠️  the site's {name} still runs ({e}): the next lifeboat stops it");
         }
     }
     // Its certificates' keys: none waits on the VPS for the next promotion.
@@ -403,14 +450,19 @@ async fn bring(
         Ok(None) => None,
         Err(e) => return Err(e.to_string()),
     };
-    let pg_image = if all.iter().any(|c| !c.databases.is_empty()) {
-        let plan = lifeboat::plan_of(state, lifeboat::POSTGRES)
-            .await
-            .map_err(|e| e.to_string())?;
-        lifeboat::services(&plan).into_iter().find_map(|a| match a {
-            Action::DeployService { image, .. } => Some(image.clone()),
-            _ => None,
-        })
+    let on = |server: DbServer| {
+        all.iter()
+            .any(|c| c.databases.iter().any(|d| d.server == server))
+    };
+    let pg_image = if on(DbServer::Postgres) {
+        image_of(state, lifeboat::POSTGRES).await?
+    } else {
+        None
+    };
+    let vital_image = if on(DbServer::PostgresVital) {
+        // What the house wrote that never reached the site, said before it is replaced.
+        say(written_past(house, site).await);
+        image_of(state, VITAL_POSTGRES).await?
     } else {
         None
     };
@@ -419,22 +471,47 @@ async fn bring(
     let mut read: Vec<(Vec<Brought>, Vec<Brought>)> = Vec::new();
     for c in all {
         let mut dbs = Vec::new();
-        for (name, extensions) in &c.databases {
-            let (Some(image), Some(admin)) = (&pg_image, &admin) else {
-                return Err("the site's PostgreSQL is unknown to the house".into());
-            };
-            let server = Server {
-                image,
-                admin_password: admin,
+        for d in &c.databases {
+            let name = &d.name;
+            let role_password;
+            let reader = match d.server {
+                DbServer::PostgresVital => {
+                    let Some(image) = &vital_image else {
+                        return Err(format!("{VITAL_POSTGRES}'s image is unknown to the house"));
+                    };
+                    role_password = match state.secret(&d.password_secret).await {
+                        Ok(Some(ct)) => vault.decrypt(&ct).map_err(|e| e.to_string())?,
+                        Ok(None) => {
+                            return Err(format!("{}: no {} in the vault", c.app, d.password_secret))
+                        }
+                        Err(e) => return Err(e.to_string()),
+                    };
+                    Reader {
+                        image,
+                        host: VITAL_POSTGRES,
+                        user: &d.role,
+                        password: &role_password,
+                    }
+                }
+                DbServer::Postgres | DbServer::Mariadb => {
+                    let (Some(image), Some(admin)) = (&pg_image, &admin) else {
+                        return Err("the site's PostgreSQL is unknown to the house".into());
+                    };
+                    Server {
+                        image,
+                        admin_password: admin,
+                    }
+                    .reader()
+                }
             };
             let db = Database {
                 engine: DbEngine::Postgres,
                 name,
-                role: &c.app,
-                extensions,
+                role: &d.role,
+                extensions: &d.extensions,
             };
             let b = restore
-                .database_from_site(&c.app, &db, &target, &server)
+                .database_from_site(&c.app, &db, &target, &reader)
                 .await
                 .map_err(|e| format!("{}'s database {name}: {e}", c.app))?;
             say(format!(
@@ -462,7 +539,8 @@ async fn bring(
 
     // Restored over the house's, each backing up what it replaces.
     for (c, (dbs, vols)) in all.iter().zip(&read) {
-        for ((name, extensions), b) in c.databases.iter().zip(dbs) {
+        for (d, b) in c.databases.iter().zip(dbs) {
+            let name = &d.name;
             let admin_url = cli
                 .admin_of(state, &c.app, name, DbEngine::Postgres)
                 .await
@@ -470,8 +548,8 @@ async fn bring(
             let db = Database {
                 engine: DbEngine::Postgres,
                 name,
-                role: &c.app,
-                extensions,
+                role: &d.role,
+                extensions: &d.extensions,
             };
             let before = restore
                 .database_in_place(&c.app, &db, &admin_url, &b.source)
@@ -505,6 +583,51 @@ async fn bring(
         say(format!("{} healthy at home", c.app));
     }
     Ok(lines)
+}
+
+/// The image `service`'s plan deploys.
+async fn image_of(state: &State, service: &str) -> std::result::Result<Option<String>, String> {
+    let plan = lifeboat::plan_of(state, service)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(lifeboat::services(&plan).into_iter().find_map(|a| match a {
+        Action::DeployService { image, .. } => Some(image.clone()),
+        _ => None,
+    }))
+}
+
+/// One question to a PostgreSQL service, as its own `postgres` over its socket.
+async fn ask(
+    on: &SwarmOrchestrator,
+    service: &str,
+    cmd: &str,
+) -> std::result::Result<String, String> {
+    let out = on
+        .exec_in_service(service, &["sh".into(), "-c".into(), cmd.into()])
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.ok() {
+        return Err(out.stderr.trim().to_string());
+    }
+    Ok(out.stdout)
+}
+
+/// The house's vital server's position against where the site's standby took over.
+/// Said, never a reason to stop: the return replaces it either way.
+async fn written_past(house: &SwarmOrchestrator, site: &SwarmOrchestrator) -> String {
+    let position = ask(
+        house,
+        VITAL_POSTGRES,
+        &format!("psql -U postgres -XqtA -c '{}'", wal_ship::POSITION_SQL),
+    )
+    .await
+    .and_then(|o| wal_ship::parse_position(&o).ok_or_else(|| format!("read {:?}", o.trim())));
+    let history = ask(site, VITAL_POSTGRES, "cat \"$PGDATA\"/pg_wal/*.history").await;
+    match (position, history) {
+        (Ok(p), Ok(h)) => wal_ship::written_past(p, &h),
+        (Err(e), _) => format!("the house's {VITAL_POSTGRES} could not say where it is: {e}"),
+        (_, Err(e)) => format!("the site's {VITAL_POSTGRES} could not say where it took over: {e}"),
+    }
 }
 
 fn short(id: &str) -> &str {

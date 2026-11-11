@@ -29,6 +29,7 @@ pub mod snapshot;
 pub mod sqlite;
 pub mod tarball;
 pub mod verify;
+pub mod wal_ship;
 
 pub use destination::{
     coverage_of, destinations_for, Class, Coverage, CoverageSource, Destination,
