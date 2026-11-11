@@ -1757,6 +1757,13 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        instant into a throwaway server, a dump taken out of it. `hlb replication`
        and `hlb dr exercise` stay the shared server's: the site's standby is no
        streaming replica, and the lifeboat is the vital server's nightly drill.
+       Built and proved on the lab 2026-11-11: a witness row written in
+       Vaultwarden's database at 15:59:15, deleted at 16:00:03; `pitr restore --to
+       "16:00:00"` took that afternoon's base (48 MB) and the 2.3 MB of WAL the site
+       kept, replayed them in 12 s and stopped "before commit of transaction 1058,
+       16:00:03"; its dump, restored by `hlb backup restore --database --snapshot`,
+       brought the row back and Vaultwarden answered. Production untouched until then,
+       nothing of the replay left behind.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
        restored by the promotion.
      - 8d. The vital volumes pushed every minute, what changed only.
