@@ -346,7 +346,12 @@ exported — Homelabus never bills.
   estimated from the 2–31 KB compressed segments measured on the lab, to be measured —
   and `hlb backup pitr --server postgres-vital` reads its window there: a password
   deleted from Vaultwarden that morning comes back to the minute. Its own step, after
-  8b is proved.
+  8b is proved. **The restore is a copy, never production rewound** (decided the same
+  day): `hlb backup pitr restore --server postgres-vital` brings the base to the instant
+  asked in a throwaway server at home, no network, the WAL fetched from the site, and
+  takes a dump of the app's database out of it — restored by `hlb backup restore
+  --database` if the owner wants it. What everyone else wrote since is not lost for one
+  person's mistake.
 
 #### The phases
 
@@ -1748,7 +1753,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        replaced, kept in the copy the return takes first, and said by the return.
      - 8b′. The vital server's point-in-time restore (decided 2026-11-11): the site
        keeps the WAL since the base before last, `hlb backup pitr --server
-       postgres-vital` reads its window and plans a restore from it. `hlb replication`
+       postgres-vital` reads its window and restores an app's database as it was at an
+       instant into a throwaway server, a dump taken out of it. `hlb replication`
        and `hlb dr exercise` stay the shared server's: the site's standby is no
        streaming replica, and the lifeboat is the vital server's nightly drill.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
