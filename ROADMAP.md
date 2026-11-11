@@ -334,6 +334,20 @@ exported — Homelabus never bills.
   PostgreSQL is ~60–150 MB, felt on a 4 GB `light` node — against two moves to write
   and prove instead of one.
 
+#### Decided by the owner, 2026-11-11
+
+- **The vital server gets a point-in-time restore of its own**, rather than `hlb backup
+  pitr`, `hlb replication` and `hlb dr exercise` each pointed at it. Counted first: the
+  site's standby replays from an archive, so `pg_stat_replication` never shows it and
+  `hlb site status` already judges it; the lifeboat already rehearses the vital server's
+  restore nightly and records it as a drill; and the standby cleaned the site's WAL as
+  it replayed (`pg_archivecleanup`), so the vital server had no window at all. The site
+  keeps the WAL since the base before last instead — a day or so; 6 to 90 MB a day
+  estimated from the 2–31 KB compressed segments measured on the lab, to be measured —
+  and `hlb backup pitr --server postgres-vital` reads its window there: a password
+  deleted from Vaultwarden that morning comes back to the minute. Its own step, after
+  8b is proved.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1725,8 +1739,11 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.
-       `hlb backup pitr`, `hlb replication` and `hlb dr exercise` still speak to the
-       shared server alone: each takes the vital one here.
+     - 8b′. The vital server's point-in-time restore (decided 2026-11-11): the site
+       keeps the WAL since the base before last, `hlb backup pitr --server
+       postgres-vital` reads its window and plans a restore from it. `hlb replication`
+       and `hlb dr exercise` stay the shared server's: the site's standby is no
+       streaming replica, and the lifeboat is the vital server's nightly drill.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
        restored by the promotion.
      - 8d. The vital volumes pushed every minute, what changed only.
