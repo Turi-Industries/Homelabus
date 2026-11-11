@@ -558,6 +558,12 @@ async fn rebuild(
         }
     }
 
+    let sqlite_volumes: Vec<String> = state
+        .sqlite_volumes()
+        .await?
+        .into_iter()
+        .map(|(_, volume, _)| volume)
+        .collect();
     let mut vital_spec = None;
     for (app, plan) in &plans {
         let backed_up: Vec<String> = state
@@ -597,6 +603,26 @@ async fn rebuild(
                 );
                 if !sent.sqlite.is_empty() {
                     line.push_str(&format!(", SQLite {}", sent.sqlite.join(", ")));
+                }
+                // What its replica must be newer than to replace it at the promotion —
+                // a copy restic took live as much as one put back consistent.
+                if sqlite_volumes.contains(vol) {
+                    let taken = sent.taken.ok_or_else(|| {
+                        format!(
+                            "{vol}: snapshot {} carries no readable time",
+                            &sent.snapshot[..8]
+                        )
+                    })?;
+                    let marked = ssh
+                        .run(&[
+                            "sh".into(),
+                            "-c".into(),
+                            hlb_backup::sqlite_ship::copied_script(vol, taken),
+                        ])
+                        .await?;
+                    if !marked.ok() {
+                        return Err(format!("{vol}: {}", marked.stderr.trim()).into());
+                    }
                 }
                 println!("  ✓ {line}");
                 said.push(line);
@@ -654,7 +680,27 @@ async fn rebuild(
     said.push(format!("{} ready, stopped", caddy_spec.name));
 
     // The promotion, and the door's file it puts in place.
-    let script = lifeboat::promote_script(&lifeboat::start_order(&apps_services), &ingress.names);
+    let steps = super::litestream::promote_steps(state, &sel.apps).await?;
+    if !steps.is_empty() {
+        // Pulled now: the night of the promotion, a download is minutes the apps wait,
+        // and a registry out of reach leaves the replica unread (lab, 2026-11-11).
+        let pulled = ssh
+            .run(&[
+                "docker".into(),
+                "pull".into(),
+                "-q".into(),
+                hlb_backup::images::LITESTREAM.into(),
+            ])
+            .await?;
+        if !pulled.ok() {
+            return Err(format!("Litestream's image on the site: {}", pulled.stderr.trim()).into());
+        }
+    }
+    let script = lifeboat::promote_script(
+        &lifeboat::start_order(&apps_services),
+        &ingress.names,
+        &steps,
+    );
     hlb_bootstrap::provision::install_file(&ssh, lifeboat::PROMOTE_SCRIPT, &script, 0o700).await?;
     now.names = ingress.names.clone();
     remember(state, vault, &now).await?;
@@ -922,6 +968,7 @@ mod tests {
             snapshot: id.into(),
             bytes: 1,
             sqlite: vec![],
+            taken: None,
         };
         let base = vec!["aaaaaaaa1111".to_string()];
         assert!(is_base(&sent("aaaaaaaa1111"), &base).is_ok());

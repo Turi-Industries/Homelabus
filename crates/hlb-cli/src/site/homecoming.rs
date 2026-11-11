@@ -246,7 +246,8 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         println!("volume on the site into the house's backups (kind:from-site); restore each");
         println!("over the house's, what the house holds backed up first; start them at home");
         println!("until healthy; send their names home from the door; and take the site's");
-        println!("Caddy and its certificates away.");
+        println!("Caddy and its certificates away. A vital SQLite's pusher is stopped first,");
+        println!("its replica on the site emptied once home, and the pusher started again.");
         println!("🔴 What the house's own copies wrote since the promotion is replaced: it");
         println!("   stays in the snapshot each restore takes first.");
         println!("Rerun with --apply.");
@@ -257,6 +258,9 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let _bridge = ssh.docker_socket(&socket).await?;
     let site = SwarmOrchestrator::connect_unix(&socket).await?;
     let scratch = tmp.path();
+    // Stopped first: a pusher running would push the house's database as it is
+    // replaced. Left stopped if the return fails, the site serving again.
+    super::litestream::stop(&state, &vault, &house).await?;
     let outcome = bring(
         cli, &state, &vault, &house, &restore, &site, &socket, scratch, &all,
     )
@@ -294,6 +298,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     println!("✓ the door sends every name home");
+    super::litestream::resume(&state, &vault, &ssh, &house).await;
     // Left running for the dumps, it would serve a copy of each database read until the
     // nightly lifeboat, which leaves everything stopped. Not before the door: a return
     // failing there gives the site its apps back, PostgreSQL first.

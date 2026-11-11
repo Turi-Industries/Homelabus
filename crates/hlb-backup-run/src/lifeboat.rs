@@ -34,6 +34,9 @@ pub struct Sent {
     pub bytes: u64,
     /// The SQLite databases put back from the pass's consistent copies.
     pub sqlite: Vec<String>,
+    /// When the snapshot was taken, seconds since the epoch: what a vital SQLite's
+    /// replica must be newer than to replace this copy at the promotion.
+    pub taken: Option<i64>,
 }
 
 /// The site's daemon, and how its free space is asked before an archive is sent.
@@ -314,6 +317,7 @@ impl Restore<'_> {
             snapshot: id.clone(),
             bytes: size,
             sqlite,
+            taken: source.snapshot.epoch(),
         })
     }
 
@@ -502,6 +506,7 @@ impl Restore<'_> {
             snapshot: source.snapshot.id.clone(),
             bytes: dump.len() as u64,
             sqlite: Vec::new(),
+            taken: source.snapshot.epoch(),
         })
     }
 }

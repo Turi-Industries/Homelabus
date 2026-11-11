@@ -148,6 +148,16 @@ cleanly and is missing data.
 - **An app that creates its own databases asks for root.** Seafile's first start did,
   and Homelabus never hands out MariaDB's root: `USE_EXISTING_DB=1` makes it use the
   databases and the account already provisioned.
+- **🔴 A vital SQLite's replica is chosen ONCE per promotion, after the restore ran**
+  (`sqlite_ship::promote_step`, `<volume>-<db>.promoted`, cleared by the lifeboat). A
+  house back up while the site serves starts its Litestream, which pushes the house's
+  older database as the replica's newest state: chosen again, it would go over what the
+  site wrote. Marked BEFORE the restore, a promotion cut while the image downloaded
+  kept last night's copy for good (lab, 2026-11-11) — and the lifeboat pulls the image
+  ahead. The replica wins only newer than the copy's backup, its `-wal`/`-shm` dropped.
+  Litestream's position lives in tmpfs: in the volume it would travel to the site and
+  come home describing another database. ⚠️ `app_volumes.mountpoint` is the HOST path
+  (`/var/lib/docker/volumes/…`); inside the app it is the manifest's `path`.
 - **A SQLite file cannot be copied hot.** In WAL mode restic copies three files one
   after another while the app writes. `VACUUM INTO` produces a consistent snapshot, and
   the failure only shows at restore time. 🔴 `sqlite: true` is a list kept by hand:
