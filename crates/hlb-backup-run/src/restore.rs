@@ -149,7 +149,14 @@ fn pick_where<'a>(
                 }
                 break;
             }
-            None if s.tags.iter().any(|t| t == BEFORE_RESTORE) => continue,
+            // A point-in-time restore's dump is an old state on purpose: never unasked.
+            None if s
+                .tags
+                .iter()
+                .any(|t| t == BEFORE_RESTORE || t == hlb_backup::replay::PITR_KIND) =>
+            {
+                continue
+            }
             None if taken.contains(&s.id) => {
                 picked.snapshot = Some(s);
                 break;
@@ -1200,6 +1207,29 @@ mod tests {
         assert_eq!(pg.snapshot.map(|s| s.id.as_str()), Some("pg1"));
         let ma = pick_dump(&all, DbEngine::Mariadb, "chat", None, &t, NOW);
         assert_eq!(ma.snapshot.map(|s| s.id.as_str()), Some("ma1"));
+    }
+
+    #[test]
+    fn a_point_in_time_dump_is_restored_only_by_its_id() {
+        let all = vec![
+            snap(
+                "pass",
+                "2026-11-11T03:00:00Z",
+                "/staging/vw-vw-20261111T030000Z.dump",
+                &["app:vw", "db:vw", "kind:sql-dump"],
+            ),
+            snap(
+                "pitr",
+                "2026-11-11T12:00:00Z",
+                "/staging/vw-vw-20261111T120000Z.dump",
+                &["app:vw", "db:vw", hlb_backup::replay::PITR_KIND],
+            ),
+        ];
+        let t = taken(&["pass", "pitr"]);
+        let unasked = pick_dump(&all, DbEngine::Postgres, "vw", None, &t, NOW);
+        assert_eq!(unasked.snapshot.map(|s| s.id.as_str()), Some("pass"));
+        let named = pick_dump(&all, DbEngine::Postgres, "vw", Some("pitr"), &t, NOW);
+        assert_eq!(named.snapshot.map(|s| s.id.as_str()), Some("pitr"));
     }
 
     #[test]

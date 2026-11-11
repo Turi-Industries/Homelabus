@@ -16,13 +16,16 @@ use hlb_backup::wal_ship;
 const NETWORK: &str = "hlb-test-walship";
 const PRIMARY: &str = "hlb-test-walship-house";
 const STANDBY: &str = "hlb-test-walship-site";
-const VOLUMES: [&str; 5] = [
+const VOLUMES: [&str; 6] = [
     "hlb-test-walship-data",
     "hlb-test-walship-wal",
     "hlb-test-walship-seed",
     "hlb-test-walship-seed-wal",
     "hlb-test-walship-site-dir",
+    "hlb-test-walship-pitr-base",
 ];
+/// A point-in-time replay of the base, beside the site.
+const REPLAY: &str = "hlb-test-walship-replay";
 const PASSWORD: &str = "admin-password";
 /// The app's role, which owns its table and reads it off the promoted standby.
 const APP: &str = "keeper";
@@ -97,7 +100,7 @@ impl Drop for Cleanup {
         if std::env::var_os("HLB_KEEP").is_some() {
             return;
         }
-        let _ = docker(&["rm", "-f", PRIMARY, STANDBY]);
+        let _ = docker(&["rm", "-f", PRIMARY, STANDBY, REPLAY]);
         let _ = docker(&["network", "rm", NETWORK]);
         for v in VOLUMES {
             let _ = docker(&["volume", "rm", "-f", v]);
@@ -302,6 +305,20 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
              touch /stage/standby.signal; chown -R postgres:postgres /stage; chmod 700 /stage"
         ),
     ]);
+    // The same base, kept aside for a point-in-time replay: the standby's is promoted.
+    ok(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/a", VOLUMES[2]),
+        "-v",
+        &format!("{}:/b", VOLUMES[5]),
+        "--entrypoint",
+        "sh",
+        &s.image,
+        "-c",
+        "cp -a /a/. /b/",
+    ]);
     write_then_switch("after-base");
     until("a segment archived, compressed", 60, push_count_ready);
     assert!(push(&receiver) > 0, "something pushed");
@@ -358,6 +375,14 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
         "a standby takes no write"
     );
 
+    // The instant a point-in-time restore will ask for: after the second row, before
+    // the third. Seconds apart, as `recovery_target_time` counts them.
+    std::thread::sleep(Duration::from_secs(2));
+    let instant = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    std::thread::sleep(Duration::from_secs(2));
     // Written at home later: it reaches the site with the next push alone.
     write_then_switch("seconds-before-the-cut");
     until("the next segment archived", 60, push_count_ready);
@@ -365,6 +390,45 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
     until("the standby, the third row", 60, || {
         psql(STANDBY, "SELECT count(*) FROM vault").as_deref() == Some("3")
     });
+
+    // The base replayed to the instant, on the WAL the site keeps: the two rows written
+    // before it, not the one after — and a dump of it, as the restore keeps.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(hlb_backup::replay::start(
+        REPLAY,
+        &s.image,
+        VOLUMES[5],
+        VOLUMES[4],
+        Some("wal"),
+        instant,
+    ))
+    .expect("the replay starts");
+    let stopped = rt
+        .block_on(hlb_backup::replay::wait_promoted(REPLAY))
+        .expect("replayed to the instant");
+    assert!(!stopped.is_empty(), "the log says where it stopped");
+    let rows = docker(&[
+        "exec",
+        REPLAY,
+        "su",
+        "postgres",
+        "-c",
+        "psql -XAtc 'SELECT item FROM vault ORDER BY item'",
+    ]);
+    assert_eq!(
+        String::from_utf8_lossy(&rows.stdout).trim(),
+        "after-base\nbefore-base",
+        "{}",
+        String::from_utf8_lossy(&rows.stderr)
+    );
+    let dump = rt
+        .block_on(hlb_backup::replay::dump(REPLAY, "postgres"))
+        .expect("dumped");
+    assert!(dump.starts_with(b"PGDMP"));
+    rt.block_on(hlb_backup::replay::remove(REPLAY));
 
     // What the site refuses: a name it does not archive, a file damaged on the way.
     let bad_sum = "0".repeat(64);

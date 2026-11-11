@@ -155,6 +155,38 @@ async fn rewound(mut f: tokio::fs::File) -> Result<(tokio::fs::File, u64), Strin
     Ok((f, size))
 }
 
+/// `volume`'s directory in snapshot `id`, as a tar archive written to `path`: the
+/// directory's own entry first, then what restic dumps of it. Rewound, with its size.
+async fn archive_of(
+    repo: &hlb_backup::Repository<hlb_backup::ContainerRunner>,
+    id: &str,
+    volume: &str,
+    path: &Path,
+) -> Result<(tokio::fs::File, u64), String> {
+    let root = volume_path(volume);
+    // 🔴 restic's archive of a directory holds everything under it and not the
+    // directory: unpacked so, the volume's root keeps the mount point's owner and
+    // mode, and an app dropping its privileges cannot write into its own volume.
+    let node = repo
+        .node(id, &root)
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|n| n.kind == "dir")
+        .ok_or_else(|| {
+            format!(
+                "snapshot {} holds no directory {root}",
+                &id[..8.min(id.len())]
+            )
+        })?;
+    let mut file = scratch_file(path).await?;
+    let head = tar::header(root.trim_start_matches('/'), Kind::Dir, &attrs(&node))?;
+    file.write_all(&head).await.map_err(|e| e.to_string())?;
+    repo.dump(id, &root, &mut file)
+        .await
+        .map_err(|e| format!("{volume}: {e}"))?;
+    rewound(file).await
+}
+
 /// The archive putting an empty [`wal_ship::STANDBY_SIGNAL`], the server's user's, into
 /// the data directory mounted at `root`. No entry for the directory: its own owner and
 /// mode, the base's, stay as restored.
@@ -192,6 +224,38 @@ pub async fn mark_standby(site: &Site<'_>, image: &str, volume: &str) -> Result<
         )
         .await
         .map_err(|e| format!("{volume} on the site: {}", causes(&e)))
+}
+
+/// The WAL the site keeps, read from its standby — which binds it at
+/// [`STANDBY_DIR`] — into `into`, a volume of `home`'s, at its root: what a
+/// point-in-time replay reads. Through `scratch`: Docker reads at its own pace. The
+/// bytes fetched.
+///
+/// [`STANDBY_DIR`]: hlb_backup::wal_ship::STANDBY_DIR
+pub async fn wal_from_site(
+    site: &SwarmOrchestrator,
+    home: &SwarmOrchestrator,
+    image: &str,
+    into: &str,
+    scratch: &Path,
+) -> Result<u64, String> {
+    use hlb_backup::wal_ship::STANDBY_DIR;
+    use hlb_types::VITAL_POSTGRES;
+    let path = scratch.join("site-wal.tar");
+    let mut file = scratch_file(&path).await?;
+    let n = site
+        .service_archive(VITAL_POSTGRES, STANDBY_DIR, &mut file)
+        .await
+        .map_err(|e| format!("the site's WAL, read from its standby: {}", causes(&e)))?;
+    let (file, _) = rewound(file).await?;
+    // Its entries are `<last part of STANDBY_DIR>/…`: unpacked at `/`, under a mount
+    // of that name, they land at the volume's root.
+    let last = STANDBY_DIR.rsplit('/').next().unwrap_or("incoming");
+    home.put_archive(image, into, &format!("/{last}"), stream(file))
+        .await
+        .map_err(|e| format!("the site's WAL, kept here: {}", causes(&e)))?;
+    let _ = tokio::fs::remove_file(&path).await;
+    Ok(n)
 }
 
 impl Restore<'_> {
@@ -233,24 +297,8 @@ impl Restore<'_> {
         let repo = self.repository(&source, &password, env);
         let id = &source.snapshot.id;
         let root = volume_path(volume);
-
-        // 🔴 restic's archive of a directory holds everything under it and not the
-        // directory: unpacked so, the volume's root keeps the mount point's owner and
-        // mode, and an app dropping its privileges cannot write into its own volume.
-        let node = repo
-            .node(id, &root)
-            .await
-            .map_err(|e| e.to_string())?
-            .filter(|n| n.kind == "dir")
-            .ok_or_else(|| format!("snapshot {} holds no directory {root}", &id[..8]))?;
         let path = scratch.join(format!("{volume}.tar"));
-        let mut file = scratch_file(&path).await?;
-        let head = tar::header(root.trim_start_matches('/'), Kind::Dir, &attrs(&node))?;
-        file.write_all(&head).await.map_err(|e| e.to_string())?;
-        repo.dump(id, &root, &mut file)
-            .await
-            .map_err(|e| format!("{volume}: {e}"))?;
-        let (file, size) = rewound(file).await?;
+        let (file, size) = archive_of(&repo, id, volume, &path).await?;
         let (free_now, total) = free().await?;
         fits(size, free_now, total)?;
         site.docker
@@ -267,6 +315,37 @@ impl Restore<'_> {
             bytes: size,
             sqlite,
         })
+    }
+
+    /// Fills `into`, a volume of `docker`'s, with `snapshot` — a full id Homelabus took —
+    /// of `app`'s `volume`, unpacked at the volume's own path as every restore does. A
+    /// point-in-time restore's base: a PostgreSQL directory, so no SQLite to put back.
+    /// The bytes unpacked.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn snapshot_into(
+        &self,
+        app: &str,
+        volume: &str,
+        snapshot: &str,
+        docker: &SwarmOrchestrator,
+        into: &str,
+        image: &str,
+        scratch: &Path,
+    ) -> Result<u64, String> {
+        let source = self.find(app, volume, None, Some(snapshot)).await?;
+        let password = restic_password(self.state, self.vault)
+            .await
+            .map_err(|e| e.to_string())?;
+        let env = self.env(&source.destination).await?;
+        let repo = self.repository(&source, &password, env);
+        let path = scratch.join(format!("{into}.tar"));
+        let (file, size) = archive_of(&repo, &source.snapshot.id, volume, &path).await?;
+        docker
+            .put_archive(image, into, &volume_path(volume), stream(file))
+            .await
+            .map_err(|e| format!("{into}: {}", causes(&e)))?;
+        let _ = tokio::fs::remove_file(&path).await;
+        Ok(size)
     }
 
     /// Each SQLite database of `volume`, from the copy the pass of `source` took, over
@@ -559,6 +638,40 @@ impl Restore<'_> {
             .await
             .map_err(|e| format!("{} on the site: {e}", db.name))?;
         self.archived(app, db, &dest, &dump, FROM_SITE).await
+    }
+
+    /// `bytes`, `db` as a point-in-time replay held it at `at`, archived to the app's
+    /// first destination for critical data, tagged [`PITR_KIND`] and recorded: restored
+    /// by its id alone, never as the latest.
+    ///
+    /// [`PITR_KIND`]: hlb_backup::replay::PITR_KIND
+    pub async fn pitr_dump(
+        &self,
+        app: &str,
+        db: &Database<'_>,
+        bytes: Vec<u8>,
+        at: i64,
+    ) -> Result<Brought, String> {
+        use hlb_backup::pgdump::scheduled::Dump;
+        let dest = crate::effective_destinations(
+            self.state,
+            app,
+            hlb_backup::Class::Critical,
+            self.fallback_repo,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no destination accepts {app}'s dumps"))?;
+        let dump = Dump {
+            app: app.to_string(),
+            database: db.name.to_string(),
+            filename: Dump::name_for(app, db.name, at),
+            bytes,
+        };
+        self.archived(app, db, &dest, &dump, hlb_backup::replay::PITR_KIND)
+            .await
     }
 
     /// `dump` of `db` archived to `dest` tagged `kind`, recorded, and found again as

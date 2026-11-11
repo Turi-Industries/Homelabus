@@ -576,7 +576,11 @@ pub fn parse_site_labels(out: &str) -> SiteLabels {
             s.received = v.trim().parse().ok();
         } else if let Some(v) = line.strip_prefix("label=") {
             // `find` prints the time with its fraction: `1762862960.4630000000`.
-            let at = v.trim().split('.').next().and_then(|n| n.parse::<i64>().ok());
+            let at = v
+                .trim()
+                .split('.')
+                .next()
+                .and_then(|n| n.parse::<i64>().ok());
             if let Some(at) = at {
                 s.oldest_label = Some(s.oldest_label.map_or(at, |o| o.min(at)));
             }
@@ -921,7 +925,10 @@ mod tests {
             base("its-label-just-after", 1_762_800_000 - 20),
             base("this-morning", 1_762_862_940),
         ];
-        let usable: Vec<String> = usable_bases(&bases, &site).into_iter().map(|b| b.id).collect();
+        let usable: Vec<String> = usable_bases(&bases, &site)
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
         assert_eq!(usable, ["its-label-just-after", "this-morning"]);
         // A site with no label keeps no base's WAL.
         assert!(usable_bases(&bases, &parse_site_labels("received=\n")).is_empty());
@@ -938,5 +945,4 @@ mod tests {
             .expect("sh");
         assert!(out.status.success());
     }
-
 }

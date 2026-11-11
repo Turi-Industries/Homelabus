@@ -19,6 +19,7 @@ pub mod pgdump;
 pub mod pgrunner;
 pub mod pitr;
 pub mod provider;
+pub mod replay;
 pub mod replication;
 pub mod restic;
 pub mod restorability;
