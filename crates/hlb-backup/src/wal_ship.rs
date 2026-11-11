@@ -550,12 +550,14 @@ pub fn judge(waiting: Option<u64>, site: &SiteWal, promoted: bool, now: u64) -> 
 /// site keeps is still the one that label belongs to. Bases are hours apart.
 pub const LABEL_SLACK_S: i64 = 60;
 
-/// Run on the site: when it last received, and when each base label it keeps arrived —
-/// `received=<epoch>` and `label=<epoch>` lines, read by [`parse_site_labels`].
+/// Run on the site: when it last received, each base label it keeps with when it
+/// arrived, and each segment it keeps — `received=<epoch>`, `label=<epoch> <name>` and
+/// `segment=<name>` lines, read by [`parse_site_labels`].
 pub fn site_labels_script() -> String {
     format!(
         r#"echo "received=$(cat {SITE_RECEIVED} 2>/dev/null)"
-find {SITE_DIR} -maxdepth 1 -type f -name '*.backup{SUFFIX}' -printf 'label=%T@\n' 2>/dev/null
+find {SITE_DIR} -maxdepth 1 -type f -name '*.backup{SUFFIX}' -printf 'label=%T@ %f\n' 2>/dev/null
+find {SITE_DIR} -maxdepth 1 -type f -name '????????????????????????{SUFFIX}' -printf 'segment=%f\n' 2>/dev/null
 "#
     )
 }
@@ -569,23 +571,43 @@ pub struct SiteLabels {
     pub oldest_label: Option<i64>,
 }
 
+/// 🔴 A label counts only while the segment its base starts in is still there:
+/// `pg_archivecleanup` — the standby's `archive_cleanup_command` until 2026-11-11 —
+/// removes segments and leaves labels, and a window read from labels alone would name
+/// bases with no WAL behind them. Segments compared without their timeline, as the
+/// prune does.
 pub fn parse_site_labels(out: &str) -> SiteLabels {
     let mut s = SiteLabels::default();
+    let mut labels = Vec::new();
+    let mut oldest_segment: Option<String> = None;
+    let position = |name: &str| name.get(8..24).map(str::to_string);
     for line in out.lines() {
         if let Some(v) = line.strip_prefix("received=") {
             s.received = v.trim().parse().ok();
         } else if let Some(v) = line.strip_prefix("label=") {
             // `find` prints the time with its fraction: `1762862960.4630000000`.
-            let at = v
-                .trim()
-                .split('.')
-                .next()
-                .and_then(|n| n.parse::<i64>().ok());
-            if let Some(at) = at {
-                s.oldest_label = Some(s.oldest_label.map_or(at, |o| o.min(at)));
+            let (at, name) = v.trim().split_once(' ').unwrap_or((v.trim(), ""));
+            let at = at.split('.').next().and_then(|n| n.parse::<i64>().ok());
+            if let (Some(at), Some(p)) = (at, position(name)) {
+                labels.push((at, p));
+            }
+        } else if let Some(p) = line
+            .strip_prefix("segment=")
+            .and_then(|n| position(n.trim()))
+        {
+            if oldest_segment.as_ref().is_none_or(|o| p < *o) {
+                oldest_segment = Some(p);
             }
         }
     }
+    let Some(oldest) = oldest_segment else {
+        return s;
+    };
+    s.oldest_label = labels
+        .into_iter()
+        .filter(|(_, p)| *p >= oldest)
+        .map(|(at, _)| at)
+        .min();
     s
 }
 
@@ -907,7 +929,14 @@ mod tests {
     }
     #[test]
     fn the_site_s_labels_say_how_far_back_a_restore_reaches() {
-        let out = "received=1762900000\nlabel=1762862960.4630000000\nlabel=1762800000.1\n";
+        let out = "received=1762900000\n\
+                   label=1762862960.4630000000 00000001000000000000000A.00000060.backup.zst\n\
+                   label=1762800000.1 000000010000000000000004.00000028.backup.zst\n\
+                   label=1762700000.1 000000010000000000000002.00000028.backup.zst\n\
+                   segment=000000010000000000000004.zst\n\
+                   segment=00000001000000000000000A.zst\n\
+                   segment=00000002000000000000000B.zst\n";
+        // The label of a base whose first segment is gone (…02) does not count.
         let site = parse_site_labels(out);
         assert_eq!(
             site,
@@ -932,6 +961,9 @@ mod tests {
         assert_eq!(usable, ["its-label-just-after", "this-morning"]);
         // A site with no label keeps no base's WAL.
         assert!(usable_bases(&bases, &parse_site_labels("received=\n")).is_empty());
+        // Labels left, every segment gone: nothing to replay from.
+        let bare = "label=1762800000 000000010000000000000004.00000028.backup.zst\n";
+        assert_eq!(parse_site_labels(bare).oldest_label, None);
         assert_eq!(parse_site_labels("received=\n").received, None);
     }
 
