@@ -913,6 +913,10 @@ enum PitrCmd {
     Window {
         #[arg(long, default_value = "/archive/wal")]
         dir: String,
+        /// The server: `postgres`, the shared one and its archive directory, or
+        /// `postgres-vital`, whose WAL its site keeps.
+        #[arg(long, default_value = "postgres")]
+        server: String,
     },
     /// 🔴 Produce a base backup. Without one, the WAL restores nothing.
     Base {
@@ -2665,7 +2669,8 @@ async fn pitr(
             Ok(ExitCode::SUCCESS)
         }
 
-        PitrCmd::Window { dir } => {
+        // The vital server is answered by `site::pitr` before this is called.
+        PitrCmd::Window { dir, server: _ } => {
             let state = State::open(state_path).await?;
             let bases = load_databases(&state).await?;
 
@@ -12846,6 +12851,18 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
+                    BackupCmd::Pitr(PitrCmd::Window { server, dir: _ })
+                        if server != hlb_types::DbEngine::Postgres.service_name() =>
+                    {
+                        if server != hlb_types::VITAL_POSTGRES {
+                            eprintln!(
+                                "No PostgreSQL server \"{server}\": postgres or {}.",
+                                hlb_types::VITAL_POSTGRES
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        site::pitr::window(&cli).await
+                    }
                     BackupCmd::Pitr(sub) => {
                         pitr(sub, &cli.state, cli.postgres_admin.as_deref(), &cli.platform_network).await
                     }

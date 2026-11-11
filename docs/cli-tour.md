@@ -358,6 +358,7 @@ No plan ever moves a database: one planned elsewhere than it lives is refused.
 ./target/debug/hlb site announce             # each alert open, and what the page says of it
 ./target/debug/hlb site announce services-budget --follow "Power cut in the street." --apply
 ./target/debug/hlb site announce services-budget --replace "Back tonight." --apply
+./target/debug/hlb backup pitr window --server postgres-vital   # the bases whose WAL the site keeps, a day back at least
 ```
 
 The controller is two services of one image: `hlb-privd`, the daemon holding the

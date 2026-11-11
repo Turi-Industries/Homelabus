@@ -487,6 +487,47 @@ impl Restore<'_> {
         })
     }
 
+    /// Every snapshot of `volume` Homelabus took, oldest first, from the first
+    /// destination receiving the app's volumes that lists them — the bases a
+    /// point-in-time restore chooses among. Never a restore's own prior copy.
+    pub async fn taken_of(&self, app: &str, volume: &str) -> Result<Vec<Snapshot>, String> {
+        let path = volume_path(volume);
+        let password = restic_password(self.state, self.vault)
+            .await
+            .map_err(|e| e.to_string())?;
+        let taken = self
+            .state
+            .snapshots_taken(app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut tried = Vec::new();
+        for d in effective_destinations(self.state, app, Class::Bulky, self.fallback_repo)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            let env = self.env(&d).await?;
+            let (runner, location) = d.runner(Some(self.network));
+            let repo = hlb_backup::Repository::new(runner, location, &password).extra_env(env);
+            match repo.snapshots(Some(&format!("app:{app}"))).await {
+                Ok(all) => {
+                    return Ok(all
+                        .into_iter()
+                        .filter(|s| {
+                            s.paths.contains(&path)
+                                && taken.contains(&s.id)
+                                && !s.tags.iter().any(|t| t == BEFORE_RESTORE)
+                        })
+                        .collect())
+                }
+                Err(e) => tried.push(format!("{}: {e}", d.name)),
+            }
+        }
+        Err(format!(
+            "no destination listed {app}'s snapshots of {volume}: {}",
+            tried.join("; ")
+        ))
+    }
+
     /// The machine holding `volume`. Asked while its app still runs: a stopped
     /// service whose data no node pins — on the pool, over NFS — runs nowhere to be
     /// found.

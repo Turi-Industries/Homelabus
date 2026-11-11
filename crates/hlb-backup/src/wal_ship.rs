@@ -545,6 +545,62 @@ pub fn judge(waiting: Option<u64>, site: &SiteWal, promoted: bool, now: u64) -> 
     out
 }
 
+/// A base label reaches the site some seconds after its base ended, and the base's
+/// snapshot is dated when restic began: a base this much older than the oldest label the
+/// site keeps is still the one that label belongs to. Bases are hours apart.
+pub const LABEL_SLACK_S: i64 = 60;
+
+/// Run on the site: when it last received, and when each base label it keeps arrived —
+/// `received=<epoch>` and `label=<epoch>` lines, read by [`parse_site_labels`].
+pub fn site_labels_script() -> String {
+    format!(
+        r#"echo "received=$(cat {SITE_RECEIVED} 2>/dev/null)"
+find {SITE_DIR} -maxdepth 1 -type f -name '*.backup{SUFFIX}' -printf 'label=%T@\n' 2>/dev/null
+"#
+    )
+}
+
+/// What the site keeps for a point-in-time restore.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SiteLabels {
+    /// When the site last received a file: the newest instant it can replay to.
+    pub received: Option<i64>,
+    /// When the oldest base label it keeps arrived: no older base has its WAL there.
+    pub oldest_label: Option<i64>,
+}
+
+pub fn parse_site_labels(out: &str) -> SiteLabels {
+    let mut s = SiteLabels::default();
+    for line in out.lines() {
+        if let Some(v) = line.strip_prefix("received=") {
+            s.received = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("label=") {
+            // `find` prints the time with its fraction: `1762862960.4630000000`.
+            let at = v.trim().split('.').next().and_then(|n| n.parse::<i64>().ok());
+            if let Some(at) = at {
+                s.oldest_label = Some(s.oldest_label.map_or(at, |o| o.min(at)));
+            }
+        }
+    }
+    s
+}
+
+/// The bases a point-in-time restore of the vital server can start from: those whose
+/// label, and so the WAL past their start, the site still keeps.
+pub fn usable_bases(
+    bases: &[crate::pitr::BaseBackup],
+    site: &SiteLabels,
+) -> Vec<crate::pitr::BaseBackup> {
+    let Some(oldest) = site.oldest_label else {
+        return Vec::new();
+    };
+    bases
+        .iter()
+        .filter(|b| b.finished_at >= oldest - LABEL_SLACK_S)
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,4 +901,42 @@ mod tests {
         let t22 = Target { port: 22, ..t };
         assert!(known_hosts_line(&t22, "ssh-ed25519 K").starts_with("203.0.113.7 "));
     }
+    #[test]
+    fn the_site_s_labels_say_how_far_back_a_restore_reaches() {
+        let out = "received=1762900000\nlabel=1762862960.4630000000\nlabel=1762800000.1\n";
+        let site = parse_site_labels(out);
+        assert_eq!(
+            site,
+            SiteLabels {
+                received: Some(1_762_900_000),
+                oldest_label: Some(1_762_800_000)
+            }
+        );
+        let base = |id: &str, at| crate::pitr::BaseBackup {
+            id: id.into(),
+            finished_at: at,
+        };
+        let bases = [
+            base("pruned", 1_762_700_000),
+            base("its-label-just-after", 1_762_800_000 - 20),
+            base("this-morning", 1_762_862_940),
+        ];
+        let usable: Vec<String> = usable_bases(&bases, &site).into_iter().map(|b| b.id).collect();
+        assert_eq!(usable, ["its-label-just-after", "this-morning"]);
+        // A site with no label keeps no base's WAL.
+        assert!(usable_bases(&bases, &parse_site_labels("received=\n")).is_empty());
+        assert_eq!(parse_site_labels("received=\n").received, None);
+    }
+
+    #[test]
+    fn the_labels_script_reads_the_site_s_own_paths() {
+        let s = site_labels_script();
+        assert!(s.contains(SITE_RECEIVED) && s.contains(SITE_DIR), "{s}");
+        let out = std::process::Command::new("sh")
+            .args(["-n", "-c", &s])
+            .output()
+            .expect("sh");
+        assert!(out.status.success());
+    }
+
 }

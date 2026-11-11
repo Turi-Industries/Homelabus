@@ -842,7 +842,7 @@ async fn seed_standby(
 }
 
 /// The volume holding the server's data directory: the one its base backup copies.
-fn data_volume(m: &Manifest) -> Option<String> {
+pub(super) fn data_volume(m: &Manifest) -> Option<String> {
     m.spec.requires.iter().find_map(|c| match c {
         hlb_types::Capability::Storage { name, copy, .. }
             if copy.engine() == Some(hlb_types::DbEngine::Postgres) =>
