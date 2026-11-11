@@ -18,6 +18,8 @@ use hlb_types::binding::GeneratedSecret;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformAccess {
     pub postgres_admin: Option<String>,
+    /// The vital apps' own PostgreSQL, installed with a site.
+    pub postgres_vital_admin: Option<String>,
     pub mariadb_admin: Option<String>,
     /// `(admin API URL, token)`.
     pub garage_admin: Option<(String, String)>,
@@ -31,6 +33,17 @@ pub struct PlatformAccess {
     pub ntfy_publisher: Option<(String, String)>,
     /// `(user, password)` the deadman's watchdog publishes as, from another machine.
     pub ntfy_watchdog: Option<(String, String)>,
+}
+
+impl PlatformAccess {
+    /// The administrator of the server a database lives on.
+    pub fn database_admin(&self, server: hlb_types::DbServer) -> Option<&str> {
+        match server {
+            hlb_types::DbServer::Postgres => self.postgres_admin.as_deref(),
+            hlb_types::DbServer::PostgresVital => self.postgres_vital_admin.as_deref(),
+            hlb_types::DbServer::Mariadb => self.mariadb_admin.as_deref(),
+        }
+    }
 }
 
 /// ntfy's declared accounts that publish, `(user, {{ secret.* }} name)`, as its
@@ -92,13 +105,14 @@ pub async fn from_vault(state: &State, vault: &Vault) -> crate::Result<PlatformA
             None => Ok(None),
         }
     };
+    let admin = |server: hlb_types::DbServer| async move {
+        let name = generated(server.service_name(), server.admin_password_name());
+        Ok::<_, crate::Error>(read(name).await?.map(|p| server.admin_url(&p)))
+    };
     Ok(PlatformAccess {
-        postgres_admin: read(generated("postgres", "admin-password"))
-            .await?
-            .map(|p| format!("postgres://postgres:{p}@postgres:5432/postgres")),
-        mariadb_admin: read(generated("mariadb", "root-password"))
-            .await?
-            .map(|p| format!("mysql://root:{p}@mariadb:3306")),
+        postgres_admin: admin(hlb_types::DbServer::Postgres).await?,
+        postgres_vital_admin: admin(hlb_types::DbServer::PostgresVital).await?,
+        mariadb_admin: admin(hlb_types::DbServer::Mariadb).await?,
         garage_admin: read(generated("garage", "admin-token"))
             .await?
             .map(|t| ("http://garage:3903".to_string(), t)),
@@ -151,6 +165,24 @@ mod tests {
             Some(("http://garage:3903".into(), "tok".into()))
         );
         assert_eq!(a.mariadb_admin, None);
+        assert_eq!(a.postgres_vital_admin, None);
+
+        s.store_secret_if_absent(
+            "postgres-vital-admin-password",
+            &v.encrypt("pw2").expect("enc"),
+            "x",
+        )
+        .await
+        .expect("store");
+        let a = from_vault(&s, &v).await.expect("read");
+        assert_eq!(
+            a.database_admin(hlb_types::DbServer::PostgresVital),
+            Some("postgres://postgres:pw2@postgres-vital:5432/postgres")
+        );
+        assert_eq!(
+            a.database_admin(hlb_types::DbServer::Postgres),
+            Some("postgres://postgres:pw1@postgres:5432/postgres")
+        );
     }
 
     #[test]

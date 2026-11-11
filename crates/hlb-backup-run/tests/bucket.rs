@@ -131,6 +131,7 @@ async fn a_bucket_backed_up_comes_back_whole_and_the_copy_taken_first_undoes_it(
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -198,6 +199,7 @@ async fn a_bucket_backed_up_comes_back_whole_and_the_copy_taken_first_undoes_it(
     // is undone from it with nothing named.
     let admins = hlb_backup_run::Admins {
         postgres: None,
+        postgres_vital: None,
         mariadb: None,
     };
     let copy = hlb_backup_run::provider_for_update(

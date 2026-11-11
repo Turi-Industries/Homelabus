@@ -148,6 +148,7 @@ spec:
         fallback_repo: None,
         network: NETWORK,
         postgres_admin: Some(&admin),
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -162,6 +163,7 @@ spec:
 
     let admins = Admins {
         postgres: Some(&admin),
+        postgres_vital: None,
         mariadb: None,
     };
     let copy = provider_for_update(&state, &vault, NETWORK, admins, None, None, "chat")

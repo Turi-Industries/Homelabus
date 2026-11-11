@@ -64,6 +64,18 @@ pub enum Error {
     #[error(transparent)]
     Platform(#[from] hlb_platform::Error),
 
+    /// A plan places a database on another server than the one holding it.
+    #[error(
+        "{app}/{database} lives on {on} and this plan provisions it on {planned}: \
+         it is moved with its data, never provisioned empty beside it"
+    )]
+    DatabaseElsewhere {
+        app: String,
+        database: String,
+        on: &'static str,
+        planned: &'static str,
+    },
+
     /// A volume declares a tier this installation cannot provide.
     ///
     /// 🔴 An error, never a fallback: a `tier: nfs` volume quietly turned into a local
@@ -506,6 +518,11 @@ pub struct Executor<'a, O: Orchestrator + ?Sized> {
     vault: Option<&'a Vault>,
     /// Absent until PostgreSQL is deployed and reachable.
     postgres: Option<&'a PostgresProvisioner>,
+    /// The vital apps' own server, absent unless the house has a site.
+    postgres_vital: Option<&'a PostgresProvisioner>,
+    /// Every database read on this one server, whatever the house recorded: the site's
+    /// lifeboat runs a single PostgreSQL.
+    databases_on: Option<hlb_types::DbServer>,
     /// Same for MariaDB. Both can coexist: different apps have different
     /// requirements, and the resolver chooses per manifest.
     mariadb: Option<&'a MariadbProvisioner>,
@@ -544,6 +561,8 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             state,
             vault: None,
             postgres: None,
+            postgres_vital: None,
+            databases_on: None,
             mariadb: None,
             registry: None,
             identity: None,
@@ -590,6 +609,45 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
     pub fn with_postgres(mut self, pg: &'a PostgresProvisioner) -> Self {
         self.postgres = Some(pg);
         self
+    }
+
+    pub fn with_postgres_vital(mut self, pg: &'a PostgresProvisioner) -> Self {
+        self.postgres_vital = Some(pg);
+        self
+    }
+
+    /// Renders every database as living on `server`: a service rendered for another
+    /// machine — the site — reaches that machine's server, not the house's.
+    pub fn databases_on(mut self, server: hlb_types::DbServer) -> Self {
+        self.databases_on = Some(server);
+        self
+    }
+
+    /// The PostgreSQL server's provisioner, `None` for one unreachable — or MariaDB.
+    fn postgres_on(&self, server: hlb_types::DbServer) -> Option<&'a PostgresProvisioner> {
+        match server {
+            hlb_types::DbServer::Postgres => self.postgres,
+            hlb_types::DbServer::PostgresVital => self.postgres_vital,
+            hlb_types::DbServer::Mariadb => None,
+        }
+    }
+
+    /// The server an app's database lives on: where it was provisioned, or its
+    /// engine's shared server for one provisioned before that was recorded.
+    async fn server_of(
+        &self,
+        app: &str,
+        database: &str,
+        engine: hlb_types::DbEngine,
+    ) -> Result<hlb_types::DbServer> {
+        if let Some(on) = self.databases_on.filter(|on| on.engine() == engine) {
+            return Ok(on);
+        }
+        Ok(self
+            .state
+            .database_server(app, database)
+            .await?
+            .unwrap_or_else(|| hlb_types::DbServer::shared(engine)))
     }
 
     pub fn with_mariadb(mut self, my: &'a MariadbProvisioner) -> Self {
@@ -916,7 +974,13 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 match c {
                     hlb_types::Capability::Database { engine, name, .. } => {
                         let base = name.clone().unwrap_or_else(|| app.to_string());
-                        let host = engine.service_name().to_string();
+                        // Where it lives, never where a new one would go: a vital app
+                        // installed before the site keeps the shared server until moved.
+                        let host = self
+                            .server_of(app, &base, *engine)
+                            .await?
+                            .service_name()
+                            .to_string();
                         let port = match engine {
                             hlb_types::DbEngine::Postgres => "5432",
                             hlb_types::DbEngine::Mariadb => "3306",
@@ -1456,7 +1520,7 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
             }
 
             Action::ProvisionDatabase {
-                engine,
+                server,
                 database,
                 role,
                 password_secret,
@@ -1466,6 +1530,19 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 let Some(vault) = self.vault else {
                     return Ok(Step::NotImplemented);
                 };
+                // 🔴 A database stays where it was provisioned until it is moved: a plan
+                // placing it elsewhere — the vital server installed since, its move not
+                // done — would provision an empty one beside it, and the app's next
+                // deployment would point at that.
+                let recorded = self.state.database_server(app, database).await?;
+                if let Some(on) = recorded.filter(|on| on != server) {
+                    return Err(Error::DatabaseElsewhere {
+                        app: app.to_string(),
+                        database: database.clone(),
+                        on: on.service_name(),
+                        planned: server.service_name(),
+                    });
+                }
 
                 let ct = self
                     .state
@@ -1478,9 +1555,9 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // compilation here, which forces a decision on how to provision it
                 // rather than letting it fall into a default arm that would claim
                 // success.
-                let created = match engine {
+                let created = match server.engine() {
                     hlb_types::DbEngine::Postgres => {
-                        let Some(pg) = self.postgres else {
+                        let Some(pg) = self.postgres_on(*server) else {
                             return Ok(Step::NotImplemented);
                         };
                         let created = pg.provision(database, role, &password).await?;
@@ -1502,14 +1579,23 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 };
 
                 if created {
-                    tracing::info!(database, role, engine = ?engine, "database provisioned");
+                    tracing::info!(
+                        database,
+                        role,
+                        server = server.service_name(),
+                        "database provisioned"
+                    );
                 }
+                // Before anything reads it: the deploy's `{{ db.host }}` comes from here.
+                self.state
+                    .record_database_server(app, database, *server)
+                    .await?;
 
                 // 🔴 Extensions AFTER the database, and on the app's database - not on
                 // `postgres`. `CREATE EXTENSION` is per-database: installed in the
                 // wrong place it succeeds and the app never sees it.
                 if !extensions.is_empty() {
-                    let Some(pg) = self.postgres else {
+                    let Some(pg) = self.postgres_on(*server) else {
                         return Ok(Step::NotImplemented);
                     };
                     for ext in extensions {
@@ -1574,9 +1660,14 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 } else {
                     None
                 };
-                let app_db = match (self.postgres, database) {
-                    (Some(pg), Some(database)) => Some(AppDb { pg, database }),
-                    _ => None,
+                let app_db = match database {
+                    Some(database) => {
+                        let server = self
+                            .server_of(app, &database, hlb_types::DbEngine::Postgres)
+                            .await?;
+                        self.postgres_on(server).map(|pg| AppDb { pg, database })
+                    }
+                    None => None,
                 };
                 let manifest = self.state.app_manifest(app).await.ok();
                 let port = manifest
@@ -3298,6 +3389,71 @@ spec:
         // And the composite URL must carry the SAME password, not another draw.
         let url = table.get("DB_URL").expect("URL transmise");
         assert_eq!(*url, format!("postgres://demo:{password}@postgres/demo"));
+    }
+
+    /// A database is read where it was provisioned, and never provisioned again on the
+    /// other server: the vital server installed before the vital app was moved would
+    /// otherwise get an empty database, and the app pointed at it.
+    #[tokio::test]
+    async fn a_database_is_found_on_its_server_and_never_provisioned_beside_it() {
+        const VITAL: &str = r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: demo, criticality: vital }
+spec:
+  image: { repo: acme/demo, tag: "1.0", digest: "sha256:abc" }
+  requires:
+    - kind: database
+      engine: postgres
+  env:
+    DB_HOST: "{{ db.host }}"
+"#;
+        let o = Fake::default();
+        let s = State::in_memory().await.expect("state");
+        let dir = tempfile::tempdir().expect("tmp");
+        let vault = Vault::init(dir.path().join("master.key")).expect("vault");
+        let m: hlb_types::Manifest = serde_yaml_ng::from_str(VITAL).expect("manifest");
+        s.upsert_app("demo", &m, None).await.expect("upsert");
+        s.record_database_server("demo", "demo", hlb_types::DbServer::PostgresVital)
+            .await
+            .expect("record");
+
+        // Planned on the shared server: refused before anything is provisioned.
+        let shared = hlb_resolver::resolve(&m, &Default::default()).expect("plan");
+        let out = Executor::new(&o, &s)
+            .with_vault(&vault)
+            .apply(true)
+            .run("demo", &shared)
+            .await
+            .expect("run");
+        let (_, why) = out.failed.expect("refused");
+        assert!(why.contains("lives on postgres-vital"), "{why}");
+        assert!(o.deployed_env.lock().expect("lock").is_empty());
+
+        let vital = hlb_resolver::resolve(
+            &m,
+            &hlb_resolver::InstallParams {
+                vital_postgres: true,
+                ..Default::default()
+            },
+        )
+        .expect("plan");
+        Executor::new(&o, &s)
+            .with_vault(&vault)
+            .apply(true)
+            .run("demo", &vital)
+            .await
+            .expect("run");
+        let deployments = o.deployed_env.lock().expect("lock").clone();
+        let (_, env) = deployments
+            .iter()
+            .find(|(n, _)| n == "demo")
+            .expect("demo deployed");
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "DB_HOST" && v == "postgres-vital"),
+            "{env:?}"
+        );
     }
 
     #[tokio::test]

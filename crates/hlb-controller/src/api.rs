@@ -5171,6 +5171,7 @@ pub(crate) mod tests {
             // 🔴 No database client: the executor must record the provisioning as
             // unimplemented instead of skipping it. That is the case this test locks.
             postgres: None,
+            postgres_vital: None,
             mariadb: None,
             storage: Default::default(),
             api: hlb_guide::HttpApi::default(),
@@ -6311,7 +6312,7 @@ steps:
             .await
             .expect("body");
         let said = String::from_utf8_lossy(&bytes);
-        assert!(said.contains("postgres database"), "{said}");
+        assert!(said.contains("PostgreSQL database"), "{said}");
     }
 
     #[tokio::test]

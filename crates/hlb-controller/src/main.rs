@@ -20,8 +20,9 @@ use hlb_state::State;
 
 /// The settings reaching a real system: a demonstration's fictional apps would be
 /// backed up, provisioned or exported there, so `--demo` refuses each of them.
-const DEMO_REFUSES: [&str; 8] = [
+const DEMO_REFUSES: [&str; 9] = [
     "postgres_admin",
+    "postgres_vital_admin",
     "mariadb_admin",
     "pocketid_url",
     "heartbeat",
@@ -565,6 +566,7 @@ async fn demonstration(
         vault: hlb_secrets::Vault::ephemeral(),
         registry: hlb_registry::RegistryClient::new(),
         postgres: None,
+        postgres_vital: None,
         mariadb: None,
         storage: hlb_engine::StorageConfig {
             local_root: cli.daemon.storage_root.clone(),

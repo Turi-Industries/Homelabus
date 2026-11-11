@@ -66,6 +66,7 @@ async fn a_pass_sends_volumes_and_state_to_the_declared_destination() {
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -169,6 +170,7 @@ async fn the_state_a_pass_leaves_knows_what_that_pass_took() {
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force,
@@ -324,6 +326,7 @@ async fn a_sqlite_database_in_an_unflagged_volume_is_snapshotted_not_only_copied
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -518,6 +521,7 @@ async fn a_pass_leaves_alone_a_service_a_restore_holds() {
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -786,6 +790,7 @@ async fn a_volume_declared_copied_stopped_is_never_copied_while_its_service_runs
         fallback_repo: None,
         network: "bridge",
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -895,6 +900,7 @@ async fn an_update_s_copy_of_a_sqlite_volume_is_taken_with_its_service_stopped()
     };
     let admins = hlb_backup_run::Admins {
         postgres: None,
+        postgres_vital: None,
         mariadb: None,
     };
     let ids =
@@ -1140,6 +1146,7 @@ async fn a_postgres_directory_copied_while_written_restores_into_a_server_that_s
         fallback_repo: None,
         network: PG_NET,
         postgres_admin: Some(&admin),
+        postgres_vital_admin: None,
         mariadb_admin: None,
         schedule: hlb_backup::Schedule::default(),
         force: true,
@@ -1484,6 +1491,7 @@ async fn a_mariadb_directory_copied_while_written_restores_into_a_server_that_st
         fallback_repo: None,
         network: MA_NET,
         postgres_admin: None,
+        postgres_vital_admin: None,
         mariadb_admin: Some(&admin),
         schedule: hlb_backup::Schedule::default(),
         force: true,

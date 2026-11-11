@@ -62,6 +62,11 @@ struct Cli {
     #[arg(long, global = true, env = "HLB_POSTGRES_ADMIN")]
     postgres_admin: Option<String>,
 
+    /// The vital apps' own PostgreSQL's admin URL — `postgres-vital`, installed with a
+    /// site. Read from the vault like the others.
+    #[arg(long, global = true, env = "HLB_POSTGRES_VITAL_ADMIN")]
+    postgres_vital_admin: Option<String>,
+
     /// MariaDB admin URL, same principle.
     #[arg(long, global = true, env = "HLB_MARIADB_ADMIN")]
     mariadb_admin: Option<String>,
@@ -2189,8 +2194,9 @@ enum SiteCmd {
     },
     /// Each house node's tunnel to the site, read off the VPS.
     Status,
-    /// Push the link again: a node joined or left the house, or one was unreachable.
-    /// Preview by default.
+    /// Push the link again: a node joined or left the house, or one was unreachable —
+    /// and the vital apps' own PostgreSQL, installed and their databases moved into it
+    /// when the site predates it. Preview by default.
     Sync {
         #[arg(long)]
         apply: bool,
@@ -2827,6 +2833,40 @@ fn main() -> ExitCode {
     }
 }
 
+impl Cli {
+    /// The database servers' administrators this run was given.
+    fn admins(&self) -> hlb_backup_run::Admins<'_> {
+        hlb_backup_run::Admins {
+            postgres: self.postgres_admin.as_deref(),
+            postgres_vital: self.postgres_vital_admin.as_deref(),
+            mariadb: self.mariadb_admin.as_deref(),
+        }
+    }
+
+    /// The administrator of the server `app`'s `database` lives on, or why there is
+    /// none. 🔴 Where the state recorded it, never the engine's shared server: a vital
+    /// app's database restored into the shared one is a copy beside it the app never
+    /// reads, and its live one is left as it was.
+    async fn admin_of(
+        &self,
+        state: &State,
+        app: &str,
+        database: &str,
+        engine: hlb_types::DbEngine,
+    ) -> Result<Result<String, String>, Box<dyn std::error::Error>> {
+        let server = state
+            .database_server(app, database)
+            .await?
+            .unwrap_or_else(|| hlb_types::DbServer::shared(engine));
+        let name = server.service_name();
+        Ok(self
+            .admins()
+            .of(server)
+            .map(str::to_string)
+            .ok_or_else(|| format!("{name}'s administrator is in no vault here (--{name}-admin)")))
+    }
+}
+
 /// The provider an update's prior copy goes through: the app's first bulky destination for
 /// its volumes and buckets and first critical one for its dumps, or `--backup-repo`. `None`
 /// refuses the update.
@@ -2836,10 +2876,7 @@ async fn build_backup_provider(
     state: &State,
     vault: &Vault,
 ) -> Result<Option<hlb_backup_run::PlacedProvider>, Box<dyn std::error::Error>> {
-    let admins = hlb_backup_run::Admins {
-        postgres: cli.postgres_admin.as_deref(),
-        mariadb: cli.mariadb_admin.as_deref(),
-    };
+    let admins = cli.admins();
     // Garage does not resolve on a host: a relay, opened only for an app keeping a bucket.
     let s3_endpoint = if state.buckets_to_backup(app).await?.is_empty() {
         None
@@ -5889,6 +5926,7 @@ async fn switch_manifest(
         domain: domain.clone(),
         mail_domain,
         timezone: state.timezone().await?,
+        vital_postgres: hlb_engine::install::vital_postgres(state).await?,
         ..Default::default()
     };
     let guide = &entry.guide;
@@ -5962,6 +6000,122 @@ async fn switch_manifest(
     }
 }
 
+/// `hlb install`: the app's plan previewed, or recorded and run.
+pub(crate) async fn install(
+    cli: &Cli,
+    asked: &str,
+    domain: Option<String>,
+    mail_domain: Option<String>,
+    apply: bool,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let state = open_state(cli).await?;
+    let c = sources::catalog_with_sources(cli, &state).await?;
+    let entry = c.get(asked)?;
+    // `community/foo` installs as `foo`.
+    let app = &entry.manifest.metadata.name;
+
+    // 🔴 BEFORE freezing the manifest. A `tier: nfs` volume with no server
+    // configured cannot be provisioned, and discovering it once the app is
+    // recorded leaves a half-install whose first action failed.
+    let storage = hlb_engine::StorageConfig {
+        local_root: cli.storage_root.clone(),
+        nfs_server: cli.nfs_server.clone(),
+        nfs_export: cli.nfs_export.clone(),
+    };
+    let missing = storage.blockers_for(&entry.manifest);
+    if !missing.is_empty() {
+        for m in &missing {
+            eprintln!("🔴 {m}");
+        }
+        return Ok(ExitCode::FAILURE);
+    }
+
+    let exposure = state.exposure().await?;
+
+    // The ingress refuses at preview what would leave it unplaced, or
+    // serving names nobody chose; an app, a route through what is missing.
+    if let Ok(orch) = SwarmOrchestrator::connect().await {
+        let mut blockers = hlb_engine::ingress::app_blockers(&orch, &state, &entry.manifest).await;
+        if entry.manifest.metadata.name == hlb_types::manifest::INGRESS_SERVICE {
+            blockers.extend(hlb_engine::ingress::blockers(&orch, &state).await);
+        }
+        if !blockers.is_empty() {
+            for b in &blockers {
+                eprintln!("🔴 {b}");
+            }
+            return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
+        }
+    }
+
+    // An app with a route and no domain named takes `<app>.<domain>`: the
+    // template would otherwise stay `{{ domain }}`, which no DNS resolves.
+    let domain = match (domain, &exposure) {
+        (Some(d), _) => Some(d),
+        (None, Some(e)) if !entry.manifest.spec.ingress.is_empty() => {
+            let d = e.default_domain(app);
+            println!("Published at {d} (--domain to choose another)\n");
+            Some(d)
+        }
+        _ => None,
+    };
+    // The mail domain follows the exposure's, unless named.
+    let mail_domain = mail_domain.or_else(|| exposure.as_ref().map(|e| e.domain.clone()));
+
+    // An app already recorded resumes from what it was installed with.
+    let basis = match hlb_engine::install::basis(
+        &state,
+        app,
+        hlb_engine::install::Origin {
+            source: entry.source.as_deref(),
+            index: entry.index,
+            version: entry.version.as_deref(),
+        },
+        &entry.manifest,
+        &entry.guide,
+        domain,
+        mail_domain,
+    )
+    .await?
+    {
+        Ok(b) => b,
+        Err(refusal) => {
+            eprintln!("🔴 {refusal}");
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    if let Some(status) = &basis.resumed {
+        println!(
+            "\"{app}\" is recorded ({status}): resuming it as installed — the \
+                 catalog's changes reach it through `hlb upgrade {app}`\n"
+        );
+    }
+
+    let params = InstallParams {
+        domain: basis.domain.clone(),
+        mail_domain: basis.mail_domain.clone(),
+        timezone: state.timezone().await?,
+        vital_postgres: hlb_engine::install::vital_postgres(&state).await?,
+        ..Default::default()
+    };
+    let plan = hlb_resolver::resolve_with_guide(&basis.manifest, &basis.guide, &params)?;
+
+    // The manifest is frozen now — and only when applying: a preview records
+    // nothing. A later catalog change will not modify this installation.
+    if apply {
+        hlb_engine::install::record(&state, app, &basis).await?;
+    }
+    let grants = basis.manifest.grants(basis.domain.as_deref());
+    if !apply && !grants.is_empty() {
+        println!("What \"{app}\" receives beyond its own container:");
+        for g in grants {
+            println!("  ⚠️  {g}");
+        }
+        println!();
+    }
+
+    execute_plan(cli, &state, app, &plan, &storage, apply, "install").await
+}
+
 /// Runs an app's plan with every building block that answers wired in — `install`'s
 /// path, and `upgrade`'s: two copies would drift, and the one used less would be the
 /// one deploying without its database.
@@ -5989,6 +6143,34 @@ async fn execute_plan(
             Ok(p) => Some(p),
             Err(e) => {
                 eprintln!("⚠️  PostgreSQL unreachable ({e}) — provisioning skipped.");
+                None
+            }
+        },
+        None => None,
+    };
+
+    // Installed by this very run — `hlb site add` — its administrator was not in the
+    // vault when the run read it.
+    let vital_url = match &cli.postgres_vital_admin {
+        Some(url) => Some(url.clone()),
+        None => {
+            hlb_engine::access::from_vault(state, &vault)
+                .await?
+                .postgres_vital_admin
+        }
+    };
+    let pg_vital = match &vital_url {
+        Some(url) => match hlb_platform::PostgresProvisioner::connect(&relay::reach(
+            url,
+            &cli.platform_network,
+        ))
+        .await
+        {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!(
+                    "⚠️  The vital apps' PostgreSQL unreachable ({e}) — provisioning skipped."
+                );
                 None
             }
         },
@@ -6036,6 +6218,9 @@ async fn execute_plan(
         .apply(apply);
     if let Some(p) = &pg {
         exec = exec.with_postgres(p);
+    }
+    if let Some(p) = &pg_vital {
+        exec = exec.with_postgres_vital(p);
     }
     if let Some(m) = &mariadb {
         exec = exec.with_mariadb(m);
@@ -6150,7 +6335,7 @@ async fn remember_replicas(
 }
 
 /// An installed app's plan, resolved again from the manifest it was installed with.
-async fn plan_as_installed(
+pub(crate) async fn plan_as_installed(
     cli: &Cli,
     state: &State,
     app: &str,
@@ -6167,6 +6352,7 @@ async fn plan_as_installed(
         // The one its install took: the exposure's of today may be another.
         mail_domain: hlb_engine::install::mail_domain(state, app, None).await?,
         timezone: state.timezone().await?,
+        vital_postgres: hlb_engine::install::vital_postgres(state).await?,
         ..Default::default()
     };
     Ok(hlb_resolver::resolve_with_guide(&frozen, &guide, &params)?)
@@ -6218,6 +6404,9 @@ fn with_platform_access(mut cli: Cli) -> Cli {
     if let Some(a) = access {
         if cli.postgres_admin.is_none() {
             cli.postgres_admin = a.postgres_admin;
+        }
+        if cli.postgres_vital_admin.is_none() {
+            cli.postgres_vital_admin = a.postgres_vital_admin;
         }
         if cli.mariadb_admin.is_none() {
             cli.mariadb_admin = a.mariadb_admin;
@@ -6523,9 +6712,23 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     return Ok(ExitCode::FAILURE);
                 }
             };
+            // Read from an installation when there is one — never created here: with a
+            // site, a vital app's databases are placed on the vital server.
+            let vital_postgres = if cli.state.exists() {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(async {
+                    let state = State::open_read_only(&cli.state).await?;
+                    Ok::<_, Box<dyn std::error::Error>>(
+                        hlb_engine::install::vital_postgres(&state).await?,
+                    )
+                })?
+            } else {
+                false
+            };
             let params = InstallParams {
                 domain,
                 mail_domain,
+                vital_postgres,
                 ..Default::default()
             };
 
@@ -6732,117 +6935,13 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             apply,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                let state = open_state(&cli).await?;
-                let c = sources::catalog_with_sources(&cli, &state).await?;
-                let entry = c.get(asked)?;
-                // `community/foo` installs as `foo`.
-                let app = &entry.manifest.metadata.name;
-
-                // 🔴 BEFORE freezing the manifest. A `tier: nfs` volume with no server
-                // configured cannot be provisioned, and discovering it once the app is
-                // recorded leaves a half-install whose first action failed.
-                let storage = hlb_engine::StorageConfig {
-                    local_root: cli.storage_root.clone(),
-                    nfs_server: cli.nfs_server.clone(),
-                    nfs_export: cli.nfs_export.clone(),
-                };
-                let missing = storage.blockers_for(&entry.manifest);
-                if !missing.is_empty() {
-                    for m in &missing {
-                        eprintln!("🔴 {m}");
-                    }
-                    return Ok(ExitCode::FAILURE);
-                }
-
-                let exposure = state.exposure().await?;
-
-                // The ingress refuses at preview what would leave it unplaced, or
-                // serving names nobody chose; an app, a route through what is missing.
-                if let Ok(orch) = SwarmOrchestrator::connect().await {
-                    let mut blockers =
-                        hlb_engine::ingress::app_blockers(&orch, &state, &entry.manifest).await;
-                    if entry.manifest.metadata.name == hlb_types::manifest::INGRESS_SERVICE {
-                        blockers.extend(hlb_engine::ingress::blockers(&orch, &state).await);
-                    }
-                    if !blockers.is_empty() {
-                        for b in &blockers {
-                            eprintln!("🔴 {b}");
-                        }
-                        return Ok::<_, Box<dyn std::error::Error>>(ExitCode::FAILURE);
-                    }
-                }
-
-                // An app with a route and no domain named takes `<app>.<domain>`: the
-                // template would otherwise stay `{{ domain }}`, which no DNS resolves.
-                let domain = match (domain, &exposure) {
-                    (Some(d), _) => Some(d.clone()),
-                    (None, Some(e)) if !entry.manifest.spec.ingress.is_empty() => {
-                        let d = e.default_domain(app);
-                        println!("Published at {d} (--domain to choose another)\n");
-                        Some(d)
-                    }
-                    _ => None,
-                };
-                // The mail domain follows the exposure's, unless named.
-                let mail_domain = mail_domain
-                    .clone()
-                    .or_else(|| exposure.as_ref().map(|e| e.domain.clone()));
-
-                // An app already recorded resumes from what it was installed with.
-                let basis = match hlb_engine::install::basis(
-                    &state,
-                    app,
-                    hlb_engine::install::Origin {
-                        source: entry.source.as_deref(),
-                        index: entry.index,
-                        version: entry.version.as_deref(),
-                    },
-                    &entry.manifest,
-                    &entry.guide,
-                    domain,
-                    mail_domain,
-                )
-                .await?
-                {
-                    Ok(b) => b,
-                    Err(refusal) => {
-                        eprintln!("🔴 {refusal}");
-                        return Ok(ExitCode::FAILURE);
-                    }
-                };
-                if let Some(status) = &basis.resumed {
-                    println!(
-                        "\"{app}\" is recorded ({status}): resuming it as installed — the \
-                         catalog's changes reach it through `hlb upgrade {app}`\n"
-                    );
-                }
-
-                let params = InstallParams {
-                    domain: basis.domain.clone(),
-                    mail_domain: basis.mail_domain.clone(),
-                    timezone: state.timezone().await?,
-                    ..Default::default()
-                };
-                let plan =
-                    hlb_resolver::resolve_with_guide(&basis.manifest, &basis.guide, &params)?;
-
-                // The manifest is frozen now — and only when applying: a preview records
-                // nothing. A later catalog change will not modify this installation.
-                if *apply {
-                    hlb_engine::install::record(&state, app, &basis).await?;
-                }
-                let grants = basis.manifest.grants(basis.domain.as_deref());
-                if !*apply && !grants.is_empty() {
-                    println!("What \"{app}\" receives beyond its own container:");
-                    for g in grants {
-                        println!("  ⚠️  {g}");
-                    }
-                    println!();
-                }
-
-                execute_plan(&cli, &state, app, &plan, &storage, *apply, "install").await
-            })
+            rt.block_on(install(
+                &cli,
+                asked,
+                domain.clone(),
+                mail_domain.clone(),
+                *apply,
+            ))
         }
 
         Command::Upgrade {
@@ -7180,9 +7279,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             .collect(),
                     };
                     // A person asked: a refused sign-in is tried again, once.
+                    let placed = state.databases_of(&name).await?;
                     let results = hlb_guide::assertions::read_all(
                         &reader,
                         &m,
+                        &placed,
                         &credentials,
                         hlb_guide::assertions::Refused::TryAgain,
                         now,
@@ -12277,6 +12378,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             fallback_repo: cli.backup_repo.as_deref(),
                             network: &cli.platform_network,
                             postgres_admin: cli.postgres_admin.as_deref(),
+                            postgres_vital_admin: cli.postgres_vital_admin.as_deref(),
                             mariadb_admin: cli.mariadb_admin.as_deref(),
                             schedule: sched,
                             force: *force,

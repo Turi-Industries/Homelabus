@@ -36,6 +36,11 @@ pub struct Config {
     #[arg(long, env = "HLB_POSTGRES_ADMIN")]
     pub postgres_admin: Option<String>,
 
+    /// The vital apps' own PostgreSQL's admin URL (`postgres-vital`, installed with a
+    /// site). Read from the vault like the others.
+    #[arg(long, env = "HLB_POSTGRES_VITAL_ADMIN")]
+    pub postgres_vital_admin: Option<String>,
+
     /// MariaDB admin URL. Without it, the apps that need MariaDB are installed with
     /// their database recorded as unimplemented rather than silently skipped.
     #[arg(long, env = "HLB_MARIADB_ADMIN")]
@@ -326,6 +331,9 @@ pub async fn start(
                     garage_admin = a.garage_admin.clone();
                     if cfg.postgres_admin.is_none() {
                         cfg.postgres_admin = a.postgres_admin;
+                    }
+                    if cfg.postgres_vital_admin.is_none() {
+                        cfg.postgres_vital_admin = a.postgres_vital_admin;
                     }
                     if cfg.mariadb_admin.is_none() {
                         cfg.mariadb_admin = a.mariadb_admin;
@@ -688,6 +696,7 @@ pub async fn start(
         fallback_repo: cfg.backup_repo.clone(),
         network: cfg.platform_network.clone(),
         postgres_admin: cfg.postgres_admin.clone(),
+        postgres_vital_admin: cfg.postgres_vital_admin.clone(),
         mariadb_admin: cfg.mariadb_admin.clone(),
     };
     {
@@ -776,11 +785,14 @@ pub async fn start(
     // closes and someone — a restore, a `docker service update`, an app's own settings
     // page — reopened is in the inbox the next morning, and notified.
     {
-        let reader = Arc::new(hlb_guide::assertions::LiveReader::new(
-            orch_api.clone(),
-            cfg.postgres_admin.clone(),
-            cfg.mariadb_admin.clone(),
-        ));
+        let reader = Arc::new(
+            hlb_guide::assertions::LiveReader::new(
+                orch_api.clone(),
+                cfg.postgres_admin.clone(),
+                cfg.mariadb_admin.clone(),
+            )
+            .with_postgres_vital(cfg.postgres_vital_admin.clone()),
+        );
         // The mail records with them, judged from a public resolver: a DKIM key nobody
         // published files every mail as spam, and nothing in the house says so.
         let mail = match (
@@ -1211,6 +1223,18 @@ pub async fn start(
                 },
                 None => None,
             };
+            let postgres_vital = match &cfg.postgres_vital_admin {
+                Some(url) => match hlb_platform::PostgresProvisioner::connect(url).await {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!(
+                            "the vital apps' PostgreSQL unreachable ({e}): their databases NOT provisioned"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
             let mariadb = match &cfg.mariadb_admin {
                 Some(url) => match hlb_platform::MariadbProvisioner::connect(url).await {
                     Ok(m) => Some(m),
@@ -1225,6 +1249,7 @@ pub async fn start(
                 vault,
                 registry: hlb_registry::RegistryClient::new(),
                 postgres,
+                postgres_vital,
                 mariadb,
                 storage: hlb_engine::StorageConfig {
                     local_root: cfg.storage_root.clone(),
@@ -1612,6 +1637,7 @@ pub async fn start(
                         catalog: &followed,
                         network: &config.network,
                         postgres_admin: config.postgres_admin.as_deref(),
+                        postgres_vital_admin: config.postgres_vital_admin.as_deref(),
                         mariadb_admin: config.mariadb_admin.as_deref(),
                         fallback_repo: config.fallback_repo.as_deref(),
                         scanner: &hlb_updater::grype::Grype {

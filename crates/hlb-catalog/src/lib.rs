@@ -501,14 +501,19 @@ impl Catalog {
     /// them; one of them read the limit from where the manifest no longer set it.
     fn connection_budgets(&self) -> Vec<(String, hlb_types::Error)> {
         let mut errs = Vec::new();
-        for engine in [hlb_types::DbEngine::Postgres, hlb_types::DbEngine::Mariadb] {
-            // Exhaustive: an engine added to `DbEngine` must be added above.
-            match engine {
-                hlb_types::DbEngine::Postgres | hlb_types::DbEngine::Mariadb => {}
-            }
-            let server = engine.service_name();
+        for db_server in hlb_types::DbServer::ALL {
+            let engine = db_server.engine();
+            let server = db_server.service_name();
             let mut apps: Vec<(&str, u32)> = Vec::new();
             for (name, e) in &self.entries {
+                // A vital app counts on both PostgreSQL servers: on the shared one until
+                // the house has a site, on its own after.
+                let criticality = e.manifest.criticality();
+                let lives_here = hlb_types::DbServer::shared(engine) == db_server
+                    || hlb_types::DbServer::placed(engine, criticality, true) == db_server;
+                if !lives_here {
+                    continue;
+                }
                 let declared: u32 = e
                     .manifest
                     .spec
@@ -623,6 +628,22 @@ fn catalog_rules(e: &Entry) -> hlb_types::Result<()> {
             )
         }
         (hlb_types::Kind::App, Some(_)) | (hlb_types::Kind::PlatformService, None) => {}
+    }
+    // A vital app's data is streamed to the site from a server of its own, and only
+    // PostgreSQL has one: on MariaDB its writes since the night would be lost.
+    for c in &m.spec.requires {
+        if let hlb_types::Capability::Database { engine, .. } = c {
+            let placed = hlb_types::DbServer::placed(*engine, m.criticality(), true);
+            if m.criticality() == hlb_types::Criticality::Vital
+                && placed == hlb_types::DbServer::shared(*engine)
+            {
+                return refuse(format!(
+                    "a vital app's database must be PostgreSQL: no vital server of {} \
+                     follows the house to its site",
+                    placed.service_name()
+                ));
+            }
+        }
     }
     // Only a vital app is carried by the lifeboat: its way home anywhere else is read by
     // nothing. A platform service is carried for the apps signing in through it.
@@ -1743,6 +1764,32 @@ mod tests {
             r.iter().any(|e| e.contains("its connection limit")),
             "{r:?}"
         );
+
+        // A vital app counts on the vital server too, whose limit is smaller.
+        let mut vital = c.clone();
+        set(&mut vital, "vaultwarden", Some(40));
+        let r = refused(&vital);
+        assert!(
+            r.len() == 1 && r[0].contains("postgres-vital:") && r[0].contains("vaultwarden 40"),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_vital_app_on_mariadb_is_refused() {
+        let c = Catalog::load(repo_catalog()).expect("catalog should load");
+        let mut m = c.get("vaultwarden").expect("vaultwarden").manifest.clone();
+        for r in &mut m.spec.requires {
+            if let hlb_types::Capability::Database { engine, .. } = r {
+                *engine = hlb_types::DbEngine::Mariadb;
+            }
+        }
+        let e = Entry {
+            manifest: m,
+            ..c.get("vaultwarden").expect("vaultwarden").clone()
+        };
+        let err = catalog_rules(&e).expect_err("refused").to_string();
+        assert!(err.contains("must be PostgreSQL"), "{err}");
     }
 
     #[test]

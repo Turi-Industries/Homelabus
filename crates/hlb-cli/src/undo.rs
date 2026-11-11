@@ -123,17 +123,12 @@ pub async fn run(
         }
     }
     for (engine, name, extensions) in restore::databases_of(&manifest, app) {
-        // 🔴 Exhaustive: an engine added to `DbEngine` must say where its admin is.
-        let (admin, server, flag) = match engine {
-            DbEngine::Postgres => (cli.postgres_admin.clone(), "PostgreSQL", "postgres"),
-            DbEngine::Mariadb => (cli.mariadb_admin.clone(), "MariaDB", "mariadb"),
-        };
-        let Some(admin) = admin else {
-            missing.push(format!(
-                "{server}'s administrator is in no vault here (--{flag}-admin): {name} cannot \
-                 be put back"
-            ));
-            continue;
+        let admin = match cli.admin_of(state, app, &name, engine).await? {
+            Ok(a) => a,
+            Err(none) => {
+                missing.push(format!("{none}: {name} cannot be put back"));
+                continue;
+            }
         };
         match restore
             .find_in_copy(app, &Part::Database(engine, &name), &undo.copies)

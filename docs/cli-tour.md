@@ -335,10 +335,19 @@ wrote, and archives them when the alert resolves. Until then the owner may repla
 those words or add to them, with the hour — from `hlb`, or over SSH to the VPS with
 `hlb-site-announce` when the house is down; the incident stays one entry on the page.
 
+A site also gives the vital apps a PostgreSQL of their own at home, `postgres-vital`
+(the shared server's image, its own volume): what the house pushes to its site, and
+nothing else of the shared server. `site add` installs it and moves each vital app's
+database into it — the app stopped meanwhile, the database copied to its backups as it
+is, restored on the new server, the app redeployed onto it, and the old one dropped
+only once the app answers; `site sync` does the same for a site added before. A vital
+app installed afterwards is placed there directly.
+No plan ever moves a database: one planned elsewhere than it lives is refused.
+
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake; each vital name's public records
-./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch
+./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server
 ./target/debug/hlb secret-get site-ntfy-reader-password   # the phone's, for the site's alerts
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
@@ -491,7 +500,8 @@ never touched.
 The platform's own secrets — PostgreSQL's and MariaDB's administrators, Garage's RPC
 secret and token, Grafana's admin, Pocket ID's key — are generated at install into the
 vault (`{{ secret.<name> }}` in their manifests), and `hlb` and the controller read the
-admin URLs from there. Backups to the cluster's Garage, then off-site:
+admin URLs from there (`--postgres-admin`, `--postgres-vital-admin`, `--mariadb-admin`
+override them). Backups to the cluster's Garage, then off-site:
 
 ```sh
 ./target/debug/hlb install garage --apply

@@ -215,6 +215,16 @@ pub async fn record(state: &State, app: &str, basis: &Basis) -> crate::Result<()
     Ok(())
 }
 
+/// Whether a vital app's databases are placed on the vital server: it is recorded —
+/// the graph reads the same, and recording it pinned every older database where it is.
+pub async fn vital_postgres(state: &State) -> crate::Result<bool> {
+    Ok(state
+        .installed_apps()
+        .await?
+        .iter()
+        .any(|(name, _)| name == hlb_types::VITAL_POSTGRES))
+}
+
 /// The mail domain an app's plan is resolved with again — an upgrade, a redeployment:
 /// one named now, else the one its install took, else the exposure's.
 pub async fn mail_domain(
@@ -259,6 +269,22 @@ mod tests {
         .await
         .expect("state")
         .expect_err("refused")
+    }
+
+    #[tokio::test]
+    async fn a_vital_app_is_placed_on_the_vital_server_once_it_is_recorded() {
+        let state = State::in_memory().await.expect("state");
+        state
+            .upsert_app("gitea", &manifest("gitea"), None)
+            .await
+            .expect("upsert");
+        assert!(!vital_postgres(&state).await.expect("read"));
+        let vital = hlb_types::VITAL_POSTGRES;
+        state
+            .upsert_app(vital, &manifest(vital), None)
+            .await
+            .expect("upsert");
+        assert!(vital_postgres(&state).await.expect("read"));
     }
 
     #[tokio::test]

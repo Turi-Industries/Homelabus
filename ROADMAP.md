@@ -328,6 +328,11 @@ exported — Homelabus never bills.
   it starts them again. The other choice keeps them serving the LAN and has the return
   compare positions and ask which side keeps its writes, the other kept as a named
   snapshot. "Ça serait sympa d'avoir l'option, et par défaut la 2."
+- **The vital apps' own PostgreSQL exists only with a site**: `hlb site add` creates it
+  and moves the vital databases into it, their copy taken first; `hlb site remove` moves
+  them back to the shared server. A house without a VPS pays nothing for it — a second
+  PostgreSQL is ~60–150 MB, felt on a 4 GB `light` node — against two moves to write
+  and prove instead of one.
 
 #### The phases
 
@@ -1709,10 +1714,19 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      the last seconds, and both sides never written at once unless the house chose it.
      One pull request each:
      - 8a. A PostgreSQL of the vital apps' own at home, a vital app's database moved
-       into it by `hlb upgrade`, its copy taken first.
+       into it by `hlb site add`, its copy taken first. Built 2026-11-10; the move
+       back waits for `hlb site remove`, which does not exist yet
+       (`site::vital::moves(state, false)` lists it). Proved on the lab the same
+       night, by `hlb site sync` on a site added before: Vaultwarden's 31 tables and
+       a witness row moved from deb2's shared server to `postgres-vital` on deb1, gone
+       from the first; the moving-house drill then went through the lifeboat, the
+       cut (268 s to the VPS) and the return (122 s home), the database coming back
+       onto `postgres-vital` with the witness.
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.
+       `hlb backup pitr`, `hlb replication` and `hlb dr exercise` still speak to the
+       shared server alone: each takes the vital one here.
      - 8c. PocketID's SQLite pushed continuously (Litestream, over SFTP to the site),
        restored by the promotion.
      - 8d. The vital volumes pushed every minute, what changed only.

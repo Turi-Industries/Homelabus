@@ -30,6 +30,7 @@ mod door;
 pub mod homecoming;
 pub mod lifeboat;
 pub mod promote;
+pub mod vital;
 pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -500,6 +501,7 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
             "            both served by {} as status. and alerts. of the house's domain.",
             hlb_ingress::front_door::SITE_EDGE
         );
+        vital::run(cli, &state, &vault, false).await?;
         println!();
         if !provision_machine(first.as_ref(), &distro, false, false, false).await? {
             return Ok(ExitCode::FAILURE);
@@ -549,12 +551,14 @@ pub async fn add(cli: &Cli, a: Add<'_>) -> Result<ExitCode> {
     }
     let door = open_door(&state, &vault, ours.as_ref(), &s).await;
     let watched = watch_site(&state, &vault, &s).await;
+    // Last: what it pushes to the site follows, and a failed move leaves the site ready.
+    let vital = vital::run(cli, &state, &vault, true).await?;
     let name = hostname_of(ours.as_ref()).await.unwrap_or_default();
     println!(
         "\nSite {} ready ({name}). `hlb site status` reads the link.",
         s.name
     );
-    Ok(if linked && door && watched {
+    Ok(if linked && door && watched && vital {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -614,6 +618,8 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
             hlb_ingress::status_page::NTFY,
             hlb_ingress::front_door::SITE_EDGE
         );
+        // A site added before the vital server existed gets it here.
+        vital::run(cli, &state, &vault, false).await?;
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -623,7 +629,8 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     // Opened even when a node failed to link: its health check keeps it out of the door.
     let door = open_door(&state, &vault, hub.as_ref(), &s).await;
     let watched = watch_site(&state, &vault, &s).await;
-    let all = linked && door && watched;
+    let vital = vital::run(cli, &state, &vault, true).await?;
+    let all = linked && door && watched && vital;
     let outcome = if all { "ok" } else { "partial" };
     state
         .audit("cli", ACTOR_ROLE, "site-sync", &s.name, outcome, None)

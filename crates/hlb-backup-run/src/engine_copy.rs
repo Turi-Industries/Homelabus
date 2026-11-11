@@ -22,11 +22,23 @@ const ENV_DIR: &str = "/run/hlb/env";
 /// A copy that does not end is said to have not ended.
 const TIMEOUT_S: u64 = 3600;
 
-/// The engines' administrator URLs, as the pass is given them.
+/// The database servers' administrator URLs, as the pass is given them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Admins<'a> {
     pub postgres: Option<&'a str>,
+    /// The vital apps' own server, installed with a site.
+    pub postgres_vital: Option<&'a str>,
     pub mariadb: Option<&'a str>,
+}
+
+impl<'a> Admins<'a> {
+    pub fn of(&self, server: hlb_types::DbServer) -> Option<&'a str> {
+        match server {
+            hlb_types::DbServer::Postgres => self.postgres,
+            hlb_types::DbServer::PostgresVital => self.postgres_vital,
+            hlb_types::DbServer::Mariadb => self.mariadb,
+        }
+    }
 }
 
 /// The volume a copy of `volume` is written to, beside it.
@@ -89,7 +101,10 @@ pub(crate) async fn take(
         // The live volume, for a tool that reads the server's files beside it.
         let (script, env, live) = match c.engine {
             DbEngine::Postgres => {
-                let Some(creds) = admins.postgres.and_then(hlb_backup::parse_pg_url) else {
+                // The server whose volume this is: the vital one has its own password.
+                let server = hlb_types::DbServer::from_service_name(app)
+                    .unwrap_or(hlb_types::DbServer::Postgres);
+                let Some(creds) = admins.of(server).and_then(hlb_backup::parse_pg_url) else {
                     return Ok(Err(format!(
                         "{} is copied by pg_basebackup, and no PostgreSQL administrator \
                          is known (--postgres-admin): it is not copied live instead",
@@ -111,7 +126,9 @@ pub(crate) async fn take(
                 )
             }
             DbEngine::Mariadb => {
-                let Some(creds) = admins.mariadb.and_then(hlb_backup::parse_maria_url) else {
+                let server = hlb_types::DbServer::from_service_name(app)
+                    .unwrap_or(hlb_types::DbServer::Mariadb);
+                let Some(creds) = admins.of(server).and_then(hlb_backup::parse_maria_url) else {
                     return Ok(Err(format!(
                         "{} is copied by mariadb-backup, and no MariaDB administrator is \
                          known (--mariadb-admin): it is not copied live instead",

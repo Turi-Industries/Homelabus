@@ -106,6 +106,17 @@ cleanly and is missing data.
   refused from another container, with a message about an incorrect password. And
   `_`/`%` are WILDCARDS in a `GRANT`: `%` is refused, `_` is escaped (`ccnet\_db`) —
   refusing it made Seafile, whose databases carry it, impossible to install.
+- **🔴 A database stays on the server it was provisioned on; only a move changes it.**
+  A vital app's PostgreSQL is placed on `postgres-vital` once a site installed it
+  (`DbServer::placed`, from `criticality`), and `database_servers` records where each
+  database lives — `{{ db.host }}`, the backups, the restores and the lifeboat read it.
+  A plan placing an existing database elsewhere is refused (`DatabaseElsewhere`):
+  provisioned there it would be EMPTY, and the next deployment would point at it. ⚠️
+  A database provisioned before that table has no row, which nothing refused: the
+  first recording of `postgres-vital` pins every unplaced one to the shared server
+  (`State::pin_unplaced_databases`). Every plan says `vital_postgres`
+  (`tests/install_params.rs` walks the sources); a restore takes the administrator of
+  the database's own server (`Cli::admin_of`), never the engine's.
 - **An app's connection pools are counted against the shared server's limit.**
   Seafile's seaf-server opens TWO pools of `[database] max_connections` (100 by default)
   and its file server 16 more: past MariaDB's 151 on its own. Left to their defaults,

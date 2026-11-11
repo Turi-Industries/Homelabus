@@ -23,6 +23,7 @@ pub struct PassConfig {
     pub fallback_repo: Option<String>,
     pub network: String,
     pub postgres_admin: Option<String>,
+    pub postgres_vital_admin: Option<String>,
     pub mariadb_admin: Option<String>,
 }
 
@@ -46,6 +47,7 @@ impl PassConfig {
             fallback_repo: self.fallback_repo.as_deref(),
             network: &self.network,
             postgres_admin: self.postgres_admin.as_deref(),
+            postgres_vital_admin: self.postgres_vital_admin.as_deref(),
             mariadb_admin: self.mariadb_admin.as_deref(),
             schedule: hlb_backup::Schedule::default(),
             force,

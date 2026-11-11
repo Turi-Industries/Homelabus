@@ -393,6 +393,9 @@ async fn rebuild(
     let exec = hlb_engine::Executor::new(&site, state)
         .with_vault(vault)
         .with_network(lifeboat::NETWORK)
+        // The site runs one PostgreSQL: a vital app's database moved home to the vital
+        // server is there too.
+        .databases_on(hlb_types::DbServer::shared(hlb_types::DbEngine::Postgres))
         .withholding(lifeboat::WITHHELD)
         .replacing_secret(&lifeboat::admin_entry(), &admin);
     let restore = Restore {
@@ -423,8 +426,9 @@ async fn rebuild(
         };
         for (app, plan) in &plans {
             for a in &plan.actions {
+                // The site's own server takes it, whichever held it at home.
                 let Action::ProvisionDatabase {
-                    engine,
+                    server: _,
                     database,
                     role,
                     password_secret,
@@ -439,7 +443,7 @@ async fn rebuild(
                     .await?
                     .ok_or_else(|| format!("{app}: no {password_secret} in the vault"))?;
                 let db = Database {
-                    engine: *engine,
+                    engine: hlb_types::DbEngine::Postgres,
                     name: database,
                     role,
                     extensions,

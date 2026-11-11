@@ -76,6 +76,15 @@ pub enum Error {
     #[error("unknown app \"{0}\"")]
     UnknownApp(String),
 
+    /// A server name a later `hlb` recorded: read as the shared server, the database
+    /// would be backed up empty and restored over another's.
+    #[error("{app}/{database} is on \"{server}\", a database server this hlb does not know")]
+    UnknownDatabaseServer {
+        app: String,
+        database: String,
+        server: String,
+    },
+
     /// A domain reading the state holds and this binary cannot read: an error, since
     /// a baseline read as none would compare nothing, and alert on nothing.
     #[error("unreadable stored domain reading \"{key}\": {source}")]
@@ -915,6 +924,14 @@ impl State {
             app: name.to_string(),
             source,
         })?;
+
+        // 🔴 Before the vital server is first recorded, since from then on a vital app's
+        // plan places its databases there: one provisioned before `database_servers`
+        // existed has no row, so nothing would refuse a plan provisioning it EMPTY on
+        // the vital server, and the app's next deployment would point at that.
+        if name == hlb_types::VITAL_POSTGRES && !self.is_recorded(name).await? {
+            self.pin_unplaced_databases().await?;
+        }
 
         sqlx::query(
             "INSERT INTO apps (name, manifest, domain, status)
@@ -2860,9 +2877,11 @@ impl State {
     /// changed a database name would back up an empty database while letting the old
     /// one drift with no safety net.
     ///
-    /// Returns `(app, engine, database, role, password secret)`.
+    /// Returns `(app, server, database, password secret)` — the server's service name,
+    /// which is also its host (`hlb_types::DbServer`).
     pub async fn app_databases(&self) -> Result<Vec<(String, String, String, String)>> {
         let mut out = Vec::new();
+        let placed = self.database_servers().await?;
 
         for (app, status) in self.installed_apps().await? {
             // A failed app probably has no provisioned database; trying to back it up
@@ -2880,14 +2899,133 @@ impl State {
                     // database carries the app's name. The two MUST stay aligned, or we
                     // would back up a database that does not exist.
                     let db = name.clone().unwrap_or_else(|| app.clone());
+                    let server = placed
+                        .get(&(app.clone(), db.clone()))
+                        .copied()
+                        .filter(|s| s.engine() == *engine)
+                        .unwrap_or_else(|| hlb_types::DbServer::shared(*engine));
                     out.push((
                         app.clone(),
-                        engine.service_name().to_string(),
+                        server.service_name().to_string(),
                         db,
                         format!("{app}-db-password"),
                     ));
                 }
             }
+        }
+        Ok(out)
+    }
+
+    /// Where an app's database was provisioned. Recorded by the executor as it
+    /// provisions, so whatever reads it — the deploy's `{{ db.host }}`, the backups, the
+    /// lifeboat — finds the database where it is, not where today's placement would put
+    /// a new one.
+    pub async fn record_database_server(
+        &self,
+        app: &str,
+        database: &str,
+        server: hlb_types::DbServer,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO database_servers (app, database, server) VALUES (?, ?, ?) \
+             ON CONFLICT (app, database) DO UPDATE SET server = excluded.server",
+        )
+        .bind(app)
+        .bind(database)
+        .bind(server.service_name())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn is_recorded(&self, app: &str) -> Result<bool> {
+        Ok(sqlx::query("SELECT 1 FROM apps WHERE name = ?1")
+            .bind(app)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some())
+    }
+
+    /// Records the engine's shared server for every database a frozen manifest names
+    /// and nothing placed yet: before the vital server, there was nowhere else for it.
+    /// A failed app's too — a database provisioned before its failure lives there.
+    pub async fn pin_unplaced_databases(&self) -> Result<()> {
+        let placed = self.database_servers().await?;
+        for (app, _) in self.installed_apps().await? {
+            let Ok(m) = self.app_manifest(&app).await else {
+                continue;
+            };
+            for c in &m.spec.requires {
+                if let hlb_types::Capability::Database { engine, name, .. } = c {
+                    // The resolver's convention: unnamed, the database is the app's.
+                    let db = name.clone().unwrap_or_else(|| app.clone());
+                    if !placed.contains_key(&(app.clone(), db.clone())) {
+                        self.record_database_server(
+                            &app,
+                            &db,
+                            hlb_types::DbServer::shared(*engine),
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The server an app's database lives on, if one was recorded. `None` for every
+    /// database provisioned before the record existed: the engine's shared server.
+    pub async fn database_server(
+        &self,
+        app: &str,
+        database: &str,
+    ) -> Result<Option<hlb_types::DbServer>> {
+        Ok(self
+            .database_servers()
+            .await?
+            .get(&(app.to_string(), database.to_string()))
+            .copied())
+    }
+
+    /// One app's databases by name, each with the server it lives on.
+    pub async fn databases_of(
+        &self,
+        app: &str,
+    ) -> Result<std::collections::BTreeMap<String, hlb_types::DbServer>> {
+        let mut out = std::collections::BTreeMap::new();
+        for (owner, server, database, _) in self.app_databases().await? {
+            if owner != app {
+                continue;
+            }
+            // `app_databases` wrote it from a `DbServer`, so it reads back.
+            if let Some(s) = hlb_types::DbServer::from_service_name(&server) {
+                out.insert(database, s);
+            }
+        }
+        Ok(out)
+    }
+
+    async fn database_servers(
+        &self,
+    ) -> Result<std::collections::BTreeMap<(String, String), hlb_types::DbServer>> {
+        let rows = sqlx::query("SELECT app, database, server FROM database_servers")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = std::collections::BTreeMap::new();
+        for r in rows {
+            let (app, database, server): (String, String, String) = (
+                r.try_get("app")?,
+                r.try_get("database")?,
+                r.try_get("server")?,
+            );
+            let Some(s) = hlb_types::DbServer::from_service_name(&server) else {
+                return Err(Error::UnknownDatabaseServer {
+                    app,
+                    database,
+                    server,
+                });
+            };
+            out.insert((app, database), s);
         }
         Ok(out)
     }
@@ -7068,6 +7206,85 @@ mod tests {
         // convention as the resolver. The two must stay aligned.
         assert_eq!(d[0].2, "gitea");
         assert_eq!(d[0].3, "gitea-db-password");
+
+        // Where the executor provisioned it wins over the engine's shared server: a
+        // database read on the wrong one would be backed up empty.
+        s.record_database_server("gitea", "gitea", hlb_types::DbServer::PostgresVital)
+            .await
+            .expect("record");
+        assert_eq!(
+            s.app_databases().await.expect("read")[0].1,
+            "postgres-vital"
+        );
+        assert_eq!(
+            s.database_server("gitea", "gitea").await.expect("read"),
+            Some(hlb_types::DbServer::PostgresVital)
+        );
+
+        // A name a later hlb wrote is an error, never the shared server.
+        sqlx::query("UPDATE database_servers SET server = 'postgres-elsewhere'")
+            .execute(&s.pool)
+            .await
+            .expect("update");
+        assert!(matches!(
+            s.app_databases().await,
+            Err(Error::UnknownDatabaseServer { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_vital_server_pins_every_older_database_to_the_shared_one() {
+        // A database provisioned before `database_servers` has no row: unpinned, a
+        // vital app's next plan would provision it empty on the vital server.
+        let s = st().await;
+        let y = |app: &str| {
+            format!(
+                "apiVersion: hlb/v1\nkind: App\nmetadata: {{ name: {app} }}\n\
+                 spec:\n  image: {{ repo: a/b, tag: \"1\" }}\n\
+                 \x20 requires:\n    - kind: database\n      engine: postgres\n"
+            )
+        };
+        let m = |app: &str| -> Manifest { serde_yaml_ng::from_str(&y(app)).expect("manifest") };
+        s.upsert_app("vaultwarden", &m("vaultwarden"), None)
+            .await
+            .expect("upsert");
+        assert_eq!(
+            s.database_server("vaultwarden", "vaultwarden")
+                .await
+                .expect("read"),
+            None
+        );
+
+        s.upsert_app(
+            hlb_types::VITAL_POSTGRES,
+            &manifest(hlb_types::VITAL_POSTGRES),
+            None,
+        )
+        .await
+        .expect("upsert");
+        assert_eq!(
+            s.database_server("vaultwarden", "vaultwarden")
+                .await
+                .expect("read"),
+            Some(hlb_types::DbServer::Postgres)
+        );
+
+        // Only the FIRST time: an app installing since is placed by its own plan, and
+        // the vital server recorded again (resumed, upgraded) must not pin it back.
+        s.upsert_app("gitea", &m("gitea"), None)
+            .await
+            .expect("upsert");
+        s.upsert_app(
+            hlb_types::VITAL_POSTGRES,
+            &manifest(hlb_types::VITAL_POSTGRES),
+            None,
+        )
+        .await
+        .expect("upsert");
+        assert_eq!(
+            s.database_server("gitea", "gitea").await.expect("read"),
+            None
+        );
     }
 
     #[tokio::test]

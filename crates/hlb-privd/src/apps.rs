@@ -120,6 +120,10 @@ pub(crate) async fn install(p: &Privd, i: Install) -> Acted {
         domain: domain.clone(),
         mail_domain: basis.as_ref().and_then(|b| b.mail_domain.clone()),
         timezone: p.state.timezone().await.ok().flatten(),
+        vital_postgres: match hlb_engine::install::vital_postgres(&p.state).await {
+            Ok(v) => v,
+            Err(e) => return Acted::Unplannable(e.to_string()),
+        },
         ..Default::default()
     };
 
@@ -271,6 +275,9 @@ fn platform_executor<'a>(
         .apply(true);
     if let Some(pg) = &ctx.postgres {
         ex = ex.with_postgres(pg);
+    }
+    if let Some(pg) = &ctx.postgres_vital {
+        ex = ex.with_postgres_vital(pg);
     }
     if let Some(my) = &ctx.mariadb {
         ex = ex.with_mariadb(my);
@@ -463,6 +470,10 @@ pub(crate) async fn upgrade(p: &Privd, i: Upgrade) -> Acted {
         domain: p.state.app_domain(&app).await.ok().flatten(),
         mail_domain,
         timezone: p.state.timezone().await.ok().flatten(),
+        vital_postgres: match hlb_engine::install::vital_postgres(&p.state).await {
+            Ok(v) => v,
+            Err(e) => return Acted::Unplannable(e.to_string()),
+        },
         ..Default::default()
     };
     let plan = match hlb_resolver::resolve_with_guide(&next, &input.guide, &params) {

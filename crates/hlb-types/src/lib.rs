@@ -33,7 +33,8 @@ pub mod binding;
 pub use assertion::{Assertion, Check};
 pub use binding::{redact, substitute, Token};
 pub use capability::{
-    CacheEngine, Capability, DbEngine, SmtpSender, SsoMode, StorageTier, VolumeCopy,
+    CacheEngine, Capability, DbEngine, DbServer, SmtpSender, SsoMode, StorageTier, VolumeCopy,
+    VITAL_POSTGRES,
 };
 pub use manifest::{
     ApiVersion, AuthRoute, Automatic, Companion, CompanionVolume, Criticality, ExposePolicy,

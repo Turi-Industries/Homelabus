@@ -20,6 +20,7 @@ pub mod engine_copy;
 pub mod erasure;
 pub mod kit;
 pub mod lifeboat;
+pub mod moving;
 pub mod placement;
 pub mod restore;
 pub mod upkeep;
@@ -196,6 +197,7 @@ pub struct PlacedProvider {
     state: State,
     network: String,
     postgres_admin: Option<String>,
+    postgres_vital_admin: Option<String>,
     mariadb_admin: Option<String>,
     password: String,
     /// The destination volumes go to, and its environment.
@@ -275,7 +277,7 @@ impl PlacedProvider {
 
 /// One database an update's prior copy dumps.
 struct PriorDump<'a> {
-    engine: String,
+    engine: hlb_types::DbEngine,
     name: String,
     admin: &'a str,
     to: &'a (Destination, Option<String>),
@@ -328,6 +330,14 @@ impl PlacedProvider {
         Ok(taken)
     }
 
+    fn admins(&self) -> Admins<'_> {
+        Admins {
+            postgres: self.postgres_admin.as_deref(),
+            postgres_vital: self.postgres_vital_admin.as_deref(),
+            mariadb: self.mariadb_admin.as_deref(),
+        }
+    }
+
     /// What the copy must dump of `app`. Refused here, not halfway through: an app's
     /// volumes copied and then no dump is an update refused after stopping it for nothing.
     async fn databases_to_dump(
@@ -344,11 +354,10 @@ impl PlacedProvider {
             if owner != app {
                 continue;
             }
-            let admin = match engine.as_str() {
-                "postgres" => self.postgres_admin.as_deref(),
-                "mariadb" => self.mariadb_admin.as_deref(),
-                _ => return Err(format!("engine \"{engine}\" has no dumper")),
+            let Some(server) = hlb_types::DbServer::from_service_name(&engine) else {
+                return Err(format!("server \"{engine}\" has no dumper"));
             };
+            let admin = self.admins().of(server);
             let Some(to) = &self.dumps_to else {
                 return Err(format!(
                     "no destination accepts critical data: {name} cannot be dumped first"
@@ -360,7 +369,7 @@ impl PlacedProvider {
                 ));
             };
             out.push(PriorDump {
-                engine,
+                engine: server.engine(),
                 name,
                 admin,
                 to,
@@ -377,9 +386,11 @@ impl PlacedProvider {
         app: &str,
         db: &PriorDump<'_>,
     ) -> std::result::Result<String, String> {
-        let dump = match db.engine.as_str() {
-            "postgres" => pg_dump(&self.network, app, &db.name, db.admin).await,
-            _ => maria_dump(&self.network, app, &db.name, db.admin).await,
+        let dump = match db.engine {
+            hlb_types::DbEngine::Postgres => pg_dump(&self.network, app, &db.name, db.admin).await,
+            hlb_types::DbEngine::Mariadb => {
+                maria_dump(&self.network, app, &db.name, db.admin).await
+            }
         }
         .map_err(|e| format!("{} could not be dumped first: {e}", db.name))?;
         let (d, creds) = db.to;
@@ -444,10 +455,7 @@ impl PlacedProvider {
         let copies = engine_copy::declared(&self.state, app)
             .await
             .map_err(|e| e.to_string())?;
-        let admins = Admins {
-            postgres: self.postgres_admin.as_deref(),
-            mariadb: self.mariadb_admin.as_deref(),
-        };
+        let admins = self.admins();
         let sources = if copies.is_empty() {
             BTreeMap::new()
         } else {
@@ -765,6 +773,7 @@ pub async fn provider_for_update(
         state: state.clone(),
         network: network.to_string(),
         postgres_admin: admins.postgres.map(str::to_string),
+        postgres_vital_admin: admins.postgres_vital.map(str::to_string),
         mariadb_admin: admins.mariadb.map(str::to_string),
         password: restic_password(state, vault).await?,
         volumes_to,
@@ -806,6 +815,8 @@ pub struct Pass<'a> {
     /// The overlay where `postgres` and the S3 endpoint resolve.
     pub network: &'a str,
     pub postgres_admin: Option<&'a str>,
+    /// The vital apps' own server's, installed with a site.
+    pub postgres_vital_admin: Option<&'a str>,
     pub mariadb_admin: Option<&'a str>,
     pub schedule: Schedule,
     /// Back up even what is not due.
@@ -1194,20 +1205,17 @@ impl Pass<'_> {
         }
         for (app, engine, base, _) in databases {
             let what = format!("{app}/{base}");
-            let admin = match engine.as_str() {
-                "postgres" => self.postgres_admin,
-                "mariadb" => self.mariadb_admin,
-                _ => {
-                    emit(
-                        Event::NotCovered {
-                            what,
-                            why: format!("engine \"{engine}\" has no dumper"),
-                        },
-                        &mut sum,
-                    );
-                    continue;
-                }
+            let Some(server) = hlb_types::DbServer::from_service_name(&engine) else {
+                emit(
+                    Event::NotCovered {
+                        what,
+                        why: format!("server \"{engine}\" has no dumper"),
+                    },
+                    &mut sum,
+                );
+                continue;
             };
+            let admin = self.admins().of(server);
             let Some(url) = admin else {
                 emit(
                     Event::NotCovered {
@@ -1237,9 +1245,9 @@ impl Pass<'_> {
                 Some(dests) if dests.is_empty() => continue,
                 Some(dests) => dests,
             };
-            let dump = match engine.as_str() {
-                "postgres" => pg_dump(self.network, &app, &base, url).await,
-                _ => maria_dump(self.network, &app, &base, url).await,
+            let dump = match server.engine() {
+                hlb_types::DbEngine::Postgres => pg_dump(self.network, &app, &base, url).await,
+                hlb_types::DbEngine::Mariadb => maria_dump(self.network, &app, &base, url).await,
             };
             match dump {
                 Ok(d) => {
@@ -1284,6 +1292,7 @@ impl Pass<'_> {
     fn admins(&self) -> Admins<'_> {
         Admins {
             postgres: self.postgres_admin,
+            postgres_vital: self.postgres_vital_admin,
             mariadb: self.mariadb_admin,
         }
     }
@@ -1728,6 +1737,7 @@ mod tests {
             fallback_repo: None,
             network: "bridge",
             postgres_admin: None,
+            postgres_vital_admin: None,
             mariadb_admin: None,
             schedule: Schedule::default(),
             force: false,
@@ -1771,6 +1781,7 @@ mod tests {
         }
         let admins = Admins {
             postgres: None,
+            postgres_vital: None,
             mariadb: None,
         };
         provider_for_update(&state, &vault, "bridge", admins, None, None, "x")
@@ -1848,6 +1859,7 @@ mod tests {
             .expect("destination");
         let admins = Admins {
             postgres: None,
+            postgres_vital: None,
             mariadb: None,
         };
         let err = provider_for_update(

@@ -37,9 +37,20 @@ pub async fn read_every_app(
             .filter(|(owner, _)| owner == &app)
             .map(|(_, r)| r.clone())
             .collect();
+        // Where its databases live: a vital app's may be on its own server. Unread, the
+        // app is left for the next pass: read on the shared server instead, a database
+        // left there by a move would answer for it.
+        let placed = match state.databases_of(&app).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(app, "where its databases live is unread ({e}): not read");
+                continue;
+            }
+        };
         let results = hlb_guide::assertions::read_all(
             reader,
             &m,
+            &placed,
             &credentials,
             hlb_guide::assertions::Refused::Keep(&last),
             now,

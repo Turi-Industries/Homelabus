@@ -58,6 +58,9 @@ pub struct InstallParams {
     /// The installation's time zone (`hlb config timezone`), for `{{ timezone }}`.
     pub timezone: Option<String>,
     pub health_timeout_secs: u64,
+    /// The vital apps' own PostgreSQL runs (`postgres-vital`, installed with a site):
+    /// a vital app's databases are placed there.
+    pub vital_postgres: bool,
 }
 
 impl Default for InstallParams {
@@ -67,6 +70,7 @@ impl Default for InstallParams {
             mail_domain: None,
             timezone: None,
             health_timeout_secs: 120,
+            vital_postgres: false,
         }
     }
 }
@@ -145,19 +149,19 @@ pub fn resolve_with_guide(
 
     // 1. The prerequisites, capability by capability.
     for cap in &m.spec.requires {
-        resolve_capability(cap, app, params, &mut plan)?;
+        resolve_capability(cap, app, m.criticality(), params, &mut plan)?;
     }
     // The role's limit is the app's, across its databases on the engine: Seafile's
     // three share one role, so no single requirement knows it.
     for a in &mut plan.actions {
         if let Action::ProvisionDatabase {
-            engine,
+            server,
             connection_limit,
             ..
         } = a
         {
             *connection_limit =
-                hlb_types::capability::role_connection_limit(&m.spec.requires, *engine);
+                hlb_types::capability::role_connection_limit(&m.spec.requires, server.engine());
         }
     }
 
@@ -513,6 +517,7 @@ fn render_guide(template: &str, vars: &[(&'static str, String)]) -> String {
 fn resolve_capability(
     cap: &Capability,
     app: &str,
+    criticality: hlb_types::Criticality,
     params: &InstallParams,
     plan: &mut Plan,
 ) -> Result<()> {
@@ -549,7 +554,7 @@ fn resolve_capability(
                 });
             }
             plan.push(Action::ProvisionDatabase {
-                engine: *engine,
+                server: hlb_types::DbServer::placed(*engine, criticality, params.vital_postgres),
                 database: db.clone(),
                 // 🔴 The role is named after the APP, not after the database.
                 //
@@ -836,6 +841,7 @@ spec:
                 aliases: true,
             },
             "wiki",
+            hlb_types::Criticality::Normal,
             &params,
             &mut plan,
         )
@@ -880,6 +886,7 @@ spec:
                 sender: hlb_types::SmtpSender::App,
             },
             "vikunja",
+            hlb_types::Criticality::Normal,
             &params,
             &mut plan,
         )
@@ -910,6 +917,7 @@ spec:
                 sender: hlb_types::SmtpSender::Person,
             },
             "roundcube",
+            hlb_types::Criticality::Normal,
             &params,
             &mut plan,
         )
@@ -923,6 +931,7 @@ spec:
                 sender: hlb_types::SmtpSender::App,
             },
             "vikunja",
+            hlb_types::Criticality::Normal,
             &InstallParams::default(),
             &mut plan,
         )
@@ -1329,12 +1338,47 @@ steps:
     }
 
     #[test]
+    fn a_vital_app_s_database_is_placed_on_the_vital_server_once_it_runs() {
+        let mut m = manifest(
+            "  requires:\n    - kind: database\n      engine: postgres\n  env:\n    DB: \"{{ db.url }}\"\n",
+        );
+        let server = |m: &Manifest, vital_postgres| {
+            let p = resolve(
+                m,
+                &InstallParams {
+                    vital_postgres,
+                    ..Default::default()
+                },
+            )
+            .expect("plan");
+            let a = p
+                .actions
+                .iter()
+                .find(|a| matches!(a, Action::ProvisionDatabase { .. }))
+                .expect("a database")
+                .clone();
+            let Action::ProvisionDatabase { server, .. } = &a else {
+                unreachable!()
+            };
+            (*server, a.to_string())
+        };
+        // Not vital: the shared server, whatever runs.
+        assert_eq!(server(&m, true).0, hlb_types::DbServer::Postgres);
+        m.metadata.criticality = Some(hlb_types::Criticality::Vital);
+        assert_eq!(server(&m, false).0, hlb_types::DbServer::Postgres);
+        let (placed, shown) = server(&m, true);
+        assert_eq!(placed, hlb_types::DbServer::PostgresVital);
+        // The preview says where: a person approves the server too.
+        assert!(shown.contains("on postgres-vital"), "{shown}");
+    }
+
+    #[test]
     fn database_becomes_isolated_db_plus_secret() {
         let m = manifest(READS_ITS_DATABASE);
         let p = resolve(&m, &InstallParams::default()).expect("plan");
 
         assert!(p.actions.contains(&Action::ProvisionDatabase {
-            engine: hlb_types::DbEngine::Postgres,
+            server: hlb_types::DbServer::Postgres,
             database: "gitea".into(),
             role: "gitea".into(),
             password_secret: "gitea-db-password".into(),
