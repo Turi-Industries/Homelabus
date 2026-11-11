@@ -1870,38 +1870,7 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn exec_in_service(&self, name: &str, cmd: &[String]) -> Result<ExecOutput> {
-        // A service has no container: its tasks do. So we look for a running task and
-        // enter ITS container.
-        let mut filters = HashMap::new();
-        filters.insert("service".to_string(), vec![name.to_string()]);
-        filters.insert("desired-state".to_string(), vec!["running".to_string()]);
-
-        let opts = ListTasksOptionsBuilder::default().filters(&filters).build();
-        let tasks = self.docker.list_tasks(Some(opts)).await?;
-
-        let (container, node) = tasks
-            .iter()
-            .filter(|t| {
-                t.status
-                    .as_ref()
-                    .and_then(|s| s.state.as_ref())
-                    .is_some_and(|s| format!("{s:?}").to_lowercase().contains("running"))
-            })
-            .find_map(|t| {
-                let id = t
-                    .status
-                    .as_ref()?
-                    .container_status
-                    .as_ref()?
-                    .container_id
-                    .clone()?;
-                Some((id, t.node_id.clone()))
-            })
-            .ok_or_else(|| {
-                Error::Unexpected(format!(
-                    "no running task for \"{name}\": cannot run the command"
-                ))
-            })?;
+        let (container, node) = self.running_container(name).await?;
 
         // 🔴 The daemon `hlb` talks to has only its own node's containers: a task on
         // another node answered "no such container", read as the command failing.
@@ -1911,48 +1880,7 @@ impl Orchestrator for SwarmOrchestrator {
                 return self.exec_on_node(name, &node, &container, cmd).await;
             }
         }
-
-        let exec = self
-            .docker
-            .create_exec(
-                &container,
-                CreateExecOptions {
-                    cmd: Some(cmd.to_vec()),
-                    attach_stdout: Some(true),
-                    attach_stderr: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await?;
-
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-
-        if let StartExecResults::Attached { mut output, .. } = self
-            .docker
-            .start_exec(&exec.id, None::<StartExecOptions>)
-            .await?
-        {
-            use futures::StreamExt;
-            while let Some(Ok(msg)) = output.next().await {
-                match msg {
-                    LogOutput::StdOut { message } => {
-                        stdout.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    LogOutput::StdErr { message } => {
-                        stderr.push_str(&String::from_utf8_lossy(&message));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let info = self.docker.inspect_exec(&exec.id).await?;
-        Ok(ExecOutput {
-            exit_code: info.exit_code.unwrap_or(-1),
-            stdout,
-            stderr,
-        })
+        self.exec_in_container(&container, cmd).await
     }
 
     async fn create_volume(&self, spec: &VolumeSpec) -> Result<VolumeInfo> {
@@ -2260,6 +2188,125 @@ impl SwarmOrchestrator {
             )
             .await?;
         Ok(())
+    }
+
+    /// A running task's container of `name`, and the node it runs on: a service has no
+    /// container, its tasks do.
+    async fn running_container(&self, name: &str) -> Result<(String, Option<String>)> {
+        let mut filters = HashMap::new();
+        filters.insert("service".to_string(), vec![name.to_string()]);
+        filters.insert("desired-state".to_string(), vec!["running".to_string()]);
+
+        let opts = ListTasksOptionsBuilder::default().filters(&filters).build();
+        let tasks = self.docker.list_tasks(Some(opts)).await?;
+
+        let (container, node) = tasks
+            .iter()
+            .filter(|t| {
+                t.status
+                    .as_ref()
+                    .and_then(|s| s.state.as_ref())
+                    .is_some_and(|s| format!("{s:?}").to_lowercase().contains("running"))
+            })
+            .find_map(|t| {
+                let id = t
+                    .status
+                    .as_ref()?
+                    .container_status
+                    .as_ref()?
+                    .container_id
+                    .clone()?;
+                Some((id, t.node_id.clone()))
+            })
+            .ok_or_else(|| {
+                Error::Unexpected(format!(
+                    "no running task for \"{name}\": cannot run the command"
+                ))
+            })?;
+        Ok((container, node))
+    }
+
+    async fn exec_in_container(&self, container: &str, cmd: &[String]) -> Result<ExecOutput> {
+        let exec = self
+            .docker
+            .create_exec(
+                container,
+                CreateExecOptions {
+                    cmd: Some(cmd.to_vec()),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+
+        if let StartExecResults::Attached { mut output, .. } = self
+            .docker
+            .start_exec(&exec.id, None::<StartExecOptions>)
+            .await?
+        {
+            use futures::StreamExt;
+            while let Some(Ok(msg)) = output.next().await {
+                match msg {
+                    LogOutput::StdOut { message } => {
+                        stdout.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    LogOutput::StdErr { message } => {
+                        stderr.push_str(&String::from_utf8_lossy(&message));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let info = self.docker.inspect_exec(&exec.id).await?;
+        Ok(ExecOutput {
+            exit_code: info.exit_code.unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
+
+    /// `path` as a tar archive, read from a running container of `service` on this
+    /// daemon's node and written to `out` — entries named `<last part of path>/…`. The
+    /// bytes written. A task on another node is refused rather than read as missing.
+    pub async fn service_archive<W>(&self, service: &str, path: &str, out: &mut W) -> Result<u64>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use futures::StreamExt as _;
+        use tokio::io::AsyncWriteExt as _;
+        let (container, node) = self.running_container(service).await?;
+        if let (Some(node), Some(local)) = (node, self.local_node().await?) {
+            if node != local {
+                return Err(Error::Unexpected(format!(
+                    "{service} runs on another node than this daemon's"
+                )));
+            }
+        }
+        let mut stream = self.docker.download_from_container(
+            &container,
+            Some(
+                bollard::query_parameters::DownloadFromContainerOptionsBuilder::default()
+                    .path(path)
+                    .build(),
+            ),
+        );
+        let mut n = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            out.write_all(&chunk)
+                .await
+                .map_err(|e| Error::Unexpected(format!("writing the archive: {e}")))?;
+            n += chunk.len() as u64;
+        }
+        out.flush()
+            .await
+            .map_err(|e| Error::Unexpected(format!("writing the archive: {e}")))?;
+        Ok(n)
     }
 
     /// Unpacks a tar archive into the volume `volume`, mounted at `mount_at` in a

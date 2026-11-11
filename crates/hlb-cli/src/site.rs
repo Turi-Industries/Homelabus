@@ -29,6 +29,7 @@ pub mod announce;
 mod door;
 pub mod homecoming;
 pub mod lifeboat;
+pub mod pitr;
 pub mod promote;
 pub mod vital;
 pub mod wal;

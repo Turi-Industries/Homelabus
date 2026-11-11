@@ -405,11 +405,10 @@ async fn rebuild(
     let before = carried(state, vault).await?;
     let on = |server: DbServer| placed.iter().any(|p| p.server == server);
     // The base the standby is seeded from, taken now: the site's WAL reaches back only
-    // to last night's standby's last restartpoint, and a base older than that is
-    // followed by nothing.
+    // to the base its last prune kept, and a base older than that is followed by
+    // nothing.
     let base = if on(DbServer::PostgresVital) {
-        // 🔴 Last night's standby stopped first: replaying on, its restartpoints would
-        // clean from the site the segments the new base needs past its end.
+        // Last night's standby stopped first: its volume is about to be refilled.
         let had = before.services.iter().any(|s| s == VITAL_POSTGRES);
         if had {
             stop(&site, VITAL_POSTGRES).await?;
@@ -824,13 +823,26 @@ async fn seed_standby(
     site.wait_healthy(&spec.name, HEALTHY_WITHIN_SECS)
         .await
         .map_err(|e| format!("{VITAL_POSTGRES}'s standby never became healthy: {e}"))?;
+    // Only once the new standby runs: a seeding that failed keeps every segment.
+    let pruned = ssh
+        .run(&["sh".into(), "-c".into(), wal_ship::prune_script()])
+        .await?;
+    let kept = match pruned.stdout.trim() {
+        _ if !pruned.ok() => format!("⚠️ the site's WAL was not pruned: {}", pruned.stderr.trim()),
+        "" => format!(
+            "the site's WAL kept whole: no base is {} hours old yet",
+            wal_ship::KEEP_HOURS
+        ),
+        b => format!("the site's WAL kept from base {b}"),
+    };
+    println!("  ✓ {kept}");
     Ok(format!(
-        "{VITAL_POSTGRES} replaying on the site, from {from}"
+        "{VITAL_POSTGRES} replaying on the site, from {from}; {kept}"
     ))
 }
 
 /// The volume holding the server's data directory: the one its base backup copies.
-fn data_volume(m: &Manifest) -> Option<String> {
+pub(super) fn data_volume(m: &Manifest) -> Option<String> {
     m.spec.requires.iter().find_map(|c| match c {
         hlb_types::Capability::Storage { name, copy, .. }
             if copy.engine() == Some(hlb_types::DbEngine::Postgres) =>

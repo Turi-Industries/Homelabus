@@ -118,9 +118,33 @@ pub fn restore_command() -> String {
     format!("f={STANDBY_DIR}/%f{SUFFIX}; [ -f $f ] && zstd -qdc $f > %p")
 }
 
-/// What the standby no longer needs, deleted as it restarts past it.
-pub fn cleanup_command() -> String {
-    format!("pg_archivecleanup -x {SUFFIX} {STANDBY_DIR} %r")
+/// How far back the site's WAL reaches, at least: a point-in-time restore of the vital
+/// server can be asked for any instant this recent.
+pub const KEEP_HOURS: u32 = 24;
+
+/// Run on the site after a base was seeded: the WAL older than the newest base received
+/// more than [`KEEP_HOURS`] ago is removed, so every instant since stays reachable from a
+/// base and what follows it. Prints the base kept, nothing when none is old enough.
+///
+/// 🔴 The standby never cleans: its restartpoints would remove, as it replays, every
+/// segment a point-in-time restore needs (`archive_cleanup_command`, until 2026-11-11).
+/// Names compared without their timeline, as `pg_archivecleanup` does — a promotion's
+/// segments carry the next one, and would otherwise sort after everything for ever.
+/// Timeline histories are kept: a few bytes, and a replay needs them.
+pub fn prune_script() -> String {
+    let minutes = KEEP_HOURS * 60;
+    format!(
+        r#"dir={SITE_DIR}
+b=$(find "$dir" -maxdepth 1 -type f -name '*.backup{SUFFIX}' -mmin +{minutes} -printf '%f\n' |
+    awk '{{ k = substr($0, 9, 16); if (k > m) {{ m = k; f = $0 }} }} END {{ print f }}')
+[ -n "$b" ] || exit 0
+cut=$(printf %s "$b" | cut -c9-24)
+find "$dir" -maxdepth 1 -type f -printf '%f\n' |
+    awk -v cut="$cut" '!/\.history\{SUFFIX}$/ && substr($0, 9, 16) "" < cut ""' |
+    while read -r f; do rm -f "$dir/$f"; done
+printf '%s\n' "${{b%{SUFFIX}}}"
+"#
+    )
 }
 
 /// After the catalog's arguments, on the site's standby: it replays what arrives, and
@@ -130,7 +154,6 @@ pub fn standby_args() -> Vec<String> {
     [
         "archive_mode=off".to_string(),
         format!("restore_command={}", restore_command()),
-        format!("archive_cleanup_command={}", cleanup_command()),
     ]
     .into_iter()
     .flat_map(|s| ["-c".to_string(), s])
@@ -522,6 +545,88 @@ pub fn judge(waiting: Option<u64>, site: &SiteWal, promoted: bool, now: u64) -> 
     out
 }
 
+/// A base label reaches the site some seconds after its base ended, and the base's
+/// snapshot is dated when restic began: a base this much older than the oldest label the
+/// site keeps is still the one that label belongs to. Bases are hours apart.
+pub const LABEL_SLACK_S: i64 = 60;
+
+/// Run on the site: when it last received, each base label it keeps with when it
+/// arrived, and each segment it keeps — `received=<epoch>`, `label=<epoch> <name>` and
+/// `segment=<name>` lines, read by [`parse_site_labels`].
+pub fn site_labels_script() -> String {
+    format!(
+        r#"echo "received=$(cat {SITE_RECEIVED} 2>/dev/null)"
+find {SITE_DIR} -maxdepth 1 -type f -name '*.backup{SUFFIX}' -printf 'label=%T@ %f\n' 2>/dev/null
+find {SITE_DIR} -maxdepth 1 -type f -name '????????????????????????{SUFFIX}' -printf 'segment=%f\n' 2>/dev/null
+"#
+    )
+}
+
+/// What the site keeps for a point-in-time restore.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SiteLabels {
+    /// When the site last received a file: the newest instant it can replay to.
+    pub received: Option<i64>,
+    /// When the oldest base label it keeps arrived: no older base has its WAL there.
+    pub oldest_label: Option<i64>,
+}
+
+/// 🔴 A label counts only while the segment its base starts in is still there:
+/// `pg_archivecleanup` — the standby's `archive_cleanup_command` until 2026-11-11 —
+/// removes segments and leaves labels, and a window read from labels alone would name
+/// bases with no WAL behind them. Segments compared without their timeline, as the
+/// prune does.
+pub fn parse_site_labels(out: &str) -> SiteLabels {
+    let mut s = SiteLabels::default();
+    let mut labels = Vec::new();
+    let mut oldest_segment: Option<String> = None;
+    let position = |name: &str| name.get(8..24).map(str::to_string);
+    for line in out.lines() {
+        if let Some(v) = line.strip_prefix("received=") {
+            s.received = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("label=") {
+            // `find` prints the time with its fraction: `1762862960.4630000000`.
+            let (at, name) = v.trim().split_once(' ').unwrap_or((v.trim(), ""));
+            let at = at.split('.').next().and_then(|n| n.parse::<i64>().ok());
+            if let (Some(at), Some(p)) = (at, position(name)) {
+                labels.push((at, p));
+            }
+        } else if let Some(p) = line
+            .strip_prefix("segment=")
+            .and_then(|n| position(n.trim()))
+        {
+            if oldest_segment.as_ref().is_none_or(|o| p < *o) {
+                oldest_segment = Some(p);
+            }
+        }
+    }
+    let Some(oldest) = oldest_segment else {
+        return s;
+    };
+    s.oldest_label = labels
+        .into_iter()
+        .filter(|(_, p)| *p >= oldest)
+        .map(|(at, _)| at)
+        .min();
+    s
+}
+
+/// The bases a point-in-time restore of the vital server can start from: those whose
+/// label, and so the WAL past their start, the site still keeps.
+pub fn usable_bases(
+    bases: &[crate::pitr::BaseBackup],
+    site: &SiteLabels,
+) -> Vec<crate::pitr::BaseBackup> {
+    let Some(oldest) = site.oldest_label else {
+        return Vec::new();
+    };
+    bases
+        .iter()
+        .filter(|b| b.finished_at >= oldest - LABEL_SLACK_S)
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,6 +811,95 @@ mod tests {
         assert_eq!(a[1], "archive_mode=off");
         assert!(a.iter().any(|s| s.starts_with("restore_command=")));
         assert!(restore_command().contains("[ -f $f ] &&"));
+        assert!(
+            !a.iter().any(|s| s.starts_with("archive_cleanup_command")),
+            "the site's WAL is kept for point-in-time restores: {a:?}"
+        );
+    }
+
+    /// Run on a directory laid out as the site's: two bases a day and more back, one
+    /// this morning, a promotion's segments on the next timeline.
+    #[test]
+    fn the_site_keeps_its_wal_back_to_the_newest_base_a_day_old() {
+        let dir = tempfile::tempdir().expect("scratch");
+        let old = "202611090300";
+        let day = "202611100300";
+        let files = [
+            ("000000010000000000000003.zst", old),
+            ("000000010000000000000004.00000028.backup.zst", old),
+            ("000000010000000000000004.zst", old),
+            ("000000010000000000000009.zst", day),
+            ("00000001000000000000000A.00000060.backup.zst", day),
+            ("00000001000000000000000A.zst", day),
+            ("00000001000000000000000B.zst", day),
+            ("00000002000000000000000C.zst", day),
+            ("00000002.history.zst", old),
+            ("00000001000000000000000D.00000028.backup.zst", ""),
+            ("00000001000000000000000D.zst", ""),
+        ];
+        for (f, at) in files {
+            let path = dir.path().join(f);
+            std::fs::write(&path, b"x").expect("written");
+            if !at.is_empty() {
+                let out = std::process::Command::new("touch")
+                    .args(["-t", at])
+                    .arg(&path)
+                    .output()
+                    .expect("touch");
+                assert!(out.status.success());
+            }
+        }
+        let script = prune_script().replace(SITE_DIR, &dir.path().to_string_lossy());
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .expect("sh");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "00000001000000000000000A.00000060.backup",
+            "this morning's base is not a day old: yesterday's is kept"
+        );
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "00000001000000000000000A.00000060.backup.zst",
+                "00000001000000000000000A.zst",
+                "00000001000000000000000B.zst",
+                "00000001000000000000000D.00000028.backup.zst",
+                "00000001000000000000000D.zst",
+                "00000002.history.zst",
+                "00000002000000000000000C.zst",
+            ]
+        );
+    }
+
+    #[test]
+    fn nothing_is_pruned_before_a_base_is_a_day_old() {
+        let dir = tempfile::tempdir().expect("scratch");
+        for f in [
+            "000000010000000000000003.zst",
+            "000000010000000000000004.00000028.backup.zst",
+        ] {
+            std::fs::write(dir.path().join(f), b"x").expect("written");
+        }
+        let script = prune_script().replace(SITE_DIR, &dir.path().to_string_lossy());
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .expect("sh");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+        assert_eq!(std::fs::read_dir(dir.path()).expect("read").count(), 2);
     }
 
     #[test]
@@ -732,5 +926,55 @@ mod tests {
         );
         let t22 = Target { port: 22, ..t };
         assert!(known_hosts_line(&t22, "ssh-ed25519 K").starts_with("203.0.113.7 "));
+    }
+    #[test]
+    fn the_site_s_labels_say_how_far_back_a_restore_reaches() {
+        let out = "received=1762900000\n\
+                   label=1762862960.4630000000 00000001000000000000000A.00000060.backup.zst\n\
+                   label=1762800000.1 000000010000000000000004.00000028.backup.zst\n\
+                   label=1762700000.1 000000010000000000000002.00000028.backup.zst\n\
+                   segment=000000010000000000000004.zst\n\
+                   segment=00000001000000000000000A.zst\n\
+                   segment=00000002000000000000000B.zst\n";
+        // The label of a base whose first segment is gone (…02) does not count.
+        let site = parse_site_labels(out);
+        assert_eq!(
+            site,
+            SiteLabels {
+                received: Some(1_762_900_000),
+                oldest_label: Some(1_762_800_000)
+            }
+        );
+        let base = |id: &str, at| crate::pitr::BaseBackup {
+            id: id.into(),
+            finished_at: at,
+        };
+        let bases = [
+            base("pruned", 1_762_700_000),
+            base("its-label-just-after", 1_762_800_000 - 20),
+            base("this-morning", 1_762_862_940),
+        ];
+        let usable: Vec<String> = usable_bases(&bases, &site)
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(usable, ["its-label-just-after", "this-morning"]);
+        // A site with no label keeps no base's WAL.
+        assert!(usable_bases(&bases, &parse_site_labels("received=\n")).is_empty());
+        // Labels left, every segment gone: nothing to replay from.
+        let bare = "label=1762800000 000000010000000000000004.00000028.backup.zst\n";
+        assert_eq!(parse_site_labels(bare).oldest_label, None);
+        assert_eq!(parse_site_labels("received=\n").received, None);
+    }
+
+    #[test]
+    fn the_labels_script_reads_the_site_s_own_paths() {
+        let s = site_labels_script();
+        assert!(s.contains(SITE_RECEIVED) && s.contains(SITE_DIR), "{s}");
+        let out = std::process::Command::new("sh")
+            .args(["-n", "-c", &s])
+            .output()
+            .expect("sh");
+        assert!(out.status.success());
     }
 }

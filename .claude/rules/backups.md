@@ -150,6 +150,13 @@ during an outage.
   NFS app at 0 replicas with no pin: the hold records the volume's node before anything stops
   (`service_holds.node`), and `place_of` reads it last. Never "here" without it: a node lacking
   the volume creates an empty local one, and the restore lands in that.
+- **🔴 A point-in-time dump is an old state on purpose, never "the latest".** `hlb backup
+  pitr restore --server postgres-vital` replays a base into a throwaway server and keeps
+  a dump of the app's database as it was, newer than every pass's: picked unasked, the
+  next `restore --database` would put that morning back over everyone's writes. Tagged
+  `kind:pitr` (`replay::PITR_KIND`), skipped by `pick_where` as `kind:pre-restore` is;
+  its id restores it. The replay follows the house's timeline (`'current'`): after a
+  return the site's promotion history names the next one, which `'latest'` would follow.
 - **The copy a restore takes first is never "the latest".** It is tagged
   `kind:pre-restore`; taken as the default, a second restore would bring back the very
   data the first replaced. Only its id restores it. ⚠️ `kind:pre-update` is what every

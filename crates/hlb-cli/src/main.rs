@@ -913,6 +913,10 @@ enum PitrCmd {
     Window {
         #[arg(long, default_value = "/archive/wal")]
         dir: String,
+        /// The server: `postgres`, the shared one and its archive directory, or
+        /// `postgres-vital`, whose WAL its site keeps.
+        #[arg(long, default_value = "postgres")]
+        server: String,
     },
     /// 🔴 Produce a base backup. Without one, the WAL restores nothing.
     Base {
@@ -920,6 +924,22 @@ enum PitrCmd {
         #[arg(long, default_value = "/archive/base")]
         dest: String,
         /// Actually run. Without this flag, only what would be done is shown.
+        #[arg(long)]
+        apply: bool,
+    },
+    /// An app's database as it was at an instant, into a throwaway server, a dump taken
+    /// out of it and kept in the backups — production untouched. `postgres-vital` only:
+    /// the site keeps its WAL. Preview by default.
+    Restore {
+        /// The server, `postgres-vital`.
+        #[arg(long)]
+        server: String,
+        /// The app whose database comes back.
+        #[arg(long)]
+        app: String,
+        /// The instant, in UTC: "2026-11-11 09:58:00".
+        #[arg(long)]
+        to: String,
         #[arg(long)]
         apply: bool,
     },
@@ -2519,7 +2539,7 @@ fn known_migrations() -> Vec<(i64, hlb_selfupdate::Migration)> {
 }
 
 /// The present instant, in seconds since the epoch.
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -2665,7 +2685,10 @@ async fn pitr(
             Ok(ExitCode::SUCCESS)
         }
 
-        PitrCmd::Window { dir } => {
+        PitrCmd::Restore { .. } => Err("answered by `site::pitr`, before this is called".into()),
+
+        // The vital server is answered by `site::pitr` before this is called.
+        PitrCmd::Window { dir, server: _ } => {
             let state = State::open(state_path).await?;
             let bases = load_databases(&state).await?;
 
@@ -12846,6 +12869,34 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                         Ok(ExitCode::SUCCESS)
                     }
 
+                    BackupCmd::Pitr(PitrCmd::Window { server, dir: _ })
+                        if server != hlb_types::DbEngine::Postgres.service_name() =>
+                    {
+                        if server != hlb_types::VITAL_POSTGRES {
+                            eprintln!(
+                                "No PostgreSQL server \"{server}\": postgres or {}.",
+                                hlb_types::VITAL_POSTGRES
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        site::pitr::window(&cli).await
+                    }
+                    BackupCmd::Pitr(PitrCmd::Restore {
+                        server,
+                        app,
+                        to,
+                        apply,
+                    }) => {
+                        if server != hlb_types::VITAL_POSTGRES {
+                            eprintln!(
+                                "Only {} restores into a copy: the shared server's archive \
+                                 is yours to read.  hlb backup pitr plan \"<UTC>\"",
+                                hlb_types::VITAL_POSTGRES
+                            );
+                            return Ok(ExitCode::FAILURE);
+                        }
+                        site::pitr::restore(&cli, app, to, *apply).await
+                    }
                     BackupCmd::Pitr(sub) => {
                         pitr(sub, &cli.state, cli.postgres_admin.as_deref(), &cli.platform_network).await
                     }

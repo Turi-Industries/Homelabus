@@ -149,7 +149,14 @@ fn pick_where<'a>(
                 }
                 break;
             }
-            None if s.tags.iter().any(|t| t == BEFORE_RESTORE) => continue,
+            // A point-in-time restore's dump is an old state on purpose: never unasked.
+            None if s
+                .tags
+                .iter()
+                .any(|t| t == BEFORE_RESTORE || t == hlb_backup::replay::PITR_KIND) =>
+            {
+                continue
+            }
             None if taken.contains(&s.id) => {
                 picked.snapshot = Some(s);
                 break;
@@ -485,6 +492,47 @@ impl Restore<'_> {
             Some(w) => format!("no snapshot {w} of {volume} — {}", tried.join("; ")),
             None => format!("no snapshot of {volume} — {}", tried.join("; ")),
         })
+    }
+
+    /// Every snapshot of `volume` Homelabus took, oldest first, from the first
+    /// destination receiving the app's volumes that lists them — the bases a
+    /// point-in-time restore chooses among. Never a restore's own prior copy.
+    pub async fn taken_of(&self, app: &str, volume: &str) -> Result<Vec<Snapshot>, String> {
+        let path = volume_path(volume);
+        let password = restic_password(self.state, self.vault)
+            .await
+            .map_err(|e| e.to_string())?;
+        let taken = self
+            .state
+            .snapshots_taken(app)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut tried = Vec::new();
+        for d in effective_destinations(self.state, app, Class::Bulky, self.fallback_repo)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            let env = self.env(&d).await?;
+            let (runner, location) = d.runner(Some(self.network));
+            let repo = hlb_backup::Repository::new(runner, location, &password).extra_env(env);
+            match repo.snapshots(Some(&format!("app:{app}"))).await {
+                Ok(all) => {
+                    return Ok(all
+                        .into_iter()
+                        .filter(|s| {
+                            s.paths.contains(&path)
+                                && taken.contains(&s.id)
+                                && !s.tags.iter().any(|t| t == BEFORE_RESTORE)
+                        })
+                        .collect())
+                }
+                Err(e) => tried.push(format!("{}: {e}", d.name)),
+            }
+        }
+        Err(format!(
+            "no destination listed {app}'s snapshots of {volume}: {}",
+            tried.join("; ")
+        ))
     }
 
     /// The machine holding `volume`. Asked while its app still runs: a stopped
@@ -1159,6 +1207,29 @@ mod tests {
         assert_eq!(pg.snapshot.map(|s| s.id.as_str()), Some("pg1"));
         let ma = pick_dump(&all, DbEngine::Mariadb, "chat", None, &t, NOW);
         assert_eq!(ma.snapshot.map(|s| s.id.as_str()), Some("ma1"));
+    }
+
+    #[test]
+    fn a_point_in_time_dump_is_restored_only_by_its_id() {
+        let all = vec![
+            snap(
+                "pass",
+                "2026-11-11T03:00:00Z",
+                "/staging/vw-vw-20261111T030000Z.dump",
+                &["app:vw", "db:vw", "kind:sql-dump"],
+            ),
+            snap(
+                "pitr",
+                "2026-11-11T12:00:00Z",
+                "/staging/vw-vw-20261111T120000Z.dump",
+                &["app:vw", "db:vw", hlb_backup::replay::PITR_KIND],
+            ),
+        ];
+        let t = taken(&["pass", "pitr"]);
+        let unasked = pick_dump(&all, DbEngine::Postgres, "vw", None, &t, NOW);
+        assert_eq!(unasked.snapshot.map(|s| s.id.as_str()), Some("pass"));
+        let named = pick_dump(&all, DbEngine::Postgres, "vw", Some("pitr"), &t, NOW);
+        assert_eq!(named.snapshot.map(|s| s.id.as_str()), Some("pitr"));
     }
 
     #[test]

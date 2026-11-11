@@ -354,7 +354,7 @@ pub fn iso8601(epoch: i64) -> String {
 }
 
 /// The same date, in the format PostgreSQL expects for `recovery_target_time`.
-fn pg_timestamp(epoch: i64) -> String {
+pub(crate) fn pg_timestamp(epoch: i64) -> String {
     let (y, m, d, hh, mm, ss) = civil(epoch);
     // The `+00` suffix is indispensable: with no timezone, PostgreSQL interprets the
     // date in the server's `TimeZone`, and you restore to an instant shifted by hours

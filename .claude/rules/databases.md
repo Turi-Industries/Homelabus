@@ -121,10 +121,15 @@ cleanly and is missing data.
   `postgres-vital` refused Vaultwarden's `CREATE TABLE IF NOT EXISTS`, so no app can be
   proved healthy against it: the lifeboat rehearses the apps on a plain copy of the base,
   removes it, then restores the base again with `standby.signal` (`wal_ship`). Seeded
-  only by the base just taken — an older one's WAL is gone from the site — and last
-  night's standby STOPPED first: replaying on, its restartpoints' `pg_archivecleanup`
-  would remove the segments the new base needs past its end. `pg_walfile_name` errors in
-  recovery: `wal_ship::segment_name` computes the name.
+  only by the base just taken — an older one's WAL may be pruned from the site.
+  `pg_walfile_name` errors in recovery: `wal_ship::segment_name` computes the name.
+- **🔴 A standby's `archive_cleanup_command` deletes the point-in-time window.** Its
+  restartpoints removed every segment it had replayed from the site, so the vital
+  server had no window at all, and a new base seeded behind a standby still running
+  lost the segments it needed. The standby never cleans (2026-11-11): the lifeboat
+  prunes the site to the newest base received a day ago (`wal_ship::prune_script`),
+  names compared without their timeline as `pg_archivecleanup` does — a promotion's
+  segments carry the next one and would sort after everything for ever.
 - **A WAL distance past a segment's end is no size.** `archive_timeout` switches pad
   each segment to its 16 MB boundary: four quiet minutes after a cut read "32769 KB
   written" on the lab (2026-11-11). The return counts segments past the takeover.
