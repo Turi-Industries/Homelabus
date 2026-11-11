@@ -17,3 +17,8 @@ pub const POSTGRES_CLIENT: &str =
 /// test of the catalog holds the two to one reference.
 pub const MARIADB_CLIENT: &str =
     "mariadb:12.3.2@sha256:a02fe89cb597d4375812b2eac90cf9d0775d4686daa7f7cc750ebbcad7525bbc";
+
+/// Litestream, pushing a vital app's SQLite to the site and restoring it there. 0.5's
+/// replica format (LTX) is not 0.3's: the house's and the site's are one build.
+pub const LITESTREAM: &str =
+    "litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b";

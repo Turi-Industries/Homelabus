@@ -28,6 +28,7 @@ pub mod runner;
 pub mod schedule;
 pub mod snapshot;
 pub mod sqlite;
+pub mod sqlite_ship;
 pub mod tarball;
 pub mod verify;
 pub mod wal_ship;
