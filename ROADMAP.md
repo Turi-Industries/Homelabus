@@ -1739,6 +1739,13 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      - 8b. Its WAL archived, pushed to the site by the house every 30 s at most over
        the lifeboat's SSH; a standby on the site, seeded by the nightly lifeboat,
        replaying what arrives. Promoted with the site; its position read by the return.
+       Built and proved on the lab 2026-11-11: a segment 2.9 KB compressed; a row
+       written at home replayed by the standby 32 s later; the moving-house drill
+       twice (promoted 236 and 251 s after the cut, home again in 128 and 125 s). A
+       row written every second through it: the newest to come home was written 29 s
+       before the cut — the bound is 40, a segment switched every 30 s and pushed
+       within 10 —, the 115 before it all home; what the house wrote after the cut
+       replaced, kept in the copy the return takes first, and said by the return.
      - 8b′. The vital server's point-in-time restore (decided 2026-11-11): the site
        keeps the WAL since the base before last, `hlb backup pitr --server
        postgres-vital` reads its window and plans a restore from it. `hlb replication`
