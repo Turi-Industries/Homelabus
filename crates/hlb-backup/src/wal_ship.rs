@@ -290,19 +290,25 @@ pub fn written_past(house: (u32, u64), history: &str) -> String {
              it wrote past the site's copy cannot be told"
         );
     };
-    match at.saturating_sub(switch) {
-        0 => "the house's server wrote nothing past the point the site took over".into(),
-        n => format!(
-            "the house's server wrote {} of WAL past the point the site took over — its \
-             own restart's records at least, and whatever its apps wrote after the last \
-             push: replaced, kept in the copy each restore takes first",
-            if n < 1024 {
-                format!("{n} bytes")
-            } else {
-                format!("{} KB", n.div_ceil(1024))
-            }
+    // Past a segment's end the distance is no size: each switch [`ARCHIVE_TIMEOUT_S`]
+    // forces jumps to the next 16 MB boundary, so four quiet minutes on the lab read
+    // "32769 KB" (2026-11-11). Segments are counted instead — each holds a write.
+    let segments = (at >> 24).saturating_sub(switch >> 24);
+    let how_much = match at.saturating_sub(switch) {
+        0 => return "the house's server wrote nothing past the point the site took over".into(),
+        _ if segments > 0 => format!(
+            "WAL into {segments} more segment{} (one is switched every \
+             {ARCHIVE_TIMEOUT_S} s once anything was written)",
+            if segments == 1 { "" } else { "s" }
         ),
-    }
+        n if n < 1024 => format!("{n} bytes of WAL"),
+        n => format!("{} KB of WAL", n.div_ceil(1024)),
+    };
+    format!(
+        "the house's server wrote {how_much} past the point the site took over — its own \
+         restart's records at least, and whatever its apps wrote after the last push: \
+         replaced, kept in the copy each restore takes first"
+    )
 }
 
 /// The segment holding `lsn` on `timeline`, as PostgreSQL names it: 16 MB segments,
@@ -646,6 +652,13 @@ mod tests {
         let past = written_past((1, 0x500_0148 + 4096), history);
         assert!(past.contains("4 KB") && past.contains("replaced"), "{past}");
         assert!(written_past((1, 0x500_0148 + 120), history).contains("120 bytes"));
+        // Past the segment's end, switches pad to 16 MB: segments are said, not a size.
+        let two = written_past((1, 0x700_0060), history);
+        assert!(
+            two.contains("2 more segments") && !two.contains("KB"),
+            "{two}"
+        );
+        assert!(written_past((1, 0x600_0000), history).contains("1 more segment "));
         // A timeline the site's history does not hold is not compared.
         assert!(written_past((3, 1), history).contains("cannot be told"));
         // Two history files, the second repeating the first.
