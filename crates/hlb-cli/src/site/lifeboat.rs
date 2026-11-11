@@ -688,13 +688,9 @@ async fn stop(site: &SwarmOrchestrator, name: &str) -> Result<()> {
     if site.scale(name, 0).await.is_err() {
         return Ok(());
     }
-    for _ in 0..60 {
-        match site.status(name).await {
-            Ok(st) if st.running_replicas > 0 => {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await
-            }
-            _ => return Ok(()),
-        }
+    // The tasks' own state: `running_replicas` reads 0 while the container still stops.
+    if hlb_orchestrator::wait_stopped(site, name, std::time::Duration::from_secs(60)).await? {
+        return Ok(());
     }
     Err(format!("{name} is still running on the site a minute after it was stopped").into())
 }
