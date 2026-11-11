@@ -305,6 +305,22 @@ fn the_site_s_standby_replays_what_the_house_pushed_and_promotes_with_it() {
     write_then_switch("after-base");
     until("a segment archived, compressed", 60, push_count_ready);
     assert!(push(&receiver) > 0, "something pushed");
+    // The base's label goes with its segments: what the site's prune and a
+    // point-in-time restore find a base by.
+    let site_files = ok(&[
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/s", VOLUMES[4]),
+        "--entrypoint",
+        "ls",
+        hlb_backup::images::RESTIC,
+        "/s/wal",
+    ]);
+    assert!(
+        site_files.lines().any(|f| f.ends_with(".backup.zst")),
+        "{site_files}"
+    );
 
     // The site: the same server, standing by on what arrived.
     let mut args = s.args.clone();

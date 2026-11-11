@@ -118,9 +118,33 @@ pub fn restore_command() -> String {
     format!("f={STANDBY_DIR}/%f{SUFFIX}; [ -f $f ] && zstd -qdc $f > %p")
 }
 
-/// What the standby no longer needs, deleted as it restarts past it.
-pub fn cleanup_command() -> String {
-    format!("pg_archivecleanup -x {SUFFIX} {STANDBY_DIR} %r")
+/// How far back the site's WAL reaches, at least: a point-in-time restore of the vital
+/// server can be asked for any instant this recent.
+pub const KEEP_HOURS: u32 = 24;
+
+/// Run on the site after a base was seeded: the WAL older than the newest base received
+/// more than [`KEEP_HOURS`] ago is removed, so every instant since stays reachable from a
+/// base and what follows it. Prints the base kept, nothing when none is old enough.
+///
+/// 🔴 The standby never cleans: its restartpoints would remove, as it replays, every
+/// segment a point-in-time restore needs (`archive_cleanup_command`, until 2026-11-11).
+/// Names compared without their timeline, as `pg_archivecleanup` does — a promotion's
+/// segments carry the next one, and would otherwise sort after everything for ever.
+/// Timeline histories are kept: a few bytes, and a replay needs them.
+pub fn prune_script() -> String {
+    let minutes = KEEP_HOURS * 60;
+    format!(
+        r#"dir={SITE_DIR}
+b=$(find "$dir" -maxdepth 1 -type f -name '*.backup{SUFFIX}' -mmin +{minutes} -printf '%f\n' |
+    awk '{{ k = substr($0, 9, 16); if (k > m) {{ m = k; f = $0 }} }} END {{ print f }}')
+[ -n "$b" ] || exit 0
+cut=$(printf %s "$b" | cut -c9-24)
+find "$dir" -maxdepth 1 -type f -printf '%f\n' |
+    awk -v cut="$cut" '!/\.history\{SUFFIX}$/ && substr($0, 9, 16) "" < cut ""' |
+    while read -r f; do rm -f "$dir/$f"; done
+printf '%s\n' "${{b%{SUFFIX}}}"
+"#
+    )
 }
 
 /// After the catalog's arguments, on the site's standby: it replays what arrives, and
@@ -130,7 +154,6 @@ pub fn standby_args() -> Vec<String> {
     [
         "archive_mode=off".to_string(),
         format!("restore_command={}", restore_command()),
-        format!("archive_cleanup_command={}", cleanup_command()),
     ]
     .into_iter()
     .flat_map(|s| ["-c".to_string(), s])
@@ -706,6 +729,95 @@ mod tests {
         assert_eq!(a[1], "archive_mode=off");
         assert!(a.iter().any(|s| s.starts_with("restore_command=")));
         assert!(restore_command().contains("[ -f $f ] &&"));
+        assert!(
+            !a.iter().any(|s| s.starts_with("archive_cleanup_command")),
+            "the site's WAL is kept for point-in-time restores: {a:?}"
+        );
+    }
+
+    /// Run on a directory laid out as the site's: two bases a day and more back, one
+    /// this morning, a promotion's segments on the next timeline.
+    #[test]
+    fn the_site_keeps_its_wal_back_to_the_newest_base_a_day_old() {
+        let dir = tempfile::tempdir().expect("scratch");
+        let old = "202611090300";
+        let day = "202611100300";
+        let files = [
+            ("000000010000000000000003.zst", old),
+            ("000000010000000000000004.00000028.backup.zst", old),
+            ("000000010000000000000004.zst", old),
+            ("000000010000000000000009.zst", day),
+            ("00000001000000000000000A.00000060.backup.zst", day),
+            ("00000001000000000000000A.zst", day),
+            ("00000001000000000000000B.zst", day),
+            ("00000002000000000000000C.zst", day),
+            ("00000002.history.zst", old),
+            ("00000001000000000000000D.00000028.backup.zst", ""),
+            ("00000001000000000000000D.zst", ""),
+        ];
+        for (f, at) in files {
+            let path = dir.path().join(f);
+            std::fs::write(&path, b"x").expect("written");
+            if !at.is_empty() {
+                let out = std::process::Command::new("touch")
+                    .args(["-t", at])
+                    .arg(&path)
+                    .output()
+                    .expect("touch");
+                assert!(out.status.success());
+            }
+        }
+        let script = prune_script().replace(SITE_DIR, &dir.path().to_string_lossy());
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .expect("sh");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "00000001000000000000000A.00000060.backup",
+            "this morning's base is not a day old: yesterday's is kept"
+        );
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "00000001000000000000000A.00000060.backup.zst",
+                "00000001000000000000000A.zst",
+                "00000001000000000000000B.zst",
+                "00000001000000000000000D.00000028.backup.zst",
+                "00000001000000000000000D.zst",
+                "00000002.history.zst",
+                "00000002000000000000000C.zst",
+            ]
+        );
+    }
+
+    #[test]
+    fn nothing_is_pruned_before_a_base_is_a_day_old() {
+        let dir = tempfile::tempdir().expect("scratch");
+        for f in [
+            "000000010000000000000003.zst",
+            "000000010000000000000004.00000028.backup.zst",
+        ] {
+            std::fs::write(dir.path().join(f), b"x").expect("written");
+        }
+        let script = prune_script().replace(SITE_DIR, &dir.path().to_string_lossy());
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .expect("sh");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+        assert_eq!(std::fs::read_dir(dir.path()).expect("read").count(), 2);
     }
 
     #[test]
