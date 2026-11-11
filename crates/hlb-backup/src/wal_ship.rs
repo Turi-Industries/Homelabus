@@ -39,6 +39,11 @@ pub const SITE_RECEIVED: &str = "/var/lib/homelabus-site/wal-received";
 /// Where the standby reads [`SITE_DIR`].
 pub const STANDBY_DIR: &str = "/var/lib/postgresql/incoming";
 
+/// What makes a data directory start as a standby, beside what a base backup restored.
+/// Without it the server recovers what the base holds and opens for writes — on a
+/// timeline of its own, which no WAL of the house follows.
+pub const STANDBY_SIGNAL: &str = "standby.signal";
+
 /// The forced command of the pushing key, on the VPS.
 pub const RECEIVER: &str = "/usr/local/sbin/hlb-wal-receive";
 

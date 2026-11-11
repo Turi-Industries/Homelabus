@@ -132,6 +132,45 @@ async fn rewound(mut f: tokio::fs::File) -> Result<(tokio::fs::File, u64), Strin
     Ok((f, size))
 }
 
+/// The archive putting an empty [`wal_ship::STANDBY_SIGNAL`], the server's user's, into
+/// the data directory mounted at `root`. No entry for the directory: its own owner and
+/// mode, the base's, stay as restored.
+///
+/// [`wal_ship::STANDBY_SIGNAL`]: hlb_backup::wal_ship::STANDBY_SIGNAL
+pub fn standby_signal(root: &str) -> Result<Vec<u8>, String> {
+    use hlb_backup::wal_ship::{POSTGRES_UID, STANDBY_SIGNAL};
+    let mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let a = Attrs {
+        uid: POSTGRES_UID,
+        gid: POSTGRES_UID,
+        mode: 0o600,
+        mtime,
+    };
+    let path = format!("{}/{STANDBY_SIGNAL}", root.trim_start_matches('/'));
+    let mut out = tar::header(&path, Kind::File(0), &a)?.to_vec();
+    out.extend_from_slice(&tar::end());
+    Ok(out)
+}
+
+/// `volume` on the site, a PostgreSQL directory a base backup filled, made to start as a
+/// standby. `image` is the server's, which the site has pulled already.
+pub async fn mark_standby(site: &Site<'_>, image: &str, volume: &str) -> Result<(), String> {
+    let root = volume_path(volume);
+    let tar = bytes::Bytes::from(standby_signal(&root)?);
+    site.docker
+        .put_archive(
+            image,
+            volume,
+            &root,
+            futures::stream::once(async move { Ok::<_, std::io::Error>(tar) }),
+        )
+        .await
+        .map_err(|e| format!("{volume} on the site: {}", causes(&e)))
+}
+
 impl Restore<'_> {
     fn repository(
         &self,
@@ -596,6 +635,34 @@ mod tests {
         assert!(
             fits(11 * gib, 10 * gib, 20 * gib).is_err(),
             "more than is free"
+        );
+    }
+
+    #[test]
+    fn the_standby_signal_is_postgres_s_file_and_leaves_the_directory_alone() {
+        use std::io::Write as _;
+        let archive = standby_signal("/donnees/postgres-vital-data").expect("archive");
+        let mut tar = std::process::Command::new("tar")
+            .args(["--numeric-owner", "-tvf", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("tar");
+        tar.stdin
+            .take()
+            .expect("stdin")
+            .write_all(&archive)
+            .expect("written");
+        let out = tar.wait_with_output().expect("listed");
+        assert!(out.status.success(), "{out:?}");
+        let listed = String::from_utf8_lossy(&out.stdout);
+        let lines: Vec<&str> = listed.lines().collect();
+        assert_eq!(lines.len(), 1, "one entry, no directory's: {listed}");
+        assert!(lines[0].starts_with("-rw-------"), "{listed}");
+        assert!(lines[0].contains("999/999"), "{listed}");
+        assert!(
+            lines[0].ends_with("donnees/postgres-vital-data/standby.signal"),
+            "{listed}"
         );
     }
 }

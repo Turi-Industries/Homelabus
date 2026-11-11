@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 use std::time::Instant;
 
+use hlb_backup::wal_ship;
 use hlb_backup_run::lifeboat::{Server, Site as Target};
 use hlb_backup_run::restore::{Database, Restore};
 use hlb_bootstrap::Runner;
@@ -18,7 +19,7 @@ use hlb_orchestrator::{Orchestrator as _, SwarmOrchestrator};
 use hlb_resolver::Action;
 use hlb_secrets::Vault;
 use hlb_state::State;
-use hlb_types::Manifest;
+use hlb_types::{DbServer, Manifest, VITAL_POSTGRES};
 
 use crate::{
     existing_ssh_key, open_state, open_vault, parse_ssh_target, write_temporary_key, Cli,
@@ -60,21 +61,52 @@ fn say(sel: &Selection) {
     }
 }
 
+/// One carried database, and the server it lives on at home.
+struct Placed {
+    app: String,
+    database: String,
+    server: DbServer,
+}
+
+/// Each carried database with the server it lives on at home, which decides the site's:
+/// the shared server's restored from its dump into a PostgreSQL of the site's own, the
+/// vital server's replayed there continuously by a standby.
+async fn placed(state: &State, sel: &Selection) -> Result<Vec<Placed>> {
+    let mut out = Vec::new();
+    for (app, database) in &sel.postgres {
+        let server = state
+            .database_server(app, database)
+            .await?
+            .unwrap_or(DbServer::Postgres);
+        out.push(Placed {
+            app: app.clone(),
+            database: database.clone(),
+            server,
+        });
+    }
+    Ok(out)
+}
+
+/// The servers the site runs for `placed`, once each.
+fn servers(placed: &[Placed]) -> Vec<DbServer> {
+    let mut out: Vec<DbServer> = placed.iter().map(|p| p.server).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The site's memory against what the selection may take; why not, otherwise.
 fn memory_refusal(
     sel: &Selection,
     installed: &[(String, Manifest)],
+    servers: &[DbServer],
     s: &Site,
 ) -> std::result::Result<u64, String> {
-    let postgres = installed
-        .iter()
-        .find(|(n, _)| n == lifeboat::POSTGRES)
-        .map(|(_, m)| m);
     let caddy = installed
         .iter()
         .find(|(n, _)| n == hlb_types::manifest::INGRESS_SERVICE)
         .map(|(_, m)| m);
-    let needed = lifeboat::memory_mib(sel, installed, postgres, caddy)?;
+    let needed = lifeboat::memory_mib(sel, installed, servers, caddy)?;
     let Some(has) = s.memory_mb else {
         return Err(format!(
             "{} MB needed, and the site's memory was never read",
@@ -109,11 +141,21 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     for app in &sel.apps {
         println!("  {app}");
     }
-    for (app, db) in &sel.postgres {
-        println!("  {db} — {app}'s database, on a PostgreSQL of the site's own");
+    let placed = placed(&state, &sel).await?;
+    for p in &placed {
+        match p.server {
+            DbServer::PostgresVital => println!(
+                "  {} — {}'s database, replayed on the site by a standby of {VITAL_POSTGRES}",
+                p.database, p.app
+            ),
+            DbServer::Postgres | DbServer::Mariadb => println!(
+                "  {} — {}'s database, on a PostgreSQL of the site's own",
+                p.database, p.app
+            ),
+        }
     }
     say(&sel);
-    let memory = match memory_refusal(&sel, &installed, &s) {
+    let memory = match memory_refusal(&sel, &installed, &servers(&placed), &s) {
         Ok(mb) => mb,
         Err(why) => {
             eprintln!("\n🔴 {why}. Nothing was sent.");
@@ -137,12 +179,17 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
             "({}), which starts them the night the house is down.",
             lifeboat::PROMOTE_SCRIPT
         );
+        if placed.iter().any(|p| p.server == DbServer::PostgresVital) {
+            println!("Would take a base backup of {VITAL_POSTGRES} now, start the apps once on a");
+            println!("copy of it, then seed the standby from it: that one keeps running, and");
+            println!("replays the WAL the house pushes until the promotion makes it the server.");
+        }
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
 
     let started = Instant::now();
-    let outcome = rebuild(cli, &state, &vault, &s, &sel).await;
+    let outcome = rebuild(cli, &state, &vault, &s, &sel, &placed).await;
     let secs = started.elapsed().as_secs();
     let (ok, detail) = match &outcome {
         Ok(lines) => (true, lines.join("; ")),
@@ -167,6 +214,11 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
                 "\n✓ The lifeboat started healthy on {} in {secs} s, and is stopped.",
                 s.name
             );
+            if placed.iter().any(|p| p.server == DbServer::PostgresVital) {
+                println!(
+                    "  Its standby of {VITAL_POSTGRES} runs, replaying what the house pushes."
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
@@ -313,6 +365,7 @@ async fn rebuild(
     vault: &Vault,
     s: &Site,
     sel: &Selection,
+    placed: &[Placed],
 ) -> Result<Vec<String>> {
     let (tmp, ssh) = ssh_to(state, vault, s).await?;
     // 🔴 A promoted site's lifeboat is serving: removed and rebuilt from last night's
@@ -350,18 +403,48 @@ async fn rebuild(
     // Last night's first: what it left is the state of then, and a volume filled over
     // it would keep files the backup no longer has.
     let before = carried(state, vault).await?;
+    let on = |server: DbServer| placed.iter().any(|p| p.server == server);
+    // The base the standby is seeded from, taken now: the site's WAL reaches back only
+    // to last night's standby's last restartpoint, and a base older than that is
+    // followed by nothing.
+    let base = if on(DbServer::PostgresVital) {
+        // 🔴 Last night's standby stopped first: replaying on, its restartpoints would
+        // clean from the site the segments the new base needs past its end.
+        let had = before.services.iter().any(|s| s == VITAL_POSTGRES);
+        if had {
+            stop(&site, VITAL_POSTGRES).await?;
+        }
+        match fresh_base(cli, state, vault).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                if had {
+                    site.scale(VITAL_POSTGRES, 1).await.ok();
+                }
+                return Err(e);
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let mut plans = Vec::new();
     let mut now = Carried {
         apps: sel.apps.clone(),
         ..Carried::default()
     };
-    let pg_plan = if sel.postgres.is_empty() {
-        None
-    } else {
+    let pg_plan = if on(DbServer::Postgres) {
         Some(lifeboat::plan_of(state, lifeboat::POSTGRES).await?)
+    } else {
+        None
     };
     if let Some(p) = &pg_plan {
         collect(p, &mut now);
+    }
+    // Started before the apps, as the shared one is: a server, rendered and filled as
+    // an app's services are.
+    if on(DbServer::PostgresVital) {
+        let plan = lifeboat::plan_of(state, VITAL_POSTGRES).await?;
+        collect(&plan, &mut now);
+        plans.push((VITAL_POSTGRES.to_string(), plan));
     }
     for app in &sel.apps {
         let plan = lifeboat::plan_of(state, app).await?;
@@ -390,14 +473,14 @@ async fn rebuild(
     site.ensure_network(lifeboat::NETWORK).await?;
 
     let admin = site_admin(state, vault).await?;
+    // Each database rendered where it lives at home: the site's servers carry the same
+    // names, the shared one restored there, the vital one's standby.
     let exec = hlb_engine::Executor::new(&site, state)
         .with_vault(vault)
         .with_network(lifeboat::NETWORK)
-        // The site runs one PostgreSQL: a vital app's database moved home to the vital
-        // server is there too.
-        .databases_on(hlb_types::DbServer::shared(hlb_types::DbEngine::Postgres))
         .withholding(lifeboat::WITHHELD)
-        .replacing_secret(&lifeboat::admin_entry(), &admin);
+        .replacing_secret(&lifeboat::admin_entry(), &admin)
+        .replacing_secret(&lifeboat::admin_entry_of(VITAL_POSTGRES), &admin);
     let restore = Restore {
         state,
         vault,
@@ -426,7 +509,8 @@ async fn rebuild(
         };
         for (app, plan) in &plans {
             for a in &plan.actions {
-                // The site's own server takes it, whichever held it at home.
+                // Where the state says it lives: the lifeboat's plan places every
+                // database on the shared server.
                 let Action::ProvisionDatabase {
                     server: _,
                     database,
@@ -438,6 +522,11 @@ async fn rebuild(
                 else {
                     continue;
                 };
+                if !placed.iter().any(|p| {
+                    &p.app == app && &p.database == database && p.server == DbServer::Postgres
+                }) {
+                    continue;
+                }
                 let ct = state
                     .secret(password_secret)
                     .await?
@@ -470,6 +559,7 @@ async fn rebuild(
         }
     }
 
+    let mut vital_spec = None;
     for (app, plan) in &plans {
         let backed_up: Vec<String> = state
             .volumes_to_backup(app)
@@ -479,7 +569,14 @@ async fn rebuild(
             .collect();
         let mut specs = Vec::new();
         for action in lifeboat::services(plan) {
-            specs.push(lifeboat::for_site(exec.render_service(app, action).await?));
+            let mut spec = lifeboat::for_site(exec.render_service(app, action).await?);
+            if app == VITAL_POSTGRES {
+                // Started on the base as a server of its own, archiving nothing: the
+                // apps' rehearsal writes, and a standby takes none.
+                spec.args.extend(wal_ship::standby_args());
+                vital_spec = Some(spec.clone());
+            }
+            specs.push(spec);
         }
         let mut filled = Vec::new();
         for spec in &specs {
@@ -491,6 +588,9 @@ async fn rebuild(
                     .volume_to_site(app, vol, &target, &spec.image, tmp.path(), || free_on(&ssh))
                     .await
                     .map_err(|e| format!("{app}: {e}"))?;
+                if app == VITAL_POSTGRES {
+                    is_base(&sent, &base)?;
+                }
                 let mut line = format!(
                     "{vol} from {} ({} KB)",
                     &sent.snapshot[..8],
@@ -571,7 +671,186 @@ async fn rebuild(
     for svc in now.services.iter().rev() {
         site.scale(svc, 0).await?;
     }
+
+    // The vital server's rehearsal wrote into its copy: the standby starts from the
+    // base again, and stays.
+    if let Some(spec) = vital_spec {
+        let line = seed_standby(state, &site, &ssh, &restore, &target, spec, &base, &tmp).await?;
+        println!("  ✓ {line}");
+        said.push(line);
+    }
     Ok(said)
+}
+
+/// `name` scaled to nothing, and gone: a task still stopping may still write. A service
+/// not there is stopped.
+async fn stop(site: &SwarmOrchestrator, name: &str) -> Result<()> {
+    if site.scale(name, 0).await.is_err() {
+        return Ok(());
+    }
+    for _ in 0..60 {
+        match site.status(name).await {
+            Ok(st) if st.running_replicas > 0 => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await
+            }
+            _ => return Ok(()),
+        }
+    }
+    Err(format!("{name} is still running on the site a minute after it was stopped").into())
+}
+
+/// A pass of the vital server alone, now: the snapshots it took.
+async fn fresh_base(cli: &Cli, state: &State, vault: &Vault) -> Result<Vec<String>> {
+    println!("  … a base backup of {VITAL_POSTGRES}");
+    let orch = SwarmOrchestrator::connect().await?;
+    let pass = hlb_backup_run::Pass {
+        state,
+        vault,
+        state_path: &cli.state,
+        fallback_repo: cli.backup_repo.as_deref(),
+        network: &cli.platform_network,
+        postgres_admin: cli.postgres_admin.as_deref(),
+        postgres_vital_admin: cli.postgres_vital_admin.as_deref(),
+        mariadb_admin: cli.mariadb_admin.as_deref(),
+        schedule: hlb_backup::Schedule::default(),
+        force: true,
+        only: Some(VITAL_POSTGRES),
+        orchestrator: Some(&orch),
+        // It keeps no bucket.
+        s3_endpoint: None,
+    };
+    let mut taken = Vec::new();
+    let mut failed = Vec::new();
+    pass.run(&mut |e| match e {
+        hlb_backup_run::Event::Done { snapshot, .. } => taken.push(snapshot),
+        hlb_backup_run::Event::Failed {
+            what,
+            destination,
+            error,
+        } => failed.push(match destination {
+            Some(d) => format!("{what} → {d}: {error}"),
+            None => format!("{what}: {error}"),
+        }),
+        hlb_backup_run::Event::NotCovered { what, why } => {
+            failed.push(format!("{what} not backed up: {why}"))
+        }
+    })
+    .await?;
+    if taken.is_empty() {
+        return Err(format!(
+            "no base backup of {VITAL_POSTGRES} was taken, and last night's standby is \
+             left replaying: {}",
+            failed.join("; ")
+        )
+        .into());
+    }
+    // One destination is enough: the base is read back from the newest.
+    for f in failed {
+        println!("  ⚠️  {f}");
+    }
+    Ok(taken)
+}
+
+/// 🔴 The base sent is the one just taken, never an older one a destination answered
+/// with: the site's WAL would not reach back to it, and the standby would wait for ever
+/// on a segment nobody has, healthy all the while.
+fn is_base(sent: &hlb_backup_run::lifeboat::Sent, base: &[String]) -> Result<()> {
+    if base.contains(&sent.snapshot) {
+        return Ok(());
+    }
+    Err(format!(
+        "{VITAL_POSTGRES}'s data came from {}, not from the base just taken",
+        &sent.snapshot[..8.min(sent.snapshot.len())]
+    )
+    .into())
+}
+
+/// The vital server's standby on the site: its rehearsal removed with what it wrote,
+/// the base restored again and signalled, started with the WAL the house pushes.
+#[allow(clippy::too_many_arguments)]
+async fn seed_standby(
+    state: &State,
+    site: &SwarmOrchestrator,
+    ssh: &hlb_bootstrap::SshRunner,
+    restore: &Restore<'_>,
+    target: &Target<'_>,
+    rehearsed: hlb_orchestrator::ServiceSpec,
+    base: &[String],
+    tmp: &tempfile::TempDir,
+) -> Result<String> {
+    site.remove(VITAL_POSTGRES).await?;
+    let data = data_volume(&state.app_manifest(VITAL_POSTGRES).await?)
+        .ok_or_else(|| format!("{VITAL_POSTGRES} declares no volume copied by pg_basebackup"))?;
+    let mut from = String::new();
+    for (vol, _) in &rehearsed.mounts {
+        if *vol != data {
+            continue;
+        }
+        remove_volume(site, vol).await?;
+        let sent = restore
+            .volume_to_site(
+                VITAL_POSTGRES,
+                vol,
+                target,
+                &rehearsed.image,
+                tmp.path(),
+                || free_on(ssh),
+            )
+            .await
+            .map_err(|e| format!("{VITAL_POSTGRES}: {e}"))?;
+        is_base(&sent, base)?;
+        hlb_backup_run::lifeboat::mark_standby(target, &rehearsed.image, vol).await?;
+        from = sent.snapshot[..8.min(sent.snapshot.len())].to_string();
+    }
+    if from.is_empty() {
+        return Err(format!("{VITAL_POSTGRES} as rendered mounts no {data}").into());
+    }
+    // The receiver makes it at its first file: a bind of a path not there is refused.
+    let made = ssh
+        .run(&[
+            "install".into(),
+            "-d".into(),
+            "-o".into(),
+            wal_ship::POSTGRES_UID.to_string(),
+            "-g".into(),
+            wal_ship::POSTGRES_UID.to_string(),
+            "-m".into(),
+            "700".into(),
+            wal_ship::SITE_DIR.into(),
+        ])
+        .await?;
+    if !made.ok() {
+        return Err(format!("{} on the site: {}", wal_ship::SITE_DIR, made.stderr.trim()).into());
+    }
+    let spec = standby(rehearsed);
+    println!("  … {} starting as a standby", spec.name);
+    site.deploy(&spec).await?;
+    site.wait_healthy(&spec.name, HEALTHY_WITHIN_SECS)
+        .await
+        .map_err(|e| format!("{VITAL_POSTGRES}'s standby never became healthy: {e}"))?;
+    Ok(format!(
+        "{VITAL_POSTGRES} replaying on the site, from {from}"
+    ))
+}
+
+/// The volume holding the server's data directory: the one its base backup copies.
+fn data_volume(m: &Manifest) -> Option<String> {
+    m.spec.requires.iter().find_map(|c| match c {
+        hlb_types::Capability::Storage { name, copy, .. }
+            if copy.engine() == Some(hlb_types::DbEngine::Postgres) =>
+        {
+            Some(format!("{}-{name}", m.metadata.name))
+        }
+        _ => None,
+    })
+}
+
+/// The rehearsed vital server made the standby: the WAL the house pushed, read where
+/// the receiver writes it.
+fn standby(rehearsed: hlb_orchestrator::ServiceSpec) -> hlb_orchestrator::ServiceSpec {
+    let mut spec = rehearsed.bind(wal_ship::SITE_DIR, wal_ship::STANDBY_DIR, false);
+    spec.replicas = 1;
+    spec
 }
 
 /// The services and volumes a plan puts on the site.
@@ -586,6 +865,62 @@ fn collect(plan: &hlb_resolver::Plan, into: &mut Carried) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn catalog_vital() -> Manifest {
+        let catalog = hlb_catalog::Catalog::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../catalog"
+        )))
+        .expect("catalog");
+        catalog
+            .get(VITAL_POSTGRES)
+            .expect("in the catalog")
+            .manifest
+            .clone()
+    }
+
+    #[test]
+    fn the_standby_is_seeded_into_the_volume_the_base_backup_copies() {
+        assert_eq!(
+            data_volume(&catalog_vital()).as_deref(),
+            Some("postgres-vital-data")
+        );
+    }
+
+    #[test]
+    fn the_standby_reads_what_the_receiver_writes_and_archives_nothing() {
+        let mut rehearsed = hlb_orchestrator::ServiceSpec::new(VITAL_POSTGRES, "pg:17");
+        rehearsed.args = vec!["postgres".into()];
+        rehearsed.args.extend(wal_ship::standby_args());
+        rehearsed.replicas = 0;
+        let spec = standby(rehearsed);
+        assert_eq!(spec.replicas, 1, "it runs every day");
+        assert_eq!(
+            spec.binds,
+            vec![hlb_orchestrator::Bind {
+                source: wal_ship::SITE_DIR.into(),
+                target: wal_ship::STANDBY_DIR.into(),
+                read_only: false,
+            }],
+            "read and cleaned where the receiver writes"
+        );
+        assert!(spec.args.ends_with(&wal_ship::standby_args()));
+    }
+
+    #[test]
+    fn only_the_base_just_taken_seeds_the_standby() {
+        let sent = |id: &str| hlb_backup_run::lifeboat::Sent {
+            snapshot: id.into(),
+            bytes: 1,
+            sqlite: vec![],
+        };
+        let base = vec!["aaaaaaaa1111".to_string()];
+        assert!(is_base(&sent("aaaaaaaa1111"), &base).is_ok());
+        let older = is_base(&sent("bbbbbbbb2222"), &base).expect_err("an older base");
+        assert!(older.to_string().contains("bbbbbbbb"), "{older}");
+    }
+
     #[test]
     fn df_reads_free_then_total() {
         let out = "      Avail     1B-blocks\n30000000000 42006183936\n";
