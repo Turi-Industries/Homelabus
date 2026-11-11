@@ -697,6 +697,7 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
 
     let (_key_dir, hub) = reach(&state, &vault, &s).await?;
     // Said first: while promoted, the site serves, and the link only carries the rest.
+    let promoted = matches!(promote::since(hub.as_ref()).await, Ok(Some(_)));
     if let Ok(Some(since)) = promote::since(hub.as_ref()).await {
         println!("  ⚠️  promoted since {since}: the site serves the vital apps");
     }
@@ -741,6 +742,8 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
         }
     }
 
+    all &= wal_status(&state, hub.as_ref(), promoted, now).await?;
+
     // Each vital name's public records, read as the authority reads them the night the
     // site is promoted: a name still naming the house gets no certificate there.
     match hub.read_file(hlb_engine::lifeboat::PROMOTE_SCRIPT).await {
@@ -759,6 +762,50 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The vital server's WAL on its way to the site's standby, said line by line; false on
+/// a fault. Nothing to say while the house runs no vital server.
+async fn wal_status(state: &State, hub: &dyn Runner, promoted: bool, now: u64) -> Result<bool> {
+    use hlb_backup::wal_ship;
+    use hlb_orchestrator::Orchestrator as _;
+    use hlb_types::VITAL_POSTGRES;
+    if state.app_manifest(VITAL_POSTGRES).await.is_err() {
+        return Ok(true);
+    }
+    let waiting = match hlb_orchestrator::SwarmOrchestrator::connect().await {
+        Ok(house) => house
+            .exec_in_service(
+                VITAL_POSTGRES,
+                &["sh".into(), "-c".into(), wal_ship::waiting_command()],
+            )
+            .await
+            .ok()
+            .filter(|o| o.ok())
+            .and_then(|o| o.stdout.trim().parse().ok()),
+        Err(_) => None,
+    };
+    let probe = hub
+        .run(&[
+            "sh".into(),
+            "-c".into(),
+            wal_ship::site_probe_script(VITAL_POSTGRES),
+        ])
+        .await?;
+    let site = wal_ship::parse_site(&probe.stdout);
+    let mut fine = true;
+    for said in wal_ship::judge(waiting, &site, promoted, now) {
+        let mark = match said.mark {
+            wal_ship::Mark::Fine => "✓",
+            wal_ship::Mark::Unknown => "⚠️ ",
+            wal_ship::Mark::Fault => {
+                fine = false;
+                "🔴"
+            }
+        };
+        println!("  {mark} {}", said.line);
+    }
+    Ok(fine)
 }
 
 /// Every A and AAAA record of `name`, CNAMEs followed, from a public resolver. Either

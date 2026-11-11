@@ -305,9 +305,326 @@ pub fn written_past(house: (u32, u64), history: &str) -> String {
     }
 }
 
+/// The segment holding `lsn` on `timeline`, as PostgreSQL names it: 16 MB segments,
+/// the catalog's. Computed here: `pg_walfile_name` refuses to run on a standby.
+pub fn segment_name(timeline: u32, lsn: u64) -> String {
+    format!(
+        "{timeline:08X}{:08X}{:08X}",
+        lsn >> 32,
+        (lsn & 0xFFFF_FFFF) >> 24
+    )
+}
+
+/// A file waiting at home past this many minutes means the pusher does not reach the
+/// site: it pushes every [`PUSH_EVERY_S`].
+pub const WAITING_MINUTES: u32 = 5;
+
+/// Counts what waits at home for the site past [`WAITING_MINUTES`], in the server's
+/// container.
+pub fn waiting_command() -> String {
+    format!("find {ARCHIVE_DIR} -name '*{SUFFIX}' -mmin +{WAITING_MINUTES} | wc -l")
+}
+
+/// Run on the site: when it last received, the newest segment it holds, and how the
+/// vital server's standby stands — `key=value` lines, read by [`parse_site`].
+pub fn site_probe_script(service: &str) -> String {
+    format!(
+        r#"echo "received=$(cat {SITE_RECEIVED} 2>/dev/null)"
+n=$(ls {SITE_DIR} 2>/dev/null | grep -E '^[0-9A-F]{{24}}\{SUFFIX}$' | sort | tail -n 1)
+echo "newest=${{n%{SUFFIX}}}"
+id=$(docker ps -q --filter label=com.docker.swarm.service.name={service} | head -n 1)
+if [ -n "$id" ]; then
+    echo "standby=$(docker exec -u postgres "$id" psql -XqtA -c '{STANDBY_SQL}' 2>&1 | tr '\n' ' ')"
+else
+    echo "standby="
+fi
+"#
+    )
+}
+
+/// What the standby is asked: whether it still replays, on which timeline, and where.
+const STANDBY_SQL: &str =
+    "SELECT pg_is_in_recovery(), timeline_id, pg_last_wal_replay_lsn() FROM pg_control_checkpoint()";
+
+/// The vital server's standby, as the site reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Standby {
+    /// No task of it runs.
+    Absent,
+    Replaying {
+        timeline: u32,
+        lsn: Option<u64>,
+    },
+    /// Out of recovery: the server the site serves from, or a standby gone astray.
+    Writing,
+    Unread(String),
+}
+
+/// What [`site_probe_script`] said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteWal {
+    /// When it last received a file, seconds since the epoch.
+    pub received: Option<u64>,
+    /// The newest whole segment it holds.
+    pub newest: Option<String>,
+    pub standby: Standby,
+}
+
+pub fn parse_site(out: &str) -> SiteWal {
+    let field = |k: &str| {
+        out.lines()
+            .find_map(|l| l.strip_prefix(k)?.strip_prefix('='))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    let standby = match field("standby") {
+        None => Standby::Absent,
+        Some(v) => {
+            let f: Vec<&str> = v.split('|').collect();
+            match (f.first().copied(), f.get(1).and_then(|t| t.parse().ok())) {
+                (Some("t"), Some(timeline)) => Standby::Replaying {
+                    timeline,
+                    lsn: f.get(2).and_then(|l| parse_lsn(l)),
+                },
+                (Some("f"), Some(_)) => Standby::Writing,
+                _ => Standby::Unread(v.to_string()),
+            }
+        }
+    };
+    SiteWal {
+        received: field("received").and_then(|v| v.parse().ok()),
+        newest: field("newest").map(str::to_string),
+        standby,
+    }
+}
+
+/// How a line of the WAL's state reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Fine,
+    /// Not read: never said fine.
+    Unknown,
+    Fault,
+}
+
+/// One line of the WAL's state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Said {
+    pub mark: Mark,
+    pub line: String,
+}
+
+/// How long since `then`, for a person.
+fn ago(now: u64, then: u64) -> String {
+    let s = now.saturating_sub(then);
+    match s {
+        0..=119 => format!("{s} s ago"),
+        120..=7199 => format!("{} min ago", s / 60),
+        _ => format!("{} h ago", s / 3600),
+    }
+}
+
+/// The WAL's way to the site, judged: what waits at home (`None`: unread), what the
+/// site received, and its standby — `promoted` when the site serves from it.
+///
+/// 🔴 A standby that answers is not one that replays: one stopped at a missing segment
+/// stays healthy and answers reads for ever. It is stopped when the site holds a newer
+/// segment than the one it replays and received nothing for two minutes.
+pub fn judge(waiting: Option<u64>, site: &SiteWal, promoted: bool, now: u64) -> Vec<Said> {
+    let mut out = Vec::new();
+    let mut say = |mark: Mark, line: String| out.push(Said { mark, line });
+    match waiting {
+        Some(0) => say(
+            Mark::Fine,
+            "WAL — nothing waits at home for the site".into(),
+        ),
+        Some(n) => say(
+            Mark::Fault,
+            format!(
+                "WAL — {n} file(s) wait at home for over {WAITING_MINUTES} min: the pusher \
+                 does not reach the site (docker service logs hlb-wal-push)"
+            ),
+        ),
+        None => say(
+            Mark::Unknown,
+            "WAL — what waits at home could not be read".into(),
+        ),
+    }
+    match site.received {
+        Some(t) => say(
+            Mark::Fine,
+            format!("WAL — last file received {}", ago(now, t)),
+        ),
+        None => say(
+            Mark::Unknown,
+            "WAL — the site has received nothing yet".into(),
+        ),
+    }
+    let quiet = site.received.is_none_or(|t| now.saturating_sub(t) > 120);
+    match (&site.standby, promoted) {
+        (Standby::Writing, true) => {}
+        (Standby::Writing, false) => say(
+            Mark::Fault,
+            "standby — out of recovery with the site not promoted: it follows nothing; \
+             the next lifeboat seeds another"
+                .into(),
+        ),
+        (Standby::Absent, true) => say(
+            Mark::Fault,
+            "standby — promoted, and no task of it runs: the vital apps have no database".into(),
+        ),
+        (Standby::Absent, false) => say(
+            Mark::Fault,
+            "standby — none runs on the site: the next lifeboat seeds one \
+             (hlb site lifeboat --apply)"
+                .into(),
+        ),
+        (Standby::Unread(why), _) => {
+            say(Mark::Fault, format!("standby — could not be read: {why}"))
+        }
+        (Standby::Replaying { lsn: None, .. }, _) => say(
+            Mark::Fault,
+            "standby — in recovery, and replayed nothing yet".into(),
+        ),
+        (
+            Standby::Replaying {
+                timeline,
+                lsn: Some(lsn),
+            },
+            _,
+        ) => {
+            let at = segment_name(*timeline, *lsn);
+            match &site.newest {
+                Some(newest) if *newest > at && quiet => say(
+                    Mark::Fault,
+                    format!(
+                        "standby — stopped in {at} while the site holds {newest}: a segment \
+                         is missing; the next lifeboat seeds it again"
+                    ),
+                ),
+                _ => say(
+                    Mark::Fine,
+                    format!(
+                        "standby — replayed to {:X}/{:X} ({at})",
+                        lsn >> 32,
+                        lsn & 0xFFFF_FFFF
+                    ),
+                ),
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_segment_is_named_as_postgresql_names_it() {
+        assert_eq!(segment_name(1, 0x500_0148), "000000010000000000000005");
+        assert_eq!(
+            segment_name(2, (1 << 32) | 0x1F00_0000),
+            "00000002000000010000001F"
+        );
+    }
+
+    #[test]
+    fn the_site_s_probe_is_read_back() {
+        let out = "received=1700000000\nnewest=000000010000000000000007\nstandby=t|1|0/7000060 \n";
+        assert_eq!(
+            parse_site(out),
+            SiteWal {
+                received: Some(1_700_000_000),
+                newest: Some("000000010000000000000007".into()),
+                standby: Standby::Replaying {
+                    timeline: 1,
+                    lsn: Some(0x700_0060)
+                },
+            }
+        );
+        let none = parse_site("received=\nnewest=\nstandby=\n");
+        assert_eq!(none.received, None);
+        assert_eq!(none.newest, None);
+        assert_eq!(none.standby, Standby::Absent);
+        assert!(matches!(
+            parse_site("standby=psql: error: connection refused ").standby,
+            Standby::Unread(_)
+        ));
+        assert_eq!(
+            parse_site("standby=f|2|0/9000000").standby,
+            Standby::Writing
+        );
+        let script = site_probe_script("postgres-vital");
+        let out = std::process::Command::new("sh")
+            .args(["-n", "-c", &script])
+            .output()
+            .expect("sh");
+        assert!(out.status.success(), "{script}");
+    }
+
+    #[test]
+    fn a_standby_stopped_at_a_missing_segment_is_a_fault_though_it_answers() {
+        let now = 1_700_000_000;
+        let replaying = |lsn: u64, newest: &str, received: u64| SiteWal {
+            received: Some(received),
+            newest: Some(newest.into()),
+            standby: Standby::Replaying {
+                timeline: 1,
+                lsn: Some(lsn),
+            },
+        };
+        let faults = |s: &SiteWal, promoted: bool| -> Vec<String> {
+            judge(Some(0), s, promoted, now)
+                .into_iter()
+                .filter(|l| l.mark == Mark::Fault)
+                .map(|l| l.line)
+                .collect()
+        };
+        // Up to date: replaying the segment after the newest received.
+        assert!(faults(
+            &replaying(0x800_0000, "000000010000000000000007", now - 400),
+            false
+        )
+        .is_empty());
+        // Behind while files still arrive: catching up, no fault yet.
+        assert!(faults(
+            &replaying(0x500_0000, "000000010000000000000007", now - 10),
+            false
+        )
+        .is_empty());
+        // Behind, and nothing arrived for minutes: stopped.
+        let stuck = faults(
+            &replaying(0x500_0000, "000000010000000000000007", now - 400),
+            false,
+        );
+        assert!(
+            stuck.len() == 1 && stuck[0].contains("missing"),
+            "{stuck:?}"
+        );
+        // Out of recovery without a promotion follows nothing; promoted, it serves.
+        let writing = SiteWal {
+            received: None,
+            newest: None,
+            standby: Standby::Writing,
+        };
+        assert_eq!(faults(&writing, false).len(), 1);
+        assert!(faults(&writing, true).is_empty());
+        // Files waiting at home are the pusher's fault, whatever the site says.
+        let w = judge(
+            Some(3),
+            &replaying(0x800_0000, "000000010000000000000007", now),
+            false,
+            now,
+        );
+        assert!(
+            w[0].mark == Mark::Fault && w[0].line.contains("pusher"),
+            "{w:?}"
+        );
+        // Unread is never fine.
+        let u = judge(None, &writing, true, now);
+        assert_eq!(u[0].mark, Mark::Unknown, "{u:?}");
+    }
 
     #[test]
     fn a_position_reads_as_postgresql_writes_it() {
