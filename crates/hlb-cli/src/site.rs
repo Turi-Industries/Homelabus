@@ -29,6 +29,7 @@ pub mod announce;
 mod door;
 pub mod homecoming;
 pub mod lifeboat;
+pub mod litestream;
 pub mod pitr;
 pub mod promote;
 pub mod vital;
@@ -744,6 +745,7 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
     }
 
     all &= wal_status(&state, hub.as_ref(), promoted, now).await?;
+    all &= litestream::status(&state, &vault, hub.as_ref(), promoted, now).await?;
 
     // Each vital name's public records, read as the authority reads them the night the
     // site is promoted: a name still naming the house gets no certificate there.

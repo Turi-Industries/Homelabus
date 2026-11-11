@@ -84,7 +84,8 @@ pub async fn run(cli: &Cli, state: &State, vault: &Vault, apply: bool) -> Result
             );
             println!("            its backups first, the old one dropped once it answers");
         }
-        return super::wal::ship(cli, state, vault, false).await;
+        let wal = super::wal::ship(cli, state, vault, false).await?;
+        return Ok(super::litestream::ship(cli, state, vault, false).await? && wal);
     }
 
     if !installed {
@@ -118,8 +119,10 @@ pub async fn run(cli: &Cli, state: &State, vault: &Vault, apply: bool) -> Result
             }
         }
     }
-    // Moved or not, what the server holds goes to the site.
-    Ok(super::wal::ship(cli, state, vault, true).await? && ok)
+    // Moved or not, what the server holds goes to the site, and so does every vital
+    // SQLite.
+    let wal = super::wal::ship(cli, state, vault, true).await?;
+    Ok(super::litestream::ship(cli, state, vault, true).await? && wal && ok)
 }
 
 const VITAL: &str = hlb_types::VITAL_POSTGRES;

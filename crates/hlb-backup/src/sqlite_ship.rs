@@ -54,6 +54,18 @@ pub const META: &str = "/meta";
 /// since the epoch of the backup it came from — what the replica must be newer than.
 pub const COPIED_DIR: &str = "/etc/hlb/site/sqlite-copied";
 
+/// Beside [`COPIED_DIR`]'s mark, `<volume>-<database><DECIDED>`: the promotion already
+/// chose between the replica and the copy. The lifeboat removes it with each new copy.
+pub const DECIDED: &str = ".promoted";
+
+/// Run on the site by the lifeboat once it put `volume` there: when the backup it came
+/// from was taken, and the next promotion free to choose again.
+pub fn copied_script(volume: &str, taken: i64) -> String {
+    format!(
+        "mkdir -p {COPIED_DIR} && echo {taken} > {COPIED_DIR}/{volume} && rm -f {COPIED_DIR}/{volume}-*{DECIDED}\n"
+    )
+}
+
 /// The site account of `app`'s Litestream. An error when the name would not fit Linux.
 pub fn user(app: &str) -> Result<String, String> {
     let u = format!("{USER_PREFIX}{app}");
@@ -250,6 +262,10 @@ pub fn parse_discovered(out: &str) -> Result<Option<(String, Vec<String>)>, Stri
 ///
 /// 🔴 The copy's `-wal` and `-shm` go with it: a WAL left beside a database it was not
 /// written for is replayed into it at the next open.
+///
+/// 🔴 Decided once per promotion ([`DECIDED`]): a house back up while the site serves
+/// starts its Litestream, which pushes the house's own, older database as the replica's
+/// newest state; a promotion run again would put that over what the site wrote since.
 pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str) -> String {
     let replica = site_replica(user);
     let mut s = String::new();
@@ -262,6 +278,13 @@ pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str)
     format!(
         r#"from_replica() {{
     vol=$1; rep=$2; db=$3
+    done="{COPIED_DIR}/$vol-$(printf %s "$db" | tr / _){DECIDED}"
+    if [ -f "$done" ]; then
+        echo "  ✓ $db: put in place by this promotion's first run, kept"
+        return 0
+    fi
+    mkdir -p {COPIED_DIR}
+    : > "$done"
     newest=$(find "$rep/$db" -name '*.ltx' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)
     copied=$(cat {COPIED_DIR}/"$vol" 2>/dev/null || echo 0)
     if [ -z "$newest" ]; then
@@ -484,7 +507,10 @@ mod tests {
             "{s}"
         );
         // Under the promotion's `set -e`, a failed restore is an `if`'s condition.
-        assert!(s.contains("if tar -C \"$rep\" -cf - \"$db\" | docker run"), "{s}");
+        assert!(
+            s.contains("if tar -C \"$rep\" -cf - \"$db\" | docker run"),
+            "{s}"
+        );
         assert!(!s.contains("exit"), "{s}");
     }
 

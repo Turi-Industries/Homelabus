@@ -268,14 +268,9 @@ fn the_site_restores_every_row_written_before_the_cut() {
     assert_eq!(said.mark, hlb_backup::wal_ship::Mark::Fine, "{}", said.line);
 
     let step = sqlite_ship::promote_step(&user, COPY, &dbs, images::LITESTREAM);
-    let copied = format!("{}/{COPY}", sqlite_ship::COPIED_DIR);
-
     // A copy newer than the replica's last file serves as it is.
-    let out = site_sh(&format!(
-        "set -eu; mkdir -p {}; echo {} > {copied}; {step}",
-        sqlite_ship::COPIED_DIR,
-        now + 3600
-    ));
+    let copied = |at: u64| sqlite_ship::copied_script(COPY, at as i64);
+    let out = site_sh(&format!("set -eu; {}{step}", copied(now + 3600)));
     assert!(
         out.status.success(),
         "{}",
@@ -285,7 +280,7 @@ fn the_site_restores_every_row_written_before_the_cut() {
     assert_eq!(sql(COPY, "SELECT count(*) FROM t"), "1");
 
     // An older copy is replaced by the replica: every row, the stale journal gone.
-    let out = site_sh(&format!("set -eu; echo {} > {copied}; {step}", now - 3600));
+    let out = site_sh(&format!("set -eu; {}{step}", copied(now - 3600)));
     let (stdout, stderr) = (
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
@@ -306,10 +301,23 @@ fn the_site_restores_every_row_written_before_the_cut() {
         format!("{OWNER}\n{DB}")
     );
 
+    // Run again, the promotion keeps what the site wrote since: the replica may hold
+    // the house's older database by then.
+    sql(COPY, "INSERT INTO t(at) VALUES ('written on the site')");
+    let again = site_sh(&format!("set -eu; {step}"));
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert!(String::from_utf8_lossy(&again.stdout).contains("kept"));
+    assert_eq!(sql(COPY, "SELECT count(*) FROM t"), "22");
+
     // A replica that does not restore leaves the copy and never stops the promotion.
     let broken = site_sh(&format!(
-        "set -eu; find {}/{DB} -name '*.ltx' -exec sh -c 'printf garbage > \"$1\"' sh {{}} \\;; {step}",
-        sqlite_ship::site_replica(&user)
+        "set -eu; find {}/{DB} -name '*.ltx' -exec sh -c 'printf garbage > \"$1\"' sh {{}} \\;; {}{step}",
+        sqlite_ship::site_replica(&user),
+        copied(now - 3600)
     ));
     assert!(
         broken.status.success(),
@@ -317,7 +325,7 @@ fn the_site_restores_every_row_written_before_the_cut() {
         String::from_utf8_lossy(&broken.stderr)
     );
     assert!(String::from_utf8_lossy(&broken.stderr).contains("did not restore"));
-    assert_eq!(sql(COPY, "SELECT count(*) FROM t"), "21");
+    assert_eq!(sql(COPY, "SELECT count(*) FROM t"), "22");
 
     cleanup();
     let _ = std::fs::remove_dir_all(&dir);
