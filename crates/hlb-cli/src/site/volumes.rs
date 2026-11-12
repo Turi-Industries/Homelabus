@@ -268,7 +268,9 @@ pub async fn status(
     let house = SwarmOrchestrator::connect().await?;
     let mut fine = true;
     for (c, user) in all.iter().zip(&users) {
-        let running = matches!(house.status(user).await, Ok(s) if s.running_replicas > 0);
+        // Wanted and there: a pusher scaled to 0 by the return reads as gone.
+        let running = matches!(house.status(user).await,
+            Ok(s) if s.desired_replicas > 0 && s.running_replicas as u64 >= s.desired_replicas);
         let said = volume_ship::judge(
             &c.pushed.volume,
             volume_ship::parse_probe(&site, user),
