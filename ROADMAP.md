@@ -1780,7 +1780,26 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        home, emptied the site's replica and restarted the pusher. 205 KB snapshot,
        652 KB replica. One account per app rather than one `hlb-litestream`: a key
        read beside one app cannot rewrite another vital app's replica.
-     - 8d. The vital volumes pushed every minute, what changed only.
+     - 8d. The vital volumes pushed every minute, what changed only. Built 2026-11-12:
+       `hlb-vol-<volume>` (rclone 1.75.2) beside each carried
+       app's backed-up volume, read-only, root with `DAC_READ_SEARCH` alone, pushing
+       over SFTP into a chrooted account of its own on the VPS, every host key of the
+       site pinned; its SQLite left to Litestream, symbolic links to the copy, each
+       path's owner and mode listed after the files, the round's start written last.
+       The promotion streams the tree over last night's copy when that round began
+       after the copy's backup, deletes what the house deleted (never a SQLite file
+       or journal) and puts the owners back — once per promotion, and never from an
+       empty push. A volume on NFS, `copy: stopped` or an engine's stays nightly.
+       `cargo test -p hlb-backup --test volume_ship -- --ignored`: a Debian sshd, the
+       pinned image, two rounds, the step over an older copy. The lab, 2026-11-12: a
+       file written in Vaultwarden's volume at 12:00:53 as 1000:1000 mode 640, another
+       deleted, the house frozen at 12:01:33 once the site held the round; promoted,
+       the file was there with its owner and mode, the deleted one gone. A file
+       written on the site came home with the return (126 s), and both pushes read
+       ✓ 14 s after it. A round of an idle volume takes 0-1 s; a pusher holds 14 MiB
+       beside Vaultwarden, 40 beside PocketID (limit 128). The lab found every round
+       of Vaultwarden's failing: its volume holds no SQLite, and the search for one
+       ended on the last file's `[ … ] &&`.
      - 8e. Two sides: the house stops its vital apps once the link has been down past a
        delay, and starts them again with the link back and the site not promoted; the
        promotion waits until every house node's last handshake is older than that

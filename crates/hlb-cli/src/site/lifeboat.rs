@@ -564,6 +564,12 @@ async fn rebuild(
         .into_iter()
         .map(|(_, volume, _)| volume)
         .collect();
+    let pushed: Vec<String> = super::volumes::carried_among(state, &sel.apps)
+        .await?
+        .0
+        .into_iter()
+        .map(|c| c.pushed.volume)
+        .collect();
     let mut vital_spec = None;
     for (app, plan) in &plans {
         let backed_up: Vec<String> = state
@@ -604,9 +610,10 @@ async fn rebuild(
                 if !sent.sqlite.is_empty() {
                     line.push_str(&format!(", SQLite {}", sent.sqlite.join(", ")));
                 }
-                // What its replica must be newer than to replace it at the promotion —
-                // a copy restic took live as much as one put back consistent.
-                if sqlite_volumes.contains(vol) {
+                // What its replica or its pushed files must be newer than to replace
+                // it at the promotion — a copy restic took live as much as one put back
+                // consistent.
+                if sqlite_volumes.contains(vol) || pushed.contains(vol) {
                     let taken = sent.taken.ok_or_else(|| {
                         format!(
                             "{vol}: snapshot {} carries no readable time",
@@ -680,22 +687,30 @@ async fn rebuild(
     said.push(format!("{} ready, stopped", caddy_spec.name));
 
     // The promotion, and the door's file it puts in place.
-    let steps = super::litestream::promote_steps(state, &sel.apps).await?;
-    if !steps.is_empty() {
-        // Pulled now: the night of the promotion, a download is minutes the apps wait,
-        // and a registry out of reach leaves the replica unread (lab, 2026-11-11).
+    let files = super::volumes::promote_steps(state, &sel.apps).await?;
+    let sqlite = super::litestream::promote_steps(state, &sel.apps).await?;
+    // Pulled now: the night of the promotion, a download is minutes the apps wait, and
+    // a registry out of reach leaves the replica unread (lab, 2026-11-11).
+    for (any, image, what) in [
+        (!files.is_empty(), hlb_backup::images::RCLONE, "rclone"),
+        (
+            !sqlite.is_empty(),
+            hlb_backup::images::LITESTREAM,
+            "Litestream",
+        ),
+    ] {
+        if !any {
+            continue;
+        }
         let pulled = ssh
-            .run(&[
-                "docker".into(),
-                "pull".into(),
-                "-q".into(),
-                hlb_backup::images::LITESTREAM.into(),
-            ])
+            .run(&["docker".into(), "pull".into(), "-q".into(), image.into()])
             .await?;
         if !pulled.ok() {
-            return Err(format!("Litestream's image on the site: {}", pulled.stderr.trim()).into());
+            return Err(format!("{what}'s image on the site: {}", pulled.stderr.trim()).into());
         }
     }
+    // The files first: SQLite's replica is put back over the copy they leave.
+    let steps = super::volumes::joined(files.into_iter().chain(sqlite).collect());
     let script = lifeboat::promote_script(
         &lifeboat::start_order(&apps_services),
         &ingress.names,

@@ -26,11 +26,13 @@ pub mod restorability;
 pub mod retention;
 pub mod runner;
 pub mod schedule;
+pub mod sftp_account;
 pub mod snapshot;
 pub mod sqlite;
 pub mod sqlite_ship;
 pub mod tarball;
 pub mod verify;
+pub mod volume_ship;
 pub mod wal_ship;
 
 pub use destination::{

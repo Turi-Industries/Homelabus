@@ -22,3 +22,8 @@ pub const MARIADB_CLIENT: &str =
 /// replica format (LTX) is not 0.3's: the house's and the site's are one build.
 pub const LITESTREAM: &str =
     "litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b";
+
+/// rclone, pushing a vital app's volume to the site and laying it in place there: its
+/// image is Alpine, whose `sh`, `find` and `stat` both ends' scripts run on.
+pub const RCLONE: &str =
+    "rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5";

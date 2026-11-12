@@ -269,6 +269,74 @@ pub fn select(installed: &[(String, Manifest)]) -> Selection {
     sel
 }
 
+/// A carried app's volume the house pushes to the site every minute, from the node
+/// holding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pushed {
+    /// `<service>-<name>`, as the house and the site name it.
+    pub volume: String,
+    /// The service whose node holds it: the app, or its companion.
+    pub service: String,
+}
+
+/// What of `app`'s backed-up volumes is pushed every minute, and what the nightly copy
+/// alone carries, with why.
+pub fn pushed_volumes(app: &str, m: &Manifest) -> (Vec<Pushed>, Vec<(String, String)>) {
+    let mut pushed = Vec::new();
+    let mut nightly = Vec::new();
+    let mut judge = |service: String, name: &str, copy: hlb_types::VolumeCopy, nfs: bool| {
+        let volume = format!("{service}-{name}");
+        // A copy taken file after file while the app writes is what a push is: fine for
+        // files each written whole, never for a store whose files only make sense
+        // together (a later one names an earlier one the push already passed).
+        let why = match copy {
+            hlb_types::VolumeCopy::Live if nfs => {
+                Some("it lives on NFS, which a pusher pinned to a node would not see".to_string())
+            }
+            hlb_types::VolumeCopy::Live => None,
+            hlb_types::VolumeCopy::Stopped => {
+                Some("its files only make sense together (`copy: stopped`)".into())
+            }
+            hlb_types::VolumeCopy::PgBasebackup | hlb_types::VolumeCopy::MariadbBackup => {
+                Some("a database server's directory, copied by its engine's own tool".into())
+            }
+        };
+        match why {
+            None => pushed.push(Pushed { volume, service }),
+            Some(why) => nightly.push((volume, why)),
+        }
+    };
+    for c in &m.spec.requires {
+        if let Capability::Storage {
+            name,
+            path: _,
+            tier,
+            backup,
+            sqlite: _,
+            copy,
+            owner,
+        } = c
+        {
+            // Another app's volume is that app's to push; one never backed up starts
+            // empty on the site.
+            if owner.is_none() && *backup {
+                judge(
+                    app.to_string(),
+                    name,
+                    *copy,
+                    *tier == hlb_types::StorageTier::Nfs,
+                );
+            }
+        }
+    }
+    for c in &m.spec.companions {
+        for v in c.storage.iter().filter(|v| v.backup) {
+            judge(c.service(app), &v.name, v.copy, false);
+        }
+    }
+    (pushed, nightly)
+}
+
 /// The site's own Caddy: its volumes, the certificates and its configuration's.
 pub const CADDY_DATA: &str = "hlb-site-caddy-data";
 pub const CADDY_CONFIG: &str = "hlb-site-caddy-config";
@@ -749,6 +817,55 @@ spec:
 "#,
             ),
         )
+    }
+
+    #[test]
+    fn a_volume_is_pushed_when_its_files_stand_alone_and_it_sits_on_a_node() {
+        let (app, m) = manifest_pair(
+            "vw",
+            r#"
+apiVersion: hlb/v1
+kind: App
+metadata: { name: vw, criticality: vital }
+spec:
+  image: { repo: x/vw, tag: "1", digest: "sha256:abc" }
+  requires:
+    - { kind: storage, name: data, path: /data }
+    - { kind: storage, name: store, path: /store, copy: stopped }
+    - { kind: storage, name: media, path: /media, tier: nfs }
+    - { kind: storage, name: cache, path: /cache, backup: false }
+  companions:
+    - name: side
+      image: { repo: x/side, tag: "1", digest: "sha256:abc" }
+      storage:
+        - { name: keep, path: /keep, backup: true }
+        - { name: models, path: /models }
+  lifeboat: { returns: whole }
+"#,
+        );
+        let (pushed, nightly) = pushed_volumes(&app, &m);
+        assert_eq!(
+            pushed,
+            vec![
+                Pushed {
+                    volume: "vw-data".into(),
+                    service: "vw".into()
+                },
+                Pushed {
+                    volume: "vw-side-keep".into(),
+                    service: "vw-side".into()
+                },
+            ]
+        );
+        let names: Vec<&str> = nightly.iter().map(|(v, _)| v.as_str()).collect();
+        assert_eq!(names, vec!["vw-store", "vw-media"], "{nightly:?}");
+        // The catalog's PocketID: its volume pushed, its SQLite Litestream's.
+        let (app, m) = pocket_id();
+        assert_eq!(pushed_volumes(&app, &m).0.len(), 1);
+    }
+
+    fn manifest_pair(name: &str, yaml: &str) -> (String, Manifest) {
+        (name.to_string(), manifest(yaml))
     }
 
     fn normal(name: &str) -> (String, Manifest) {
