@@ -23,6 +23,23 @@ pub async fn since(site: &dyn Runner) -> Result<Option<String>> {
         .map(|s| s.trim().to_string()))
 }
 
+/// The house's own services of the apps the site carries, with the replicas each runs.
+pub(super) async fn house_services(
+    o: &dyn hlb_orchestrator::Orchestrator,
+    state: &hlb_state::State,
+    vault: &hlb_secrets::Vault,
+) -> std::result::Result<Vec<(String, u64)>, String> {
+    let mut services = Vec::new();
+    for app in super::lifeboat::apps(state, vault)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        let m = state.app_manifest(&app).await.map_err(|e| e.to_string())?;
+        services.extend(restore::replicas(o, &hlb_engine::services_of(&app, &m)).await);
+    }
+    Ok(services)
+}
+
 /// Stops the house's own copies of the carried apps, held until the return. Their names.
 async fn hold_house(
     state: &hlb_state::State,
@@ -31,14 +48,7 @@ async fn hold_house(
     let o = hlb_orchestrator::SwarmOrchestrator::connect()
         .await
         .map_err(|e| format!("this machine's Docker: {e}"))?;
-    let mut services = Vec::new();
-    for app in super::lifeboat::apps(state, vault)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        let m = state.app_manifest(&app).await.map_err(|e| e.to_string())?;
-        services.extend(restore::replicas(&o, &hlb_engine::services_of(&app, &m)).await);
-    }
+    let services = house_services(&o, state, vault).await?;
     restore::stop_held(
         &o,
         state,
@@ -78,19 +88,31 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let mut argv = vec![lifeboat::PROMOTE_SCRIPT.to_string()];
     if apply {
         // First, or the house's copies take writes the site never sees, for the LAN.
-        match hold_house(&state, &vault).await {
-            Ok(held) if held.is_empty() => {}
-            Ok(held) => println!(
-                "✓ the house's own {} stopped, held until the return",
-                held.join(", ")
-            ),
-            Err(e) => eprintln!(
-                "⚠️  the house's own copies could not be stopped ({e}): what they take \
-                 meanwhile is replaced at the return"
-            ),
-        }
+        // Only a house that stopped them says so: otherwise the site waits until the
+        // house's guard has, or refuses while the house still handshakes.
+        let stopped = match hold_house(&state, &vault).await {
+            Ok(held) if held.is_empty() => true,
+            Ok(held) => {
+                println!(
+                    "✓ the house's own {} stopped, held until the return",
+                    held.join(", ")
+                );
+                true
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  the house's own copies could not be stopped ({e}): the site \
+                     waits until the house's link has been silent long enough, and \
+                     refuses while it is not"
+                );
+                false
+            }
+        };
         println!("Promoting {}: each service started, then the door.", s.name);
         argv.push("--apply".into());
+        if stopped {
+            argv.push("--house-stopped".into());
+        }
     } else {
         println!(
             "Would stop the house's own copies first, held until the return: two copies \
@@ -109,6 +131,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     // Everything started and the door swapped, a name still without its certificate:
     // promoted, which the message for a promotion that stopped would deny.
     let uncertified = matches!(&out, Ok(o) if o.status == lifeboat::PROMOTED_WITHOUT_CERTIFICATE);
+    let house_up = matches!(&out, Ok(o) if o.status == hlb_engine::site_guard::HOUSE_UP);
     if !apply {
         return Ok(if ok {
             ExitCode::SUCCESS
@@ -126,6 +149,8 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
                 "ok"
             } else if uncertified {
                 "no-certificate"
+            } else if house_up {
+                "house-up"
             } else {
                 "failed"
             },
@@ -150,6 +175,12 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         );
         eprintln!("   certificate: its visitors are refused until one comes. Its public");
         eprintln!("   records must name the site.  hlb site status");
+        Ok(ExitCode::FAILURE)
+    } else if house_up {
+        eprintln!();
+        eprintln!("🔴 Not promoted: the house's own copies still serve, and the site");
+        eprintln!("   would be written beside them. Stop them, or wait for the house's");
+        eprintln!("   guard to once its link is down:  hlb site status");
         Ok(ExitCode::FAILURE)
     } else {
         if let Err(e) = &out {

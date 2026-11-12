@@ -358,6 +358,23 @@ exported — Homelabus never bills.
   sync` writes and reloads after `sshd -t`. A key read out of the container next to
   PocketID sees PocketID's replica and nothing else of the VPS.
 
+#### Decided by the owner, 2026-11-12
+
+- **The house stops after a delay of its own, counted past WireGuard's stale
+  handshake**: two minutes by default, `hlb config site-link` to change it. Handshakes
+  renew every ~120 s on a live tunnel, so a link is called down only past 180 s — a
+  shorter threshold would stop the apps on a healthy one. Both ends read the same
+  handshake by their own clock: no clock is compared with another. The promotion waits
+  until every house node's handshake is older than that plus a guard period and a
+  stop's grace (6 min at the default), and refuses while one is fresh.
+- **The watcher is a systemd timer running `hlb site guard`**, not `hlb-privd`: a
+  watcher must not depend on what it guards, and the daemon holds neither SSH nor `wg`.
+  On the node holding the state and the vault only; safe both ways, that node's link
+  down stops the house, any node handshaking holds the site back.
+- **8e is the default stop, the promotion's wait and the setting; 8e′ the other
+  choice** — the LAN kept served, the return comparing positions and asking — in a pull
+  request of its own.
+
 #### The phases
 
 In the order of risk — a theft is irreversible, a clumsy screen is not. Each phase closes
@@ -1803,8 +1820,17 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      - 8e. Two sides: the house stops its vital apps once the link has been down past a
        delay, and starts them again with the link back and the site not promoted; the
        promotion waits until every house node's last handshake is older than that
-       delay, so a house that is up has stopped. The other choice, `hlb config`, keeps
-       the LAN served and has the return compare positions and ask.
+       delay, so a house that is up has stopped. Built 2026-11-12: `hlb site guard`, a
+       timer every 30 s on the node holding the state (`hlb-site-guard.timer`, put
+       there by `site sync`), stops the carried services 300 s after the last handshake
+       at the default, held `the site link is down`; a fresh one and the site not
+       promoted, it starts them again — promoted, they stay held until the return. The
+       promotion reads `/etc/hlb/site/house-wait` (360 s), waits out what is left, exits
+       4 while a node still handshakes; `hlb site promote` passes `--house-stopped`
+       once it stopped them itself. `hlb config site-link --stop-after` tells the site
+       first when longer. Not yet proved on the lab.
+     - 8e′. The other choice, `hlb config`: the LAN kept served, the return comparing
+       positions and asking which side keeps its writes.
      - 8f. The gate again, the writes lost measured: a row written at home seconds
        before the cut, found on the site.
   9. Then Knot (the house signing, the VPS secondary) and OPNsense.
