@@ -107,11 +107,14 @@ pub fn env(t: &Target, user: &str, host_keys: &[String]) -> Vec<(String, String)
 /// Shell functions of the pusher, in the current directory: the SQLite files found by
 /// their header, as the backup pass finds them, and each as the anchored patterns that
 /// leave it and its journals out of a sync — escaped, a `[` in a name being a glob.
+/// An `if`, never `[ … ] && printf`: a last file that is no database would end the
+/// loop on 1, `find` would pass it on, and every round of Vaultwarden's volume — no
+/// SQLite in it — failed on the lab.
 fn sqlite_functions() -> &'static str {
     r#"sqlite_here() {
     find . -type f ! -name '*.partial' -exec sh -c '
         for f; do
-            [ "$(head -c 15 "$f" 2>/dev/null)" = "SQLite format 3" ] && printf "%s\n" "${f#.}"
+            if [ "$(head -c 15 "$f" 2>/dev/null)" = "SQLite format 3" ]; then printf "%s\n" "${f#.}"; fi
         done' sh {} +
 }
 as_patterns() {
@@ -399,6 +402,31 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("sleep \"$left\""), "{s}");
+    }
+
+    fn sqlite_here_in(dir: &std::path::Path) -> std::process::Output {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{}sqlite_here", sqlite_functions()))
+            .current_dir(dir)
+            .output()
+            .expect("sh runs")
+    }
+
+    #[test]
+    fn a_volume_holding_no_sqlite_still_pushes() {
+        let d = tempfile::tempdir().expect("dir");
+        std::fs::create_dir(d.path().join("attachments")).expect("subdir");
+        std::fs::write(d.path().join("attachments/a.bin"), b"not a database").expect("file");
+        std::fs::write(d.path().join("rsa_key.pem"), b"-----BEGIN").expect("file");
+        let out = sqlite_here_in(d.path());
+        assert!(out.status.success(), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+
+        std::fs::write(d.path().join("db.sqlite3"), b"SQLite format 3\0rest").expect("db");
+        let out = sqlite_here_in(d.path());
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "/db.sqlite3\n");
     }
 
     #[test]
