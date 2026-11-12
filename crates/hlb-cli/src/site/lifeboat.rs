@@ -254,6 +254,11 @@ pub async fn apps(state: &State, vault: &Vault) -> Result<Vec<String>> {
     Ok(lifeboat::select(&installed(state).await?).apps)
 }
 
+/// The apps the lifeboat last left on the site; none when it never ran there.
+pub async fn left_on_site(state: &State, vault: &Vault) -> Result<Vec<String>> {
+    Ok(carried(state, vault).await?.apps)
+}
+
 /// The names the lifeboat left on the site, for the door's promoted file.
 pub async fn names(state: &State, vault: &Vault) -> Result<Vec<String>> {
     Ok(carried(state, vault).await?.names)

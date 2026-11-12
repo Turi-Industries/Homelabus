@@ -344,15 +344,26 @@ only once the app answers; `site sync` does the same for a site added before. A 
 app installed afterwards is placed there directly.
 No plan ever moves a database: one planned elsewhere than it lives is refused.
 
+Both sides are never written at once. `site sync` puts a guard on the node holding the
+state, run every 30 s: once the link to the site has been down past WireGuard's 180 s
+and then a delay of the owner's (two minutes unless `config site-link` says otherwise),
+the vital apps stop, held; the link back and the site not promoted, they start again.
+The promotion, for its part, waits until no house node has handshaken for that long and
+a minute more, and refuses if one handshakes again meanwhile — unless `site promote`
+stopped the house's copies first.
+
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
-./target/debug/hlb site status               # each house node's last handshake; the WAL and each vital SQLite replica; each vital name's public records
-./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server and its WAL pusher, each vital SQLite's Litestream, each vital volume's rclone
+./target/debug/hlb site status               # each house node's last handshake; the WAL and each vital SQLite replica; the guard; each vital name's public records
+./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server and its WAL pusher, each vital SQLite's Litestream, each vital volume's rclone, the guard
 ./target/debug/hlb secret-get site-ntfy-reader-password   # the phone's, for the site's alerts
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
 ./target/debug/hlb site promote              # what the site would start and serve
 ./target/debug/hlb site promote --apply      # the site serves them, once each has its certificate
+./target/debug/hlb site guard                # the link as this node reads it, and what the guard would do
+./target/debug/hlb config site-link           # the delay, and how long the site's promotion waits for it
+./target/debug/hlb config site-link --stop-after 10m --apply   # told to the site first when longer
 ./target/debug/hlb site return               # what comes home, and from which snapshot
 ./target/debug/hlb site return --apply       # the site's writes replace the house's; the door goes home
 ./target/debug/hlb site announce             # each alert open, and what the page says of it
