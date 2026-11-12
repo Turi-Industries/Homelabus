@@ -261,6 +261,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     // Stopped first: a pusher running would push the house's database as it is
     // replaced. Left stopped if the return fails, the site serving again.
     super::litestream::stop(&state, &vault, &house).await?;
+    super::volumes::stop(&state, &vault, &house).await?;
     let outcome = bring(
         cli, &state, &vault, &house, &restore, &site, &socket, scratch, &all,
     )
@@ -299,6 +300,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     }
     println!("✓ the door sends every name home");
     super::litestream::resume(&state, &vault, &ssh, &house).await;
+    super::volumes::resume(&state, &vault, &ssh, &house).await;
     // Left running for the dumps, it would serve a copy of each database read until the
     // nightly lifeboat, which leaves everything stopped. Not before the door: a return
     // failing there gives the site its apps back, PostgreSQL first.

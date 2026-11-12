@@ -283,3 +283,14 @@ during an outage.
   snapshot and leaves the root's owner and mode alone (measured 2026-11-09,
   `hlb-backup-run/tests/lifeboat.rs`). Harmless while both copies descend from one
   backup; a volume whose root changed mode is not put back by the restore.
+- **🔴 A vital volume's push lays files over the copy, and SFTP keeps no owner**
+  (`volume_ship`, 2026-11-12). rclone writes each file as the site's account: the round
+  lists every path's owner and mode AFTER the files (what the sync sent is still there
+  to list), and the promotion puts them back. It deletes what the list does not name —
+  never a SQLite file or journal, which the push never carries and Litestream puts
+  back — and refuses a list naming only the root: a volume mounted fresh on the wrong
+  node pushes as empty, and laid over the copy it would delete everything. The round's
+  start is written LAST: a round cut short leaves the previous one's, older than what
+  it sent. The tree is streamed into the volume (`tar | docker run -i`), never bound:
+  the account's directory is 0700, and two archives in one pipe end at the first's
+  trailer.

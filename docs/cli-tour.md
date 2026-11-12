@@ -347,7 +347,7 @@ No plan ever moves a database: one planned elsewhere than it lives is refused.
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake; the WAL and each vital SQLite replica; each vital name's public records
-./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server and its WAL pusher, each vital SQLite's Litestream
+./target/debug/hlb site sync --apply         # a node joined or left: the link, the door, the watch, the vital server and its WAL pusher, each vital SQLite's Litestream, each vital volume's rclone
 ./target/debug/hlb secret-get site-ntfy-reader-password   # the phone's, for the site's alerts
 ./target/debug/hlb site lifeboat             # what it carries, what it refuses, its memory
 ./target/debug/hlb site lifeboat --apply     # rebuilt, proved healthy, stopped; a rehearsal
