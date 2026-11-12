@@ -366,7 +366,8 @@ exported — Homelabus never bills.
   shorter threshold would stop the apps on a healthy one. Both ends read the same
   handshake by their own clock: no clock is compared with another. The promotion waits
   until every house node's handshake is older than that plus a guard period and a
-  stop's grace (6 min at the default), and refuses while one is fresh.
+  stop's grace (6 min at the default), and refuses once one handshakes again while
+  it waits.
 - **The watcher is a systemd timer running `hlb site guard`**, not `hlb-privd`: a
   watcher must not depend on what it guards, and the daemon holds neither SSH nor `wg`.
   On the node holding the state and the vault only; safe both ways, that node's link
@@ -1826,7 +1827,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        at the default, held `the site link is down`; a fresh one and the site not
        promoted, it starts them again — promoted, they stay held until the return. The
        promotion reads `/etc/hlb/site/house-wait` (360 s), waits out what is left, exits
-       4 while a node still handshakes; `hlb site promote` passes `--house-stopped`
+       4 once a node handshakes again meanwhile — a recent handshake alone is the dead
+       house's last, the alert coming before it turns stale; `hlb site promote` passes `--house-stopped`
        once it stopped them itself. `hlb config site-link --stop-after` tells the site
        first when longer. Not yet proved on the lab.
      - 8e′. The other choice, `hlb config`: the LAN kept served, the return comparing

@@ -140,21 +140,26 @@ pub fn start_again(promoted: &Result<Option<String>, String>) -> bool {
 }
 
 /// The site's half: a shell function, `house_stopped`, that returns once every house
-/// node's last handshake is at least `$HOUSE_WAIT` seconds old and exits [`HOUSE_UP`]
-/// as soon as one is fresh.
+/// node's last handshake is at least `$HOUSE_WAIT` seconds old, and exits [`HOUSE_UP`]
+/// as soon as a node handshakes again while it waits.
+///
+/// 🔴 A handshake that is merely recent says nothing: the owner promotes when the
+/// alert comes, two to three minutes after a cut, while the dead house's last handshake
+/// is still under [`STALE_AFTER_SECS`]. A house that is up renews it within two minutes
+/// — a handshake dated after the wait began is the proof.
 ///
 /// A node that never handshook since the site's interface came up says nothing: a
 /// site rebooted while the house was down would otherwise wait forever. A link that
 /// cannot be read refuses: the house may be up, and only a person can say it is not.
 pub fn house_wait_fn() -> String {
     let wg = hlb_mesh::site::INTERFACE;
-    let stale = STALE_AFTER_SECS;
     let up = HOUSE_UP;
     let every = GUARD_EVERY_SECS;
     let default = promotion_waits(DEFAULT_STOP_AFTER_SECS);
     format!(
         r#"house_stopped() {{
     case "$HOUSE_WAIT" in ''|*[!0-9]*) HOUSE_WAIT={default} ;; esac
+    began=$(date +%s)
     while :; do
         now=$(date +%s)
         youngest=""
@@ -165,20 +170,20 @@ pub fn house_wait_fn() -> String {
         }}
         for t in $(echo "$seen" | awk '{{print $2}}'); do
             [ "$t" -gt 0 ] || continue
-            age=$((now - t))
-            if [ "$age" -le {stale} ]; then
-                echo "🔴 the house is up: a node's last handshake is $age s old, so its" >&2
-                echo "   vital apps still serve. Promoting would have both sides written." >&2
+            if [ "$t" -gt "$began" ]; then
+                echo "🔴 the house is up: a node handshook $((now - t)) s ago, after this began," >&2
+                echo "   so its vital apps still serve. Promoting would have both sides written." >&2
                 echo "   From the house: hlb site promote --apply stops them first." >&2
                 exit {up}
             fi
+            age=$((now - t))
             if [ -z "$youngest" ] || [ "$age" -lt "$youngest" ]; then youngest=$age; fi
         done
         [ -n "$youngest" ] || return 0
         [ "$youngest" -lt "$HOUSE_WAIT" ] || return 0
         left=$((HOUSE_WAIT - youngest))
-        echo "  … the house's last handshake is $youngest s old: it has stopped its vital" \
-            "apps at $HOUSE_WAIT s, waiting $left s more"
+        echo "  … the house's last handshake is $youngest s old; a house still up handshakes" \
+            "again, one cut stops its vital apps before $HOUSE_WAIT s: waiting $left s more"
         [ "$left" -le {every} ] || left={every}
         sleep "$left"
     done
@@ -270,7 +275,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let wg = dir.path().join("wg");
-        std::fs::write(&wg, format!("#!/bin/sh\nprintf '{handshakes}'\n")).expect("wg");
+        std::fs::write(&wg, format!("#!/bin/sh\nprintf \"{handshakes}\"\n")).expect("wg");
         std::fs::set_permissions(&wg, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let script = format!(
             "{}HOUSE_WAIT={house_wait}\nhouse_stopped\necho waited\n",
@@ -298,7 +303,7 @@ mod tests {
     #[test]
     fn an_unreadable_link_or_wait_never_lets_the_promotion_through_unasked() {
         // `wg` failing: the house may be up.
-        let (code, _, said) = wait("x' ; exit 1 ; '", 360);
+        let (code, _, said) = wait("x\" ; exit 1 ; \"", 360);
         assert_eq!(code, 1, "{said}");
         assert!(said.contains("--house-stopped"), "{said}");
     }
@@ -312,13 +317,21 @@ mod tests {
     }
 
     #[test]
-    fn the_promotion_refuses_a_house_still_handshaking() {
-        let (code, _, said) = wait(
-            &format!("old\\t{}\\nnew\\t{}\\n", epoch(999), epoch(5)),
-            360,
-        );
+    fn the_promotion_refuses_a_house_handshaking_again_while_it_waits() {
+        // A handshake dated after the wait began: what a house still up renews.
+        let (code, took, said) = wait("a\\t$(( $(date +%s) + 1 ))\\n", 360);
         assert_eq!(code, HOUSE_UP, "{said}");
         assert!(!said.contains("waited"), "{said}");
+        assert!(took.as_secs() < 2, "{took:?}");
+    }
+
+    #[test]
+    fn a_handshake_merely_recent_is_waited_out_not_refused() {
+        // The dead house's last handshake, 5 s before the owner promotes.
+        let (code, took, said) = wait(&format!("a\\t{}\\n", epoch(5)), 7);
+        assert_eq!(code, 0, "{said}");
+        assert!(said.ends_with("waited\n"), "{said}");
+        assert!((2..6).contains(&took.as_secs()), "{took:?}");
     }
 
     #[test]

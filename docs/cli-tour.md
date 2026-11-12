@@ -349,8 +349,8 @@ state, run every 30 s: once the link to the site has been down past WireGuard's 
 and then a delay of the owner's (two minutes unless `config site-link` says otherwise),
 the vital apps stop, held; the link back and the site not promoted, they start again.
 The promotion, for its part, waits until no house node has handshaken for that long and
-a minute more, and refuses while one still does — unless `site promote` stopped the
-house's copies first.
+a minute more, and refuses if one handshakes again meanwhile — unless `site promote`
+stopped the house's copies first.
 
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply

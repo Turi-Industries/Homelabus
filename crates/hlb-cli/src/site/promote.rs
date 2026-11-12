@@ -103,7 +103,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
                 eprintln!(
                     "⚠️  the house's own copies could not be stopped ({e}): the site \
                      waits until the house's link has been silent long enough, and \
-                     refuses while it is not"
+                     refuses if the house handshakes meanwhile"
                 );
                 false
             }
