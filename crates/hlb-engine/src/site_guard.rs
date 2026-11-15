@@ -11,6 +11,10 @@
 //! [`promotion_waits`] old, later by one guard period and a stop's grace. A site
 //! promoted early would be written beside a house still serving its LAN, and the return
 //! replaces what the house wrote.
+//!
+//! Unless the owner chose otherwise ([`OnCut::Serve`]): the house keeps serving its LAN,
+//! the site promotes once the link is merely down, and the return compares what each
+//! side wrote (`crate::site_return`).
 
 /// A handshake older than this is a link down: with a keepalive every 25 s, WireGuard
 /// renews its session every two minutes while the tunnel lives. A threshold below it
@@ -45,6 +49,46 @@ pub const HOUSE_UP: i32 = 4;
 
 /// The guard's systemd units on the house's node, `.service` and `.timer`.
 pub const UNIT: &str = "hlb-site-guard";
+
+/// What the house does once its link has been down past its delay. 🔴 A stored value
+/// (`settings`, `site-link-on-cut`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnCut {
+    /// Its vital apps stop, so a promoted site is the only side written: the owner's
+    /// default (2026-11-10).
+    #[default]
+    Stop,
+    /// Its LAN keeps being served: a site promoted meanwhile is written beside it, and
+    /// the return compares the two and asks which keeps its writes.
+    Serve,
+}
+
+impl OnCut {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            OnCut::Stop => "stop",
+            OnCut::Serve => "serve",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [OnCut::Stop, OnCut::Serve]
+            .into_iter()
+            .find(|o| o.as_str() == s.trim())
+    }
+}
+
+/// How long the site's promotion waits without a handshake from the house.
+///
+/// Serving its LAN, the house never stops: the wait only proves the link down — a
+/// handshake past [`STALE_AFTER_SECS`] is no live tunnel's —, and still refuses a house
+/// handshaking again, whose link is up and whose owner can move it the planned way.
+pub fn site_waits(on_cut: OnCut, stop_after: u64) -> u64 {
+    match on_cut {
+        OnCut::Stop => promotion_waits(stop_after),
+        OnCut::Serve => STALE_AFTER_SECS,
+    }
+}
 
 /// The handshake's age at which the house stops its vital apps.
 pub fn stops_at(stop_after: u64) -> u64 {
@@ -112,6 +156,9 @@ pub enum Act {
     Stop,
     /// The link is back: ask the site whether it was promoted meanwhile.
     AskSite,
+    /// Serving the LAN whatever the link: what the guard held before the owner chose
+    /// so starts again, unasked.
+    Start,
 }
 
 /// 🔴 A link that cannot be read is a link down: stopping when it was not needed costs a
@@ -119,7 +166,13 @@ pub enum Act {
 ///
 /// Between [`STALE_AFTER_SECS`] and [`stops_at`] nothing moves either way: a link going
 /// down is given its delay, one coming back must handshake afresh first.
-pub fn decide(link: &Link, stop_after: u64, held: &Held) -> Act {
+pub fn decide(link: &Link, stop_after: u64, on_cut: OnCut, held: &Held) -> Act {
+    if on_cut == OnCut::Serve {
+        return match held {
+            Held::ByGuard => Act::Start,
+            Held::Not | Held::Other(_) => Act::Nothing,
+        };
+    }
     let down = match link {
         Link::Never | Link::Unread(_) => true,
         Link::Age(age) => *age > stops_at(stop_after),
@@ -183,7 +236,7 @@ pub fn house_wait_fn() -> String {
         [ "$youngest" -lt "$HOUSE_WAIT" ] || return 0
         left=$((HOUSE_WAIT - youngest))
         echo "  … the house's last handshake is $youngest s old; a house still up handshakes" \
-            "again, one cut stops its vital apps before $HOUSE_WAIT s: waiting $left s more"
+            "again before $HOUSE_WAIT s: waiting $left s more"
         [ "$left" -le {every} ] || left={every}
         sleep "$left"
     done
@@ -197,6 +250,7 @@ mod tests {
     use super::*;
 
     const D: u64 = DEFAULT_STOP_AFTER_SECS;
+    const S: OnCut = OnCut::Stop;
 
     #[test]
     fn the_site_waits_past_the_house_stopping() {
@@ -219,32 +273,35 @@ mod tests {
     #[test]
     fn a_link_down_past_its_delay_stops_and_one_unread_does_too() {
         let not = Held::Not;
-        assert_eq!(decide(&Link::Age(stops_at(D) + 1), D, &not), Act::Stop);
-        assert_eq!(decide(&Link::Never, D, &not), Act::Stop);
-        assert_eq!(decide(&Link::Unread("x".into()), D, &not), Act::Stop);
+        assert_eq!(decide(&Link::Age(stops_at(D) + 1), D, S, &not), Act::Stop);
+        assert_eq!(decide(&Link::Never, D, S, &not), Act::Stop);
+        assert_eq!(decide(&Link::Unread("x".into()), D, S, &not), Act::Stop);
         // Inside the delay, and healthy: nothing.
-        assert_eq!(decide(&Link::Age(stops_at(D)), D, &not), Act::Nothing);
-        assert_eq!(decide(&Link::Age(30), D, &not), Act::Nothing);
+        assert_eq!(decide(&Link::Age(stops_at(D)), D, S, &not), Act::Nothing);
+        assert_eq!(decide(&Link::Age(30), D, S, &not), Act::Nothing);
     }
 
     #[test]
     fn only_a_fresh_handshake_starts_what_the_guard_held() {
         let ours = Held::ByGuard;
-        assert_eq!(decide(&Link::Age(5), D, &ours), Act::AskSite);
-        assert_eq!(decide(&Link::Age(STALE_AFTER_SECS), D, &ours), Act::AskSite);
+        assert_eq!(decide(&Link::Age(5), D, S, &ours), Act::AskSite);
+        assert_eq!(
+            decide(&Link::Age(STALE_AFTER_SECS), D, S, &ours),
+            Act::AskSite
+        );
         // Stale but within the delay: the link has not come back.
         assert_eq!(
-            decide(&Link::Age(STALE_AFTER_SECS + 1), D, &ours),
+            decide(&Link::Age(STALE_AFTER_SECS + 1), D, S, &ours),
             Act::Nothing
         );
-        assert_eq!(decide(&Link::Never, D, &ours), Act::Nothing);
+        assert_eq!(decide(&Link::Never, D, S, &ours), Act::Nothing);
     }
 
     #[test]
     fn a_hold_of_someone_else_is_theirs_to_release() {
         let other = Held::Other("the site serves it".into());
         for link in [Link::Never, Link::Age(5), Link::Age(10_000)] {
-            assert_eq!(decide(&link, D, &other), Act::Nothing);
+            assert_eq!(decide(&link, D, S, &other), Act::Nothing);
         }
         let carried = vec!["vaultwarden".to_string(), "pocket-id".to_string()];
         let h = |s: &str, w: &str| (s.to_string(), w.to_string());
@@ -261,6 +318,29 @@ mod tests {
             ),
             Held::Other("the site serves it".into())
         );
+    }
+
+    #[test]
+    fn a_house_serving_its_lan_never_stops_and_starts_what_the_guard_held() {
+        let serve = OnCut::Serve;
+        for link in [Link::Never, Link::Unread("x".into()), Link::Age(10_000)] {
+            assert_eq!(decide(&link, D, serve, &Held::Not), Act::Nothing);
+            // Held before the owner chose to serve: started, the link down or not.
+            assert_eq!(decide(&link, D, serve, &Held::ByGuard), Act::Start);
+            let other = Held::Other("the site serves it".into());
+            assert_eq!(decide(&link, D, serve, &other), Act::Nothing);
+        }
+    }
+
+    #[test]
+    fn serving_the_lan_the_site_waits_only_for_a_link_down() {
+        assert_eq!(site_waits(OnCut::Stop, D), promotion_waits(D));
+        assert_eq!(site_waits(OnCut::Serve, 3600), STALE_AFTER_SECS);
+        for o in [OnCut::Stop, OnCut::Serve] {
+            assert_eq!(OnCut::parse(o.as_str()), Some(o));
+        }
+        assert_eq!(OnCut::parse("stopped"), None);
+        assert_eq!(OnCut::default(), OnCut::Stop);
     }
 
     #[test]

@@ -10,6 +10,11 @@
 //! stopped, everything read, everything restored, the house started and healthy, and
 //! only then the door sent home. Anything failing before the door gives the site back
 //! its apps: a rerun reads them again, unchanged.
+//!
+//! Which side's writes are kept is compared first (`hlb_engine::site_return`): the
+//! side that alone wrote since the site took over, asked when both did while the house
+//! served its LAN. Keeping the house's, nothing at home is restored; the site's are read
+//! into the house's backups all the same, and named.
 
 use std::process::ExitCode;
 
@@ -19,6 +24,7 @@ use hlb_backup_run::placement::Place;
 use hlb_backup_run::restore::{self, Database, Failure, Restore};
 use hlb_bootstrap::Runner;
 use hlb_engine::lifeboat;
+use hlb_engine::site_return::{self, Choice, Keep};
 use hlb_orchestrator::{Orchestrator as _, SwarmOrchestrator};
 use hlb_resolver::Action;
 use hlb_secrets::Vault;
@@ -183,7 +189,7 @@ fn said(c: &Coming) -> String {
     }
 }
 
-pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
+pub async fn run(cli: &Cli, asked: Option<Keep>, apply: bool) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
     let Some(s) = super::load(&state, &vault).await? else {
@@ -240,6 +246,69 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
 
+    // Which side's writes are kept, before anything stops.
+    let apps: Vec<String> = all.iter().map(|c| c.app.clone()).collect();
+    let compared = super::positions::Coming {
+        apps: &apps,
+        databases: all
+            .iter()
+            .flat_map(|c| {
+                c.databases
+                    .iter()
+                    .map(|d| (c.app.clone(), d.name.clone(), d.server))
+            })
+            .collect(),
+        volumes: all
+            .iter()
+            .flat_map(|c| c.volumes.iter().map(|(v, _, _)| (c.app.clone(), v.clone())))
+            .collect(),
+    };
+    let seen = super::positions::seen(&state, &house, &ssh, &compared).await;
+    let on_cut = super::guard::on_cut(&state).await?;
+    println!("\nWritten since {} took over:", s.name);
+    for x in &seen {
+        println!(
+            "  {} — the house: {}; the site: {}",
+            x.what,
+            x.house.said(),
+            x.site.said()
+        );
+    }
+    let keep = match site_return::choose(on_cut, asked, &seen) {
+        Choice::Keep(k, why) => {
+            println!("Kept: the {}'s writes — {why}.", k.as_str());
+            k
+        }
+        Choice::Ask => {
+            println!();
+            println!("🔴 Both sides wrote while the house served its LAN: two copies written");
+            println!("   apart cannot be merged, so one side's writes are kept and the other's");
+            println!("   put in the house's backups, named. Say which:");
+            println!(
+                "     hlb site return --keep site --apply    the outage's writes, made on the site"
+            );
+            println!("     hlb site return --keep house --apply   the LAN's, made at home");
+            if apply {
+                eprintln!("\nNothing was changed: the site keeps serving.");
+                return Ok(ExitCode::FAILURE);
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+    };
+
+    if !apply && keep == Keep::House {
+        println!();
+        println!("Would stop the site's copies; read each database and volume on the site into");
+        println!("the house's backups (kind:from-site), named here, and restore none of them:");
+        println!("the house's copies keep serving, started if held. Then send their names home");
+        println!("from the door and take the site's Caddy and its certificates away. The");
+        println!("pushers of the vital SQLite databases and volumes are stopped first, what");
+        println!("they pushed to the site emptied once home, and each pusher started again.");
+        println!("🔴 What the site wrote since it took over is no longer served: it stays in");
+        println!("   those snapshots, restored by `hlb backup restore`.");
+        println!("Rerun with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
     if !apply {
         println!();
         println!("Would stop the house's own copies, and the site's; read each database and");
@@ -260,18 +329,27 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let site = SwarmOrchestrator::connect_unix(&socket).await?;
     let scratch = tmp.path();
     // Stopped first: a pusher running would push the house's database as it is
-    // replaced. Left stopped if the return fails, the site serving again.
+    // replaced. Left stopped if a return keeping the site's fails, the site serving
+    // again; keeping the house's, nothing was replaced and they start again.
     super::litestream::stop(&state, &vault, &house).await?;
     super::volumes::stop(&state, &vault, &house).await?;
     let outcome = bring(
-        cli, &state, &vault, &house, &restore, &site, &socket, scratch, &all,
+        cli, &state, &vault, &house, &restore, &site, &socket, scratch, &all, keep,
     )
-    .await;
+    .await
+    .map(|mut lines| {
+        lines.insert(0, format!("kept the {}'s writes", keep.as_str()));
+        lines
+    });
     let door = match &outcome {
         Ok(_) => Some(send_home(&state, &vault, &ssh, &s).await),
         Err(e) => {
             eprintln!("\n🔴 {e}");
-            back_to_site(&state, &house, &ssh, &all).await;
+            back_to_site(&state, &house, &ssh, &all, keep).await;
+            if keep == Keep::House {
+                super::litestream::restart(&state, &vault, &house).await;
+                super::volumes::restart(&state, &vault, &house).await;
+            }
             None
         }
     };
@@ -399,6 +477,7 @@ async fn bring(
     socket: &std::path::Path,
     scratch: &std::path::Path,
     all: &[Coming],
+    keep: Keep,
 ) -> std::result::Result<Vec<String>, String> {
     let mut lines = Vec::new();
     let mut say = |line: String| {
@@ -407,7 +486,8 @@ async fn bring(
     };
 
     // The house's copies held, if the promotion did not: from here on one copy writes.
-    for c in all {
+    // Kept, the house's serve on.
+    for c in all.iter().filter(|_| keep == Keep::Site) {
         let at = match c.volumes.first() {
             Some((_, _, place)) => restore.node_of(place).await,
             None => None,
@@ -426,7 +506,9 @@ async fn bring(
             .await
             .map_err(|e| e.to_string())?;
     }
-    say("the house's own copies stopped".into());
+    if keep == Keep::Site {
+        say("the house's own copies stopped".into());
+    }
 
     // The site's apps stopped, its PostgreSQL left running for the dumps.
     for c in all {
@@ -469,7 +551,9 @@ async fn bring(
     };
     let vital_image = if on(DbServer::PostgresVital) {
         // What the house wrote that never reached the site, said before it is replaced.
-        say(written_past(house, site).await);
+        if keep == Keep::Site {
+            say(written_past(house, site).await);
+        }
         image_of(state, VITAL_POSTGRES).await?
     } else {
         None
@@ -545,8 +629,9 @@ async fn bring(
         read.push((dbs, vols));
     }
 
-    // Restored over the house's, each backing up what it replaces.
-    for (c, (dbs, vols)) in all.iter().zip(&read) {
+    // Restored over the house's, each backing up what it replaces. Kept, the house's
+    // stay, and the site's are those snapshots.
+    for (c, (dbs, vols)) in all.iter().zip(&read).filter(|_| keep == Keep::Site) {
         for (d, b) in c.databases.iter().zip(dbs) {
             let name = &d.name;
             let admin_url = cli
@@ -654,12 +739,34 @@ fn failed(app: &str, what: &str, f: Failure) -> String {
 
 /// A return that stopped before the door: the site serves again, the house's copies
 /// stay held. Nothing at home has been given to anyone, so a rerun reads the site again.
+/// Keeping the house's writes, its copies serve on as they did: never stopped for the
+/// site.
 async fn back_to_site(
     state: &State,
     house: &SwarmOrchestrator,
     ssh: &hlb_bootstrap::SshRunner,
     all: &[Coming],
+    keep: Keep,
 ) {
+    if keep == Keep::House {
+        let argv = vec![lifeboat::PROMOTE_SCRIPT.to_string(), "--apply".into()];
+        match ssh.run(&argv).await {
+            Ok(o) if o.ok() => {
+                eprintln!("   The site serves them again, beside the house's copies.");
+                eprintln!("   Rerun `hlb site return --keep house --apply`.");
+            }
+            Ok(o) => eprintln!(
+                "   🔴 and the site did not start again: {}\n   {} --apply on the site",
+                o.stderr.trim(),
+                lifeboat::PROMOTE_SCRIPT
+            ),
+            Err(e) => eprintln!(
+                "   🔴 and the site could not be reached to start again: {e}\n   {} --apply on the site",
+                lifeboat::PROMOTE_SCRIPT
+            ),
+        }
+        return;
+    }
     // 🔴 The larger of the count read before and the one running now: a failure after
     // the house started released the promotion's hold, and held again at the 0 read
     // before, the next return would start them at 0 and send the door home to nothing.
@@ -691,8 +798,10 @@ async fn back_to_site(
     let served = ssh.run(&argv).await;
     match served {
         Ok(o) if o.ok() => {
+            // The same side named: the house's positions read as unknown now, its
+            // pushers stopped, and serving its LAN that alone would have it ask.
             eprintln!("   The site serves them again; the house's copies stay stopped.");
-            eprintln!("   Rerun `hlb site return --apply`: it reads the site again.");
+            eprintln!("   Rerun `hlb site return --keep site --apply`: it reads the site again.");
         }
         Ok(o) => eprintln!(
             "   🔴 and the site did not start again: {}\n   {} --apply on the site",

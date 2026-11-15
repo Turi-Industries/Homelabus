@@ -1840,7 +1840,34 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        healthy 76 s after it. Promoted with the link up: exit 4 at 121 s, the site
        untouched.
      - 8e′. The other choice, `hlb config`: the LAN kept served, the return comparing
-       positions and asking which side keeps its writes.
+       positions and asking which side keeps its writes. Built 2026-11-15, the design
+       agreed with the owner that day: `hlb config site-link --on-cut serve` — the
+       guard stops nothing (and starts what it held before), the site's promotion waits
+       180 s for a link down and still refuses a house handshaking again. The promotion
+       records where the sides part: the vital server's next transaction
+       (`/etc/hlb/site/promoted-xid`, right after `pg_promote`), each SQLite's
+       Litestream transaction restored and each volume's round laid, in their decision
+       marks. `hlb site return` reads each side against them, each by its own clock —
+       the transaction ids, Litestream's position at home (0.5 numbers on across
+       restarts, measured on the lab), the newest non-SQLite file of each volume — and
+       keeps the side that alone wrote, asking `--keep house|site` when both did while
+       the LAN was served. A position unread counts as written. Keeping the house's,
+       nothing is restored and the site's go into the house's backups, named. The lab,
+       2026-11-15, a row written on each side while both served: `site return` asked,
+       `--apply` alone refused and changed nothing; `--keep house` kept the house's row,
+       the site's found in the `kind:from-site` dump (44 s); `--keep site` the site's,
+       the house's found in the `kind:pre-restore` dump (2 min 15). Each side's 1
+       transaction read against the recorded xid. PocketID writes a few Litestream
+       transactions a minute idle and its start touches its volume, so with it among
+       the vital apps a served cut nearly always asks — "kept unasked" holds in the
+       tests, not on a house running PocketID. Met there: a `--keep house` return
+       failing left the house's pushers stopped, and the rerun read every house
+       position as unknown — they start again now, nothing at home having been
+       replaced, and the rerun read them (failure provoked by a table the app's role
+       could not dump); the site's Swarm manager stalled 20 s once on `service scale`
+       ("context deadline exceeded") and failed a promotion, which tries five times
+       now. A cut that drops only the host's traffic is not one: the pushers run in
+       containers, through `FORWARD` — `DOCKER-USER` too.
      - 8f. The gate again, the writes lost measured: a row written at home seconds
        before the cut, found on the site.
   9. Then Knot (the house signing, the VPS secondary) and OPNsense.

@@ -352,6 +352,16 @@ The promotion, for its part, waits until no house node has handshaken for that l
 a minute more, and refuses if one handshakes again meanwhile — unless `site promote`
 stopped the house's copies first.
 
+Or the owner keeps the LAN served (`config site-link --on-cut serve`): the guard stops
+nothing, the promotion waits only for a link down, and the return compares what each
+side wrote since the site took over — the vital server's next transaction, recorded by
+the promotion; each SQLite's Litestream transaction; each volume's files against the
+round laid. The side that alone wrote is kept unasked; both, and `--keep` says which —
+with PocketID among the vital apps, nearly always: it writes a few transactions a minute
+idle.
+The other side's writes are never dropped: the house's go into the copy each restore
+takes first, the site's into the house's backups (`kind:from-site`), each named.
+
 ```sh
 ./target/debug/hlb site add 203.0.113.7 --identity ~/.ssh/id_ed25519 --apply
 ./target/debug/hlb site status               # each house node's last handshake; the WAL and each vital SQLite replica; the guard; each vital name's public records
@@ -364,8 +374,10 @@ stopped the house's copies first.
 ./target/debug/hlb site guard                # the link as this node reads it, and what the guard would do
 ./target/debug/hlb config site-link           # the delay, and how long the site's promotion waits for it
 ./target/debug/hlb config site-link --stop-after 10m --apply   # told to the site first when longer
-./target/debug/hlb site return               # what comes home, and from which snapshot
-./target/debug/hlb site return --apply       # the site's writes replace the house's; the door goes home
+./target/debug/hlb config site-link --on-cut serve --apply     # the LAN kept served on a cut
+./target/debug/hlb site return               # what each side wrote since, whose is kept, from which snapshot
+./target/debug/hlb site return --apply       # the side that alone wrote kept; the door goes home
+./target/debug/hlb site return --keep house --apply   # both wrote: the house's kept, the site's into its backups
 ./target/debug/hlb site announce             # each alert open, and what the page says of it
 ./target/debug/hlb site announce services-budget --follow "Power cut in the street." --apply
 ./target/debug/hlb site announce services-budget --replace "Back tonight." --apply

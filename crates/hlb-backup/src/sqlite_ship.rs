@@ -139,7 +139,7 @@ pub fn config(databases: &[String], t: &Target, user: &str, host_key: &str) -> S
       host-key: "{pinned}"
       path: /{REPLICA}/{db}
 "#,
-            meta = db.replace('/', "__") + "-litestream",
+            meta = meta_dir(db),
             host = t.host,
             port = t.port,
         ));
@@ -218,8 +218,11 @@ pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str)
     fi
     # Marked once the choice is carried out, never before: a run cut mid-restore (an
     # image still downloading) chooses again, nothing having started on the copy yet.
-    decided() {{ mkdir -p {COPIED_DIR} && : > "$done"; }}
+    # The mark holds the transaction restored, where the house's own writes part from
+    # the site's: empty when the copy serves.
+    decided() {{ mkdir -p {COPIED_DIR} && printf '%s\n' "${{1:-}}" > "$done"; }}
     newest=$(find "$rep/$db" -name '*.ltx' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)
+    txid=$(find "$rep/$db" -name '*.ltx' 2>/dev/null | {LTX_TXID} | sort | tail -n 1)
     copied=$(cat {COPIED_DIR}/"$vol" 2>/dev/null || echo 0)
     if [ -z "$newest" ]; then
         echo "  ⚠️  $db: the site never received its replica: last night's copy serves" >&2
@@ -249,13 +252,95 @@ pub fn promote_step(user: &str, volume: &str, databases: &[String], image: &str)
             chown "$owner" "$out"
             mv -f "$out" "$db"' sh "$db"; then
         echo "  ✓ $db: restored from its replica, written to $(date -u -d "@$newest" +%H:%M:%S) UTC"
-    else
-        echo "  🔴 $db: its replica did not restore: last night's copy serves" >&2
+        decided "$txid"
+        return 0
     fi
+    echo "  🔴 $db: its replica did not restore: last night's copy serves" >&2
     decided
 }}
 {s}"#
     )
+}
+
+/// A filter from LTX paths to the last transaction each holds, 16 hex digits: Litestream
+/// 0.5 names a file `<first>-<last>.ltx`, and numbers a database's transactions on from
+/// its replica's across restarts (measured on 0.5.18: "detected database behind
+/// replica", then on). Fixed width, so `sort` orders them.
+pub const LTX_TXID: &str = r"sed -n 's/.*-\([0-9a-f]\{16\}\)\.ltx$/\1/p'";
+
+/// The decision's mark of `db` in `volume`, which [`promote_step`] writes and
+/// [`copied_script`] removes. The return reads it: its time is when the site began
+/// serving the database, and it holds the transaction restored.
+pub fn decided_mark(volume: &str, db: &str) -> String {
+    format!("{COPIED_DIR}/{volume}-{}{DECIDED}", db.replace('/', "_"))
+}
+
+/// Run in Litestream's container at home: the last transaction each database reached,
+/// `<db>=<txid>` lines, empty when none — its position is in memory ([`META`]).
+pub fn house_position_script(databases: &[String]) -> String {
+    databases
+        .iter()
+        .map(|db| {
+            format!(
+                "echo \"{db}=$(find {META}/{} -name '*.ltx' 2>/dev/null | {LTX_TXID} | sort | tail -n 1)\"\n",
+                meta_dir(db)
+            )
+        })
+        .collect()
+}
+
+/// Litestream's position directory of `db`, under [`META`].
+fn meta_dir(db: &str) -> String {
+    db.replace('/', "__") + "-litestream"
+}
+
+/// Run on the site as root, `image` there — Litestream's, which the promotion restored
+/// with: what the return compares the site's writes with, as `<db>.<key>=` lines.
+///
+/// - `txid`: the transaction the promotion restored, empty when the copy served.
+/// - `marked`: when the promotion decided, by the site's clock — `promoted` when it
+///   never decided for this database, the promotion's own mark.
+/// - `written`: the newest time of the database and its WAL, by the site's: an app
+///   opening it in WAL mode writes the WAL, so the site wrote unless it never started.
+pub fn site_since_script(
+    volume: &str,
+    databases: &[String],
+    image: &str,
+    promoted: &str,
+) -> String {
+    databases
+        .iter()
+        .map(|db| {
+            let mark = decided_mark(volume, db);
+            format!(
+                r#"mark={mark}
+[ -f "$mark" ] || mark={promoted}
+echo "{db}.txid=$(cat {mark} 2>/dev/null)"
+echo "{db}.marked=$(stat -c %Y "$mark" 2>/dev/null)"
+echo "{db}.written=$(docker run --rm --network none --read-only --cap-drop ALL \
+    --cap-add DAC_READ_SEARCH --mount "type=volume,src={volume},dst={MOUNTED_AT},readonly" \
+    --entrypoint sh {image} -c 'stat -c %Y "$1" "$1-wal" 2>/dev/null | sort -n | tail -n 1' \
+    sh "{MOUNTED_AT}/{db}")"
+"#
+            )
+        })
+        .collect()
+}
+
+/// The value of `key` in a probe's `<key>=<value>` lines; `None` when absent or empty.
+pub fn probed<'a>(out: &'a str, key: &str) -> Option<&'a str> {
+    out.lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+/// A transaction as the mark and the position script give it.
+pub fn parse_txid(s: &str) -> Option<u64> {
+    let s = s.trim();
+    (s.len() == 16)
+        .then(|| u64::from_str_radix(s, 16).ok())
+        .flatten()
 }
 
 /// Run on the site: the newest file each database's replica holds, `<db>=<epoch>`
@@ -454,6 +539,55 @@ mod tests {
         let restore = s.find("if tar -C").expect("restore");
         assert!(s.find("decided()").expect("defined") < restore, "{s}");
         assert!(s.rfind("    decided\n").expect("marked") > restore, "{s}");
+        // A restore marks the transaction it restored, read before the replica moved.
+        let txid = s.find("txid=$(find \"$rep/$db\"").expect("read");
+        assert!(txid < restore, "{s}");
+        assert!(s.find("decided \"$txid\"").expect("kept") > restore, "{s}");
+    }
+
+    #[test]
+    fn a_transaction_is_read_off_the_ltx_names() {
+        let names = "/r/db/ltx/0/0000000000000094-0000000000000099.ltx\n\
+                     /r/db/ltx/3/0000000000000001-0000000000000036.ltx\n\
+                     /r/db/ltx/0/notes.txt\n";
+        let out = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("printf '{names}' | {LTX_TXID} | sort | tail -n 1"),
+            ])
+            .output()
+            .expect("sh");
+        let last = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(parse_txid(&last), Some(0x99), "{last}");
+        assert_eq!(parse_txid(""), None);
+        assert_eq!(parse_txid("99"), None);
+        assert_eq!(
+            decided_mark("pocket-id-data", "sub/p.db"),
+            format!("{COPIED_DIR}/pocket-id-data-sub_p.db{DECIDED}")
+        );
+        let h = house_position_script(&["sub/p.db".into()]);
+        assert!(
+            h.starts_with("echo \"sub/p.db=$(find /meta/sub__p.db-litestream "),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn the_site_s_probe_falls_back_to_the_promotion_s_mark() {
+        let s = site_since_script("v", &["p.db".into()], "img", "/etc/hlb/site/promoted");
+        assert!(
+            s.contains("[ -f \"$mark\" ] || mark=/etc/hlb/site/promoted"),
+            "{s}"
+        );
+        // The transaction is the decision's only: the promotion's mark holds a date.
+        assert!(
+            s.contains(&format!("p.db.txid=$(cat {} ", decided_mark("v", "p.db"))),
+            "{s}"
+        );
+        assert!(s.contains("readonly"), "{s}");
+        let out = "p.db.txid=\np.db.marked=17\np.db.written=18\n";
+        assert_eq!(probed(out, "p.db.txid"), None);
+        assert_eq!(probed(out, "p.db.written"), Some("18"));
     }
 
     #[test]

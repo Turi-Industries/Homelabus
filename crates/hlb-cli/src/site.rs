@@ -32,6 +32,7 @@ pub mod homecoming;
 pub mod lifeboat;
 pub mod litestream;
 pub mod pitr;
+mod positions;
 pub mod promote;
 pub mod vital;
 pub mod volumes;
@@ -624,12 +625,19 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
         // A site added before the vital server existed gets it here.
         vital::run(cli, &state, &vault, false).await?;
         let delay = guard::stop_after(&state).await?;
-        println!(
-            "and the guard on this node: the vital apps stopped once the link has been \
-             down {} s, the site's promotion waiting {} s for it.",
-            hlb_engine::site_guard::stops_at(delay),
-            hlb_engine::site_guard::promotion_waits(delay)
-        );
+        let on_cut = guard::on_cut(&state).await?;
+        let wait = hlb_engine::site_guard::site_waits(on_cut, delay);
+        match on_cut {
+            hlb_engine::site_guard::OnCut::Stop => println!(
+                "and the guard on this node: the vital apps stopped once the link has been \
+                 down {} s, the site's promotion waiting {wait} s for it.",
+                hlb_engine::site_guard::stops_at(delay),
+            ),
+            hlb_engine::site_guard::OnCut::Serve => println!(
+                "and the guard on this node, the vital apps serving the LAN on a cut (`hlb \
+                 config site-link`), the site's promotion waiting {wait} s for a link down."
+            ),
+        }
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -656,9 +664,16 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
 /// The guard on this node, what it holds, and the site's wait against the delay.
 async fn guard_status(state: &State, hub: &dyn Runner) -> Result<bool> {
     let delay = guard::stop_after(state).await?;
+    let on_cut = guard::on_cut(state).await?;
     let stops = hlb_engine::site_guard::stops_at(delay);
     let mut ok = true;
-    if guard::active().await {
+    if on_cut == hlb_engine::site_guard::OnCut::Serve {
+        println!(
+            "  ⚠️  on a cut the vital apps keep serving the LAN, by choice: a site promoted \
+             meanwhile is written beside them, and `hlb site return` asks which side keeps \
+             its writes.  hlb config site-link"
+        );
+    } else if guard::active().await {
         println!("  ✓ guard: the vital apps stop once the link has been down {stops} s");
     } else {
         ok = false;
@@ -678,7 +693,7 @@ async fn guard_status(state: &State, hub: &dyn Runner) -> Result<bool> {
             held.join(", ")
         );
     }
-    let want = hlb_engine::site_guard::promotion_waits(delay);
+    let want = hlb_engine::site_guard::site_waits(on_cut, delay);
     // A site never told waits the default, which the house may have lengthened.
     let default =
         hlb_engine::site_guard::promotion_waits(hlb_engine::site_guard::DEFAULT_STOP_AFTER_SECS);
@@ -707,14 +722,17 @@ async fn guard_status(state: &State, hub: &dyn Runner) -> Result<bool> {
 /// order: a guard stopping the apps before the site waits for it is safe, the other way
 /// round a promotion could start beside a house still serving.
 async fn guard_site(cli: &Cli, state: &State, hub: &dyn Runner) -> bool {
-    let delay = match guard::stop_after(state).await {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("🔴 the site link's delay: {e}");
+    let (delay, wait) = match (
+        guard::stop_after(state).await,
+        guard::site_waits(state).await,
+    ) {
+        (Ok(d), Ok(w)) => (d, w),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("🔴 the site link's settings: {e}");
             return false;
         }
     };
-    match guard::push_wait(hub, delay).await {
+    match guard::push_wait(hub, wait).await {
         Ok(wait) => println!("  ✓ the site's promotion waits {wait} s without a handshake"),
         Err(e) => {
             eprintln!("🔴 the site's promotion wait ({e}): it waits the default");
@@ -723,9 +741,10 @@ async fn guard_site(cli: &Cli, state: &State, hub: &dyn Runner) -> bool {
     }
     match guard::install(cli).await {
         Ok(()) => {
+            let on_cut = guard::on_cut(state).await.unwrap_or_default();
             println!(
-                "  ✓ the guard on this node: the vital apps stop once the link has been down {} s",
-                hlb_engine::site_guard::stops_at(delay)
+                "  ✓ the guard on this node: on a cut, {}",
+                guard::rule(on_cut, delay)
             );
             true
         }

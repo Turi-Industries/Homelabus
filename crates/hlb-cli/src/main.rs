@@ -1168,15 +1168,21 @@ enum ConfigCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// How long the house's link to its site may be down before its vital apps stop,
-    /// past the 180 s WireGuard takes to call a handshake stale: so a promoted site is
-    /// the only side written. Without an option: the delay, and the site's promotion's
-    /// wait that follows from it.
+    /// What a cut of the house's link to its site does. By default its vital apps stop
+    /// once it has been down a delay past the 180 s WireGuard takes to call a handshake
+    /// stale, so a promoted site is the only side written; or they keep serving the
+    /// LAN, and `hlb site return` compares what each side wrote and asks which keeps
+    /// its writes. Without an option: the rule, and the site's promotion's wait that
+    /// follows from it.
     SiteLink {
         /// `2m` (the default), `10m`, `1h`. Longer keeps the house serving through
         /// longer cuts; the site's promotion then waits as much longer.
         #[arg(long)]
         stop_after: Option<String>,
+        /// `stop` (the default) or `serve`: the vital apps stopped on a cut, or the LAN
+        /// kept served beside a site that may be promoted.
+        #[arg(long)]
+        on_cut: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -2258,11 +2264,18 @@ enum SiteCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// Bring home what the site wrote while it served: the house's copies and the
+    /// Bring the vital apps home: what each side wrote since the site took over
+    /// compared, and the side that alone wrote kept — asked with `--keep` when both did
+    /// while the house served its LAN. Keeping the site's: the house's copies and the
     /// site's stopped, each database and volume read off the site into the house's
-    /// backups and restored over the house's — what the house held backed up first —,
-    /// the house started, the door sent home. Preview by default.
+    /// backups and restored over the house's, what the house held backed up first.
+    /// Keeping the house's: the site's read into the house's backups all the same,
+    /// named. Then the house started, the door sent home. Preview by default.
     Return {
+        /// `house` or `site`: whose writes are kept, the other's put in the house's
+        /// backups.
+        #[arg(long)]
+        keep: Option<String>,
         #[arg(long)]
         apply: bool,
     },
@@ -10062,7 +10075,15 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
                     SiteCmd::Promote { apply } => site::promote::run(&cli, *apply).await,
                     SiteCmd::Guard { apply } => site::guard::run(&cli, *apply).await,
-                    SiteCmd::Return { apply } => site::homecoming::run(&cli, *apply).await,
+                    SiteCmd::Return { keep, apply } => {
+                        let keep = match keep.as_deref() {
+                            None => None,
+                            Some("house") => Some(hlb_engine::site_return::Keep::House),
+                            Some("site") => Some(hlb_engine::site_return::Keep::Site),
+                            Some(v) => return Err(format!("--keep {v}: `house` or `site`").into()),
+                        };
+                        site::homecoming::run(&cli, keep, *apply).await
+                    }
                     SiteCmd::Announce {
                         id,
                         replace,
@@ -10942,9 +10963,25 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             ))
         }
 
-        Command::Config(ConfigCmd::SiteLink { stop_after, apply }) => {
+        Command::Config(ConfigCmd::SiteLink {
+            stop_after,
+            on_cut,
+            apply,
+        }) => {
+            let on_cut = match on_cut.as_deref() {
+                None => None,
+                Some(v) => Some(
+                    hlb_engine::site_guard::OnCut::parse(v)
+                        .ok_or_else(|| format!("--on-cut {v}: `stop` (the default) or `serve`"))?,
+                ),
+            };
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(site::guard::config(&cli, stop_after.as_deref(), *apply))
+            rt.block_on(site::guard::config(
+                &cli,
+                stop_after.as_deref(),
+                on_cut,
+                *apply,
+            ))
         }
 
         Command::Config(ConfigCmd::Exposure {

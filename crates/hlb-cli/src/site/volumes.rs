@@ -303,6 +303,24 @@ pub async fn stop(state: &State, vault: &Vault, house: &SwarmOrchestrator) -> Re
     Ok(())
 }
 
+/// A return keeping the house's writes that failed: nothing at home was replaced, so
+/// each pusher starts again, its tree on the site left as it was.
+pub async fn restart(state: &State, vault: &Vault, house: &SwarmOrchestrator) {
+    let all = match carried(state, vault).await {
+        Ok((all, _)) => all,
+        Err(e) => {
+            eprintln!("⚠️  the volume pushers could not be listed ({e}): hlb site sync --apply");
+            return;
+        }
+    };
+    for c in all {
+        let Ok(user) = c.user() else { continue };
+        if let Err(e) = house.scale(&user, 1).await {
+            eprintln!("⚠️  {user} did not start again ({e}): hlb site sync --apply");
+        }
+    }
+}
+
 /// Once the house holds what the site wrote: the site's pushed trees emptied — they
 /// follow a volume that is no longer the house's — and each pusher started again,
 /// pushing it whole. What failed is said; the next `site sync` deploys them again.
