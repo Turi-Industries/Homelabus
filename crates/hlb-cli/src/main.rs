@@ -1168,6 +1168,18 @@ enum ConfigCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// How long the house's link to its site may be down before its vital apps stop,
+    /// past the 180 s WireGuard takes to call a handshake stale: so a promoted site is
+    /// the only side written. Without an option: the delay, and the site's promotion's
+    /// wait that follows from it.
+    SiteLink {
+        /// `2m` (the default), `10m`, `1h`. Longer keeps the house serving through
+        /// longer cuts; the site's promotion then waits as much longer.
+        #[arg(long)]
+        stop_after: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
     /// The UPS the house reads through NUT, and when its apps stop for the power: on
     /// battery a while, or with little runtime left, they stop in waves — those nothing
     /// uses first, the databases last — and start again once the mains are steady.
@@ -2235,6 +2247,14 @@ enum SiteCmd {
     /// lifeboat leaves on the VPS, which SSH alone can run the night there is no house.
     /// Preview by default.
     Promote {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// The house's side of "never both written at once", run every 30 s by a timer
+    /// `hlb site sync` puts on this node: once the link to the site has been down past
+    /// its delay (`hlb config site-link`), the vital apps stop, held; the link back and
+    /// the site not promoted, they start again. Preview by default.
+    Guard {
         #[arg(long)]
         apply: bool,
     },
@@ -10040,6 +10060,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     SiteCmd::Sync { apply } => site::sync(&cli, *apply).await,
                     SiteCmd::Lifeboat { apply } => site::lifeboat::run(&cli, *apply).await,
                     SiteCmd::Promote { apply } => site::promote::run(&cli, *apply).await,
+                    SiteCmd::Guard { apply } => site::guard::run(&cli, *apply).await,
                     SiteCmd::Return { apply } => site::homecoming::run(&cli, *apply).await,
                     SiteCmd::Announce {
                         id,
@@ -10918,6 +10939,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 },
                 *apply,
             ))
+        }
+
+        Command::Config(ConfigCmd::SiteLink { stop_after, apply }) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(site::guard::config(&cli, stop_after.as_deref(), *apply))
         }
 
         Command::Config(ConfigCmd::Exposure {

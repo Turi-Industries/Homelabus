@@ -3325,6 +3325,21 @@ impl State {
         self.put_setting("crowdsec-url", url).await
     }
 
+    /// Seconds the house waits, past its site link's handshake turning stale, before its
+    /// vital apps stop (`hlb config site-link`); `None` for the default. The site holds
+    /// its own copy of what follows from it, written by `hlb site sync`.
+    pub async fn site_link_stop_after(&self) -> Result<Option<u64>> {
+        Ok(self
+            .setting("site-link-stop-after")
+            .await?
+            .and_then(|v| v.parse().ok()))
+    }
+
+    pub async fn set_site_link_stop_after(&self, secs: Option<u64>) -> Result<()> {
+        let v = secs.map(|s| s.to_string());
+        self.put_setting("site-link-stop-after", v.as_deref()).await
+    }
+
     /// When each mTLS leaf deployed as a service ends, in seconds since the epoch, by
     /// service name: written when one is issued, and by the controller from the
     /// certificate it was started with. A Swarm secret cannot be read back, so this is
@@ -10530,6 +10545,16 @@ steps:
         let history = s.uptime_history("gitea", 1).await.unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].1, Some(hlb_api::ServiceState::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn the_site_link_delay_is_kept_and_forgotten_on_none() {
+        let s = st().await;
+        assert_eq!(s.site_link_stop_after().await.unwrap(), None);
+        s.set_site_link_stop_after(Some(600)).await.unwrap();
+        assert_eq!(s.site_link_stop_after().await.unwrap(), Some(600));
+        s.set_site_link_stop_after(None).await.unwrap();
+        assert_eq!(s.site_link_stop_after().await.unwrap(), None);
     }
 
     #[tokio::test]

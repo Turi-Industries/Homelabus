@@ -27,6 +27,7 @@ use crate::{
 
 pub mod announce;
 mod door;
+pub mod guard;
 pub mod homecoming;
 pub mod lifeboat;
 pub mod litestream;
@@ -59,9 +60,7 @@ const TUNNEL: Tunnel<'static> = Tunnel {
     firewall_path: site::FIREWALL_PATH,
 };
 
-/// A handshake older than this is a link down: with a keepalive every 25 s, WireGuard
-/// renews its session every two minutes while the tunnel lives.
-const STALE_AFTER_SECS: u64 = 180;
+use hlb_engine::site_guard::STALE_AFTER_SECS;
 
 pub async fn load(state: &State, vault: &Vault) -> Result<Option<Site>> {
     Ok(match state.secret(TOPOLOGY).await? {
@@ -624,6 +623,13 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
         );
         // A site added before the vital server existed gets it here.
         vital::run(cli, &state, &vault, false).await?;
+        let delay = guard::stop_after(&state).await?;
+        println!(
+            "and the guard on this node: the vital apps stopped once the link has been \
+             down {} s, the site's promotion waiting {} s for it.",
+            hlb_engine::site_guard::stops_at(delay),
+            hlb_engine::site_guard::promotion_waits(delay)
+        );
         println!("Rerun with --apply.");
         return Ok(ExitCode::SUCCESS);
     }
@@ -634,7 +640,8 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     let door = open_door(&state, &vault, hub.as_ref(), &s).await;
     let watched = watch_site(&state, &vault, &s).await;
     let vital = vital::run(cli, &state, &vault, true).await?;
-    let all = linked && door && watched && vital;
+    let guarded = guard_site(cli, &state, hub.as_ref()).await;
+    let all = linked && door && watched && vital && guarded;
     let outcome = if all { "ok" } else { "partial" };
     state
         .audit("cli", ACTOR_ROLE, "site-sync", &s.name, outcome, None)
@@ -644,6 +651,89 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The guard on this node, what it holds, and the site's wait against the delay.
+async fn guard_status(state: &State, hub: &dyn Runner) -> Result<bool> {
+    let delay = guard::stop_after(state).await?;
+    let stops = hlb_engine::site_guard::stops_at(delay);
+    let mut ok = true;
+    if guard::active().await {
+        println!("  ✓ guard: the vital apps stop once the link has been down {stops} s");
+    } else {
+        ok = false;
+        println!("  🔴 guard: not running on this node — a cut leaves the vital apps serving");
+        println!("     beside a promoted site.  hlb site sync --apply");
+    }
+    let held: Vec<String> = state
+        .service_holds()
+        .await?
+        .into_iter()
+        .filter(|h| h.why == hlb_engine::site_guard::LINK_HOLD)
+        .map(|h| h.service)
+        .collect();
+    if !held.is_empty() {
+        println!(
+            "  ⚠️  {} stopped by the guard: the link was down; started again once it is back",
+            held.join(", ")
+        );
+    }
+    let want = hlb_engine::site_guard::promotion_waits(delay);
+    // A site never told waits the default, which the house may have lengthened.
+    let default =
+        hlb_engine::site_guard::promotion_waits(hlb_engine::site_guard::DEFAULT_STOP_AFTER_SECS);
+    match guard::site_wait(hub).await {
+        Ok(w) if w.unwrap_or(default) >= want => println!(
+            "  ✓ the site's promotion waits {} s without a handshake",
+            w.unwrap_or(default)
+        ),
+        Ok(w) => {
+            ok = false;
+            println!(
+                "  🔴 the site's promotion waits {} s, less than the {want} the house takes",
+                w.unwrap_or(default)
+            );
+            println!("     to stop: both sides could be written.  hlb site sync --apply");
+        }
+        Err(e) => {
+            ok = false;
+            println!("  🔴 the site's promotion wait unread: {e}");
+        }
+    }
+    Ok(ok)
+}
+
+/// The site told how long its promotion waits, then the guard put on this node. In that
+/// order: a guard stopping the apps before the site waits for it is safe, the other way
+/// round a promotion could start beside a house still serving.
+async fn guard_site(cli: &Cli, state: &State, hub: &dyn Runner) -> bool {
+    let delay = match guard::stop_after(state).await {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("🔴 the site link's delay: {e}");
+            return false;
+        }
+    };
+    match guard::push_wait(hub, delay).await {
+        Ok(wait) => println!("  ✓ the site's promotion waits {wait} s without a handshake"),
+        Err(e) => {
+            eprintln!("🔴 the site's promotion wait ({e}): it waits the default");
+            return false;
+        }
+    }
+    match guard::install(cli).await {
+        Ok(()) => {
+            println!(
+                "  ✓ the guard on this node: the vital apps stop once the link has been down {} s",
+                hlb_engine::site_guard::stops_at(delay)
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!("🔴 the guard on this node ({e}): a cut leaves the vital apps serving");
+            false
+        }
+    }
 }
 
 /// `wg show <if> latest-handshakes`: a public key and an epoch per line, 0 for never.
@@ -748,6 +838,7 @@ pub async fn status(cli: &Cli) -> Result<ExitCode> {
     all &= wal_status(&state, hub.as_ref(), promoted, now).await?;
     all &= litestream::status(&state, &vault, hub.as_ref(), promoted, now).await?;
     all &= volumes::status(&state, &vault, hub.as_ref(), promoted, now).await?;
+    all &= guard_status(&state, hub.as_ref()).await?;
 
     // Each vital name's public records, read as the authority reads them the night the
     // site is promoted: a name still naming the house gets no certificate there.

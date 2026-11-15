@@ -673,7 +673,8 @@ async fn back_to_site(
             (s.clone(), (*r).max(running))
         })
         .collect();
-    if let Err(e) = restore::stop_held(
+    let mut argv = vec![lifeboat::PROMOTE_SCRIPT.to_string(), "--apply".into()];
+    match restore::stop_held(
         house,
         state,
         &services,
@@ -682,11 +683,12 @@ async fn back_to_site(
     )
     .await
     {
-        eprintln!("   ⚠️  the house's own copies could not be held stopped: {e}");
+        // Said, though the site is still marked and waits for nobody: a mark lost
+        // would have it wait for a house whose link is up, and refuse.
+        Ok(()) => argv.push("--house-stopped".into()),
+        Err(e) => eprintln!("   ⚠️  the house's own copies could not be held stopped: {e}"),
     }
-    let served = ssh
-        .run(&[lifeboat::PROMOTE_SCRIPT.into(), "--apply".into()])
-        .await;
+    let served = ssh.run(&argv).await;
     match served {
         Ok(o) if o.ok() => {
             eprintln!("   The site serves them again; the house's copies stay stopped.");

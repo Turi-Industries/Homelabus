@@ -28,6 +28,8 @@ hlb-api.workspace = true
 hlb-users.workspace = true
 hlb-guide.workspace = true
 hlb-ingress.workspace = true
+# The site link's interface, which the guard and the promotion read (`site_guard`).
+hlb-mesh.workspace = true
 hlb-mail.workspace = true
 # The certificate Stalwart's submission port is served with, under Homelabus's root:
 # the same `openssl` path the root itself was made by.

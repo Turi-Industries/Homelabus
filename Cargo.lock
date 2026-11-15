@@ -1777,6 +1777,7 @@ dependencies = [
  "hlb-identity",
  "hlb-ingress",
  "hlb-mail",
+ "hlb-mesh",
  "hlb-objstore",
  "hlb-orchestrator",
  "hlb-platform",
