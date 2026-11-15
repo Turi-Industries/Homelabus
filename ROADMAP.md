@@ -1852,8 +1852,22 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        restarts, measured on the lab), the newest non-SQLite file of each volume — and
        keeps the side that alone wrote, asking `--keep house|site` when both did while
        the LAN was served. A position unread counts as written. Keeping the house's,
-       nothing is restored and the site's go into the house's backups, named. Still to
-       prove on the lab: a cut served on both sides, each `--keep`.
+       nothing is restored and the site's go into the house's backups, named. The lab,
+       2026-11-15, a row written on each side while both served: `site return` asked,
+       `--apply` alone refused and changed nothing; `--keep house` kept the house's row,
+       the site's found in the `kind:from-site` dump (44 s); `--keep site` the site's,
+       the house's found in the `kind:pre-restore` dump (2 min 15). Each side's 1
+       transaction read against the recorded xid. PocketID writes a few Litestream
+       transactions a minute idle and its start touches its volume, so with it among
+       the vital apps a served cut nearly always asks — "kept unasked" holds in the
+       tests, not on a house running PocketID. Met there: a `--keep house` return
+       failing left the house's pushers stopped, and the rerun read every house
+       position as unknown — they start again now, nothing at home having been
+       replaced, and the rerun read them (failure provoked by a table the app's role
+       could not dump); the site's Swarm manager stalled 20 s once on `service scale`
+       ("context deadline exceeded") and failed a promotion, which tries five times
+       now. A cut that drops only the host's traffic is not one: the pushers run in
+       containers, through `FORWARD` — `DOCKER-USER` too.
      - 8f. The gate again, the writes lost measured: a row written at home seconds
        before the cut, found on the site.
   9. Then Knot (the house signing, the VPS secondary) and OPNsense.

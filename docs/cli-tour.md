@@ -356,7 +356,9 @@ Or the owner keeps the LAN served (`config site-link --on-cut serve`): the guard
 nothing, the promotion waits only for a link down, and the return compares what each
 side wrote since the site took over — the vital server's next transaction, recorded by
 the promotion; each SQLite's Litestream transaction; each volume's files against the
-round laid. The side that alone wrote is kept unasked; both, and `--keep` says which.
+round laid. The side that alone wrote is kept unasked; both, and `--keep` says which —
+with PocketID among the vital apps, nearly always: it writes a few transactions a minute
+idle.
 The other side's writes are never dropped: the house's go into the copy each restore
 takes first, the site's into the house's backups (`kind:from-site`), each named.
 

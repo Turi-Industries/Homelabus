@@ -329,7 +329,8 @@ pub async fn run(cli: &Cli, asked: Option<Keep>, apply: bool) -> Result<ExitCode
     let site = SwarmOrchestrator::connect_unix(&socket).await?;
     let scratch = tmp.path();
     // Stopped first: a pusher running would push the house's database as it is
-    // replaced. Left stopped if the return fails, the site serving again.
+    // replaced. Left stopped if a return keeping the site's fails, the site serving
+    // again; keeping the house's, nothing was replaced and they start again.
     super::litestream::stop(&state, &vault, &house).await?;
     super::volumes::stop(&state, &vault, &house).await?;
     let outcome = bring(
@@ -345,6 +346,10 @@ pub async fn run(cli: &Cli, asked: Option<Keep>, apply: bool) -> Result<ExitCode
         Err(e) => {
             eprintln!("\n🔴 {e}");
             back_to_site(&state, &house, &ssh, &all, keep).await;
+            if keep == Keep::House {
+                super::litestream::restart(&state, &vault, &house).await;
+                super::volumes::restart(&state, &vault, &house).await;
+            }
             None
         }
     };
@@ -793,8 +798,10 @@ async fn back_to_site(
     let served = ssh.run(&argv).await;
     match served {
         Ok(o) if o.ok() => {
+            // The same side named: the house's positions read as unknown now, its
+            // pushers stopped, and serving its LAN that alone would have it ask.
             eprintln!("   The site serves them again; the house's copies stay stopped.");
-            eprintln!("   Rerun `hlb site return --apply`: it reads the site again.");
+            eprintln!("   Rerun `hlb site return --keep site --apply`: it reads the site again.");
         }
         Ok(o) => eprintln!(
             "   🔴 and the site did not start again: {}\n   {} --apply on the site",

@@ -633,7 +633,14 @@ ready() {{
         grep '^Up' | grep -qv -e '(health: starting)' -e '(unhealthy)'
 }}
 start() {{
-    docker service scale --detach "$1=1" >/dev/null
+    # Tried again: the site's manager once stalled 20 s on an update ("context deadline
+    # exceeded", lab 2026-11-15) and failed the promotion it took a cut to need.
+    n=0
+    until docker service scale --detach "$1=1" >/dev/null; do
+        n=$((n + 1))
+        [ "$n" -le 5 ] || {{ echo "$1 could not be started: docker service ps $1" >&2; exit 1; }}
+        sleep 5
+    done
     n=0
     until ready "$1"; do
         n=$((n + 1))

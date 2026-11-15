@@ -306,9 +306,10 @@ fn units(exe: &str, env: &[(&str, String)]) -> (String, String) {
     let every = site_guard::GUARD_EVERY_SECS;
     let service = format!(
         "# Written by Homelabus (`hlb site sync`): the vital apps stopped while the link\n\
-         # to the site is down, so a promoted site is the only side written.\n\
+         # to the site is down, so a promoted site is the only side written - or kept\n\
+         # serving the LAN, as `hlb config site-link` says.\n\
          [Unit]\n\
-         Description=Homelabus: vital apps stopped while the site link is down\n\
+         Description=Homelabus: the vital apps, as the site link stands\n\
          Wants=hlb-vault.service docker.service\n\
          After=hlb-vault.service docker.service\n\
          \n\

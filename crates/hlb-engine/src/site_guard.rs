@@ -236,7 +236,7 @@ pub fn house_wait_fn() -> String {
         [ "$youngest" -lt "$HOUSE_WAIT" ] || return 0
         left=$((HOUSE_WAIT - youngest))
         echo "  … the house's last handshake is $youngest s old; a house still up handshakes" \
-            "again, one cut stops its vital apps before $HOUSE_WAIT s: waiting $left s more"
+            "again before $HOUSE_WAIT s: waiting $left s more"
         [ "$left" -le {every} ] || left={every}
         sleep "$left"
     done
