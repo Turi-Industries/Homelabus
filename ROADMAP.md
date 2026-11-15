@@ -1830,7 +1830,15 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        4 once a node handshakes again meanwhile — a recent handshake alone is the dead
        house's last, the alert coming before it turns stale; `hlb site promote` passes `--house-stopped`
        once it stopped them itself. `hlb config site-link --stop-after` tells the site
-       first when longer. Not yet proved on the lab.
+       first when longer. The lab, 2026-11-15 (rebuilt, `scripts/lab/`), the site link
+       alone cut (UDP 51821), SSH house → VPS kept: promoted over SSH at the cut, the
+       last handshake 45 s old, the promotion waited it out to 360 s while the guard
+       stopped both apps at 311 s; the site served both names with their own
+       certificates 430 s after the cut. The link back, the guard kept them stopped
+       ("promoted … until `hlb site return`"); the return took 118 s. Cut without
+       promoting: stopped at 321 s, started again 16 s after the link came back,
+       healthy 76 s after it. Promoted with the link up: exit 4 at 121 s, the site
+       untouched.
      - 8e′. The other choice, `hlb config`: the LAN kept served, the return comparing
        positions and asking which side keeps its writes.
      - 8f. The gate again, the writes lost measured: a row written at home seconds
