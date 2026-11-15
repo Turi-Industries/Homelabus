@@ -6474,7 +6474,8 @@ pub(crate) async fn redeploy(
     };
     state.reset_plan(app).await?;
     println!();
-    execute_plan(cli, state, app, &plan, &storage, true, "redeploy").await?;
+    // The exit code is a verb's; the journal below says which action failed.
+    let _ = execute_plan(cli, state, app, &plan, &storage, true, "redeploy").await?;
     Ok(state
         .plan_actions(app)
         .await?
