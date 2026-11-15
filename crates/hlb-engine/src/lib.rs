@@ -31,6 +31,7 @@ pub mod reconcile;
 pub mod removal;
 pub mod roles;
 pub mod site_guard;
+pub mod site_return;
 pub mod site_watch;
 pub mod sources;
 pub mod stalwart_migrate;

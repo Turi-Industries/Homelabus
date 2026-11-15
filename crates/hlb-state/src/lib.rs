@@ -3340,6 +3340,17 @@ impl State {
         self.put_setting("site-link-stop-after", v.as_deref()).await
     }
 
+    /// What the house does once its site link has been down past that delay
+    /// (`hlb config site-link --on-cut serve`), as `hlb_engine::site_guard::OnCut` names it;
+    /// `None` for the default.
+    pub async fn site_link_on_cut(&self) -> Result<Option<String>> {
+        self.setting("site-link-on-cut").await
+    }
+
+    pub async fn set_site_link_on_cut(&self, on_cut: Option<&str>) -> Result<()> {
+        self.put_setting("site-link-on-cut", on_cut).await
+    }
+
     /// When each mTLS leaf deployed as a service ends, in seconds since the epoch, by
     /// service name: written when one is issued, and by the controller from the
     /// certificate it was started with. A Swarm secret cannot be read back, so this is
@@ -10555,6 +10566,13 @@ steps:
         assert_eq!(s.site_link_stop_after().await.unwrap(), Some(600));
         s.set_site_link_stop_after(None).await.unwrap();
         assert_eq!(s.site_link_stop_after().await.unwrap(), None);
+        s.set_site_link_on_cut(Some("serve")).await.unwrap();
+        assert_eq!(
+            s.site_link_on_cut().await.unwrap().as_deref(),
+            Some("serve")
+        );
+        s.set_site_link_on_cut(None).await.unwrap();
+        assert_eq!(s.site_link_on_cut().await.unwrap(), None);
     }
 
     #[tokio::test]

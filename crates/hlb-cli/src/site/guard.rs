@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use hlb_backup_run::restore;
 use hlb_bootstrap::{LocalRunner, Runner};
-use hlb_engine::site_guard::{self, Act, Held, Link};
+use hlb_engine::site_guard::{self, Act, Held, Link, OnCut};
 use hlb_mesh::site;
 use hlb_secrets::Vault;
 use hlb_state::State;
@@ -24,6 +24,30 @@ pub async fn stop_after(state: &State) -> Result<u64> {
         .site_link_stop_after()
         .await?
         .unwrap_or(site_guard::DEFAULT_STOP_AFTER_SECS))
+}
+
+/// What the house does on a cut, as the owner chose. 🔴 A value no version wrote reads
+/// as the default: stopping costs a minute of service, serving beside a promoted site
+/// a question at the return.
+pub async fn on_cut(state: &State) -> Result<OnCut> {
+    Ok(match state.site_link_on_cut().await? {
+        None => OnCut::default(),
+        Some(v) => OnCut::parse(&v).unwrap_or_else(|| {
+            eprintln!(
+                "⚠️  the site link's choice on a cut reads {v:?}, none this version knows: \
+                 the vital apps stop."
+            );
+            OnCut::default()
+        }),
+    })
+}
+
+/// How long the site's promotion should wait, from the house's settings.
+pub async fn site_waits(state: &State) -> Result<u64> {
+    Ok(site_guard::site_waits(
+        on_cut(state).await?,
+        stop_after(state).await?,
+    ))
 }
 
 /// This node's end of the link.
@@ -74,6 +98,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let delay = stop_after(&state).await?;
+    let on_cut = on_cut(&state).await?;
     let link = local_link().await;
     // No lifeboat, no promotion: stopping the house would leave nobody serving.
     if super::lifeboat::left_on_site(&state, &vault)
@@ -102,7 +127,7 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         .collect();
     let held = site_guard::held(&holds, &names);
     let stops_at = site_guard::stops_at(delay);
-    match (site_guard::decide(&link, delay, &held), &held) {
+    match (site_guard::decide(&link, delay, on_cut, &held), &held) {
         (Act::Nothing, Held::Other(why)) => {
             println!(
                 "{}; held stopped for \"{why}\": not the guard's.",
@@ -113,6 +138,15 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
         (Act::Nothing, Held::ByGuard) => {
             println!(
                 "{}: {} stay stopped until it handshakes afresh.",
+                says(&link),
+                names.join(", ")
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        (Act::Nothing, Held::Not) if on_cut == OnCut::Serve => {
+            println!(
+                "{}: {} serve the LAN whatever the link — a site promoted meanwhile is \
+                 written beside them, and `hlb site return` asks which keeps its writes.",
                 says(&link),
                 names.join(", ")
             );
@@ -172,7 +206,49 @@ pub async fn run(cli: &Cli, apply: bool) -> Result<ExitCode> {
             Ok(code)
         }
         (Act::AskSite, _) => ask_site(&state, &vault, &o, &s, &link, apply).await,
+        (Act::Start, _) => {
+            let reason = "the house serves its LAN on a cut";
+            start_held(&state, &o, &s, &format!("{}; {reason}", says(&link)), apply).await
+        }
     }
+}
+
+/// What the guard held, started again — `why`, said.
+async fn start_held(
+    state: &State,
+    o: &hlb_orchestrator::SwarmOrchestrator,
+    s: &site::Site,
+    why: &str,
+    apply: bool,
+) -> Result<ExitCode> {
+    let held = ours(state).await?;
+    let names: Vec<String> = held.iter().map(|(s, _)| s.clone()).collect();
+    if !apply {
+        println!("{why}: would start {} again.", names.join(", "));
+        return Ok(ExitCode::SUCCESS);
+    }
+    let r = restore::start(o, state, &held).await;
+    let (outcome, code) = match &r {
+        Ok(()) => {
+            println!("✓ {why}: {} started again.", names.join(", "));
+            ("ok", ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            eprintln!("🔴 starting {} again: {e}", names.join(", "));
+            ("failed", ExitCode::FAILURE)
+        }
+    };
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "site-guard-start",
+            &s.name,
+            outcome,
+            Some(&names.join(", ")),
+        )
+        .await?;
+    Ok(code)
 }
 
 /// The link is back: started again unless the site serves them now.
@@ -210,42 +286,8 @@ async fn ask_site(
         }
         return Ok(ExitCode::SUCCESS);
     }
-    if !apply {
-        println!(
-            "{}, {} not promoted: would start {} again.",
-            says(link),
-            s.name,
-            names.join(", ")
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
-    let r = restore::start(o, state, &held).await;
-    let (outcome, code) = match &r {
-        Ok(()) => {
-            println!(
-                "✓ {}, {} not promoted: {} started again.",
-                says(link),
-                s.name,
-                names.join(", ")
-            );
-            ("ok", ExitCode::SUCCESS)
-        }
-        Err(e) => {
-            eprintln!("🔴 starting {} again: {e}", names.join(", "));
-            ("failed", ExitCode::FAILURE)
-        }
-    };
-    state
-        .audit(
-            "cli",
-            ACTOR_ROLE,
-            "site-guard-start",
-            &s.name,
-            outcome,
-            Some(&names.join(", ")),
-        )
-        .await?;
-    Ok(code)
+    let why = format!("{}, {} not promoted", says(link), s.name);
+    start_held(state, o, s, &why, apply).await
 }
 
 /// Where the guard's units are written, on the node holding the state.
@@ -358,9 +400,8 @@ pub async fn site_wait(site: &dyn Runner) -> std::result::Result<Option<u64>, St
         .and_then(|v| v.trim().parse().ok()))
 }
 
-/// Tells the site how long its promotion waits for a house stopping after `stop_after`.
-pub async fn push_wait(site: &dyn Runner, stop_after: u64) -> std::result::Result<u64, String> {
-    let wait = site_guard::promotion_waits(stop_after);
+/// Tells the site how long its promotion waits without a handshake from the house.
+pub async fn push_wait(site: &dyn Runner, wait: u64) -> std::result::Result<u64, String> {
     hlb_bootstrap::provision::install_file(
         site,
         site_guard::WAIT_FILE,
@@ -373,45 +414,86 @@ pub async fn push_wait(site: &dyn Runner, stop_after: u64) -> std::result::Resul
 }
 
 /// The site told its wait, when there is one.
-async fn tell(hub: Option<&dyn Runner>, new: u64) -> std::result::Result<Option<u64>, String> {
+async fn tell(hub: Option<&dyn Runner>, wait: u64) -> std::result::Result<Option<u64>, String> {
     match hub {
-        Some(h) => push_wait(h, new).await.map(Some),
+        Some(h) => push_wait(h, wait).await.map(Some),
         None => Ok(None),
     }
 }
 
-/// `hlb config site-link`: the delay past a stale handshake before the house stops.
+/// What a cut does, said in one line.
+pub fn rule(on_cut: OnCut, stop_after: u64) -> String {
+    match on_cut {
+        OnCut::Stop => format!(
+            "the vital apps stop once the site link has been down {} s: WireGuard's {} s, \
+             then {stop_after} s",
+            site_guard::stops_at(stop_after),
+            site_guard::STALE_AFTER_SECS
+        ),
+        OnCut::Serve => "the vital apps keep serving the LAN when the site link is down; \
+                         a site promoted meanwhile is written beside them, and `hlb site \
+                         return` asks which side keeps its writes"
+            .into(),
+    }
+}
+
+/// `hlb config site-link`: what a cut does — the vital apps stopped after a delay past a
+/// stale handshake, or the LAN kept served.
 ///
-/// 🔴 The site must never wait less than the house takes to stop: a longer delay is told
+/// 🔴 The site must never wait less than the house takes to stop: a longer wait is told
 /// to the site FIRST, then saved; a shorter one saved, then told — in between, the site
 /// waits longer than it needs, never shorter.
-pub async fn config(cli: &Cli, asked: Option<&str>, apply: bool) -> Result<ExitCode> {
+pub async fn config(
+    cli: &Cli,
+    asked: Option<&str>,
+    asked_on_cut: Option<OnCut>,
+    apply: bool,
+) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let old = stop_after(&state).await?;
-    let Some(asked) = asked else {
-        println!(
-            "The vital apps stop once the site link has been down {} s: WireGuard's {} s, \
-             then {old} s.",
-            site_guard::stops_at(old),
-            site_guard::STALE_AFTER_SECS
-        );
-        println!(
-            "The site's promotion waits {} s without a handshake from the house.",
-            site_guard::promotion_waits(old)
-        );
+    let old_on_cut = on_cut(&state).await?;
+    let old_wait = site_guard::site_waits(old_on_cut, old);
+    if asked.is_none() && asked_on_cut.is_none() {
+        println!("On a cut, {}.", rule(old_on_cut, old));
+        if old_on_cut == OnCut::Serve {
+            println!(
+                "Stopping instead would wait {} s:  hlb config site-link --on-cut stop --apply",
+                site_guard::stops_at(old)
+            );
+        }
+        println!("The site's promotion waits {old_wait} s without a handshake from the house.");
         return Ok(ExitCode::SUCCESS);
+    }
+    let new = match asked {
+        Some(a) => u64::try_from(crate::parse_duration(a)?)?,
+        None => old,
     };
-    let new = u64::try_from(crate::parse_duration(asked)?)?;
+    let new_on_cut = asked_on_cut.unwrap_or(old_on_cut);
+    let new_wait = site_guard::site_waits(new_on_cut, new);
+    let what = format!(
+        "{}{}",
+        asked.map(|a| format!("stop-after {a}")).unwrap_or_default(),
+        asked_on_cut
+            .map(|o| format!(
+                "{}on-cut {}",
+                if asked.is_some() { ", " } else { "" },
+                o.as_str()
+            ))
+            .unwrap_or_default()
+    );
     if !apply {
         println!(
-            "Would stop the vital apps once the link has been down {} s (now {}), the \
-             site's promotion waiting {} s.  Rerun with --apply.",
-            site_guard::stops_at(new),
-            site_guard::stops_at(old),
-            site_guard::promotion_waits(new)
+            "Would have it so that on a cut, {} (now: {}); the site's promotion waiting \
+             {new_wait} s (now {old_wait}).  Rerun with --apply.",
+            rule(new_on_cut, new),
+            rule(old_on_cut, old)
         );
         return Ok(ExitCode::SUCCESS);
     }
+    let save = || async {
+        state.set_site_link_stop_after(Some(new)).await?;
+        state.set_site_link_on_cut(Some(new_on_cut.as_str())).await
+    };
     let vault = open_vault(cli)?;
     let site = super::load(&state, &vault).await?;
     let reached = match &site {
@@ -419,10 +501,10 @@ pub async fn config(cli: &Cli, asked: Option<&str>, apply: bool) -> Result<ExitC
         None => None,
     };
     let hub = reached.as_ref().map(|(_, r)| r.as_ref());
-    let told = if new > old {
-        match tell(hub, new).await {
+    let told = if new_wait > old_wait {
+        match tell(hub, new_wait).await {
             Ok(t) => {
-                state.set_site_link_stop_after(Some(new)).await?;
+                save().await?;
                 Ok(t)
             }
             Err(e) => {
@@ -435,7 +517,7 @@ pub async fn config(cli: &Cli, asked: Option<&str>, apply: bool) -> Result<ExitC
                         "cli",
                         ACTOR_ROLE,
                         "config-site-link",
-                        asked,
+                        &what,
                         "failed",
                         Some(&e),
                     )
@@ -444,20 +526,17 @@ pub async fn config(cli: &Cli, asked: Option<&str>, apply: bool) -> Result<ExitC
             }
         }
     } else {
-        state.set_site_link_stop_after(Some(new)).await?;
-        tell(hub, new).await
+        save().await?;
+        tell(hub, new_wait).await
     };
     let (outcome, code) = match &told {
         Ok(_) => ("ok", ExitCode::SUCCESS),
         Err(_) => ("partial", ExitCode::FAILURE),
     };
     state
-        .audit("cli", ACTOR_ROLE, "config-site-link", asked, outcome, None)
+        .audit("cli", ACTOR_ROLE, "config-site-link", &what, outcome, None)
         .await?;
-    println!(
-        "✓ The vital apps stop once the site link has been down {} s.",
-        site_guard::stops_at(new)
-    );
+    println!("✓ On a cut, {}.", rule(new_on_cut, new));
     match told {
         Ok(Some(wait)) => println!("✓ The site's promotion waits {wait} s."),
         Ok(None) => println!("  The house has no site yet: `hlb site add` tells it."),

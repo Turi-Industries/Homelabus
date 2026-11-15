@@ -482,6 +482,11 @@ pub fn caddy_on_site(
 /// Where the promotion is left on the site, and the mark it leaves.
 pub const PROMOTE_SCRIPT: &str = "/usr/local/sbin/hlb-site-promote";
 pub const PROMOTED_MARK: &str = "/etc/hlb/site/promoted";
+/// The vital server's next transaction id the moment its standby was promoted: where
+/// the site's writes and the house's part, which the return compares each side's with
+/// (`site_return`). Written once, by the run that promoted it — a rerun finds a server
+/// already taking writes, whose position is no longer the parting point.
+pub const PROMOTED_XID: &str = "/etc/hlb/site/promoted-xid";
 /// The door's file once promoted, beside the one it runs.
 pub const PROMOTED_DOOR: &str = "haproxy.promoted.cfg";
 
@@ -572,6 +577,7 @@ pub fn promote_script(
     let cert_polls = CERTIFICATE_WAIT_SECS / 2;
     let vital = hlb_types::VITAL_POSTGRES;
     let house_wait = crate::site_guard::house_wait_fn();
+    let next_xid = crate::site_return::NEXT_XID_SQL;
     let wait_file = crate::site_guard::WAIT_FILE;
     let default_wait =
         crate::site_guard::promotion_waits(crate::site_guard::DEFAULT_STOP_AFTER_SECS);
@@ -616,7 +622,10 @@ fi
 
 # First: from now on the house's nightly lifeboat refuses to replace what serves.
 mkdir -p "$(dirname {PROMOTED_MARK})"
-[ -f {PROMOTED_MARK} ] || date -u +%Y-%m-%dT%H:%M:%SZ > {PROMOTED_MARK}
+[ -f {PROMOTED_MARK} ] || {{
+    rm -f {PROMOTED_XID}
+    date -u +%Y-%m-%dT%H:%M:%SZ > {PROMOTED_MARK}
+}}
 
 # Up and, where it has a probe, healthy: a database restored behind an app it serves.
 ready() {{
@@ -645,6 +654,9 @@ promote() {{
     fi
     [ "$(sql 'SELECT pg_promote(true, 60)')" = t ] || {{
         echo "$1 is still a standby after 60 s: docker service logs $1" >&2; exit 1; }}
+    # Before any app starts: the transactions the house and the site each run from here
+    # on are what each wrote past the other.
+    sql '{next_xid}' > {PROMOTED_XID}
     echo "  ✓ $1 promoted at $(sql 'SELECT pg_current_wal_lsn()'): it takes writes"
 }}
 for s in $SERVICES; do
@@ -1286,6 +1298,13 @@ spec:
         assert!(at("run as root") < at(waited), "{script}");
         assert!(at(waited) < at("date -u +%Y"), "{script}");
         assert!(at(crate::site_guard::WAIT_FILE) < at(waited), "{script}");
+        // The parting point: forgotten with a new mark only — a rerun keeps the first
+        // run's —, and recorded by the run that promoted, before any app starts.
+        let forgotten = format!("rm -f {PROMOTED_XID}\n    date -u");
+        assert!(at(waited) < at(&forgotten), "{script}");
+        let recorded = format!("pg_current_snapshot())' > {PROMOTED_XID}");
+        assert!(at("pg_promote(true, 60)") < at(&recorded), "{script}");
+        assert!(at(&recorded) < at("for s in $SERVICES"), "{script}");
         // Checked by HAProxy before the rename, reloaded after.
         assert!(at("haproxy -c") < at("mv -f"), "{script}");
         assert!(at("mv -f") < at("USR2"), "{script}");

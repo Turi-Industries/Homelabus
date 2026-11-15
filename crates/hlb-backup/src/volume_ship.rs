@@ -227,7 +227,9 @@ pub fn promote_step(user: &str, volume: &str, image: &str) -> String {
     fi
     # Marked once the choice is carried out, never before: a run cut mid-copy chooses
     # again, nothing having started on the volume yet.
-    decided() {{ mkdir -p {COPIED_DIR} && : > "$done"; }}
+    # The mark holds the round laid, where the house's own writes part from the
+    # site's: empty when the copy serves.
+    decided() {{ mkdir -p {COPIED_DIR} && printf '%s\n' "${{1:-}}" > "$done"; }}
     pushed=$(cat "$push/{PUSHED}" 2>/dev/null || true)
     copied=$(cat {COPIED_DIR}/"$vol" 2>/dev/null || echo 0)
     if [ -z "$pushed" ] || [ ! -d "$push/{FILES}" ] || [ ! -f "$push/{OWNERS}" ]; then
@@ -260,13 +262,69 @@ pub fn promote_step(user: &str, volume: &str, image: &str) -> String {
         in_volume 'tar -xf - -C {MOUNTED_AT}' && [ "$(cat "$sent")" = 0 ] &&
         in_volume '{settle}' < "$push/{OWNERS}"; then
         echo "  ✓ $vol: the files pushed at $(date -u -d "@$pushed" +%H:%M:%S) UTC laid over last night's copy"
-    else
-        echo "  🔴 $vol: the pushed files were not all laid in place: it starts on what the copy got" >&2
+        rm -f "$sent"
+        decided "$pushed"
+        return 0
     fi
+    echo "  🔴 $vol: the pushed files were not all laid in place: it starts on what the copy got" >&2
     rm -f "$sent"
     decided
 }}
 from_push {volume} {dir}
+"#
+    )
+}
+
+/// Its own list, apart from the round's in the pusher's [`SCRATCH`].
+const SINCE_SKIP: &str = "since-sqlite";
+
+/// Run by `sh` in rclone's image, the volume at [`MOUNTED_AT`]: the newest modification
+/// time in it, `newest=<epoch>` — 0 for an empty volume.
+///
+/// Its SQLite files and their journals are left out, found by header as a round finds
+/// them: compared by their transactions instead, and touched by every checkpoint.
+/// Directories count: a file deleted shows only there.
+///
+/// 🔴 The list of what to leave out starts with a line no path is: awk reads its first
+/// file while `NR == FNR`, and an empty one would have it read the volume's as the list.
+pub fn newest_script() -> String {
+    let sqlite = sqlite_functions();
+    format!(
+        r#"set -eu
+cd {MOUNTED_AT}
+{sqlite}
+{{ echo //; sqlite_here | while IFS= read -r p; do
+    printf '.%s\n.%s-wal\n.%s-shm\n.%s-journal\n' "$p" "$p" "$p" "$p"
+done; }} > {SCRATCH}/{SINCE_SKIP}
+find . -exec stat -c '%Y %n' {{}} + | awk '
+    NR == FNR {{ skip[$0]; next }}
+    {{ t = $1; sub(/^[^ ]* /, ""); if (!($0 in skip) && t > m) m = t }}
+    END {{ print "newest=" m + 0 }}' {SCRATCH}/{SINCE_SKIP} -
+"#
+    )
+}
+
+/// Run on the site as root, `image` there — rclone's, which the promotion laid the
+/// volume with: what the return compares the site's writes with, as `<volume>.<key>=`
+/// lines.
+///
+/// - `pushed`: the round the promotion laid, by the house's clock; empty when the copy
+///   served.
+/// - `marked`: when the promotion decided, by the site's — `promoted` when it never
+///   decided for this volume, the promotion's own mark.
+/// - `newest`: [`newest_script`]'s, by the site's clock.
+pub fn site_since_script(volume: &str, image: &str, promoted: &str) -> String {
+    let mark = decided_mark(volume);
+    let newest = newest_script();
+    format!(
+        r#"mark={mark}
+[ -f "$mark" ] || mark={promoted}
+echo "{volume}.pushed=$(cat {mark} 2>/dev/null)"
+echo "{volume}.marked=$(stat -c %Y "$mark" 2>/dev/null)"
+docker run --rm -i --network none --read-only --cap-drop ALL --cap-add DAC_READ_SEARCH \
+    --tmpfs {SCRATCH} --mount "type=volume,src={volume},dst={MOUNTED_AT},readonly" \
+    --entrypoint sh {image} -s <<'HLB_NEWEST' | sed 's/^/{volume}./'
+{newest}HLB_NEWEST
 "#
     )
 }
@@ -402,6 +460,73 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("sleep \"$left\""), "{s}");
+    }
+
+    /// [`newest_script`] run in `dir`, its list in `scratch`.
+    fn newest_in(dir: &std::path::Path, scratch: &std::path::Path) -> String {
+        // The scratch first: the temporary directories live under it too.
+        let script = newest_script()
+            .replace(&format!("{SCRATCH}/"), &format!("{}/", scratch.display()))
+            .replace(
+                &format!("cd {MOUNTED_AT}"),
+                &format!("cd {}", dir.display()),
+            );
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .expect("sh");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn the_newest_time_leaves_sqlite_and_its_journals_out() {
+        let dir = tempfile::tempdir().expect("dir");
+        let scratch = tempfile::tempdir().expect("scratch");
+        let d = dir.path();
+        let at = |p: &str, t: u64| {
+            let ok = std::process::Command::new("touch")
+                .args(["-d", &format!("@{t}"), &d.join(p).display().to_string()])
+                .status()
+                .expect("touch");
+            assert!(ok.success());
+        };
+        std::fs::create_dir(d.join("sub")).expect("sub");
+        std::fs::write(d.join("sub/a"), "a").expect("a");
+        at("sub/a", 1_000);
+        at("sub", 2_000);
+        at(".", 1_500);
+        // No SQLite: the list holds its first line alone, and nothing is skipped.
+        assert_eq!(newest_in(d, scratch.path()), "newest=2000");
+        std::fs::write(d.join("p.db"), "SQLite format 3\0rest").expect("db");
+        std::fs::write(d.join("p.db-wal"), "wal").expect("wal");
+        at("p.db", 9_000);
+        at("p.db-wal", 9_500);
+        at(".", 1_500);
+        assert_eq!(newest_in(d, scratch.path()), "newest=2000");
+        // A file the house wrote after the round, beside them.
+        std::fs::write(d.join("sub/b"), "b").expect("b");
+        at("sub/b", 3_000);
+        at("sub", 2_000);
+        assert_eq!(newest_in(d, scratch.path()), "newest=3000");
+    }
+
+    #[test]
+    fn the_site_s_probe_reads_the_round_from_the_decision_only() {
+        let s = site_since_script("v", "img", "/etc/hlb/site/promoted");
+        let mark = decided_mark("v");
+        assert!(s.contains(&format!("v.pushed=$(cat {mark} ")), "{s}");
+        assert!(
+            s.contains("[ -f \"$mark\" ] || mark=/etc/hlb/site/promoted"),
+            "{s}"
+        );
+        assert!(s.contains("dst=/data,readonly"), "{s}");
+        assert!(s.contains("<<'HLB_NEWEST'"), "{s}");
+        assert!(s.trim_end().ends_with("\nHLB_NEWEST"), "{s}");
     }
 
     fn sqlite_here_in(dir: &std::path::Path) -> std::process::Output {
