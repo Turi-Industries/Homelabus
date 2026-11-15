@@ -1869,7 +1869,16 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        now. A cut that drops only the host's traffic is not one: the pushers run in
        containers, through `FORWARD` — `DOCKER-USER` too.
      - 8f. The gate again, the writes lost measured: a row written at home seconds
-       before the cut, found on the site.
+       before the cut, found on the site. Run 2026-11-15 (`scripts/drills/available.sh`,
+       its witnesses `scripts/drills/writes.sh`: a write a second at home into
+       Vaultwarden's database, PocketID's SQLite and Vaultwarden's volume, each holding
+       the house's clock): the whole house cut, the alert at 176 s, promoted at it,
+       both names served by the site's Caddy 418 s after the cut, home again 158 s
+       after the line. Lost before the cut: 22 s of the database (the bound 40: a
+       segment switched every 30 s, pushed within 10), 1 s of the SQLite, 30 s of the
+       files (a round a minute). The promotion is 160 s slower than on 2026-11-10
+       (259): 8e's wait, the house's last handshake 360 s old before anything starts —
+       the price of never having both sides written.
   9. Then Knot (the house signing, the VPS secondary) and OPNsense.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE

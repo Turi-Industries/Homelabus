@@ -11,10 +11,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The drills name these paths. The key lives with the disks, so a rebuilt container
-# still reaches VMs that were given it.
+# still reaches VMs that were given it. The repository is mounted whole: a mount of
+# scripts/lab alone went stale when a checkout without it removed the directory, and
+# every script vanished from a lab whose VMs a restart would have killed.
 RUN mkdir -p /lab \
-    && ln -s src/vm.sh /lab/vm.sh \
-    && ln -s src/vps.sh /lab/vps.sh \
+    && ln -s repo/scripts/lab/vm.sh /lab/vm.sh \
+    && ln -s repo/scripts/lab/vps.sh /lab/vps.sh \
     && ln -s /vms/keys/id_ed25519 /lab/id_ed25519 \
     && ln -s /vms/keys/id_ed25519.pub /lab/id_ed25519.pub
 

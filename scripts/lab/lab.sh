@@ -32,7 +32,7 @@ up() {
         docker run -d --name hlb-lab --hostname hlb-lab --init --privileged \
             --device /dev/kvm --network hlb-internet --ip 10.99.0.2 \
             --dns 1.1.1.1 --dns 9.9.9.9 \
-            -v "$dir:/vms" -v "$PWD:/lab/src:ro" hlb-lab >/dev/null
+            -v "$dir:/vms" -v "$(git rev-parse --show-toplevel):/lab/repo:ro" hlb-lab >/dev/null
     else
         docker start hlb-lab >/dev/null
     fi

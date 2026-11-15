@@ -27,6 +27,12 @@ scripts/lab/lab.sh off                     # every VM powered off, then the cont
 scripts/lab/lab.sh boot                    # later: vps1 first, then the house
 ```
 
+The container mounts the whole repository, read-only: a container made before
+2026-11-15 mounts `scripts/lab` alone, which a checkout without it leaves stale — `lab.sh
+off`, `docker rm hlb-lab`, `lab.sh build`, `lab.sh boot` (the disks stay in
+`HLB_LAB_DIR`). Until then, `docker cp scripts/lab/. hlb-lab:/lab/src-copy` and point
+`/lab/vm.sh` and `/lab/vps.sh` at the copy.
+
 ## The house, as it was rebuilt on 2026-11-15
 
 `hlb` built for Debian 12 (`rust:1.99-bookworm`, `cargo build --release -p hlb-cli`),
