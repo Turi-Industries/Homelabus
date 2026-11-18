@@ -655,10 +655,13 @@ pub async fn republish(cli: &crate::Cli, state: &hlb_state::State) {
     };
     let vault = crate::open_vault(cli).ok();
     match hlb_engine::ingress::publish(&orch, state, vault.as_ref()).await {
-        Ok(hlb_engine::ingress::Published::Done { routes, .. }) => println!(
-            "✓ routes republished ({})",
-            hlb_api::plural(routes.len() as u64, "route", "routes")
-        ),
+        Ok(hlb_engine::ingress::Published::Done { routes, zone, .. }) => {
+            println!(
+                "✓ routes republished ({})",
+                hlb_api::plural(routes.len() as u64, "route", "routes")
+            );
+            crate::zone::say(&zone);
+        }
         Ok(_) => {}
         Err(e) => eprintln!("⚠️  the routes could not be republished: {e} — hlb ingress --apply"),
     }

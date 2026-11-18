@@ -23,12 +23,14 @@ mod flaws;
 mod power;
 mod reboots;
 mod roles;
+mod zone;
 pub use disks::{Disk, NodeDisks, ZPool};
 pub use firmware::{FirmwareUpdate, NodeFirmware};
 pub use flaws::{host_key, Flaw, ImageScan};
 pub use power::{PowerPhase, PowerStop, UpsPolicy, UpsReading, UpsState};
 pub use reboots::{NodeReboot, RebootPhase, RebootPolicy, DEFAULT_REBOOT_WINDOW};
 pub use roles::{AdminRecord, Holder, InUse, PersonQuota, QuotaRecord, QuotaState};
+pub use zone::ZoneConfig;
 
 /// What a row of `backup_runs` backed up — its `kind`.
 ///
