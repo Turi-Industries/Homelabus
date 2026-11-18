@@ -112,6 +112,8 @@ pub async fn wanted(
         transfer,
         mail,
         caa: caa(state).await?,
+        // Declared by the switch at the registrar, the next step.
+        delegated: None,
     })
 }
 
@@ -197,7 +199,7 @@ pub fn writer(image: &str, apex: &str, rendered: &zone::Rendered) -> ServiceSpec
         .command([
             "sh".to_string(),
             "-c".to_string(),
-            zone::writer_script(apex),
+            zone::writer_script(apex, &rendered.children),
         ]);
     // Knot's own user, so what it writes in the volume stays Knot's; `conf-check`
     // compiles the configuration under /tmp.
@@ -358,6 +360,7 @@ mod tests {
             transfer: None,
             mail: Vec::new(),
             caa: None,
+            delegated: None,
         });
         let job = writer("cznic/knot:v3.6.2", "example.org", &r);
         assert!(job.constraints.contains(&format!(

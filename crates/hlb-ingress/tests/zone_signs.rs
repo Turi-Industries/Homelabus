@@ -146,7 +146,7 @@ impl Lab {
             &image(),
             "sh",
             "-c",
-            &zone::writer_script(&z.apex),
+            &zone::writer_script(&z.apex, &zone::render(z).children),
         ])
     }
 
@@ -166,6 +166,7 @@ fn the_zone() -> Zone {
         transfer: None,
         mail: Vec::new(),
         caa: None,
+        delegated: None,
     }
 }
 

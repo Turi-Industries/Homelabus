@@ -443,7 +443,7 @@ async fn serve_zone(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) ->
         Ok(port) => port,
         Err(e) => return fail("port 53", &e),
     };
-    let how = match name_server::deploy(hub, s, &config.apex, &key).await {
+    let how = match name_server::deploy(hub, s, &key).await {
         Ok(how) => how,
         Err(e) => return fail("its service", &e),
     };

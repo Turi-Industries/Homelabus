@@ -146,7 +146,7 @@ impl Net {
             zone::SITE_IMAGE,
             "sh",
             "-c",
-            &zone::writer_script(&z.apex),
+            &zone::writer_script(&z.apex, &zone::render(z).children),
         ]);
         assert!(ok, "{out}");
     }
@@ -222,6 +222,7 @@ fn the_zone(site: Ipv4Addr) -> Zone {
         }),
         mail: Vec::new(),
         caa: None,
+        delegated: None,
     }
 }
 
@@ -232,7 +233,7 @@ fn the_site_transfers_the_signed_zone_follows_it_and_serves_it_alone() {
     let (house_at, site_at) = (net.at(20), net.at(10));
     let house = net.knot("house", house_at, zone::BASE_CONF);
     net.write(&house, &the_zone(site_at));
-    let conf = zone::site_conf("lab.test", &[house_at], &key());
+    let conf = zone::site_conf(&[house_at], &key());
     let site = net.knot("site", site_at, &conf);
 
     until(
@@ -280,7 +281,7 @@ fn a_knot_without_the_key_is_handed_nothing() {
     // The stranger stands where the site would: only the key tells them apart.
     net.write(&house, &the_zone(stranger_at));
     let other = TransferKey("b3RoZXItdHJhbnNmZXIta2V5LXRoaXJ0eS10d28tYnk=".into());
-    let conf = zone::site_conf("lab.test", &[house_at], &other);
+    let conf = zone::site_conf(&[house_at], &other);
     let stranger = net.knot("stranger", stranger_at, &conf);
     std::thread::sleep(Duration::from_secs(5));
     let answer = dig(&stranger, "vault.lab.test", "A");
