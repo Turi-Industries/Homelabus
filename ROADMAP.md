@@ -1986,7 +1986,19 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        from the child, then written back by Stalwart, the RSA one included). Found on
        the way: the `rfc2136` provider Caddy needed had no Stalwart mapping, which a
        test said and nobody had run — a person's own RFC 2136 server now publishes
-       DKIM too, by address (Stalwart decodes the key at creation).
+       DKIM too, by address (Stalwart decodes the key at creation). Switched back with
+       no provider, Stalwart's server is withdrawn and its domains go back to the
+       person. On the lab (deb1's Knot, vps1's site): the switch was first REFUSED —
+       Swarm mounts the writer's files 0444, `cp` kept the mode, and Knot's user could
+       not append the DS, which the tests (staging 0644) never saw; they stage as Swarm
+       does now. Then both children signed, their DS in the parent, served by the site
+       through the catalog; the update key wrote into `_domainkey.lab.test` at Knot's
+       overlay VIP over TCP and was refused at the apex; `zone switch --back` put the
+       routes back. A switch refused half-way is finished by running it again. Not on
+       the lab: Caddy's half — the 0.4.8 image has no `rfc2136` and refuses the routes,
+       leaving them as they were — until the next release image; and Stalwart's own
+       write, which only `hlb role sync --apply` asks for, and which would also have
+       changed the lab's PocketID groups and Vaultwarden.
        Left for 9e: the registrar's switch itself — `hlb zone show` printing the NS and
        the DS (`knotc zone-read <apex> @ CDS`), the drift check expecting them — and
        librespeed's `dns-record` step.
