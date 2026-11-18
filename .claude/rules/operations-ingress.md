@@ -135,3 +135,15 @@ some mistakes loudly; the others are a 502, or a door left open.
   as listed, the VLAN read as no interface's and the next sync assigned it again —
   refused, "Option [] not in list", once the lab's opt1 was addressed (2026-11-18).
   `Vlan::device` reads the first word; the field is private.
+- **🔴 A filter rule takes a list of NAMES, and a literal network only alone.**
+  `destination_net` is multiple, each item checked against the names it knows (`any`,
+  `(self)`, `opt1`, `opt1ip`, the aliases); a typed network joins them only when the
+  WHOLE value is one (`NetworkAliasField.php`), so `10.0.0.0/8,172.16.0.0/12` is
+  refused "not a valid source IP address or alias" (26.7, measured). One block rule per private range (`hlb_router::filter`);
+  an alias would hold the list, and a rule naming an alias a person removed loads
+  nothing.
+- **A new filter rule is read last.** pf decides by the first matching rule, in
+  `sequence` order, and the router numbers a new one after every other (highest plus
+  100). A person's rule on Devices or Guests is therefore read after Homelabus's `pass`
+  to the internet, never reached, unless its sequence is below `filter::SEQUENCE`
+  (300000): the sync says which of theirs are, and puts its own back where they were.

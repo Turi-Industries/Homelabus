@@ -201,6 +201,17 @@ fn print(r: &Report) {
             }
         );
     }
+    if r.rules_unchanged > 0 {
+        println!(
+            "{} of those networks' already as {}.",
+            hlb_api::plural(r.rules_unchanged as u64, "filter rule", "filter rules"),
+            if r.rules_unchanged == 1 {
+                "it should be"
+            } else {
+                "they should be"
+            }
+        );
+    }
     if r.forwards_unchanged > 0 {
         println!(
             "{} already forwarded from the internet.",

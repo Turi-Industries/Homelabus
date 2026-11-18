@@ -751,13 +751,16 @@ console) and one for its guests, each a VLAN tagged on the trusted network's por
 VLAN-aware switch or access point carries all three on the router's one LAN cable. The
 sync makes the VLAN and the router's interface on it; OPNsense's API cannot address an
 interface, so the sync says what to do on the router's pages, then reads the address
-back and hands out a DHCP range there, the names under `home.arpa`:
+back and hands out a DHCP range there, the names under `home.arpa`. Each network may
+then ask the router's DNS and reach the internet, the devices network Caddy's 80 and 443
+too, and nothing else: not the trusted network, not the router. The rules are written
+on those two interfaces only, never on the one the API is reached by:
 
 ```sh
 ./target/debug/hlb router network devices --vlan 20 --apply
 ./target/debug/hlb router network guests --vlan 30 --apply
 ./target/debug/hlb router sync --apply       # the VLANs, their interfaces; the address is a person's
-./target/debug/hlb router network guests --off --apply   # its range goes, its VLAN stays
+./target/debug/hlb router network guests --off --apply   # its range and rules go, its VLAN stays
 ```
 
 Most residential lines close port 25 outward: mail to other domains then waits for days

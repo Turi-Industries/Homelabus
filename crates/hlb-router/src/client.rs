@@ -5,6 +5,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::filter::Listed as FilterRule;
 use crate::networks::{DhcpRange, Dnsmasq, Vlan};
 use crate::tls::{self, Fingerprint};
 use crate::{Error, Result};
@@ -209,13 +210,15 @@ impl OutboundMode {
     }
 }
 
-fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+pub(crate) fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
     flag_text::deserialize(d)
 }
 
 /// `true` or `"1"`: the router lists its own rules with a JSON boolean, and every other
 /// flag as text.
-fn truthy<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+pub(crate) fn truthy<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<bool, D::Error> {
     Ok(match Value::deserialize(d)? {
         Value::Bool(b) => b,
         Value::String(s) => s == "1",
@@ -562,7 +565,7 @@ impl Opnsense {
     }
 
     /// Loads what was saved into the firewall: a saved rule forwards nothing until then.
-    /// `which` is `d_nat` or `source_nat`.
+    /// `which` is `d_nat`, `source_nat` or `filter`.
     pub async fn apply_firewall(&self, which: &str) -> Result<()> {
         self.reloaded(&format!("firewall/{which}/apply")).await
     }
@@ -580,6 +583,33 @@ impl Opnsense {
                 other.unwrap_or("nothing")
             ))),
         }
+    }
+
+    /// Every filter rule, the router's generated ones among them.
+    pub async fn filter_rules(&self) -> Result<Vec<FilterRule>> {
+        self.search("firewall/filter/search_rule").await
+    }
+
+    /// `rule` as [`crate::filter::Rule::body`] writes it. Saved is not loaded:
+    /// [`Opnsense::apply_firewall`] with `filter`.
+    pub async fn add_filter_rule(&self, rule: &Value) -> Result<String> {
+        let call = "firewall/filter/add_rule";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "rule": rule })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    pub async fn set_filter_rule(&self, uuid: &str, rule: &Value) -> Result<()> {
+        let call = format!("firewall/filter/set_rule/{uuid}");
+        self.call(reqwest::Method::POST, &call, Some(json!({ "rule": rule })))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn del_filter_rule(&self, uuid: &str) -> Result<()> {
+        self.deleted(&format!("firewall/filter/del_rule/{uuid}"))
+            .await
     }
 
     pub async fn vlans(&self) -> Result<Vec<Vlan>> {

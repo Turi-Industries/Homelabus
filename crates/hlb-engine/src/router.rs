@@ -18,13 +18,15 @@
 //! network (`hlb router address`), Caddy's node falling back to the address `connect`
 //! was given. Before both, each network declared beyond the trusted one (`hlb router
 //! network`) carried on its VLAN, made an interface, and handed a DHCP range once a
-//! person has addressed it (`hlb_router::networks`).
+//! person has addressed it (`hlb_router::networks`) — with the rules of what it may
+//! reach (`hlb_router::filter`).
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 use hlb_orchestrator::Orchestrator;
 use hlb_router::client::{Credentials, Network, OutboundMode, System};
+use hlb_router::filter;
 use hlb_router::forwards::{self, Edit, Key, Protocol, Wanted};
 use hlb_router::names::{self, Change};
 use hlb_router::networks::{self, Kind};
@@ -54,6 +56,8 @@ pub struct Report {
     pub forwards_unchanged: usize,
     /// Networks already handing out their range as they should.
     pub networks_unchanged: usize,
+    /// Filter rules of those networks' already as they should be.
+    pub rules_unchanged: usize,
     pub notes: Vec<String>,
     /// Why the run went no further, and what a person does about it.
     pub stopped: Option<String>,
@@ -999,6 +1003,93 @@ impl Router<'_> {
             }
         }
         r.networks_unchanged = plan.unchanged;
+        self.sync_rules(router, caddy, &wanted, apply, r).await
+    }
+
+    /// What each addressed network may reach (`hlb_router::filter`), on its interface
+    /// alone — never on the trusted network the API is reached by.
+    async fn sync_rules(
+        &self,
+        router: &Opnsense,
+        caddy: Ipv4Addr,
+        networks: &[networks::RangeRule],
+        apply: bool,
+        r: &mut Report,
+    ) -> crate::Result<()> {
+        let wanted: Vec<filter::Rule> = networks
+            .iter()
+            .flat_map(|n| filter::rules_for(n.kind, &n.interface, caddy))
+            .collect();
+        let plan = filter::plan(&wanted, &router.filter_rules().await?);
+        for (iface, descr, sequence) in &plan.theirs {
+            let when = if filter::read_first(sequence) {
+                "read before Homelabus's".to_string()
+            } else {
+                format!(
+                    "read after Homelabus's, which pass or block everything first: give it \
+                     a sequence below {} to be read before",
+                    filter::SEQUENCE
+                )
+            };
+            let descr = if descr.is_empty() { "unnamed" } else { descr };
+            r.notes.push(format!(
+                "{iface} holds a filter rule of someone else's (\"{descr}\", sequence \
+                 {sequence}): left as it is, {when}"
+            ));
+        }
+        let subject = |k: Kind| format!("{} network", k.wire());
+        let kind_of = |iface: &str| {
+            networks
+                .iter()
+                .find(|n| n.interface == iface)
+                .map_or_else(|| iface.to_string(), |n| subject(n.kind))
+        };
+        let mut changed = false;
+        for e in &plan.edits {
+            let (who, change) = match e {
+                filter::Edit::Add(w) => (subject(w.kind), w.role.says(w.caddy)),
+                filter::Edit::Update { to, .. } => (
+                    subject(to.kind),
+                    format!("{} (its rule rewritten)", to.role.says(to.caddy)),
+                ),
+                filter::Edit::Remove {
+                    interface,
+                    description,
+                    ..
+                } => (
+                    kind_of(interface),
+                    format!("the rule \"{description}\" on {interface}, removed"),
+                ),
+            };
+            if !apply {
+                r.push(&who, change, Outcome::ToDo);
+                continue;
+            }
+            let done = match e {
+                filter::Edit::Add(w) => router.add_filter_rule(&w.body()).await.map(|_| ()),
+                filter::Edit::Update { uuid, to } => router.set_filter_rule(uuid, &to.body()).await,
+                filter::Edit::Remove { uuid, .. } => router.del_filter_rule(uuid).await,
+            };
+            match done {
+                Ok(()) => {
+                    changed = true;
+                    r.push(&who, change, Outcome::Done);
+                }
+                Err(e) => r.push(&who, change, Outcome::Failed(e.to_string())),
+            }
+        }
+        // Loaded even after a failed write: what was written holds as a whole only once
+        // the firewall reads it, and a half-written set is still the networks' best.
+        if changed {
+            if let Err(e) = router.apply_firewall("filter").await {
+                r.push(
+                    "firewall",
+                    "reloaded, to enforce what was saved",
+                    Outcome::Failed(e.to_string()),
+                );
+            }
+        }
+        r.rules_unchanged = plan.unchanged;
         Ok(())
     }
 

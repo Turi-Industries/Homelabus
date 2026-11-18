@@ -4,8 +4,8 @@
 //! What it holds: the API client ([`client`]), the pinned certificate it is reached
 //! through ([`tls`]), the names it answers inside the house ([`names`]) and the ports it
 //! forwards from the internet ([`forwards`]), and the house's other networks
-//! ([`networks`]). Putting
-//! it together — the vault, the state, the routes — is `hlb_engine::router`.
+//! ([`networks`]) with what they may reach ([`filter`]). Putting it together — the
+//! vault, the state, the routes — is `hlb_engine::router`.
 //!
 //! ## The API, as it is
 //!
@@ -24,6 +24,7 @@
 //! | Outbound NAT | `firewall/source_nat/{search,add,set,del}_rule`, its mode `firewall/source_nat/{get,set}`, then `firewall/source_nat/apply` |
 //! | VLANs | `interfaces/vlan_settings/{search,add}_item`, then `…/reconfigure` |
 //! | Interfaces | `interfaces/assignment/add_item`, then `…/reconfigure` — a device and a name only: no address |
+//! | Filter rules | `firewall/filter/{search,add,set,del}_rule`, then `firewall/filter/apply` |
 //! | DHCP | `dnsmasq/settings/{search,add,set,del}_range`, `dnsmasq/settings/{get,set}`, then `dnsmasq/service/reconfigure` |
 //!
 //! Authentication by HTTP Basic, an API key and its secret, which act as the account
@@ -36,6 +37,7 @@
 //! [`Error::Refused`], never a success.
 
 pub mod client;
+pub mod filter;
 pub mod forwards;
 pub mod names;
 pub mod networks;
