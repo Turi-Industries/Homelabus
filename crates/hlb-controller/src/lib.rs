@@ -39,6 +39,7 @@ pub mod power;
 pub mod promql;
 pub mod recovery;
 pub mod roles;
+pub mod router;
 pub mod runbook;
 pub mod signin;
 pub mod throughput;

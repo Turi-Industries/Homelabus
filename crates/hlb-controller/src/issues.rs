@@ -267,6 +267,7 @@ pub async fn findings(s: &AppState, people: bool) -> Result<Vec<Finding>, crate:
     out.extend(crate::flaws::findings(&s.state, now).await);
     out.extend(crate::mail_dns::findings(&s.state, now).await);
     out.extend(crate::domain::findings(&s.state, now).await);
+    out.extend(crate::router::findings(&s.state, now).await);
     for (route, cause) in crate::exposure::findings(&s.state).await {
         if let Some(cause) = cause {
             out.push((cause, route.attention(), Some(route.host)));

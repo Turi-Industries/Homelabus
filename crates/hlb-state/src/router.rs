@@ -16,10 +16,21 @@ pub struct RouterConfig {
     pub caddy: String,
 }
 
+/// The controller's last `router sync`: when it ran, and what did not hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouterSync {
+    pub at: i64,
+    /// One line per name the router could not be made to answer, or why the run went no
+    /// further; `None` when everything held.
+    pub failed: Option<String>,
+}
+
 /// Stored names. ⚠️ Stored values.
 const URL: &str = "router-url";
 const FINGERPRINT: &str = "router-fingerprint";
 const CADDY: &str = "router-caddy";
+const SYNC_AT: &str = "router-sync-at";
+const SYNC_FAILED: &str = "router-sync-failed";
 
 impl State {
     pub async fn router(&self) -> Result<Option<RouterConfig>> {
@@ -42,11 +53,29 @@ impl State {
         self.put_setting(FINGERPRINT, Some(&r.fingerprint)).await?;
         self.put_setting(CADDY, Some(&r.caddy)).await
     }
+
+    /// `None` until the controller first ran a sync, or when the time stored is not one.
+    pub async fn router_sync(&self) -> Result<Option<RouterSync>> {
+        let Some(at) = self.setting(SYNC_AT).await?.and_then(|t| t.parse().ok()) else {
+            return Ok(None);
+        };
+        Ok(Some(RouterSync {
+            at,
+            failed: self.setting(SYNC_FAILED).await?,
+        }))
+    }
+
+    pub async fn record_router_sync(&self, r: &RouterSync) -> Result<()> {
+        // The failure first: a crash between the two leaves the old time beside the
+        // new verdict, read stale — never a fresh time over a failure that was fixed.
+        self.put_setting(SYNC_FAILED, r.failed.as_deref()).await?;
+        self.put_setting(SYNC_AT, Some(&r.at.to_string())).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::RouterConfig;
+    use super::{RouterConfig, RouterSync};
     use crate::State;
 
     #[tokio::test]
@@ -66,5 +95,23 @@ mod tests {
         };
         s.set_router(&moved).await.expect("kept");
         assert_eq!(s.router().await.expect("read"), Some(moved));
+    }
+
+    #[tokio::test]
+    async fn a_sync_that_failed_then_held_reads_as_held() {
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(s.router_sync().await.expect("read"), None);
+        let failed = RouterSync {
+            at: 100,
+            failed: Some("gitea.home.org — answered 10.77.0.11: 500".into()),
+        };
+        s.record_router_sync(&failed).await.expect("kept");
+        assert_eq!(s.router_sync().await.expect("read"), Some(failed));
+        let held = RouterSync {
+            at: 200,
+            failed: None,
+        };
+        s.record_router_sync(&held).await.expect("kept");
+        assert_eq!(s.router_sync().await.expect("read"), Some(held));
     }
 }

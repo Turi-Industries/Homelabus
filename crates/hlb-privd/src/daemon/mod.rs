@@ -18,6 +18,7 @@ pub mod notify;
 pub mod power;
 pub mod reboots;
 pub mod reconcile;
+pub mod router;
 pub mod schedule;
 pub mod start;
 pub mod updates;

@@ -2583,6 +2583,36 @@
             "type": "object"
           },
           {
+            "description": "🔴 The controller's nightly `router sync` failed: a name Caddy serves is not\nanswered inside the house — an app installed since reaches the house's own\npeople the long way, or not at all. The subject is the router's URL;\n`hlb router sync` says what failed.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "router_names_unsynced"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A router is connected and its names were not synced for two days, or ever.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "router_unknown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "An identity and no mailbox: signs in everywhere, receives nothing.",
             "properties": {
               "kind": {

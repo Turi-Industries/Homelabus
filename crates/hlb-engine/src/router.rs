@@ -19,7 +19,7 @@ use hlb_router::client::{Credentials, System};
 use hlb_router::names::{self, Change};
 use hlb_router::{Fingerprint, Opnsense};
 use hlb_secrets::Vault;
-use hlb_state::{RouterConfig, State};
+use hlb_state::{RouterConfig, RouterSync, State};
 
 use crate::roles::{Line, Outcome};
 
@@ -48,6 +48,24 @@ impl Report {
         self.lines
             .iter()
             .any(|l| matches!(l.outcome, Outcome::Failed(_)))
+    }
+
+    /// What did not hold, one line each. A run that stopped short is a failure: a router
+    /// is connected, so a missing key or Caddy moved off its networks leaves every new
+    /// name unanswered.
+    pub fn failures(&self) -> Option<String> {
+        let mut lines: Vec<String> = self
+            .lines
+            .iter()
+            .filter_map(|l| match &l.outcome {
+                Outcome::Failed(e) | Outcome::NotConfigured(e) => {
+                    Some(format!("{} — {}: {e}", l.subject, l.change))
+                }
+                _ => None,
+            })
+            .collect();
+        lines.extend(self.stopped.clone());
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     fn push(&mut self, subject: &str, change: impl Into<String>, outcome: Outcome) {
@@ -371,10 +389,83 @@ impl Router<'_> {
         Ok(r)
     }
 
+    /// [`Router::sync`] applied to the names Caddy serves, its outcome recorded for the
+    /// inbox. The night's run and a person's alike: the `hlb router sync --apply` the
+    /// inbox advises must clear what it says, not leave it until the next night. No
+    /// router connected records nothing — there is nothing to answer.
+    pub async fn sync_recorded<O: Orchestrator + ?Sized>(
+        &self,
+        orch: &O,
+        now: i64,
+    ) -> crate::Result<Report> {
+        let connected = self.state.router().await?.is_some();
+        let result = match house_names(orch, self.state).await {
+            Ok(names) => self.sync(&names, true).await,
+            Err(e) => Err(e),
+        };
+        if connected {
+            let failed = match &result {
+                Ok(r) => r.failures(),
+                // Unreachable, or refused: the names are no more answered than if a
+                // line had failed.
+                Err(e) => Some(format!("router sync stopped: {e}")),
+            };
+            let record = RouterSync { at: now, failed };
+            if let Err(e) = self.state.record_router_sync(&record).await {
+                tracing::warn!("router sync not recorded: {e}");
+            }
+        }
+        result
+    }
+
     /// What the router is, and what it answers for the house.
     pub async fn show(&self, names: &[String]) -> crate::Result<(Option<RouterConfig>, Report)> {
         let config = self.state.router().await?;
         let r = self.sync(names, false).await?;
         Ok((config, r))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(subject: &str, outcome: Outcome) -> Line {
+        Line {
+            subject: subject.into(),
+            change: "answered 10.77.0.11 inside the house".into(),
+            outcome,
+        }
+    }
+
+    #[test]
+    fn what_was_done_is_no_failure_and_a_stop_is_one() {
+        let held = Report {
+            lines: vec![line("gitea.home.org", Outcome::Done)],
+            unchanged: 3,
+            ..Report::default()
+        };
+        assert_eq!(held.failures(), None);
+
+        let mixed = Report {
+            lines: vec![
+                line("gitea.home.org", Outcome::Done),
+                line("n8n.home.org", Outcome::Failed("500".into())),
+            ],
+            ..Report::default()
+        };
+        assert_eq!(
+            mixed.failures().as_deref(),
+            Some("n8n.home.org — answered 10.77.0.11 inside the house: 500")
+        );
+
+        let stopped = Report {
+            stopped: Some("the router's API key is not in the vault".into()),
+            ..Report::default()
+        };
+        assert_eq!(
+            stopped.failures().as_deref(),
+            Some("the router's API key is not in the vault")
+        );
     }
 }

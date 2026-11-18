@@ -213,6 +213,13 @@ pub enum Cause {
     /// The domain was not read from the internet lately, or no resolver answered: a
     /// change made meanwhile is not known.
     DomainUnknown,
+    /// 🔴 The controller's nightly `router sync` failed: a name Caddy serves is not
+    /// answered inside the house — an app installed since reaches the house's own
+    /// people the long way, or not at all. The subject is the router's URL;
+    /// `hlb router sync` says what failed.
+    RouterNamesUnsynced,
+    /// A router is connected and its names were not synced for two days, or ever.
+    RouterUnknown,
 
     // --- People -------------------------------------------------------------
     /// An identity and no mailbox: signs in everywhere, receives nothing.

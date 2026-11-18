@@ -103,8 +103,16 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
         }
         RouterCmd::Sync { apply } => {
             let orch = SwarmOrchestrator::connect().await?;
-            let names = house_names(&orch, &state).await?;
-            (router.sync(&names, *apply).await?, *apply, "router-sync")
+            // Applied, it is recorded as the night's run is: the inbox advises this
+            // command, which must clear what it says.
+            let report = if *apply {
+                router.sync_recorded(&orch, crate::now()).await?
+            } else {
+                router
+                    .sync(&house_names(&orch, &state).await?, false)
+                    .await?
+            };
+            (report, *apply, "router-sync")
         }
     };
     print(&report);

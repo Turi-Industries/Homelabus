@@ -2056,8 +2056,18 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        write; connect made the account and the key, and root's key then answered 401;
        the four names Caddy serves added, a second sync unchanged, and
        `librespeed.lab.test` answered 10.77.0.11 by the router. Left for 9g: the
-       router is not yet the house's gateway in the lab (the container still is), and
-       nothing runs `sync` nightly yet — an app installed since answers outside only.
+       router is not yet the house's gateway in the lab (the container still is).
+     - 9g. The firewall and NAT. The nightly sync, built 2026-11-18: privd runs
+       `router sync --apply` once a day (`HLB_ROUTER_SECS`) and notifies a failure;
+       it and a person's `hlb router sync --apply` alike record when and what did not
+       hold (`Router::sync_recorded`) — the command the inbox advises clears what it
+       says, not the next night. The inbox says a failure critical
+       (`router_names_unsynced`) until a sync holds, however old, and a router never
+       synced or not for two days unknown. A run that stopped short — the key gone
+       from the vault, Caddy moved off the router's networks — counts as failed: a
+       router is connected, so every name since goes unanswered inside. No router
+       connected is no line. Left: the port forwards and NAT reflection through the
+       savepoint, and the router as the lab's gateway.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.
