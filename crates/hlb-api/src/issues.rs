@@ -215,10 +215,11 @@ pub enum Cause {
     DomainUnknown,
     /// 🔴 The controller's nightly `router sync` failed: a name Caddy serves is not
     /// answered inside the house — an app installed since reaches the house's own
-    /// people the long way, or not at all. The subject is the router's URL;
-    /// `hlb router sync` says what failed.
-    RouterNamesUnsynced,
-    /// A router is connected and its names were not synced for two days, or ever.
+    /// people the long way, or not at all — or a port the house publishes is not
+    /// forwarded from the internet. The subject is the router's URL; `hlb router sync`
+    /// says what failed.
+    RouterUnsynced,
+    /// A router is connected and was not synced for two days, or ever.
     RouterUnknown,
 
     // --- People -------------------------------------------------------------

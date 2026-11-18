@@ -1,5 +1,6 @@
 //! The house's router: the names Caddy serves, answered inside by the router's Unbound,
-//! as the privileged side's nightly `router sync` left them. No router connected is
+//! and the ports forwarded from the internet, as the privileged side's nightly `router
+//! sync` left them. No router connected is
 //! no line — a house may have none Homelabus works on.
 
 use hlb_api::assertions::STALE_AFTER_S;
@@ -20,11 +21,7 @@ pub async fn findings(state: &State, now: i64) -> Vec<Finding> {
     // A failure stays said until a sync holds, however old: a stale reading is said
     // beside it, never instead of it.
     if sync.as_ref().is_some_and(|s| s.failed.is_some()) {
-        out.push((
-            Cause::RouterNamesUnsynced,
-            Attention::Critical,
-            subject.clone(),
-        ));
+        out.push((Cause::RouterUnsynced, Attention::Critical, subject.clone()));
     }
     if sync.is_none_or(|s| now - s.at > STALE_AFTER_S) {
         out.push((Cause::RouterUnknown, Attention::Notice, subject));
@@ -93,12 +90,12 @@ mod tests {
         .expect("sync");
         assert_eq!(
             findings(&s, 1_000).await,
-            [line(Cause::RouterNamesUnsynced, Attention::Critical)]
+            [line(Cause::RouterUnsynced, Attention::Critical)]
         );
         assert_eq!(
             findings(&s, 1_001 + STALE_AFTER_S).await,
             [
-                line(Cause::RouterNamesUnsynced, Attention::Critical),
+                line(Cause::RouterUnsynced, Attention::Critical),
                 line(Cause::RouterUnknown, Attention::Notice)
             ],
             "a failure is not forgotten for being old"

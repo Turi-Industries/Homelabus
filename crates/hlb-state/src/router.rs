@@ -1,5 +1,7 @@
 //! The house's router, as `hlb router connect` declared it. Its API key is the vault's.
 
+use sqlx::Row;
+
 use crate::{Result, State};
 
 /// Where the router is, how it is recognised, and where Caddy sits on its network.
@@ -65,6 +67,39 @@ impl State {
         }))
     }
 
+    /// Each node's declared address on the house's network, by hostname, sorted.
+    pub async fn router_addresses(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query("SELECT node, address FROM router_addresses ORDER BY node")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("node")?, r.try_get("address")?)))
+            .collect()
+    }
+
+    /// `None` forgets it.
+    pub async fn set_router_address(&self, node: &str, address: Option<&str>) -> Result<()> {
+        match address {
+            Some(a) => {
+                sqlx::query(
+                    "INSERT INTO router_addresses (node, address) VALUES (?1, ?2) \
+                     ON CONFLICT (node) DO UPDATE SET address = excluded.address",
+                )
+                .bind(node)
+                .bind(a)
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM router_addresses WHERE node = ?1")
+                    .bind(node)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn record_router_sync(&self, r: &RouterSync) -> Result<()> {
         // The failure first: a crash between the two leaves the old time beside the
         // new verdict, read stale — never a fresh time over a failure that was fixed.
@@ -95,6 +130,30 @@ mod tests {
         };
         s.set_router(&moved).await.expect("kept");
         assert_eq!(s.router().await.expect("read"), Some(moved));
+    }
+
+    #[tokio::test]
+    async fn a_nodes_address_is_declared_moved_and_forgotten() {
+        let s = State::in_memory().await.expect("state");
+        assert!(s.router_addresses().await.expect("read").is_empty());
+        s.set_router_address("deb2", Some("10.77.0.12"))
+            .await
+            .expect("kept");
+        s.set_router_address("deb1", Some("10.77.0.10"))
+            .await
+            .expect("kept");
+        s.set_router_address("deb1", Some("10.77.0.11"))
+            .await
+            .expect("moved");
+        assert_eq!(
+            s.router_addresses().await.expect("read"),
+            vec![
+                ("deb1".to_string(), "10.77.0.11".to_string()),
+                ("deb2".to_string(), "10.77.0.12".to_string())
+            ]
+        );
+        s.set_router_address("deb2", None).await.expect("forgotten");
+        assert_eq!(s.router_addresses().await.expect("read").len(), 1);
     }
 
     #[tokio::test]

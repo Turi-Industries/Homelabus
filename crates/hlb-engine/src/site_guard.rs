@@ -16,6 +16,10 @@
 //! the site promotes once the link is merely down, and the return compares what each
 //! side wrote (`crate::site_return`).
 
+/// The vault's entry holding the site and its members: there is a site when it exists.
+/// A stored name.
+pub const TOPOLOGY: &str = "site-topology";
+
 /// A handshake older than this is a link down: with a keepalive every 25 s, WireGuard
 /// renews its session every two minutes while the tunnel lives. A threshold below it
 /// would stop the apps on a healthy link.

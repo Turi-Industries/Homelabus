@@ -1886,8 +1886,21 @@ enum RouterCmd {
     /// The router, its certificate, and what it answers for the house's names.
     Show,
     /// Every name Caddy serves answered with Caddy's address inside the house, by an
-    /// Unbound override of Homelabus's own; a person's own is left as it is.
+    /// Unbound override of Homelabus's own, and every port an installed app publishes
+    /// for the internet forwarded to the node it runs on; a person's own override or
+    /// forward is left as it is.
     Sync {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Declare a node's address on the house's network: where the router forwards the
+    /// ports its services publish. Checked against the router's networks.
+    Address {
+        /// The node's hostname, as Swarm names it.
+        node: String,
+        /// Its address on the router's network — not its mesh address.
+        #[arg(long, value_parser = router::node_address)]
+        address: std::net::Ipv4Addr,
         #[arg(long)]
         apply: bool,
     },

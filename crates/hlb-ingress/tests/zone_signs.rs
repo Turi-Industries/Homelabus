@@ -520,7 +520,11 @@ fn the_manifest_runs_knot_on_the_configuration_the_writer_writes_for() {
         .map(|l| format!("{}\n", l.get(8..).unwrap_or("")))
         .collect();
     assert_eq!(block, zone::BASE_CONF);
-    assert!(manifest.contains(&format!("publishedPorts: [{0}, \"{0}/udp\"]", zone::PORT)));
+    // The site's alone: forwarded from the internet, a hidden primary would not be one.
+    assert!(manifest.contains(&format!(
+        "publishedPorts: [{{ port: {0}, reach: site }}, {{ port: \"{0}/udp\", reach: site }}]",
+        zone::PORT
+    )));
     assert!(manifest.contains(&format!("\"{}\", \"status\"", zone::SOCKET)));
     assert!(manifest.contains(&format!("name: {}\n", zone::SERVICE)));
 }

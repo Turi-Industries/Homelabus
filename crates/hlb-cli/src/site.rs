@@ -42,8 +42,7 @@ pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// The vault's entry holding the site and its members. A stored name.
-pub const TOPOLOGY: &str = "site-topology";
+pub use hlb_engine::site_guard::TOPOLOGY;
 
 /// The VPS's private key in the vault. A stored name.
 const HUB_KEY: &str = "site-hub-key";

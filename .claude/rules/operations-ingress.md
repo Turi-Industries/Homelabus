@@ -109,3 +109,15 @@ some mistakes loudly; the others are a 502, or a door left open.
 - **🔴 A fresh OPNsense serves DHCP on its LAN** (dnsmasq, 192.168.1.0/24): plugged into
   a network that has one, a node rebooting takes whichever offer comes first. The lab's
   is turned off before its LAN reaches the house's bridge (`scripts/lab/router.sh`).
+- **🔴 Outbound NAT in `automatic` mode ignores every rule written by hand.**
+  `source_nat/add_rule` answers `saved` with a uuid, and the rule is then listed nowhere
+  and loaded nowhere — no `nat on` line in `pfctl -s nat` (26.7, measured 2026-11-18).
+  Only `hybrid` (generated and written) or `advanced` (written only) read them; `hlb
+  router sync` turns `automatic` into `hybrid` before writing a forward's reflection,
+  and leaves `disabled` alone, saying so.
+- **A forward's own reflection does not reach the target's own network.** `purenat`
+  redirects a LAN client asking the WAN address, and the target answers it directly,
+  from an address it never spoke to. The system's "automatic outbound NAT for
+  reflection" has no API: each forward gets an outbound NAT rule of Homelabus's own
+  (`hlb_router::forwards`), its source and translation named by the network
+  (`lan`, `lanip`) so a renumbering carries it.
