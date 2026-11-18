@@ -1038,7 +1038,9 @@ mod tests {
             )),
             "{conf}"
         );
-        assert!(conf.contains(&format!("  - domain: {CATALOG}\n    catalog-role: generate\n")));
+        assert!(conf.contains(&format!(
+            "  - domain: {CATALOG}\n    catalog-role: generate\n"
+        )));
         assert!(
             !format!("{z:?}").contains(&key().0),
             "the key never reaches a log"
