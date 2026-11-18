@@ -2026,6 +2026,38 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        Caddy 0.4.8 refusing `rfc2136`; switched back, its install finished and the site
        served its name. Left: the registrar's switch on a real domain, with the next
        release image, then OPNsense.
+     - OPNsense, in steps of its own (decided 2026-11-18): 9f Homelabus let in, and
+       the house's names answered inside; 9g the firewall and NAT — the port forwards
+       to Caddy and Stalwart, NAT reflection (plan 0⁗'s calls), applied through
+       OPNsense's savepoint so a change that cuts the API rolls back by itself; 9h the
+       three networks (trusted, devices, guests) and DHCP registering names; 9i
+       WireGuard for the family, NTS, the UPS's NUT server; 9j Unbound recursive with
+       DNSSEC validation and blocklists, and the configuration to restic nightly.
+     - 9f. The router let in. Built 2026-11-18: `hlb-router`, OPNsense 26.7's API as
+       read from its own controllers on the machine, reached through the certificate
+       its console prints (`HTTPS: SHA256 …`) — pinned, its name and issuer not read,
+       the handshake's signatures checked; `hlb router connect --url …` with no
+       fingerprint reads the certificate and sends NOTHING. With it, an
+       administrator's key (the file the interface downloads, on standard input) makes
+       Homelabus's own account `homelabus` in `admins` and its own key, kept in the
+       vault and proved by a call, then deletes the key given. 🔴 OPNsense answers a
+       write it refused with a 200 (`"result": "failed"`): `Error::Refused`. Caddy's
+       address is declared (`--caddy`), never Swarm's — a node advertises its mesh
+       address, which the router does not reach — and refused unless it sits in one of
+       the router's networks. `hlb router sync` makes every name Caddy serves an
+       Unbound host override of Homelabus's own (`description: homelabus`, no PTR: one
+       address cannot carry a reverse name per app), removes its own for a name no
+       longer served, and leaves a person's override for a name as it is, said.
+       The lab's router (`scripts/lab/router.sh`): OPNsense 26.7 nano, its image's
+       checksum the release's, LAN 10.77.0.3 on the house's bridge — 🔴 its DHCP, on
+       out of the box, turned off before its LAN reaches the bridge, or a rebooting
+       node takes its offer. Proved on the lab 2026-11-18: the certificate read was
+       the console's; a wrong fingerprint and the mesh address refused before any
+       write; connect made the account and the key, and root's key then answered 401;
+       the four names Caddy serves added, a second sync unchanged, and
+       `librespeed.lab.test` answered 10.77.0.11 by the router. Left for 9g: the
+       router is not yet the house's gateway in the lab (the container still is), and
+       nothing runs `sync` nightly yet — an app installed since answers outside only.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

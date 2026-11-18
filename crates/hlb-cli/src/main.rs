@@ -15,6 +15,7 @@ mod mail;
 mod relay;
 mod restore;
 mod roles;
+mod router;
 mod seal;
 mod site;
 mod sources;
@@ -380,6 +381,12 @@ enum Command {
     /// key Homelabus generates; a host per node in Termix, shared with its admins.
     #[command(subcommand)]
     Termix(TermixCmd),
+
+    /// The house's router, OPNsense: an account and an API key of Homelabus's own,
+    /// reached through the certificate its console prints, and the house's names
+    /// answered inside the house.
+    #[command(subcommand)]
+    Router(RouterCmd),
 
     /// mTLS certificates, agent ↔ controller.
     #[command(subcommand)]
@@ -1851,6 +1858,36 @@ enum TermixCmd {
     /// A new key for the nodes, moved to without a moment Termix is shut out: added
     /// beside the current one everywhere, given to Termix, then the former removed.
     Rotate {
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RouterCmd {
+    /// Let Homelabus in, once. Without --fingerprint, prints the certificate the
+    /// router presents, to compare with its console; with it, reads an administrator's
+    /// API key and secret on standard input, makes Homelabus's own account and key
+    /// with them, then deletes them.
+    Connect {
+        /// The router's interface: `https://10.77.0.3`.
+        #[arg(long)]
+        url: String,
+        /// The SHA-256 its console prints under `HTTPS:`, spaces or not.
+        #[arg(long, requires = "caddy")]
+        fingerprint: Option<String>,
+        /// Caddy's address on the router's network — the ingress node's, not its mesh
+        /// address. The house's names resolve to it inside.
+        #[arg(long, value_parser = router::caddy_address)]
+        caddy: Option<std::net::Ipv4Addr>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// The router, its certificate, and what it answers for the house's names.
+    Show,
+    /// Every name Caddy serves answered with Caddy's address inside the house, by an
+    /// Unbound override of Homelabus's own; a person's own is left as it is.
+    Sync {
         #[arg(long)]
         apply: bool,
     },
@@ -8630,6 +8667,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Termix(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(termix::run(&cli, cmd))
+        }
+
+        Command::Router(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(router::run(&cli, cmd))
         }
 
         Command::Mail(cmd) => {

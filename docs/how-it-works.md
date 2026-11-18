@@ -268,6 +268,7 @@ controller — and `cargo clippy --all-targets` stays at zero warnings.
 | `hlb-identity` | PocketID: OIDC provisioning and human sign-in (PKCE) |
 | `hlb-bitwarden` | Vaultwarden: an organisation's members, the emergency vault, Bitwarden's client cryptography |
 | `hlb-termix` | Termix: its API, the nodes' key, the account each node holds |
+| `hlb-router` | OPNsense: its API through the certificate its console prints, the house's names answered inside |
 | `hlb-mail` | Stalwart client (JMAP): mailboxes, aliases, Sieve |
 | `hlb-users` | Accounts, roles and who enters each app, mailboxes, aliases, Sieve, addy.io API |
 | `hlb-guide` | Verification and automation of manual steps |

@@ -5,7 +5,7 @@ FROM debian:bookworm
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bash ca-certificates cloud-image-utils curl dnsmasq-base iproute2 iptables \
+        bash bzip2 ca-certificates cloud-image-utils curl dnsmasq-base iproute2 iptables \
         openssh-client ovmf procps qemu-system-x86 qemu-utils socat swtpm swtpm-tools \
         tcpdump wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -17,6 +17,7 @@ RUN apt-get update \
 RUN mkdir -p /lab \
     && ln -s repo/scripts/lab/vm.sh /lab/vm.sh \
     && ln -s repo/scripts/lab/vps.sh /lab/vps.sh \
+    && ln -s repo/scripts/lab/router.sh /lab/router.sh \
     && ln -s /vms/keys/id_ed25519 /lab/id_ed25519 \
     && ln -s /vms/keys/id_ed25519.pub /lab/id_ed25519.pub
 

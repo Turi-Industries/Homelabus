@@ -714,6 +714,23 @@ app's "create the DNS record" step is the install's own work:
 ./target/debug/hlb zone switch --back --apply  # the DNS provider's again
 ```
 
+Inside the house, each name Caddy serves should resolve to Caddy itself: through the
+front door, a client at home goes out and comes back — not at all through a router that
+does not loop back, and never to a private route. The house's router, OPNsense, answers
+them by an Unbound override of Homelabus's own; a person's own override for a name is
+left as it is. Homelabus reaches the router through the certificate its console prints,
+as an account it makes once with an administrator's key — the file the interface
+downloads, read on standard input, then deleted:
+
+```sh
+./target/debug/hlb router connect --url https://10.77.0.3   # the certificate it presents, to compare with its console
+cat apikey.txt | ./target/debug/hlb router connect --url https://10.77.0.3 \
+    --fingerprint <sha256> --caddy 10.77.0.11 --apply
+./target/debug/hlb router sync               # preview: each name, answered with Caddy's address
+./target/debug/hlb router sync --apply
+./target/debug/hlb router show
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its
