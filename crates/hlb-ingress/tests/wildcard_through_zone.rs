@@ -254,6 +254,10 @@ fn the_wildcard_is_validated_through_the_houses_zone() {
     let caddy = stand.name("caddy");
     stand.started.push(caddy.clone());
     let image = std::env::var("HLB_CADDY_IMAGE").unwrap_or_else(|_| "hlb-caddy:dev".into());
+    // A file, never `-e`: the Caddyfile carries the update key, and a command line is
+    // readable by every account of the machine.
+    let file = stand.dir.path().join("Caddyfile");
+    std::fs::write(&file, &caddyfile).unwrap();
     ok(&[
         "run",
         "-d",
@@ -263,8 +267,8 @@ fn the_wildcard_is_validated_through_the_houses_zone() {
         &id,
         "--ip",
         &Stand::at(80),
-        "-e",
-        &format!("CADDYFILE={caddyfile}"),
+        "-v",
+        &format!("{}:/etc/hlb/Caddyfile:ro", file.display()),
         "-e",
         &format!("ACME_ROOT={root}"),
         "--entrypoint",
@@ -273,8 +277,7 @@ fn the_wildcard_is_validated_through_the_houses_zone() {
         "-c",
         &format!(
             "mkdir -p $(dirname {at}) && printf '%s' \"$ACME_ROOT\" > {at} && \
-             printf '%s' \"$CADDYFILE\" > /tmp/Caddyfile && \
-             exec caddy run --config /tmp/Caddyfile --adapter caddyfile",
+             exec caddy run --config /etc/hlb/Caddyfile --adapter caddyfile",
             at = hlb_ingress::caddyfile::ACME_ROOT
         ),
     ]);
