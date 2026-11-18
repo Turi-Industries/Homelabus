@@ -686,7 +686,11 @@ critical until accepted — someone else can answer for that name:
 With a site, the house can sign its own zone: Knot at home holds the key and answers
 the site alone, the site's Knot is the only server the internet asks. Every name Caddy
 serves, and both name servers, resolve to the site's addresses, and the zone follows
-each publication of the routes:
+each publication of the routes. It carries the house's mail as Stalwart computes it
+(read again by `hlb mail dns` and every night) and a CAA: no authority under the
+house's own root, its ACME accounts alone under Let's Encrypt. What would collide with
+the owner's own lines — a second SPF, a CAA over a name served elsewhere — stays out
+and is said:
 
 ```sh
 ./target/debug/hlb zone show                 # the zone as it would be served, and Knot's state

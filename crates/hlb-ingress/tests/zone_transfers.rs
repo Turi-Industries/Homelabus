@@ -220,6 +220,8 @@ fn the_zone(site: Ipv4Addr) -> Zone {
             // Two containers: the site's Knot answers on its own port, no publication.
             port: zone::PORT,
         }),
+        mail: Vec::new(),
+        caa: None,
     }
 }
 

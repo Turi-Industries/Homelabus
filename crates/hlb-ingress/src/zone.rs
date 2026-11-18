@@ -103,6 +103,32 @@ pub struct Zone {
     /// The site's secondary, once `hlb site sync` gave it a key; `None`, the zone is
     /// signed and answers nobody.
     pub transfer: Option<Transfer>,
+    /// The records the house's mail needs, as Stalwart computed them.
+    pub mail: Vec<Record>,
+    /// The authorities allowed to issue for the house's names.
+    pub caa: Option<Caa>,
+}
+
+/// One record a service of the house's computed, its line as that service wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    /// Absolute, without the final dot.
+    pub name: String,
+    pub kind: String,
+    /// The data, a TXT's strings joined.
+    pub value: String,
+    /// The line, absolute names, as it goes into the zone.
+    pub line: String,
+}
+
+/// A CAA set, at one name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caa {
+    /// The exposure's domain: what governs the house's names and its wildcard, and
+    /// nothing of the owner's beside them.
+    pub at: String,
+    /// Each record's data: `0 issue "letsencrypt.org; accounturi=…"`.
+    pub records: Vec<String>,
 }
 
 /// What [`render`] makes.
@@ -114,6 +140,8 @@ pub struct Rendered {
     pub zone: String,
     /// Published names outside the apex: no record of this zone can serve them.
     pub outside: Vec<String>,
+    /// What the house would publish and does not, and why: a person reads it.
+    pub withheld: Vec<String>,
 }
 
 /// `example.org.` → `example.org`, lowercased; `None` when it is no domain name.
@@ -181,6 +209,40 @@ pub fn render(z: &Zone) -> Rendered {
             let _ = writeln!(zone, "{owner} {kind} {a}");
         }
     }
+    let theirs = owner_records(&z.extra, apex);
+    let mut withheld = Vec::new();
+    let mut mail = String::new();
+    for r in &z.mail {
+        if relative(&r.name, apex).is_none() {
+            withheld.push(format!(
+                "{} {}: outside {apex}, its record stays where it is",
+                r.name, r.kind
+            ));
+        } else if let Some(t) = theirs.iter().find(|t| collides(t, r)) {
+            withheld.push(format!(
+                "{} {}: the owner's lines hold one ({}), which stays — merge Stalwart's \
+                 into it: {}",
+                r.name, r.kind, t.value, r.line
+            ));
+        } else {
+            let _ = writeln!(mail, "{}", r.line.trim());
+        }
+    }
+    if !mail.is_empty() {
+        let _ = write!(zone, "; The house's mail, as Stalwart computes it\n{mail}");
+    }
+    if let Some(caa) = &z.caa {
+        match caa_withheld(caa, apex, &theirs) {
+            Some(why) => withheld.push(why),
+            None => {
+                let owner = relative(&caa.at, apex).unwrap_or_else(|| "@".into());
+                let _ = writeln!(zone, "; Who may issue for the house's names");
+                for r in &caa.records {
+                    let _ = writeln!(zone, "{owner} 3600 CAA {r}");
+                }
+            }
+        }
+    }
     let extra = z.extra.trim();
     if !extra.is_empty() {
         let _ = writeln!(
@@ -221,7 +283,184 @@ pub fn render(z: &Zone) -> Rendered {
         conf,
         zone,
         outside,
+        withheld,
     }
+}
+
+/// One record of the owner's own lines, as far as the house needs to read them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Theirs {
+    /// Absolute, lowercased, without the final dot.
+    name: String,
+    kind: String,
+    value: String,
+}
+
+/// The owner's lines, read for what the house must not write beside them: each
+/// record's owner made absolute — `@` the apex, a name without a final dot relative to
+/// it, a line starting blank the previous owner —, its type and data. A TTL and a class
+/// are stepped over; a directive and a comment are not records.
+fn owner_records(extra: &str, apex: &str) -> Vec<Theirs> {
+    let mut out = Vec::new();
+    let mut last: Option<String> = None;
+    let mut lines = extra.lines();
+    while let Some(raw) = lines.next() {
+        let mut line = strip_comment(raw).to_string();
+        // A record across lines, `( … )`, read as one.
+        while line.matches('(').count() > line.matches(')').count() {
+            let Some(next) = lines.next() else { break };
+            line.push(' ');
+            line.push_str(strip_comment(next));
+        }
+        if line.trim().is_empty() || line.trim_start().starts_with('$') {
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        let owner = if line.starts_with([' ', '\t']) {
+            last.clone()
+        } else {
+            words.next().map(|o| absolute(o, apex))
+        };
+        let Some(owner) = owner else { continue };
+        last = Some(owner.clone());
+        let mut rest: Vec<&str> = words.collect();
+        while let Some(w) = rest.first() {
+            let class = ["IN", "CH", "HS"].contains(&w.to_ascii_uppercase().as_str());
+            if class || w.bytes().all(|b| b.is_ascii_digit()) {
+                rest.remove(0);
+            } else {
+                break;
+            }
+        }
+        let Some((kind, data)) = rest.split_first() else {
+            continue;
+        };
+        let data = data.join(" ");
+        let data = data.trim_matches(['(', ')', ' ']);
+        out.push(Theirs {
+            name: owner,
+            kind: kind.to_ascii_uppercase(),
+            value: if kind.eq_ignore_ascii_case("TXT") {
+                txt_strings(data)
+            } else {
+                data.to_string()
+            },
+        });
+    }
+    out
+}
+
+/// A line without its comment: a `;` outside quotes.
+fn strip_comment(line: &str) -> &str {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => quoted = !quoted,
+            ';' if !quoted => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// `@`, `www`, `www.example.org.` → absolute, lowercased, without the final dot.
+fn absolute(owner: &str, apex: &str) -> String {
+    let o = owner.to_ascii_lowercase();
+    if o == "@" {
+        apex.to_string()
+    } else if let Some(abs) = o.strip_suffix('.') {
+        abs.to_string()
+    } else {
+        format!("{o}.{apex}")
+    }
+}
+
+/// A TXT's quoted strings joined; as is when unquoted.
+fn txt_strings(data: &str) -> String {
+    if !data.contains('"') {
+        return data.to_string();
+    }
+    let mut out = String::new();
+    let (mut quoted, mut escaped) = (false, false);
+    for c in data.chars() {
+        match c {
+            _ if escaped => {
+                out.push(c);
+                escaped = false;
+            }
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            c if quoted => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `v=spf1 mx -all` → `v=spf1`: what kind of TXT it is, when it says.
+fn txt_tag(value: &str) -> Option<String> {
+    let first = value.split([';', ' ']).next()?.trim().to_ascii_lowercase();
+    first.starts_with("v=").then_some(first)
+}
+
+/// Would `ours` beside `theirs` be a second of one thing? 🔴 Two SPF records at a name
+/// are read by receivers as none, two DMARC the same: the owner's stays, the house's is
+/// said. A CNAME of the owner's refuses any other data at its name, and Knot the zone.
+fn collides(theirs: &Theirs, ours: &Record) -> bool {
+    if theirs.name != ours.name.to_ascii_lowercase() {
+        return false;
+    }
+    match (theirs.kind.as_str(), ours.kind.as_str()) {
+        ("CNAME", _) => true,
+        ("TXT", "TXT") => txt_tag(&theirs.value).is_some_and(|t| txt_tag(&ours.value) == Some(t)),
+        (a, b) => a == b,
+    }
+}
+
+/// Why the house's CAA set is left out, if it is.
+///
+/// 🔴 A CAA governs every name below it that has none of its own: a name of the
+/// owner's served elsewhere — a blog, a shop — would have its next certificate refused
+/// by its own host's authority, silently, months later. So the set goes in only where
+/// none of the owner's names lies under it, and never beside a CAA the owner wrote.
+fn caa_withheld(caa: &Caa, apex: &str, theirs: &[Theirs]) -> Option<String> {
+    let pins = caa
+        .records
+        .iter()
+        .map(|r| format!("{} CAA {r}", caa.at))
+        .collect::<Vec<_>>()
+        .join("\n    ");
+    if relative(&caa.at, apex).is_none() {
+        return Some(format!(
+            "CAA: {} is not in {apex}, the house's CAA stays out:\n    {pins}",
+            caa.at
+        ));
+    }
+    if theirs.iter().any(|t| t.kind == "CAA") {
+        return Some(format!(
+            "CAA: the owner's lines hold their own, which stand alone; the house's would \
+             be:\n    {pins}"
+        ));
+    }
+    let mut under: Vec<&str> = theirs
+        .iter()
+        .filter(|t| ["A", "AAAA", "CNAME"].contains(&t.kind.as_str()))
+        .filter(|t| t.name == caa.at || t.name.ends_with(&format!(".{}", caa.at)))
+        .map(|t| t.name.as_str())
+        .collect();
+    under.sort_unstable();
+    under.dedup();
+    (!under.is_empty()).then(|| {
+        format!(
+            "CAA: the owner's {} would fall under the house's CAA, which would refuse its \
+             host's certificates — give each a CAA of its own in --extra, then these join \
+             them:\n    {pins}",
+            under.join(", ")
+        )
+    })
 }
 
 /// The key, as both configurations declare it.
@@ -379,6 +618,8 @@ mod tests {
             ],
             extra: String::new(),
             transfer: None,
+            mail: Vec::new(),
+            caa: None,
         }
     }
 
@@ -506,6 +747,148 @@ mod tests {
         assert_eq!(
             soa_serial("lab.test. 300 IN SOA a. b. 42 1 2 3 4"),
             Some(42)
+        );
+    }
+
+    fn mail(name: &str, kind: &str, value: &str) -> Record {
+        let data = if kind == "TXT" {
+            format!("\"{value}\"")
+        } else {
+            value.to_string()
+        };
+        Record {
+            name: name.into(),
+            kind: kind.into(),
+            value: value.into(),
+            line: format!("{name}. IN {kind} {data}"),
+        }
+    }
+
+    fn pins() -> Caa {
+        Caa {
+            at: "example.org".into(),
+            records: vec!["0 issue \"letsencrypt.org; accounturi=https://a/1\"".into()],
+        }
+    }
+
+    #[test]
+    fn the_houses_mail_and_its_caa_are_in_the_zone() {
+        let mut z = zone();
+        z.mail = vec![
+            mail("example.org", "MX", "10 mail.example.org."),
+            mail("example.org", "TXT", "v=spf1 mx -all"),
+        ];
+        z.caa = Some(pins());
+        let r = render(&z);
+        assert!(
+            r.zone
+                .contains("\nexample.org. IN MX 10 mail.example.org.\n"),
+            "{}",
+            r.zone
+        );
+        assert!(r
+            .zone
+            .contains("\nexample.org. IN TXT \"v=spf1 mx -all\"\n"));
+        assert!(r
+            .zone
+            .contains("\n@ 3600 CAA 0 issue \"letsencrypt.org; accounturi=https://a/1\"\n"));
+        assert_eq!(r.withheld, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_second_spf_or_mx_beside_the_owners_is_withheld_and_said() {
+        let mut z = zone();
+        z.extra = "@ 3600 IN TXT \"v=spf1 include:_spf.google.com ~all\"\n\
+                   \x20  TXT \"google-site-verification=abc\"\n\
+                   @ MX 5 mx.elsewhere.example.\n"
+            .into();
+        z.mail = vec![
+            mail("example.org", "TXT", "v=spf1 mx -all"),
+            mail("example.org", "MX", "10 mail.example.org."),
+            mail("_dmarc.example.org", "TXT", "v=DMARC1; p=reject"),
+        ];
+        let r = render(&z);
+        assert!(!r.zone.contains("v=spf1 mx -all"), "{}", r.zone);
+        assert!(!r.zone.contains("IN MX 10"));
+        assert!(r.zone.contains("_dmarc.example.org. IN TXT"));
+        assert_eq!(r.withheld.len(), 2, "{:?}", r.withheld);
+        assert!(r.withheld[0].contains("v=spf1 include:_spf.google.com ~all"));
+        // A verification string is no SPF: nothing of the house's collides with it.
+        z.extra = "@ TXT \"google-site-verification=abc\"\n".into();
+        assert!(render(&z).zone.contains("v=spf1 mx -all"));
+    }
+
+    #[test]
+    fn mail_of_another_domain_stays_where_it_is() {
+        let mut z = zone();
+        z.mail = vec![mail("other.net", "MX", "10 mail.other.net.")];
+        let r = render(&z);
+        assert!(!r.zone.contains("other.net"));
+        assert!(
+            r.withheld[0].contains("outside example.org"),
+            "{:?}",
+            r.withheld
+        );
+    }
+
+    #[test]
+    fn the_caa_never_governs_a_name_of_the_owners_served_elsewhere() {
+        let mut z = zone();
+        z.caa = Some(pins());
+        z.extra = "blog CNAME owner.github.io.\n".into();
+        let r = render(&z);
+        assert!(!r.zone.contains(" CAA "), "{}", r.zone);
+        assert!(
+            r.withheld[0].contains("blog.example.org"),
+            "{:?}",
+            r.withheld
+        );
+        assert!(r.withheld[0].contains("example.org CAA 0 issue"));
+
+        // Under the exposure's own domain only, the owner's blog beside it is not.
+        let mut z = zone();
+        z.caa = Some(Caa {
+            at: "home.example.org".into(),
+            ..pins()
+        });
+        z.extra = "blog CNAME owner.github.io.\n".into();
+        let r = render(&z);
+        assert!(r.zone.contains("\nhome 3600 CAA 0 issue"), "{}", r.zone);
+
+        // The owner's own CAA stands alone.
+        let mut z = zone();
+        z.caa = Some(pins());
+        z.extra = "@ CAA 0 issue \"sectigo.com\"\n".into();
+        let r = render(&z);
+        assert_eq!(r.zone.matches(" CAA ").count(), 1, "{}", r.zone);
+        assert!(r.withheld[0].contains("their own"));
+    }
+
+    #[test]
+    fn the_owners_lines_are_read_as_a_zone_file_reads_them() {
+        let got = owner_records(
+            "$TTL 600\n\
+             ; a comment\n\
+             www 300 IN A 192.0.2.1 ; served elsewhere\n\
+             \x20   AAAA 2001:db8::1\n\
+             mail.example.org. MX 10 mx.example.\n\
+             @ TXT ( \"v=spf1 \" \"-all\" )\n\
+             big TXT (\n  \"a;b\"\n  \"c\" )\n",
+            "example.org",
+        );
+        let short: Vec<(&str, &str, &str)> = got
+            .iter()
+            .map(|t| (t.name.as_str(), t.kind.as_str(), t.value.as_str()))
+            .collect();
+        assert_eq!(
+            short,
+            [
+                ("www.example.org", "A", "192.0.2.1"),
+                ("www.example.org", "AAAA", "2001:db8::1"),
+                ("mail.example.org", "MX", "10 mx.example."),
+                ("example.org", "TXT", "v=spf1 -all"),
+                ("big.example.org", "TXT", "a;bc"),
+            ]
         );
     }
 

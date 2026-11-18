@@ -852,6 +852,7 @@ pub async fn start(
                             ))
                             .await;
                     }
+                    let mut zone_moved = false;
                     match super::domain::read_and_record(
                         &st,
                         internet.as_ref(),
@@ -862,6 +863,7 @@ pub async fn start(
                     .await
                     {
                         Ok(found) => {
+                            zone_moved = found.pins_moved;
                             for a in found.refused {
                                 let line = format!(
                                     "{}'s account {} is refused by the domain's CAA",
@@ -906,6 +908,20 @@ pub async fn start(
                             }
                         }
                         Err(e) => tracing::warn!("domain not read: {e}"),
+                    }
+                    if let Some(mail) = mail.as_deref() {
+                        match super::mail_dns::keep_zone(&st, mail).await {
+                            Ok(moved) => zone_moved |= moved,
+                            Err(e) => tracing::warn!("Stalwart's zones not read: {e}"),
+                        }
+                    }
+                    // Before the records are judged: a key made today is served by the
+                    // time the internet is asked for it.
+                    if let (true, Some(orch)) = (zone_moved, orch.as_deref()) {
+                        match hlb_engine::zone::publish(orch, &st, vault.as_ref()).await {
+                            Ok(f) => tracing::info!("the house's zone followed: {f:?}"),
+                            Err(e) => tracing::error!("🔴 the house's zone did not follow: {e}"),
+                        }
                     }
                     let Some(mail) = mail else { return };
                     match super::mail_dns::read_and_record(&st, &mail, dns.as_ref(), now).await {

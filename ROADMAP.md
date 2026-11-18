@@ -1886,8 +1886,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      already resolves to the door, so a house answering too adds nothing the day the
      VPS is down, and it would need a port open at home — none behind a CGNAT — and
      name the address the door hides. 9a the house's Knot, 9b the VPS's secondary, 9c
-     the switch at the registrar (NS, DS, the drift check expecting them), then
-     OPNsense.
+     what the zone must hold before anything is pointed at it (mail, CAA), 9d the
+     switch at the registrar (NS, DS, the drift check expecting them), then OPNsense.
      - 9a. Knot at home. Built 2026-11-18: `hlb zone set --apex … [--address …]
        [--extra file] --apply` (refused without a site, or an apex not holding the
        exposure's domain), the catalog's `knot` (3.6.2, its user, read-only, port
@@ -1933,6 +1933,36 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        only `docker-proxy`. Left for 9c: librespeed's `dns-record` step still blocks
        its install — the system resolver is asked, while the zone publishing the name
        is what the install itself does.
+     - 9c. The zone whole before the switch: a delegation moved to a zone without the
+       house's MX and DKIM loses its mail the same hour. Built 2026-11-18: the zone
+       carries Stalwart's records — those `hlb mail dns` judges, as they must read (the
+       relay's SPF term added), and the SRV and TLS reports it offers — kept in the
+       state from its zones (`zone-mail-records`) by `hlb mail dns` and by the night
+       BEFORE the records are judged, the zone published again when they moved, so a
+       key made today is served by the time the internet is asked. And a CAA at the
+       exposure's domain: `0 issue ";"` under the house's own root, the ACME accounts'
+       `accounturi` pins under Let's Encrypt's production, none under staging or a
+       private authority (staging checks it). 🔴 The pins move only on a reading that
+       read EVERY account (`zone-caa-pins`): a night Caddy's could not be read would
+       have pinned Stalwart's alone, and the house's own zone refused every renewal of
+       Caddy's. 🔴 What would collide with the owner's own lines stays out and is said
+       (`Rendered::withheld`): a second SPF, DMARC, MX or SRV where the owner wrote one
+       — receivers read two SPF as none —, any record where the owner wrote a CNAME,
+       mail of a domain outside the apex, and the CAA wherever one of the owner's names
+       served elsewhere lies under it (its host's authority would be refused at its
+       next renewal, months later) or the owner wrote a CAA. Proved on the real image
+       (`tests/zone_signs.rs`): Stalwart's own lines, the RSA key across `( … )`, and
+       the pins, signed with the rest. Proved on the lab 2026-11-18: `hlb mail dns`
+       republished the zone before reading, and the site's Knot answered `kdig
+       @10.99.0.40` with Stalwart's MX, both SPF, both DKIM keys, the DMARC, five SRV
+       and the TLS reports, each with its RRSIG; a second run published nothing. No
+       CAA there: the lab's authority is step-ca, private.
+       Left for 9d: Caddy's wildcard is validated over DNS-01 through the exposure's
+       provider, and Stalwart publishes DKIM through it: once the registrar delegates
+       to the site's Knot, the provider's zone answers nobody and both fail — the
+       challenges must reach the house's Knot (RFC 2136 with a key of its own; Knot
+       signs an update as it signs the rest). And librespeed's `dns-record` step: a
+       name in the zone answers it only once the delegation is the zone's.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

@@ -15,6 +15,8 @@ pub struct Found {
     /// Certificates for the house's names under a key it does not hold, found this
     /// night or before and not accepted since.
     pub foreign: Vec<Issuance>,
+    /// The CAA pins the house's zone carries moved: it is published again.
+    pub pins_moved: bool,
 }
 
 /// Reads the exposure's domain and records the reading. Nothing without an exposure
@@ -34,9 +36,12 @@ pub async fn read_and_record(
     }
     let mut reading = hlb_engine::domain::read(net, &exposure.domain, now).await;
     let (accounts, unread) = hlb_engine::domain::accounts(state, orch, mail).await;
-    for u in unread {
+    for u in &unread {
         tracing::warn!("{u}");
     }
+    let pins_moved = hlb_engine::zone::keep_pins(state, &accounts, &unread)
+        .await
+        .map_err(|e| e.to_string())?;
     reading.accounts = accounts;
     state
         .record_domain_reading(&reading)
@@ -68,6 +73,7 @@ pub async fn read_and_record(
         drifts,
         refused,
         foreign,
+        pins_moved,
     })
 }
 

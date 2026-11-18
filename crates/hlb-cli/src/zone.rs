@@ -39,6 +39,7 @@ async fn show(cli: &Cli) -> Result<ExitCode> {
     let rendered = hlb_ingress::zone::render(&wanted);
     println!("{}", rendered.zone);
     say_outside(&rendered.outside);
+    say_withheld(&rendered.withheld);
     let orch = SwarmOrchestrator::connect().await?;
     match orch.status(hlb_ingress::zone::SERVICE).await {
         Ok(s) if s.is_converged() => println!("✓ Knot runs ({})", s.replicas_text()),
@@ -131,6 +132,7 @@ async fn set(
         hlb_ingress::zone::render(&hlb_engine::zone::wanted(&state, &config, Some(&vault)).await?);
     println!("{}", rendered.zone);
     say_outside(&rendered.outside);
+    say_withheld(&rendered.withheld);
     let orch = SwarmOrchestrator::connect().await?;
     let deployed = match orch.status(hlb_ingress::zone::SERVICE).await {
         Ok(_) => true,
@@ -184,6 +186,12 @@ async fn set(
     Ok(code)
 }
 
+fn say_withheld(withheld: &[String]) {
+    for w in withheld {
+        println!("⚠️  Not in the zone — {w}");
+    }
+}
+
 fn say_outside(outside: &[String]) {
     if !outside.is_empty() {
         println!(
@@ -191,6 +199,22 @@ fn say_outside(outside: &[String]) {
             outside.join(", ")
         );
     }
+}
+
+/// Publishes the zone again after what it carries moved — Stalwart's records, the CAA
+/// pins —, said as a publication of the routes says it. Nothing without a zone.
+pub async fn follow(cli: &Cli, state: &hlb_state::State) {
+    if !matches!(state.zone().await, Ok(Some(_))) {
+        return;
+    }
+    let vault = open_vault(cli).ok();
+    let followed = match SwarmOrchestrator::connect().await {
+        Ok(orch) => hlb_engine::zone::publish(&orch, state, vault.as_ref())
+            .await
+            .map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    say(&followed);
 }
 
 /// What a publication of the routes did to the zone, said after them.

@@ -790,6 +790,12 @@ pub fn refused(r: &Reading) -> Vec<&Account> {
         .collect()
 }
 
+/// The CAA record letting `a` alone issue for the names under it, at its authority —
+/// what the house's own zone carries. `issue` without `issuewild` governs a wildcard too.
+pub fn pin(a: &Account) -> String {
+    format!("0 issue \"{}; accounturi={}\"", a.issuer, a.uri)
+}
+
 /// The records that let the house's accounts alone issue, when the CAA lets others.
 /// Every account in one piece of advice: a set pinning one of two refuses the other.
 fn pin_advice(r: &Reading) -> Option<Advice> {
