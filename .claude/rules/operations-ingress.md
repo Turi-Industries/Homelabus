@@ -2,6 +2,7 @@
 paths:
   - "crates/hlb-engine/src/ingress.rs"
   - "crates/hlb-ingress/**/*.rs"
+  - "crates/hlb-router/**/*.rs"
   - "crates/hlb-controller/src/exposure.rs"
   - "crates/hlb-engine/src/lifeboat.rs"
   - "crates/hlb-cli/src/site/**/*.rs"
@@ -93,3 +94,18 @@ some mistakes loudly; the others are a 502, or a door left open.
   certificate for ten minutes while `promote` said promoted and Vaultwarden, pointed at
   the door, answered. The promotion now waits for each name's certificate and exits
   `PROMOTED_WITHOUT_CERTIFICATE` naming the missing; `site status` reads the records.
+
+## The router (OPNsense)
+
+- **🔴 OPNsense answers a refused write with a 200.** `{"result": "failed",
+  "validations": {…}}` — an override with a bad name was "saved" by status code alone.
+  `hlb_router::client` makes it `Error::Refused`; read `result`, never the status.
+- **Its certificate is pinned, never trusted.** Self-signed at first boot: its name and
+  issuer say nothing. `hlb router connect` without `--fingerprint` reads it during a
+  handshake it refuses — nothing is sent before a person compared it with the console.
+- **A node's Swarm address is its mesh address**, which the router does not reach: the
+  names resolve to Caddy's address on the router's network, declared and checked
+  against the router's own networks (`names::network_of`).
+- **🔴 A fresh OPNsense serves DHCP on its LAN** (dnsmasq, 192.168.1.0/24): plugged into
+  a network that has one, a node rebooting takes whichever offer comes first. The lab's
+  is turned off before its LAN reaches the house's bridge (`scripts/lab/router.sh`).

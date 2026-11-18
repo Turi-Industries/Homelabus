@@ -1,0 +1,25 @@
+[package]
+name = "hlb-router"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The house's router, OPNsense: its API, reached through a pinned certificate, and the names it answers inside the house."
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+# The same rustls reqwest builds on: a configuration from another version is an
+# "unknown TLS backend" to it. aws-lc-rs is the provider reqwest's `rustls` already
+# brings in — no second one.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

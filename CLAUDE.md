@@ -42,12 +42,12 @@ verb with a runnable example is in [docs/cli-tour.md](docs/cli-tour.md).
 
 ## The repository
 
-Thirty-one crates, and the web interface in `web/`. Which one owns what, so a search starts in the right place:
+Thirty-two crates, and the web interface in `web/`. Which one owns what, so a search starts in the right place:
 
 | | |
 |---|---|
 | **Core** | `hlb-types` (the schema), `hlb-catalog`, `hlb-resolver` (capabilities + graph), `hlb-engine` (executor), `hlb-state` (SQLite), `hlb-orchestrator` (Swarm), `hlb-backup-run` (the one backup pass the CLI and the controller both run, and the restores and proofs built on it) |
-| **Service clients** | `hlb-mail` (Stalwart), `hlb-identity` (PocketID), `hlb-bitwarden` (Vaultwarden: members, the emergency vault, Bitwarden's client cryptography), `hlb-termix` (Termix: the nodes' hosts, key and accounts), `hlb-objstore` (Garage, and the S3 calls proving a backup destination out of reach), `hlb-ingress` (Caddy), `hlb-registry` |
+| **Service clients** | `hlb-mail` (Stalwart), `hlb-identity` (PocketID), `hlb-bitwarden` (Vaultwarden: members, the emergency vault, Bitwarden's client cryptography), `hlb-termix` (Termix: the nodes' hosts, key and accounts), `hlb-objstore` (Garage, and the S3 calls proving a backup destination out of reach), `hlb-ingress` (Caddy), `hlb-router` (OPNsense: its API through a pinned certificate, the house's names answered inside), `hlb-registry` |
 | **Domain logic** | `hlb-users`, `hlb-metrics`, `hlb-backup`, `hlb-notify`, `hlb-guide`, `hlb-platform`, `hlb-secrets` |
 | **The machines** | `hlb-agent`, `hlb-bootstrap`, `hlb-mesh`, `hlb-updater`, `hlb-selfupdate`, `hlb-gitops` |
 | **Surfaces** | `hlb-cli`, `hlb-controller` (the web side: HTTP API, interface; and the `hlb-privd` binary), `hlb-privd` (the privileged executor the handlers ask, by intent, instead of holding Docker, the vault or an admin client), `hlb-api` (the API's types), `web/` (SvelteKit: modules, inbox, action panel — CONTRIBUTING says how it is put together) |

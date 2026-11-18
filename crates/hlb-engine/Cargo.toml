@@ -22,6 +22,7 @@ hlb-identity.workspace = true
 hlb-bitwarden.workspace = true
 # The nodes, kept in Termix.
 hlb-termix.workspace = true
+hlb-router.workspace = true
 # The break-glass safeguard a verified deposit proves.
 hlb-api.workspace = true
 # What PocketID's groups and the apps should hold: the roles' rule, computed there.

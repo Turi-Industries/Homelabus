@@ -30,6 +30,7 @@ pub mod prune;
 pub mod reconcile;
 pub mod removal;
 pub mod roles;
+pub mod router;
 pub mod site_guard;
 pub mod site_return;
 pub mod site_watch;
@@ -120,6 +121,14 @@ pub enum Error {
 
     #[error(transparent)]
     Termix(#[from] hlb_termix::Error),
+
+    #[error(transparent)]
+    Router(#[from] hlb_router::Error),
+
+    /// The router as declared cannot be reached as it should: a fingerprint or an
+    /// address that does not read.
+    #[error("{0}")]
+    RouterConfig(String),
 
     #[error(transparent)]
     Ingress(#[from] hlb_ingress::Error),
