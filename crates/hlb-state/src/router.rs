@@ -100,6 +100,46 @@ impl State {
         Ok(())
     }
 
+    /// Each declared network beyond the trusted one — `devices`, `guests` — and the VLAN
+    /// tag it is carried on, sorted by kind. A tag stored out of range reads as none.
+    pub async fn router_networks(&self) -> Result<Vec<(String, u16)>> {
+        let rows = sqlx::query("SELECT kind, vlan FROM router_networks ORDER BY kind")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let vlan: i64 = r.try_get("vlan")?;
+            if let Ok(v) = u16::try_from(vlan) {
+                out.push((r.try_get("kind")?, v));
+            }
+        }
+        Ok(out)
+    }
+
+    /// `None` forgets it. Two kinds on one tag are refused by the table: the caller
+    /// says why first.
+    pub async fn set_router_network(&self, kind: &str, vlan: Option<u16>) -> Result<()> {
+        match vlan {
+            Some(v) => {
+                sqlx::query(
+                    "INSERT INTO router_networks (kind, vlan) VALUES (?1, ?2) \
+                     ON CONFLICT (kind) DO UPDATE SET vlan = excluded.vlan",
+                )
+                .bind(kind)
+                .bind(i64::from(v))
+                .execute(&self.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM router_networks WHERE kind = ?1")
+                    .bind(kind)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn record_router_sync(&self, r: &RouterSync) -> Result<()> {
         // The failure first: a crash between the two leaves the old time beside the
         // new verdict, read stale — never a fresh time over a failure that was fixed.
@@ -154,6 +194,35 @@ mod tests {
         );
         s.set_router_address("deb2", None).await.expect("forgotten");
         assert_eq!(s.router_addresses().await.expect("read").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_network_is_declared_retagged_and_forgotten_one_tag_each() {
+        let s = State::in_memory().await.expect("state");
+        assert!(s.router_networks().await.expect("read").is_empty());
+        s.set_router_network("guests", Some(30))
+            .await
+            .expect("kept");
+        s.set_router_network("devices", Some(20))
+            .await
+            .expect("kept");
+        s.set_router_network("devices", Some(21))
+            .await
+            .expect("retagged");
+        assert_eq!(
+            s.router_networks().await.expect("read"),
+            vec![("devices".to_string(), 21), ("guests".to_string(), 30)]
+        );
+        s.set_router_network("guests", Some(21))
+            .await
+            .expect_err("one tag, two networks");
+        s.set_router_network("devices", None)
+            .await
+            .expect("forgotten");
+        assert_eq!(
+            s.router_networks().await.expect("read"),
+            vec![("guests".to_string(), 30)]
+        );
     }
 
     #[tokio::test]

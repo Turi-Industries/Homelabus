@@ -746,6 +746,20 @@ is left as it is, and said:
 ./target/debug/hlb router sync               # preview: each port, forwarded to its node
 ```
 
+Beside the trusted network, the house can have one for its devices (a television, a
+console) and one for its guests, each a VLAN tagged on the trusted network's port — a
+VLAN-aware switch or access point carries all three on the router's one LAN cable. The
+sync makes the VLAN and the router's interface on it; OPNsense's API cannot address an
+interface, so the sync says what to do on the router's pages, then reads the address
+back and hands out a DHCP range there, the names under `home.arpa`:
+
+```sh
+./target/debug/hlb router network devices --vlan 20 --apply
+./target/debug/hlb router network guests --vlan 30 --apply
+./target/debug/hlb router sync --apply       # the VLANs, their interfaces; the address is a person's
+./target/debug/hlb router network guests --off --apply   # its range goes, its VLAN stays
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its

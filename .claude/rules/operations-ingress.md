@@ -130,3 +130,8 @@ some mistakes loudly; the others are a 502, or a door left open.
   checked against is configd's `interface list assign-opts`, cached 30 s: a VLAN made
   since a listing is refused "Option [] not in list" — the value it prints is empty, not
   the device asked for. `Opnsense::add_assignment` asks again for up to 40 s.
+- **🔴 An assigned VLAN's device is listed with its interface's name.** `search_item`
+  says `"vlanif": "vlan01"` until it is assigned, `"vlan01 [Devices]"` after: matched
+  as listed, the VLAN read as no interface's and the next sync assigned it again —
+  refused, "Option [] not in list", once the lab's opt1 was addressed (2026-11-18).
+  `Vlan::device` reads the first word; the field is private.

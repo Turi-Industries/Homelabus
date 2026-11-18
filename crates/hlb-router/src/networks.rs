@@ -74,10 +74,22 @@ pub struct Vlan {
     #[serde(rename = "if")]
     pub parent: String,
     pub tag: String,
-    /// The device it is, named by the router: `vlan01`.
-    pub vlanif: String,
+    /// As listed: read through [`Vlan::device`].
+    #[serde(rename = "vlanif")]
+    listed: String,
     #[serde(default)]
     pub descr: String,
+}
+
+impl Vlan {
+    /// The device it is, named by the router: `vlan01`.
+    ///
+    /// 🔴 Listed `vlan01` until assigned, `vlan01 [Devices]` after — the interface's
+    /// description appended. Matched as listed, an assigned VLAN was no interface's, and
+    /// the next sync assigned it again: "Option [] not in list".
+    pub fn device(&self) -> &str {
+        self.listed.split_whitespace().next().unwrap_or_default()
+    }
 }
 
 /// The VLAN Homelabus writes: the router names its device.
@@ -390,9 +402,15 @@ mod tests {
         let v: Vlan = serde_json::from_str(row).expect("a row");
         let vlans = [v];
         assert_eq!(
-            vlan_of(&vlans, "vtnet0", 20).map(|v| v.vlanif.as_str()),
+            vlan_of(&vlans, "vtnet0", 20).map(Vlan::device),
             Some("vlan01")
         );
+        // The same VLAN once assigned, as the lab's router listed it.
+        let assigned: Vlan = serde_json::from_str(
+            r#"{"uuid":"0cde","if":"vtnet0","tag":"20","pcp":"0","descr":"homelabus devices","vlanif":"vlan01 [Devices]"}"#,
+        )
+        .expect("a row");
+        assert_eq!(assigned.device(), "vlan01");
         assert!(vlan_of(&vlans, "vtnet1", 20).is_none());
         assert!(vlan_of(&vlans, "vtnet0", 30).is_none());
         let body = vlan_body(Kind::Guests, "vtnet0", 30);

@@ -16,7 +16,9 @@
 //! the house, and every port an installed manifest publishes for the internet forwarded
 //! to the node its service runs on — at that node's declared address on the house's
 //! network (`hlb router address`), Caddy's node falling back to the address `connect`
-//! was given.
+//! was given. Before both, each network declared beyond the trusted one (`hlb router
+//! network`) carried on its VLAN, made an interface, and handed a DHCP range once a
+//! person has addressed it (`hlb_router::networks`).
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -25,6 +27,7 @@ use hlb_orchestrator::Orchestrator;
 use hlb_router::client::{Credentials, Network, OutboundMode, System};
 use hlb_router::forwards::{self, Edit, Key, Protocol, Wanted};
 use hlb_router::names::{self, Change};
+use hlb_router::networks::{self, Kind};
 use hlb_router::{Fingerprint, Opnsense};
 use hlb_secrets::Vault;
 use hlb_state::{RouterConfig, RouterSync, State};
@@ -49,6 +52,8 @@ pub struct Report {
     pub unchanged: usize,
     /// Ports already forwarded as they should be.
     pub forwards_unchanged: usize,
+    /// Networks already handing out their range as they should.
+    pub networks_unchanged: usize,
     pub notes: Vec<String>,
     /// Why the run went no further, and what a person does about it.
     pub stopped: Option<String>,
@@ -505,6 +510,18 @@ impl Router<'_> {
                 config.url, config.fingerprint
             )));
         }
+        // A network the router could not be read for is said, and the names and
+        // forwards still made: they are what the house reaches its apps by.
+        if let Err(e) = self
+            .sync_networks(&router, caddy, &networks, apply, &mut r)
+            .await
+        {
+            r.push(
+                "networks",
+                "the house's devices and guests networks, read",
+                Outcome::Failed(e.to_string()),
+            );
+        }
         let names = house_names(orch, self.state).await?;
         self.sync_names(&router, &names, caddy, apply, &mut r)
             .await?;
@@ -771,6 +788,282 @@ impl Router<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Each declared network, one stage at a time across them all: the router reloads
+    /// once per stage, and what a stage makes is listed again before the next reads it.
+    async fn sync_networks(
+        &self,
+        router: &Opnsense,
+        caddy: Ipv4Addr,
+        networks: &[Network],
+        apply: bool,
+        r: &mut Report,
+    ) -> crate::Result<()> {
+        let declared: Vec<(Kind, u16)> = self
+            .state
+            .router_networks()
+            .await?
+            .into_iter()
+            .filter_map(|(k, tag)| Some((Kind::from_wire(&k)?, tag)))
+            .collect();
+        // The trusted network's device carries the others' tags: the router needs no
+        // port of its own for them.
+        let parent = names::network_of(caddy, networks)
+            .and_then(|(id, _)| networks.iter().find(|n| n.identifier == id))
+            .map(|n| n.device.clone())
+            .unwrap_or_default();
+        let subject = |k: Kind| format!("{} network", k.wire());
+
+        let mut vlans = router.vlans().await?;
+        for v in &vlans {
+            let Some(k) = v
+                .descr
+                .strip_prefix(networks::MARK)
+                .and_then(|d| Kind::from_wire(d.trim()))
+            else {
+                continue;
+            };
+            if !declared
+                .iter()
+                .any(|(d, tag)| *d == k && v.tag.trim() == tag.to_string())
+            {
+                // Taken away, an interface takes the rules and the leases written on it
+                // with it: a person's to remove, on the router's pages.
+                r.notes.push(format!(
+                    "VLAN {} ({}, {}) is no longer declared: it stays on the router with \
+                     its interface — Interfaces → Assignments, then Devices → VLAN, to \
+                     remove them",
+                    v.tag.trim(),
+                    k.wire(),
+                    v.device()
+                ));
+            }
+        }
+        let mut made = false;
+        for (k, tag) in &declared {
+            if networks::vlan_of(&vlans, &parent, *tag).is_some() {
+                continue;
+            }
+            let change = format!("carried on VLAN {tag}, tagged on {parent}");
+            if !apply {
+                r.push(&subject(*k), change, Outcome::ToDo);
+                r.push(
+                    &subject(*k),
+                    format!("an interface of the router's, named {}", k.label()),
+                    Outcome::ToDo,
+                );
+                continue;
+            }
+            match router
+                .add_vlan(&networks::vlan_body(*k, &parent, *tag))
+                .await
+            {
+                Ok(_) => {
+                    made = true;
+                    r.push(&subject(*k), change, Outcome::Done);
+                }
+                Err(e) => r.push(&subject(*k), change, Outcome::Failed(e.to_string())),
+            }
+        }
+        if made {
+            router.reconfigure_vlans().await?;
+            vlans = router.vlans().await?;
+        }
+
+        let mut networks = networks.to_vec();
+        let mut assigned = false;
+        for (k, tag) in &declared {
+            let Some(v) = networks::vlan_of(&vlans, &parent, *tag) else {
+                continue;
+            };
+            if networks::interface_of(&networks, v.device()).is_some() {
+                continue;
+            }
+            let change = format!("an interface of the router's, named {}", k.label());
+            if !apply {
+                r.push(&subject(*k), change, Outcome::ToDo);
+                continue;
+            }
+            match router.add_assignment(v.device(), k.label()).await {
+                Ok(()) => {
+                    assigned = true;
+                    r.push(&subject(*k), change, Outcome::Done);
+                }
+                Err(e) => r.push(&subject(*k), change, Outcome::Failed(e.to_string())),
+            }
+        }
+        if assigned {
+            router.reconfigure_assignments().await?;
+            networks = router.networks().await?;
+        }
+
+        let mut wanted: Vec<networks::RangeRule> = Vec::new();
+        for (k, tag) in &declared {
+            let Some(net) = networks::vlan_of(&vlans, &parent, *tag)
+                .and_then(|v| networks::interface_of(&networks, v.device()))
+            else {
+                continue;
+            };
+            let change = format!(
+                "addresses handed out by DHCP, named under {}",
+                networks::DOMAIN
+            );
+            if net.addr4.is_empty() {
+                r.push(
+                    &subject(*k),
+                    change,
+                    Outcome::NotConfigured(networks::address_steps(*k, &net.identifier, *tag)),
+                );
+                continue;
+            }
+            match networks::range_of(&net.addr4) {
+                Ok((start, end)) => wanted.push(networks::RangeRule {
+                    kind: *k,
+                    interface: net.identifier.clone(),
+                    start,
+                    end,
+                }),
+                Err(why) => r.push(&subject(*k), change, Outcome::NotConfigured(why)),
+            }
+        }
+        let plan = networks::ranges(&wanted, &router.dhcp_ranges().await?);
+        for (iface, range) in &plan.theirs {
+            r.notes.push(format!(
+                "{iface} hands out {range} by a DHCP range of someone else's: left as it is"
+            ));
+        }
+        let kind_of = |iface: &str| {
+            wanted
+                .iter()
+                .find(|w| w.interface == iface)
+                .map_or_else(|| iface.to_string(), |w| subject(w.kind))
+        };
+        let mut changed = false;
+        for e in &plan.edits {
+            let (who, change) = match e {
+                networks::RangeEdit::Add(w) => {
+                    (subject(w.kind), format!("hands out {}–{}", w.start, w.end))
+                }
+                networks::RangeEdit::Update { to, was, .. } => (
+                    subject(to.kind),
+                    format!("hands out {}–{} (was {was})", to.start, to.end),
+                ),
+                networks::RangeEdit::Remove { interface, .. } => (
+                    kind_of(interface),
+                    format!("Homelabus's DHCP range on {interface}, removed"),
+                ),
+            };
+            if !apply {
+                r.push(&who, change, Outcome::ToDo);
+                continue;
+            }
+            let done = match e {
+                networks::RangeEdit::Add(w) => router.add_dhcp_range(&w.body()).await.map(|_| ()),
+                networks::RangeEdit::Update { uuid, to, .. } => {
+                    router.set_dhcp_range(uuid, &to.body()).await
+                }
+                networks::RangeEdit::Remove { uuid, .. } => router.del_dhcp_range(uuid).await,
+            };
+            match done {
+                Ok(()) => {
+                    changed = true;
+                    r.push(&who, change, Outcome::Done);
+                }
+                Err(e) => r.push(&who, change, Outcome::Failed(e.to_string())),
+            }
+        }
+
+        let ours: Vec<String> = wanted.iter().map(|w| w.interface.clone()).collect();
+        if let Some(d) = networks::dnsmasq_wanted(&router.dnsmasq().await?, &ours) {
+            let change = format!("DHCP served on {}", d.interfaces.join(", "));
+            if !apply {
+                r.push("dnsmasq", change, Outcome::ToDo);
+            } else {
+                match router.set_dnsmasq(&d).await {
+                    Ok(()) => {
+                        changed = true;
+                        r.push("dnsmasq", change, Outcome::Done);
+                    }
+                    Err(e) => r.push("dnsmasq", change, Outcome::Failed(e.to_string())),
+                }
+            }
+        }
+        if changed {
+            if let Err(e) = router.reconfigure_dnsmasq().await {
+                r.push(
+                    "dnsmasq",
+                    "reconfigured, to serve what was saved",
+                    Outcome::Failed(e.to_string()),
+                );
+            }
+        }
+        r.networks_unchanged = plan.unchanged;
+        Ok(())
+    }
+
+    /// Declares the house's `kind` network carried on VLAN `tag`, or none (`None`).
+    /// The router is changed by the next sync.
+    pub async fn network(
+        &self,
+        kind: Kind,
+        tag: Option<u16>,
+        apply: bool,
+    ) -> crate::Result<Report> {
+        let mut r = Report::default();
+        if self.state.router().await?.is_none() {
+            return Ok(r.stop("no router connected — `hlb router connect --url <url>` first"));
+        }
+        if let Some(t) = tag {
+            // VLAN 1 is the untagged network's on most switches: tagged here, the
+            // trusted network and this one would be one network at the switch.
+            if !(2..=4094).contains(&t) {
+                return Ok(r.stop(format!(
+                    "VLAN {t}: a tag between 2 and 4094 — 1 is the untagged network's on \
+                     most switches"
+                )));
+            }
+        }
+        let declared = self.state.router_networks().await?;
+        if let Some(t) = tag {
+            if let Some((other, _)) = declared
+                .iter()
+                .find(|(k, v)| *v == t && k.as_str() != kind.wire())
+            {
+                return Ok(r.stop(format!(
+                    "VLAN {t} carries the {other} network already: one tag, one network"
+                )));
+            }
+        }
+        let was = declared
+            .iter()
+            .find(|(k, _)| k.as_str() == kind.wire())
+            .map(|(_, v)| *v);
+        let subject = format!("{} network", kind.wire());
+        if was == tag {
+            r.unchanged = 1;
+            r.notes.push(match tag {
+                Some(t) => format!("the {subject} is already carried on VLAN {t}."),
+                None => format!("no {subject} is declared."),
+            });
+            return Ok(r);
+        }
+        let change = match (tag, was) {
+            (Some(t), Some(w)) => format!("carried on VLAN {t} (was {w})"),
+            (Some(t), None) => format!("carried on VLAN {t}"),
+            (None, _) => "no longer Homelabus's: its DHCP range removed, its VLAN and \
+                          interface left on the router"
+                .to_string(),
+        };
+        if apply {
+            self.state.set_router_network(kind.wire(), tag).await?;
+            r.push(&subject, change, Outcome::Done);
+            r.notes
+                .push("the router changes at the next sync: `hlb router sync --apply`.".into());
+        } else {
+            r.push(&subject, change, Outcome::ToDo);
+        }
+        Ok(r)
     }
 
     /// Declares `node`'s address on the house's network: where the router forwards the
@@ -1090,5 +1383,87 @@ mod tests {
             stopped.failures().as_deref(),
             Some("the router's API key is not in the vault")
         );
+    }
+
+    async fn connected() -> State {
+        let state = State::in_memory().await.expect("state");
+        state
+            .set_router(&RouterConfig {
+                url: "https://10.77.0.3".into(),
+                fingerprint: "ab".repeat(32),
+                caddy: "10.77.0.11".into(),
+            })
+            .await
+            .expect("kept");
+        state
+    }
+
+    #[tokio::test]
+    async fn a_network_is_declared_only_once_applied_and_only_on_a_tag_of_its_own() {
+        let state = connected().await;
+        let vault = hlb_secrets::Vault::ephemeral();
+        let router = Router {
+            state: &state,
+            vault: &vault,
+        };
+        let preview = router
+            .network(Kind::Devices, Some(20), false)
+            .await
+            .expect("previewed");
+        assert_eq!(preview.lines[0].outcome, Outcome::ToDo);
+        assert!(state.router_networks().await.expect("read").is_empty());
+
+        router
+            .network(Kind::Devices, Some(20), true)
+            .await
+            .expect("declared");
+        let again = router
+            .network(Kind::Devices, Some(20), true)
+            .await
+            .expect("again");
+        assert!(again.lines.is_empty() && again.unchanged == 1, "{again:?}");
+
+        let taken = router
+            .network(Kind::Guests, Some(20), true)
+            .await
+            .expect("refused");
+        assert!(taken.stopped.expect("stopped").contains("devices"));
+        for tag in [0, 1, 4095] {
+            let r = router
+                .network(Kind::Guests, Some(tag), true)
+                .await
+                .expect("refused");
+            assert!(r.stopped.is_some(), "VLAN {tag}");
+        }
+        assert_eq!(
+            state.router_networks().await.expect("read"),
+            vec![("devices".to_string(), 20)]
+        );
+
+        let off = router
+            .network(Kind::Devices, None, true)
+            .await
+            .expect("forgotten");
+        assert!(
+            off.lines[0].change.contains("left on the router"),
+            "{off:?}"
+        );
+        assert!(state.router_networks().await.expect("read").is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_network_is_declared_before_a_router_is_connected() {
+        let state = State::in_memory().await.expect("state");
+        let vault = hlb_secrets::Vault::ephemeral();
+        let router = Router {
+            state: &state,
+            vault: &vault,
+        };
+        let r = router
+            .network(Kind::Guests, Some(30), true)
+            .await
+            .expect("refused");
+        assert!(r.stopped.is_some());
+        assert!(state.router_networks().await.expect("read").is_empty());
     }
 }
