@@ -1622,6 +1622,9 @@ impl Stalwart {
                 Some(DomainDns {
                     id: d.get("id")?.as_str()?.to_string(),
                     name: d.get("name")?.as_str()?.to_string(),
+                    origin: automatic
+                        .then(|| m?.get("origin")?.as_str().map(str::to_string))
+                        .flatten(),
                     published_by: automatic
                         .then(|| {
                             let m = m?;
@@ -1642,24 +1645,39 @@ impl Stalwart {
 
     /// Has Stalwart publish `records` of a domain through a DNS server — and keep them,
     /// rotating its DKIM keys. Switched on, it publishes the keys already active at once.
+    ///
+    /// `origin`: the zone the updates are addressed to, when it is not the domain's own
+    /// — `_domainkey.example.org`, delegated below it (1.0 only: `tasks/dns.rs` takes
+    /// it in the domain's place). Every record goes there, so only what lives below it
+    /// may be asked for.
     pub async fn publish_through(
         &self,
         domain_id: &str,
         server_id: &str,
         records: &[String],
+        origin: Option<&str>,
     ) -> Result<()> {
+        if origin.is_some() {
+            self.v1_only("publishing into a zone below the domain")
+                .await?;
+        }
         let publish: serde_json::Map<String, serde_json::Value> = records
             .iter()
             .map(|r| (r.clone(), serde_json::Value::Bool(true)))
             .collect();
+        let mut management = serde_json::json!({
+            "@type": "Automatic",
+            "dnsServerId": server_id,
+            "publishRecords": publish,
+        });
+        // Left out rather than null: 0.16 knows no such key, and refuses it.
+        if let Some(o) = origin {
+            management["origin"] = o.into();
+        }
         let args = self
             .call(
                 "x:Domain/set",
-                serde_json::json!({ "update": { domain_id: { "dnsManagement": {
-                    "@type": "Automatic",
-                    "dnsServerId": server_id,
-                    "publishRecords": publish,
-                } } } }),
+                serde_json::json!({ "update": { domain_id: { "dnsManagement": management } } }),
             )
             .await?;
         if let Some(err) = args.get("notUpdated").and_then(|v| v.get(domain_id)) {
@@ -2234,6 +2252,8 @@ pub struct DomainDns {
     pub name: String,
     /// `(server, record kinds)`; `None` when published by hand.
     pub published_by: Option<(String, Vec<String>)>,
+    /// The zone its updates go to when not the domain's own (1.0).
+    pub origin: Option<String>,
 }
 
 /// An ACME account Stalwart requests certificates with.

@@ -262,6 +262,31 @@ pub fn stalwart_dns_server(
                 secret_key: secret(1),
             })
         }
+        // A server of the person's own taking dynamic updates, in Caddy's field order:
+        // key name, algorithm, key, `host:port`.
+        "rfc2136" => {
+            let server = values.get(3).map(String::as_str).unwrap_or_default();
+            // Stalwart's `host` is an address: a name would be refused at creation.
+            let at: std::net::SocketAddr = match server.parse() {
+                Ok(a) => a,
+                Err(_) => match server.parse::<std::net::IpAddr>() {
+                    Ok(ip) => (ip, 53).into(),
+                    Err(_) => {
+                        return Err("Stalwart reaches an RFC 2136 server by its IP address, \
+                                    and the exposure names it otherwise")
+                    }
+                },
+            };
+            serde_json::json!({
+                "@type": "Tsig",
+                "host": at.ip().to_string(),
+                "port": at.port(),
+                "keyName": values.first().cloned().unwrap_or_default(),
+                "key": secret(2),
+                "protocol": "tcp",
+                "tsigAlgorithm": values.get(1).cloned().unwrap_or_default(),
+            })
+        }
         // 🔴 DuckDNS keeps ONE TXT a name, on the name itself: a DKIM key published
         // through it would overwrite the certificate challenge's, and a duckdns.org
         // name has no MX of its own to receive mail by anyway.
@@ -273,7 +298,7 @@ pub fn stalwart_dns_server(
 }
 
 /// Publishes a domain's `records` through `server`, its DKIM keys rotated by Stalwart
-/// from then on.
+/// from then on; `origin`, the zone the updates go to when not the domain's own.
 ///
 /// 🔴 Switched on, Stalwart publishes and schedules the rotation in two tasks at once,
 /// and the rotation rewrites each key while the publishing reads them: a key read
@@ -286,6 +311,7 @@ pub async fn switch(
     domain_id: &str,
     server: &str,
     records: &[String],
+    origin: Option<&str>,
 ) -> crate::Result<()> {
     let dkim = records.iter().any(|r| r == "dkim");
     // 🔴 Switched while its first keys are being made — its `DkimManagement` task still
@@ -302,7 +328,8 @@ pub async fn switch(
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    mail.publish_through(domain_id, server, records).await?;
+    mail.publish_through(domain_id, server, records, origin)
+        .await?;
     if !dkim {
         return Ok(());
     }
@@ -321,10 +348,115 @@ pub async fn switch(
     Ok(())
 }
 
+/// The DNS server Stalwart publishes through, as Homelabus wants it.
+struct Through {
+    /// How it is named in what changed: the provider, or the house's zone.
+    label: String,
+    body: serde_json::Value,
+    /// `Homelabus: <provider> <fingerprint>`.
+    description: String,
+    /// The domains it publishes, each with the zone its updates go to — `None`: every
+    /// domain under the exposure, each at its own zone.
+    origins: Option<Vec<(String, String)>>,
+}
+
+/// Stalwart's server for the house's zone: Knot's update port, signed with the update key.
+fn zone_server(knot: std::net::IpAddr, key: &hlb_ingress::zone::UpdateKey) -> serde_json::Value {
+    use hlb_ingress::zone;
+    serde_json::json!({
+        "@type": "Tsig",
+        "host": knot.to_string(),
+        "port": zone::PORT,
+        "keyName": zone::UPDATE_KEY_ID,
+        "key": { "@type": "Value", "secret": key.0 },
+        // 🔴 Over UDP the RSA key's signed update, past 512 bytes, never reached the
+        // server and the task counted as done (0.16.26).
+        "protocol": "tcp",
+        "tsigAlgorithm": zone::UPDATE_ALGORITHM,
+    })
+}
+
+/// Where Stalwart publishes, or `None` where the records are a person's to publish.
+///
+/// 🔴 Once the registrar delegates to the house's zone, the exposure's provider no longer
+/// serves the domain: the keys go into the zone's `_domainkey.<domain>` children, signed
+/// with the update key — the only names that key may write. A domain whose child the
+/// zone does not render (outside the apex, or under the owner's own lines) is not
+/// Stalwart's to publish.
+async fn through(
+    state: &hlb_state::State,
+    vault: &hlb_secrets::Vault,
+    mail: &hlb_mail::Stalwart,
+    knot: Option<std::net::IpAddr>,
+    exposure: &hlb_state::Exposure,
+) -> crate::Result<Option<Through>> {
+    if let Some(delegation) = crate::zone::delegation(state, Some(vault)).await? {
+        match mail.generation().await? {
+            hlb_mail::Generation::V1 => {}
+            hlb_mail::Generation::V016 => {
+                return Err(hlb_mail::Error::NeedsV1(
+                    "publishing DKIM into the house's delegated zone".into(),
+                )
+                .into())
+            }
+        }
+        let knot = knot.ok_or_else(|| {
+            crate::Error::Exposure(
+                "the zone is delegated and Knot is not running: Stalwart has nowhere to \
+                 publish its DKIM keys — hlb install knot --apply"
+                    .into(),
+            )
+        })?;
+        let Some(config) = state.zone().await? else {
+            return Ok(None);
+        };
+        let wanted = crate::zone::wanted(state, &config, Some(vault)).await?;
+        let origins = hlb_ingress::zone::render(&wanted)
+            .children
+            .into_iter()
+            .filter(|c| c.kind == hlb_ingress::zone::ChildKind::Dkim)
+            .filter_map(|c| {
+                let domain = c.name.strip_prefix("_domainkey.")?.to_string();
+                Some((domain, c.name))
+            })
+            .collect();
+        let print =
+            &hlb_types::token::sha256_hex(format!("{knot}\n{}", delegation.key.0).as_bytes())[..12];
+        return Ok(Some(Through {
+            label: "the house's zone".into(),
+            body: zone_server(knot, &delegation.key),
+            description: format!("{OURS} zone {print}"),
+            origins: Some(origins),
+        }));
+    }
+    let Some(name) = exposure.dns_provider.as_deref() else {
+        return Ok(None);
+    };
+    let Some(provider) = hlb_ingress::dns::provider(name) else {
+        return Ok(None);
+    };
+    let values = crate::ingress::dns_credentials(state, Some(vault), provider).await?;
+    let body = match stalwart_dns_server(name, &values, mail.generation().await?) {
+        Ok(b) => b,
+        Err(why) => {
+            tracing::info!(provider = name, "DKIM is published by hand: {why}");
+            return Ok(None);
+        }
+    };
+    let print = &hlb_types::token::sha256_hex(values.join("\n").as_bytes())[..12];
+    Ok(Some(Through {
+        label: name.to_string(),
+        body,
+        description: format!("{OURS} {name} {print}"),
+        origins: None,
+    }))
+}
+
 /// Stalwart publishes and rotates the DKIM keys of the mail domains through the DNS
-/// provider the exposure uses — the credential `hlb config exposure` already keeps.
-/// `Ok(what changed)` — or, `apply` false, what would; nothing without a provider,
-/// where the records are a person's to publish (`hlb mail dns`).
+/// provider the exposure uses — the credential `hlb config exposure` already keeps — or,
+/// once the registrar delegates to it, into the house's own zone, on Knot at `knot`.
+/// `Ok(what changed)` — or, `apply` false, what would; nothing without either, where
+/// the records are a person's to publish (`hlb mail dns`).
 ///
 /// DKIM only: the selectors are Stalwart's own names, so publishing them overwrites
 /// nothing. MX, SPF and DMARC are the domain's — another provider may hold its mail or
@@ -338,32 +470,26 @@ pub async fn publish_dkim(
     state: &hlb_state::State,
     vault: &hlb_secrets::Vault,
     mail: &hlb_mail::Stalwart,
+    knot: Option<std::net::IpAddr>,
     apply: bool,
 ) -> crate::Result<Vec<String>> {
     let Some(exposure) = state.exposure().await? else {
         return Ok(Vec::new());
     };
-    let Some(name) = exposure.dns_provider.as_deref() else {
+    let Some(Through {
+        label,
+        body,
+        description,
+        origins,
+    }) = through(state, vault, mail, knot, &exposure).await?
+    else {
         return Ok(Vec::new());
-    };
-    let Some(provider) = hlb_ingress::dns::provider(name) else {
-        return Ok(Vec::new());
-    };
-    let values = crate::ingress::dns_credentials(state, Some(vault), provider).await?;
-    let body = match stalwart_dns_server(name, &values, mail.generation().await?) {
-        Ok(b) => b,
-        Err(why) => {
-            tracing::info!(provider = name, "DKIM is published by hand: {why}");
-            return Ok(Vec::new());
-        }
     };
     let kind = body
         .get("@type")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let print = &hlb_types::token::sha256_hex(values.join("\n").as_bytes())[..12];
-    let description = format!("{OURS} {name} {print}");
 
     let mut changed = Vec::new();
     let servers = mail.dns_servers().await?;
@@ -372,9 +498,11 @@ pub async fn publish_dkim(
     let server_id = match ours {
         Some(s) if s.kind == kind && s.description == description => Some(s.id.clone()),
         Some(s) if s.kind == kind => {
-            changed.push(format!(
-                "DKIM published with the {name} credential the vault holds now"
-            ));
+            changed.push(if origins.is_some() {
+                format!("DKIM published into {label} with the address and key it has now")
+            } else {
+                format!("DKIM published with the {label} credential the vault holds now")
+            });
             if apply {
                 let mut b = body.clone();
                 b["description"] = description.clone().into();
@@ -386,7 +514,7 @@ pub async fn publish_dkim(
         // a domain names cannot be removed.
         Some(s) => {
             changed.push(format!(
-                "DKIM published through {name}, no longer {}",
+                "DKIM published through {label}, no longer {}",
                 s.kind
             ));
             if apply {
@@ -407,7 +535,7 @@ pub async fn publish_dkim(
         Some(id) => Some(id),
         None => {
             if ours.is_none() {
-                changed.push(format!("DKIM published through {name}"));
+                changed.push(format!("DKIM published through {label}"));
             }
             if apply {
                 let mut b = body;
@@ -429,10 +557,7 @@ pub async fn publish_dkim(
     } else {
         domains
     };
-    for d in domains
-        .iter()
-        .filter(|d| d.name == exposure.domain || d.name.ends_with(&format!(".{}", exposure.domain)))
-    {
+    for d in &domains {
         let by = d.published_by.as_ref();
         let by_us = by
             .is_some_and(|(s, _)| Some(s.as_str()) == ours_now || Some(s.as_str()) == ours_before);
@@ -440,20 +565,55 @@ pub async fn publish_dkim(
         if by.is_some() && !by_us {
             continue;
         }
+        let origin = match &origins {
+            None if d.name == exposure.domain
+                || d.name.ends_with(&format!(".{}", exposure.domain)) =>
+            {
+                None
+            }
+            None => continue,
+            Some(o) => match o.iter().find(|(domain, _)| *domain == d.name) {
+                Some((_, zone)) => Some(zone.as_str()),
+                // 🔴 Published by us with no child of its own to go to: every update
+                // would be refused. Back to the records the house's zone holds.
+                None if by_us => {
+                    changed.push(format!(
+                        "{}: DKIM no longer published by Stalwart — the house's zone \
+                         delegates no _domainkey below it",
+                        d.name
+                    ));
+                    if apply {
+                        mail.set_manual_dns(&d.id).await?;
+                    }
+                    continue;
+                }
+                None => continue,
+            },
+        };
         let publishes_dkim = by.is_some_and(|(s, records)| {
             Some(s.as_str()) == ours_now && records.iter().any(|r| r == "dkim")
-        });
+        }) && d.origin.as_deref() == origin;
         if !publishes_dkim {
-            changed.push(format!(
-                "{}: DKIM published and rotated by Stalwart",
-                d.name
-            ));
+            changed.push(match origin {
+                Some(zone) => format!(
+                    "{}: DKIM published into {zone} and rotated by Stalwart",
+                    d.name
+                ),
+                None => format!("{}: DKIM published and rotated by Stalwart", d.name),
+            });
             if let (true, Some(server)) = (apply, ours_now) {
-                let mut records: Vec<String> = by.map(|(_, r)| r.clone()).unwrap_or_default();
-                records.push("dkim".into());
-                records.sort();
-                records.dedup();
-                switch(mail, &d.id, server, &records).await?;
+                // Below `_domainkey.` the key may write DKIM alone: whatever else the
+                // domain published goes back to the person.
+                let records: Vec<String> = if origin.is_some() {
+                    vec!["dkim".into()]
+                } else {
+                    let mut r: Vec<String> = by.map(|(_, r)| r.clone()).unwrap_or_default();
+                    r.push("dkim".into());
+                    r.sort();
+                    r.dedup();
+                    r
+                };
+                switch(mail, &d.id, server, &records, origin).await?;
             }
             continue;
         }
@@ -619,13 +779,27 @@ mod tests {
                 (p, hlb_mail::Generation::V1),
             ]
         }) {
-            let values: Vec<String> = p.fields.iter().map(|f| format!("v-{}", f.name)).collect();
+            // An RFC 2136 server is reached by address, which Stalwart takes apart.
+            let values: Vec<String> = p
+                .fields
+                .iter()
+                .map(|f| match (p.name, f.name) {
+                    ("rfc2136", "server") => "192.0.2.53:5353".into(),
+                    _ => format!("v-{}-v", f.name),
+                })
+                .collect();
             match stalwart_dns_server(p.name, &values, g) {
                 Ok(body) => {
                     assert!(body.get("@type").is_some(), "{}: {body}", p.name);
                     // Every credential reaches Stalwart, none twice and none lost.
                     let text = body.to_string();
-                    for v in &values {
+                    if p.name == "rfc2136" {
+                        assert_eq!(
+                            (body["host"].as_str(), body["port"].as_u64()),
+                            (Some("192.0.2.53"), Some(5353))
+                        );
+                    }
+                    for v in values.iter().filter(|v| v.starts_with("v-")) {
                         assert_eq!(
                             text.matches(v.as_str()).count(),
                             1,

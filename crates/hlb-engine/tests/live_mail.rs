@@ -656,7 +656,7 @@ async fn stalwart_publishes_its_active_keys_through_a_provider_and_again_when_as
         }))
         .await
         .expect("server");
-    hlb_engine::mail_dns::switch(&s, &domain, &server, &["dkim".to_string()])
+    hlb_engine::mail_dns::switch(&s, &domain, &server, &["dkim".to_string()], None)
         .await
         .expect("switched");
 
@@ -752,9 +752,14 @@ async fn stalwart_takes_the_dns_server_of_every_provider_homelabus_maps() {
         let values: Vec<String> = p
             .fields
             .iter()
-            .map(|f| {
-                f.default
-                    .map_or_else(|| format!("test-{}", f.name), str::to_string)
+            .map(|f| match (p.name, f.name) {
+                // Stalwart takes an RFC 2136 server by address, never a name, and
+                // decodes its key at creation.
+                ("rfc2136", "server") => "192.0.2.53:53".to_string(),
+                ("rfc2136", "key") => TSIG.to_string(),
+                _ => f
+                    .default
+                    .map_or_else(|| format!("test-{}", f.name), str::to_string),
             })
             .collect();
         let Ok(mut body) = hlb_engine::mail_dns::stalwart_dns_server(
@@ -813,11 +818,11 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         }))
         .await
         .expect("their server");
-    s.publish_through(&theirs, &their_server, &["dkim".to_string()])
+    s.publish_through(&theirs, &their_server, &["dkim".to_string()], None)
         .await
         .expect("theirs");
 
-    let preview = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, false)
+    let preview = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, false)
         .await
         .expect("preview");
     assert_eq!(
@@ -833,7 +838,7 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         "a preview writes nothing"
     );
 
-    hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, true)
+    hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, true)
         .await
         .expect("applied");
     let servers = s.dns_servers().await.expect("read");
@@ -863,7 +868,7 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         Some((their_server.clone(), vec!["dkim".to_string()])),
         "a domain published through a server of a person's own stays theirs"
     );
-    let again = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, true)
+    let again = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, true)
         .await
         .expect("again");
     assert!(again.is_empty(), "once: {again:?}");
@@ -873,7 +878,7 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         .rotate_secret("dns-cloudflare-api-token", &token("second-token"))
         .await
         .expect("rotated");
-    let rotated = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, true)
+    let rotated = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, true)
         .await
         .expect("rotated");
     assert_eq!(
@@ -923,7 +928,7 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
     let before = s.dns_tasks(&mine).await.expect("tasks");
-    let retried = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, true)
+    let retried = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, true)
         .await
         .expect("retried");
     let tasks = s.dns_tasks(&mine).await.expect("tasks");
@@ -978,6 +983,278 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         "the reason beside the missing key: {said:?}"
     );
     println!("✓ through the exposure's provider, once; its credential followed; retried; said why: {said:?}");
+    stop();
+}
+
+const KNOT: &str = "hlb-test-mail-knot";
+const KNOT_VOLUME: &str = "hlb-test-mail-knot";
+
+/// The house's Knot as its manifest runs it — Knot's user, a read-only root, no
+/// capability — on the default bridge, which Stalwart reaches, `z` written into it as
+/// the writer job writes it. Its address.
+fn knot(z: &hlb_ingress::zone::Zone) -> String {
+    use hlb_ingress::zone;
+    let _ = docker(&["rm", "-f", KNOT]);
+    let _ = docker(&["volume", "rm", "-f", KNOT_VOLUME]);
+    let m = catalog("_platform/knot");
+    let image = format!(
+        "{}:{}@{}",
+        m.spec.image.repo,
+        m.spec.image.tag,
+        m.spec.image.digest.as_deref().expect("pinned")
+    );
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tmp");
+    std::fs::write(dir.path().join("knot.conf"), zone::BASE_CONF).expect("conf");
+    let storage = format!("{KNOT_VOLUME}:{}", zone::STORAGE);
+    let conf = format!("{}/knot.conf:/etc/knot/knot.conf:ro", dir.path().display());
+    let run = |extra: &[&str], script: &str| {
+        let mut args = vec![
+            "run",
+            "--user",
+            "53:53",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:mode=1777",
+            "--cap-drop",
+            "ALL",
+            "-v",
+            &storage,
+        ];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&[&image, "sh", "-c", script]);
+        docker(&args)
+    };
+    let out = run(
+        &["-d", "--name", KNOT, "-v", &conf],
+        "mkdir -p /storage/run /storage/hlb && exec knotd -c /etc/knot/knot.conf",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for _ in 0..60 {
+        if docker(&["exec", KNOT, "knotc", "-s", zone::SOCKET, "status"])
+            .status
+            .success()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    let r = zone::render(z);
+    let staged = dir.path().join("staged");
+    std::fs::create_dir_all(&staged).expect("staged");
+    std::fs::write(staged.join("zone"), &r.zone).expect("zone");
+    std::fs::write(staged.join("zone.conf"), &r.conf).expect("zone.conf");
+    std::fs::write(staged.join("check.conf"), zone::check_conf()).expect("check.conf");
+    let staged = format!("{}:/run/hlb:ro", staged.display());
+    let out = run(
+        &["--rm", "-v", &staged],
+        &zone::writer_script(&z.apex, &r.children),
+    );
+    assert!(
+        out.status.success(),
+        "the writer: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(
+        &docker(&[
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            KNOT,
+        ])
+        .stdout,
+    )
+    .trim()
+    .to_string()
+}
+
+/// What Knot answers, `+short`.
+fn kdig(name: &str, kind: &str) -> String {
+    let port = hlb_ingress::zone::PORT.to_string();
+    String::from_utf8_lossy(
+        &docker(&[
+            "exec",
+            KNOT,
+            "kdig",
+            "@127.0.0.1",
+            "-p",
+            &port,
+            "+short",
+            kind,
+            name,
+        ])
+        .stdout,
+    )
+    .into_owned()
+}
+
+fn knot_down() {
+    let _ = docker(&["rm", "-f", KNOT]);
+    let _ = docker(&["volume", "rm", "-f", KNOT_VOLUME]);
+}
+
+/// Once the registrar delegates to the house's zone, Stalwart publishes its keys into
+/// `_domainkey.<domain>`, the zone below it, signed with the update key — its keys
+/// erased there first, so what comes back is Stalwart's own writing.
+#[tokio::test]
+#[ignore = "needs Docker"]
+async fn dkim_goes_into_the_houses_delegated_zone_once_stalwart_is_told_its_origin() {
+    use hlb_ingress::zone;
+    let s = start();
+    let state = exposed("example.org").await;
+    let dir = tempfile::tempdir().expect("tmp");
+    let vault = hlb_secrets::Vault::init(dir.path().join("k.key")).expect("vault");
+    let config = hlb_state::ZoneConfig {
+        apex: "example.org".into(),
+        addresses: vec!["10.99.0.40".into()],
+        extra: String::new(),
+        delegated: true,
+    };
+    state.set_zone(&config).await.expect("zone");
+    let key = hlb_engine::zone::update_key(&state, &vault)
+        .await
+        .expect("key");
+
+    if s.generation().await.expect("generation") == Generation::V016 {
+        let refused = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, false).await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("needs Stalwart 1.0")),
+            "0.16 has no origin to be told: {refused:?}"
+        );
+        println!("✓ 0.16 refused by name");
+        stop();
+        return;
+    }
+
+    let domain = s.ensure_domain("example.org").await.expect("domain");
+    // The keys Stalwart computed, as the house keeps them for its zone.
+    let mut lines = String::new();
+    for _ in 0..60 {
+        lines = hlb_engine::mail_dns::zone_lines(&s, None, &[])
+            .await
+            .expect("lines");
+        if lines.matches("._domainkey.example.org.").count() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    state.keep_zone_mail(&lines).await.expect("kept");
+    let wanted = hlb_engine::zone::wanted(&state, &config, Some(&vault))
+        .await
+        .expect("wanted");
+    let selectors: Vec<String> = wanted
+        .mail
+        .iter()
+        .filter(|r| r.name.ends_with("._domainkey.example.org"))
+        .map(|r| r.name.clone())
+        .collect();
+    assert_eq!(selectors.len(), 2, "both keys in Stalwart's zone: {lines}");
+    let rendered = zone::render(&wanted);
+    assert!(
+        rendered
+            .children
+            .iter()
+            .any(|c| c.name == "_domainkey.example.org" && c.kind == zone::ChildKind::Dkim),
+        "{:?}",
+        rendered.children
+    );
+    let ip = knot(&wanted);
+
+    // The seeds erased, with the key Stalwart is about to be given.
+    let delete: String = selectors
+        .iter()
+        .map(|n| format!("update delete {n}. TXT\n"))
+        .collect();
+    let script = format!(
+        "server 127.0.0.1 {}\nzone _domainkey.example.org.\n{delete}send\n",
+        zone::PORT
+    );
+    let mut update = std::process::Command::new("docker")
+        .args(["exec", "-i", KNOT, "knsupdate", "-y"])
+        .arg(format!(
+            "{}:{}:{}",
+            zone::UPDATE_ALGORITHM,
+            zone::UPDATE_KEY_ID,
+            key.0
+        ))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("knsupdate");
+    std::io::Write::write_all(update.stdin.as_mut().expect("stdin"), script.as_bytes())
+        .expect("write");
+    assert!(update.wait().expect("ran").success());
+    for n in &selectors {
+        assert!(kdig(n, "TXT").trim().is_empty(), "{n} erased");
+    }
+
+    let knot_ip = Some(ip.parse().expect("an address"));
+    let preview = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, knot_ip, false)
+        .await
+        .expect("preview");
+    assert_eq!(
+        preview,
+        [
+            "DKIM published through the house's zone",
+            "example.org: DKIM published into _domainkey.example.org and rotated by Stalwart"
+        ]
+    );
+    assert!(
+        s.dns_servers().await.expect("read").is_empty(),
+        "a preview writes nothing"
+    );
+
+    hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, knot_ip, true)
+        .await
+        .expect("applied");
+    let mut back = Vec::new();
+    for _ in 0..60 {
+        back = selectors
+            .iter()
+            .filter(|n| kdig(n, "TXT").contains("v=DKIM1"))
+            .collect();
+        if back.len() == selectors.len() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    assert_eq!(
+        back.len(),
+        selectors.len(),
+        "Stalwart wrote {back:?} of {selectors:?} — tasks {:?}",
+        s.dns_tasks(&domain).await
+    );
+    let d = s
+        .domains_dns()
+        .await
+        .expect("read")
+        .into_iter()
+        .find(|d| d.id == domain)
+        .expect("the domain");
+    assert_eq!(d.origin.as_deref(), Some("_domainkey.example.org"));
+    assert_eq!(
+        d.published_by.map(|(_, r)| r),
+        Some(vec!["dkim".to_string()])
+    );
+    let again = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, knot_ip, true)
+        .await
+        .expect("again");
+    assert!(again.is_empty(), "once: {again:?}");
+
+    // Knot gone while the zone is delegated: said, never taken for nothing to do.
+    let lost = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, None, false).await;
+    assert!(
+        lost.as_ref()
+            .is_err_and(|e| e.to_string().contains("Knot is not running")),
+        "{lost:?}"
+    );
+    println!("✓ both keys written by Stalwart into _domainkey.example.org, once");
+    knot_down();
     stop();
 }
 
@@ -1991,7 +2268,7 @@ async fn a_domain_its_provider_publishes_is_certified_over_dns_01_with_no_port_o
         }))
         .await
         .expect("server");
-    hlb_engine::mail_dns::switch(&s, &domain, &server, &["dkim".to_string()])
+    hlb_engine::mail_dns::switch(&s, &domain, &server, &["dkim".to_string()], None)
         .await
         .expect("switched");
 

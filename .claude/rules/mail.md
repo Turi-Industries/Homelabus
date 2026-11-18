@@ -229,7 +229,11 @@ the first.
   waits for that task first, and `live_mail` holds the dates on both. A `DnsServer` is accepted offline and its secret reads back `****`: Homelabus
   marks its own by description, `Homelabus: <provider> <fingerprint>`. DuckDNS keeps one
   TXT a name, the certificate challenge's: refused. With DNS published by hand, Stalwart
-  never rotates a key at all.
+  never rotates a key at all. 🔴 Once the registrar delegates to the house's zone the keys go
+  into its `_domainkey.<domain>` child, the only names the update key may write there:
+  `dnsManagement.origin` (1.0 only — 0.16 refused by name) replaces the domain as EVERY
+  update's zone, so that domain publishes DKIM alone and its certificate goes HTTP-01 —
+  a challenge sent there would be refused. A `Tsig` key is base64-decoded at creation.
 - **🔴 Stalwart's defaults hand a relay's password to whoever is in the way** (0.16.26;
   the same `default` and `invalid-tls` strategies on 1.0.0).
   The `default` TLS strategy takes STARTTLS when offered (`startTls: optional`) — a

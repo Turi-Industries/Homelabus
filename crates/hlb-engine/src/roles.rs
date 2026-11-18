@@ -297,7 +297,23 @@ impl RoleSync<'_> {
                     Outcome::Failed(e.to_string()),
                 ),
             }
-            match crate::mail_dns::publish_dkim(self.state, self.vault, &mail, apply).await {
+            // The house's zone takes updates at Knot's address on the overlay: Stalwart's
+            // `Tsig` server takes an IP, never a name.
+            let published = match self
+                .orchestrator
+                .service_address(
+                    hlb_ingress::zone::SERVICE,
+                    hlb_orchestrator::PLATFORM_NETWORK,
+                )
+                .await
+            {
+                Ok(knot) => {
+                    let knot = knot.and_then(|a| a.parse().ok());
+                    crate::mail_dns::publish_dkim(self.state, self.vault, &mail, knot, apply).await
+                }
+                Err(e) => Err(e.into()),
+            };
+            match published {
                 Ok(changed) if changed.is_empty() => report.unchanged += 1,
                 Ok(changed) => {
                     for c in changed {

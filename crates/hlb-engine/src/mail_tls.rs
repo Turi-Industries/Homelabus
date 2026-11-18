@@ -9,7 +9,7 @@
 //! | Exposure | The certificate |
 //! |---|---|
 //! | internal | signed under Homelabus's own root, the one the house's devices trust for the web |
-//! | ACME, the domain's records published by a DNS provider | requested by Stalwart itself, DNS-01 through the same `DnsServer` |
+//! | ACME, the domain's records published by a DNS provider | requested by Stalwart itself, DNS-01 through the same `DnsServer` — not into the house's delegated zone, which takes DKIM alone from it |
 //! | ACME otherwise | requested by Stalwart itself, HTTP-01: the challenge reaches it through Caddy's route — port 80, redirected to 443, proxied |
 //!
 //! Stalwart renews what it requested (at two thirds of its life) without Homelabus.
@@ -99,7 +99,9 @@ pub async fn certify(
         .domains_dns()
         .await?
         .iter()
-        .any(|d| d.id == domain.id && d.published_by.is_some());
+        // 🔴 Into the house's delegated zone the server writes below `_domainkey.` only:
+        // a challenge there would be refused, so the certificate goes over HTTP-01.
+        .any(|d| d.id == domain.id && d.published_by.is_some() && d.origin.is_none());
     let wanted = wanted(&exposure, dns_published).map_err(crate::Error::Submission)?;
     let ours = state.mail_acme_provider().await?;
     let mut changed = Vec::new();
