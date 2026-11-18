@@ -97,6 +97,22 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                      hold: if nobody here asked for one, have its authority revoke it."
                 );
             }
+            let unmet = match (
+                hlb_engine::zone::delegation_needed(&state).await?,
+                &reading.dns,
+            ) {
+                (Some(needs), Ok(dns)) => domain::unmet(&needs, dns),
+                _ => Vec::new(),
+            };
+            if !unmet.is_empty() {
+                println!(
+                    "\nThe house's zone is delegated, and the registrar does not hold what it \
+                     needs — `hlb zone show` prints it:"
+                );
+                for u in &unmet {
+                    println!("  🔴 {}", u.line());
+                }
+            }
             let Some(baseline) = baseline else {
                 println!(
                     "\nNot watched yet: nothing to compare with. Read the above, then \
@@ -110,7 +126,7 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
                     "\nAs accepted on {}.",
                     day(baseline.read_at).unwrap_or_default()
                 );
-                return Ok(if refused.is_empty() && foreign == 0 {
+                return Ok(if refused.is_empty() && foreign == 0 && unmet.is_empty() {
                     ExitCode::SUCCESS
                 } else {
                     ExitCode::FAILURE

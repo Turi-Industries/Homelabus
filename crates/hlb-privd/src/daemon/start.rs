@@ -892,6 +892,18 @@ pub async fn start(
                                     ))
                                     .await;
                             }
+                            for u in found.unmet {
+                                let line = u.line();
+                                tracing::error!("🔴 delegation {line}");
+                                notif
+                                    .tell(&hlb_notify::Notification::critical(
+                                        &format!("delegation:{}", u.what.key()),
+                                        "The registrar does not delegate as the house's zone \
+                                         needs: hlb zone show says what it must hold",
+                                        &line,
+                                    ))
+                                    .await;
+                            }
                             for d in found.drifts {
                                 let line = d.line();
                                 tracing::error!("🔴 domain {line}");

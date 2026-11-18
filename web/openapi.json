@@ -2508,6 +2508,21 @@
             "type": "object"
           },
           {
+            "description": "🔴 The house's own zone is delegated (`hlb zone switch`), and the parent does\nnot name its two servers alone, or holds no DS of the key Knot signs with: the\ninternet asks a zone the house no longer writes, or refuses the house's as\nforged. The subject is the zone; `hlb zone show` prints what the registrar must\nhold.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "delegation_unmet"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "description": "🔴 The CAA governing the house's names refuses one of its ACME accounts: its\ncertificates stop renewing. The subjects are who holds the account (`Caddy`,\n`Stalwart`); `hlb domain watch` prints the line to add.",
             "properties": {
               "kind": {
@@ -3589,6 +3604,17 @@
               "null"
             ]
           },
+          "delegation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ZoneDelegation",
+                "description": "What the parent must hold, while the house's own zone is delegated; `None`\nbefore `hlb zone switch`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "domain": {
             "description": "The exposure's.",
             "type": "string"
@@ -3614,6 +3640,13 @@
               }
             ]
           },
+          "unmet": {
+            "description": "Where the last reading is not that; empty without a reading of the DNS.",
+            "items": {
+              "$ref": "#/components/schemas/DomainUnmet"
+            },
+            "type": "array"
+          },
           "zone": {
             "description": "The reading's, or the exposure's domain before any.",
             "type": "string"
@@ -3621,10 +3654,12 @@
         },
         "required": [
           "baseline_at",
+          "delegation",
           "domain",
           "drifts",
           "logs",
           "reading",
+          "unmet",
           "zone"
         ],
         "type": "object"
@@ -3797,6 +3832,33 @@
           "concentrated",
           "name",
           "nodes"
+        ],
+        "type": "object"
+      },
+      "DomainUnmet": {
+        "description": "What the parent holds that the house's zone does not need.",
+        "properties": {
+          "found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "needs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "what": {
+            "$ref": "#/components/schemas/DomainChange",
+            "description": "[`Moved::Ns`] or [`Moved::Ds`]."
+          }
+        },
+        "required": [
+          "found",
+          "needs",
+          "what"
         ],
         "type": "object"
       },
@@ -8067,6 +8129,29 @@
           "day"
         ],
         "type": "string"
+      },
+      "ZoneDelegation": {
+        "description": "What the parent must hold once the registrar delegates to the house's own zone\n(`hlb zone switch`): its two name servers, and a DS naming the key Knot signs with.",
+        "properties": {
+          "ds": {
+            "description": "Knot's CDS, `keytag algorithm digest-type digest`; empty before Knot signed the\nzone, and then no DS is compared.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ds",
+          "ns"
+        ],
+        "type": "object"
       }
     }
   },

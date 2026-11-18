@@ -693,18 +693,24 @@ the owner's own lines — a second SPF, a CAA over a name served elsewhere — s
 and is said:
 
 ```sh
-./target/debug/hlb zone show                 # the zone as it would be served, and Knot's state
+./target/debug/hlb zone show                 # the zone, Knot's state, and what the registrar must hold
 ./target/debug/hlb zone set --apex example.org --address 203.0.113.4 --address 2001:db8::4
 ./target/debug/hlb zone set --apex example.org --extra own-lines.zone --apply
 ```
 
-Once the registrar names `ns1` and `ns2` of the zone and holds its DS, the house writes
-into it: Caddy's ACME challenges and Stalwart's DKIM keys, each in a zone of its own
-below the house's, over RFC 2136 with a key that can write a TXT there and nothing else:
+`zone show` ends with what to give the registrar — `ns1` and `ns2` of the zone, their
+addresses (glue: they are inside the zone they serve), the DS of the key Knot signs
+with, or that key for a registrar that computes the DS itself — and whether the internet
+reads it yet. Once it does, the house writes into the zone: Caddy's ACME challenges and
+Stalwart's DKIM keys, each in a zone of its own below the house's, over RFC 2136 with a
+key that can write a TXT there and nothing else. The switch is refused until the public
+resolvers read the delegation; from then on every night holds the parent to it, and an
+app's "create the DNS record" step is the install's own work:
 
 ```sh
-./target/debug/hlb zone switch               # preview: what is written into the zone from now on
+./target/debug/hlb zone switch               # preview: what is written into the zone, and whether the registrar delegates
 ./target/debug/hlb zone switch --apply
+./target/debug/hlb zone switch --force --apply  # a parent's cache still names the provider
 ./target/debug/hlb zone switch --back --apply  # the DNS provider's again
 ```
 

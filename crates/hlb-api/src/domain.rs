@@ -473,6 +473,92 @@ pub fn drifts(baseline: &Reading, now: &Reading) -> Vec<Drift> {
     out
 }
 
+/// What the parent must hold once the registrar delegates to the house's own zone
+/// (`hlb zone switch`): its two name servers, and a DS naming the key Knot signs with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = ZoneDelegation)]
+pub struct Delegation {
+    pub ns: Vec<String>,
+    /// Knot's CDS, `keytag algorithm digest-type digest`; empty before Knot signed the
+    /// zone, and then no DS is compared.
+    pub ds: Vec<String>,
+}
+
+impl Delegation {
+    /// Normalised as [`DnsSide`] is, so the two compare.
+    pub fn new(ns: &[String], ds: &[String]) -> Self {
+        Self {
+            ns: normalised(ns.iter().map(|n| host(n))),
+            ds: normalised(ds.iter().map(|d| words(d).to_lowercase())),
+        }
+    }
+}
+
+/// What the parent holds that the house's zone does not need.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(as = DomainUnmet)]
+pub struct Unmet {
+    /// [`Moved::Ns`] or [`Moved::Ds`].
+    pub what: Moved,
+    pub needs: Vec<String>,
+    pub found: Vec<String>,
+}
+
+impl Unmet {
+    /// As the CLI and the notification print it.
+    pub fn line(&self) -> String {
+        format!(
+            "{}: the house's zone needs {}, the internet reads {}",
+            self.what.label(),
+            list(&self.needs),
+            list(&self.found)
+        )
+    }
+}
+
+/// Where the delegation the internet reads is not the one the house's zone needs. The
+/// name servers must be exactly its two: a third elsewhere answers for the zone with
+/// what it likes. A DS must name Knot's key — its key tag and algorithm, and the same
+/// digest where the digest type is the same: a registrar computing a SHA-384 one from
+/// the key is right too. A stale DS beside it breaks nothing, since one is enough.
+pub fn unmet(needs: &Delegation, dns: &DnsSide) -> Vec<Unmet> {
+    let mut out = Vec::new();
+    if needs.ns != dns.ns {
+        out.push(Unmet {
+            what: Moved::Ns,
+            needs: needs.ns.clone(),
+            found: dns.ns.clone(),
+        });
+    }
+    let fields = |d: &str| -> Option<(String, String, String, String)> {
+        let mut w = d.split_whitespace();
+        Some((
+            w.next()?.to_string(),
+            w.next()?.to_string(),
+            w.next()?.to_string(),
+            w.collect::<String>().to_lowercase(),
+        ))
+    };
+    let names_the_key = |found: &str| {
+        let Some((tag, alg, kind, digest)) = fields(found) else {
+            return false;
+        };
+        needs
+            .ds
+            .iter()
+            .filter_map(|d| fields(d))
+            .any(|(t, a, k, dg)| t == tag && a == alg && (k != kind || dg == digest))
+    };
+    if !needs.ds.is_empty() && !dns.ds.iter().any(|d| names_the_key(d)) {
+        out.push(Unmet {
+            what: Moved::Ds,
+            needs: needs.ds.clone(),
+            found: dns.ds.clone(),
+        });
+    }
+    out
+}
+
 /// Something worth doing, said beside a reading and never alerted: how the house is
 /// set up, not something that changed. A value, which the CLI and the interface word.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -998,6 +1084,11 @@ pub struct DomainPublic {
     pub baseline_at: Option<i64>,
     /// What moved since the baseline; empty without one.
     pub drifts: Vec<Drift>,
+    /// What the parent must hold, while the house's own zone is delegated; `None`
+    /// before `hlb zone switch`.
+    pub delegation: Option<Delegation>,
+    /// Where the last reading is not that; empty without a reading of the DNS.
+    pub unmet: Vec<Unmet>,
     pub logs: CtWatch,
 }
 
@@ -1045,12 +1136,14 @@ pub enum CtWatch {
 
 impl DomainPublic {
     /// Judges what the night recorded. `baseline` counts for its own zone only;
-    /// `transparency` is `Err` when its record could not be read.
+    /// `transparency` is `Err` when its record could not be read; `delegation` is what
+    /// the house's delegated zone needs, if it has one.
     pub fn judge(
         domain: &str,
         reading: Option<&Reading>,
         baseline: Option<&Reading>,
         transparency: Result<&Transparency, String>,
+        delegation: Option<&Delegation>,
         now: i64,
     ) -> Self {
         let baseline = baseline.filter(|b| reading.is_none_or(|r| r.zone == b.zone));
@@ -1081,6 +1174,11 @@ impl DomainPublic {
                 (Some(b), Some(r)) => drifts(b, r),
                 _ => Vec::new(),
             },
+            unmet: match (delegation, reading.map(|r| &r.dns)) {
+                (Some(d), Some(Ok(dns))) => unmet(d, dns),
+                _ => Vec::new(),
+            },
+            delegation: delegation.cloned(),
             logs: match transparency {
                 Err(why) => CtWatch::Unread { why },
                 Ok(t) if t.after.is_none() => CtWatch::NotStarted,
@@ -1183,6 +1281,103 @@ mod tests {
             nameservers: vec!["ns1.desec.io".into(), "ns2.desec.org".into()],
             expires: Some(400 * 86_400),
         })
+    }
+
+    fn needs() -> Delegation {
+        Delegation::new(
+            &["ns1.home.example".into(), "NS2.home.example.".into()],
+            &["53307 13 2 3F6A815A".into()],
+        )
+    }
+
+    fn delegated(ns: &[&str], ds: &[&str]) -> DnsSide {
+        DnsSide::new(
+            ns.iter().map(|n| n.to_string()).collect(),
+            ds.iter().map(|d| d.to_string()).collect(),
+            true,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn a_delegation_to_the_houses_two_servers_with_its_ds_is_met() {
+        let met = delegated(
+            &["ns2.home.example.", "ns1.home.example."],
+            &["53307 13 2 3f6a815a"],
+        );
+        assert_eq!(unmet(&needs(), &met), []);
+        // The registrar computed a SHA-384 one from the key, and kept the old one.
+        let computed = delegated(
+            &["ns1.home.example", "ns2.home.example"],
+            &["53307 13 4 0123ABCD", "1111 8 2 FFFF"],
+        );
+        assert_eq!(unmet(&needs(), &computed), []);
+    }
+
+    #[test]
+    fn a_third_server_or_a_ds_of_another_key_is_unmet() {
+        let third = delegated(
+            &["ns1.home.example", "ns2.home.example", "ns1.thief.example"],
+            &["53307 13 2 3F6A815A"],
+        );
+        let u = unmet(&needs(), &third);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u[0].what, Moved::Ns);
+        assert_eq!(
+            u[0].line(),
+            "name servers: the house's zone needs ns1.home.example, ns2.home.example, \
+             the internet reads ns1.home.example, ns1.thief.example, ns2.home.example"
+        );
+        // Same key tag, algorithm and digest type, another digest: another key.
+        let other = delegated(
+            &["ns1.home.example", "ns2.home.example"],
+            &["53307 13 2 00000000"],
+        );
+        assert_eq!(unmet(&needs(), &other)[0].what, Moved::Ds);
+        // No DS at all: a signed zone the parent says is not.
+        let none = delegated(&["ns1.home.example", "ns2.home.example"], &[]);
+        assert_eq!(
+            unmet(&needs(), &none)[0].line(),
+            "DS at the parent: the house's zone needs 53307 13 2 3f6a815a, the internet reads none"
+        );
+        // Before Knot signed, no DS is compared.
+        let unsigned = Delegation::new(&needs().ns, &[]);
+        assert_eq!(unmet(&unsigned, &none), []);
+    }
+
+    #[test]
+    fn the_judged_domain_says_what_the_delegation_lacks_and_only_with_one() {
+        let now = reading(signed(), locked());
+        let p = DomainPublic::judge("home.example", Some(&now), None, Ok(&ct(None)), None, 0);
+        assert_eq!(p.delegation, None);
+        assert_eq!(p.unmet, []);
+        let p = DomainPublic::judge(
+            "home.example",
+            Some(&now),
+            None,
+            Ok(&ct(None)),
+            Some(&needs()),
+            0,
+        );
+        assert_eq!(p.delegation, Some(needs()));
+        assert_eq!(
+            p.unmet.iter().map(|u| u.what).collect::<Vec<_>>(),
+            [Moved::Ns]
+        );
+        // A DNS half not read judges nothing: the inbox says it unknown.
+        let unread = Reading {
+            dns: Err("timed out".into()),
+            ..now
+        };
+        let p = DomainPublic::judge(
+            "home.example",
+            Some(&unread),
+            None,
+            Ok(&ct(None)),
+            Some(&needs()),
+            0,
+        );
+        assert_eq!(p.unmet, []);
     }
 
     #[test]
@@ -1669,7 +1864,7 @@ mod tests {
 
     #[test]
     fn a_domain_never_read_shows_its_exposure_as_the_zone_and_nothing_judged() {
-        let p = DomainPublic::judge("home.example", None, None, Ok(&ct(None)), 0);
+        let p = DomainPublic::judge("home.example", None, None, Ok(&ct(None)), None, 0);
         assert_eq!(p.zone, "home.example");
         assert_eq!(p.reading, None);
         assert_eq!(p.baseline_at, None);
@@ -1699,6 +1894,7 @@ mod tests {
             Some(&now),
             Some(&baseline),
             Ok(&ct(Some("7"))),
+            None,
             100,
         );
         assert_eq!(p.baseline_at, Some(10));
@@ -1732,6 +1928,7 @@ mod tests {
             Some(&now),
             Some(&other),
             Err("locked".into()),
+            None,
             later,
         );
         assert_eq!(p.baseline_at, None);
@@ -1752,7 +1949,7 @@ mod tests {
             accounts: vec![account("Caddy", 1, false)],
             ..reading(signed(), locked())
         };
-        let seen = DomainPublic::judge("home.example", Some(&r), None, Ok(&ct(None)), 0)
+        let seen = DomainPublic::judge("home.example", Some(&r), None, Ok(&ct(None)), None, 0)
             .reading
             .expect("read");
         assert_eq!(

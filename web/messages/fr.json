@@ -1886,6 +1886,7 @@
 		}
 	],
 	"cause_domain_moved": "Le domaine de la maison a changé depuis sa référence : si personne ici ne l'a fait, appelez le bureau d'enregistrement maintenant",
+	"cause_delegation_unmet": "Le bureau d'enregistrement ne délègue pas comme la zone de la maison l'exige : ses noms peuvent ne plus répondre, ou être refusés comme falsifiés",
 	"cause_caa_refuses_account": [
 		{
 			"declarations": [
@@ -2191,6 +2192,7 @@
 	"reason_mail_record_unknown": "non relu récemment",
 	"reason_mail_blocklists_refused": "refuse un résolveur public : hlb mail dns",
 	"reason_domain_moved": "a changé depuis sa référence : hlb domain watch",
+	"reason_delegation_unmet": "pas délégué comme sa zone l'exige : hlb zone show",
 	"reason_caa_refuses_account": "refusé par le CAA : hlb domain watch",
 	"reason_certificate_foreign": "certifié sous une clé que la maison ne détient pas",
 	"reason_domain_unwatched": "sans référence : hlb domain accept --apply",
@@ -2394,6 +2396,9 @@
 	"domain_moved_title": "Changé depuis la référence",
 	"domain_moved_explanation": "Si personne ici ne l'a fait, appelez le bureau d'enregistrement maintenant.",
 	"domain_drift": "était {was}, maintenant {now}",
+	"domain_unmet_title": "Pas délégué comme la zone de la maison l'exige",
+	"domain_unmet_explanation": "La maison signe sa propre zone : le bureau d'enregistrement doit nommer ses deux serveurs et détenir son DS. hlb zone show affiche ce qu'il faut lui donner.",
+	"domain_unmet": "attend {needs}, internet lit {found}",
 	"domain_change_ns": "Serveurs de noms",
 	"domain_change_ds": "DS chez le parent",
 	"domain_change_validated": "DNSSEC",

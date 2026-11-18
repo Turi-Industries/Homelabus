@@ -1882,6 +1882,7 @@
 		}
 	],
 	"cause_domain_moved": "The house's domain moved since its baseline: if nobody here did it, call the registrar now",
+	"cause_delegation_unmet": "The registrar does not delegate as the house's zone needs: its names may resolve nowhere, or be refused as forged",
 	"cause_caa_refuses_account": [
 		{
 			"declarations": [
@@ -2187,6 +2188,7 @@
 	"reason_mail_record_unknown": "not read lately",
 	"reason_mail_blocklists_refused": "refuses a public resolver: hlb mail dns",
 	"reason_domain_moved": "moved since its baseline: hlb domain watch",
+	"reason_delegation_unmet": "not delegated as its zone needs: hlb zone show",
 	"reason_caa_refuses_account": "refused by the CAA: hlb domain watch",
 	"reason_certificate_foreign": "certified under a key the house does not hold",
 	"reason_domain_unwatched": "no baseline: hlb domain accept --apply",
@@ -2390,6 +2392,9 @@
 	"domain_moved_title": "Moved since the baseline",
 	"domain_moved_explanation": "If nobody here did this, call the registrar now.",
 	"domain_drift": "was {was}, now {now}",
+	"domain_unmet_title": "Not delegated as the house's zone needs",
+	"domain_unmet_explanation": "The house signs its own zone, and the registrar must name its two servers and hold its DS. hlb zone show prints what to give it.",
+	"domain_unmet": "needs {needs}, the internet reads {found}",
 	"domain_change_ns": "Name servers",
 	"domain_change_ds": "DS at the parent",
 	"domain_change_validated": "DNSSEC",

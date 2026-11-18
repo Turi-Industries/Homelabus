@@ -427,7 +427,8 @@ pub fn protection(hostname: Option<&str>) -> Option<hlb_api::ProtectionLevel> {
 }
 
 /// The domain's screen, judged by the real rules from a fabricated night: the demo has
-/// no exposure. One name server moved, a lock lifted, a renewal near, a signed zone
+/// no exposure. The house signs its own zone, delegated: one of its name servers moved
+/// — so the delegation is unmet too —, a lock lifted, a renewal near, a signed zone
 /// that does not validate, a CAA naming no account — so its pin is advised — and a
 /// stranger's wildcard in the logs: each wording is on the screen the suite crawls.
 pub fn domain(now: i64) -> hlb_api::domain::DomainView {
@@ -436,7 +437,7 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
         RegistryRecord, Transparency, Validation, DNS_01, HTTP_01,
     };
     let caa = vec!["0 issue \"letsencrypt.org\"".to_string()];
-    // A house with a DNS provider: Caddy's wildcard over DNS-01, Stalwart over HTTP-01.
+    // Caddy's wildcard over DNS-01, into the house's zone; Stalwart over HTTP-01.
     let account = |who: &str, n: u32, wildcard: bool| Account {
         who: who.into(),
         issuer: "letsencrypt.org".into(),
@@ -451,7 +452,7 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
         zone: "home.example".into(),
         read_at: at,
         dns: Ok(DnsSide::new(
-            vec!["ns1.desec.io".into(), ns.into()],
+            vec!["ns1.home.example".into(), ns.into()],
             vec!["53307 13 2 3f6a815a28593ba6".into()],
             false,
             caa.clone(),
@@ -460,7 +461,7 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
             source: "https://rdap.example-registry.net/".into(),
             registrar: Some("Example Registrar SAS".into()),
             statuses: Some(vec!["client delete prohibited".into()]),
-            nameservers: vec!["ns1.desec.io".into(), "ns2.desec.org".into()],
+            nameservers: vec!["ns1.home.example".into(), "ns2.home.example".into()],
             expires: Some(now + 12 * 86_400),
         }),
         caa_governing: Some(Governing {
@@ -472,7 +473,11 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
             account("Stalwart", 21_844_062, false),
         ],
     };
-    let baseline = read("ns2.desec.org", now - 40 * 86_400);
+    let baseline = read("ns2.home.example", now - 40 * 86_400);
+    let delegation = hlb_api::domain::Delegation::new(
+        &["ns1.home.example".into(), "ns2.home.example".into()],
+        &["53307 13 2 3f6a815a28593ba6".into()],
+    );
     let reading = read("ns2.thief.example", now - 6 * 3_600);
     let transparency = Transparency {
         after: Some("8812345".into()),
@@ -489,6 +494,7 @@ pub fn domain(now: i64) -> hlb_api::domain::DomainView {
         Some(&reading),
         Some(&baseline),
         Ok(&transparency),
+        Some(&delegation),
         now,
     )))
 }

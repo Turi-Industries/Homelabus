@@ -246,7 +246,71 @@ pub async fn keep_pins(
     Ok(state.keep_zone_caa(&pins).await?)
 }
 
-/// Publishes the zone on the running Knot.
+/// What the registrar must hold for the zone: its two name servers, and the DS of the
+/// key Knot signs with, as its last publication read it.
+pub async fn parent(
+    state: &State,
+    config: &ZoneConfig,
+) -> hlb_state::Result<hlb_api::domain::Delegation> {
+    let ns: Vec<String> = zone::NAME_SERVERS
+        .iter()
+        .map(|n| format!("{n}.{}", config.apex))
+        .collect();
+    let (ds, _) = state.zone_parent().await?;
+    Ok(hlb_api::domain::Delegation::new(&ns, &ds))
+}
+
+/// The same once the registrar is said to delegate (`hlb zone switch`): what every
+/// reading of the domain is held to. `None` before, when the provider's zone is still
+/// the one asked.
+pub async fn delegation_needed(
+    state: &State,
+) -> hlb_state::Result<Option<hlb_api::domain::Delegation>> {
+    match state.zone().await? {
+        Some(config) if config.delegated => Ok(Some(parent(state, &config).await?)),
+        _ => Ok(None),
+    }
+}
+
+/// Whether the house's delegated zone answers a guide's DNS step by itself: the name
+/// is in the zone, and installing the app publishes it there, on the door's
+/// addresses — so "create the record" is the install's own work, which the system
+/// resolver could only see done after it (librespeed's `dns-record`, blocked so on the
+/// lab). Not before the switch: the provider's zone is the one asked, and its records
+/// are the owner's.
+pub async fn answers(
+    state: &State,
+    step: &hlb_types::GuideStep,
+    vars: &[(&str, &str)],
+) -> hlb_state::Result<bool> {
+    let hlb_types::guide::Verify::Dns {
+        record,
+        expect_contains,
+    } = &step.verify
+    else {
+        return Ok(false);
+    };
+    let Some(config) = state.zone().await?.filter(|c| c.delegated) else {
+        return Ok(false);
+    };
+    let Some(name) = zone::normalize(&hlb_types::guide::render(record, vars)) else {
+        return Ok(false);
+    };
+    let inside = name == config.apex || name.ends_with(&format!(".{}", config.apex));
+    // An address it expects is one the zone gives, or the check is the person's.
+    let lands = expect_contains.as_deref().is_none_or(|want| {
+        want.trim().parse::<IpAddr>().is_ok_and(|want| {
+            config
+                .addresses
+                .iter()
+                .any(|a| a.parse::<IpAddr>().is_ok_and(|a| a == want))
+        })
+    });
+    Ok(inside && lands)
+}
+
+/// Publishes the zone on the running Knot, and keeps what the registrar must hold for
+/// it: a Knot that lost its volume signs with a new key, which no DS names.
 pub async fn publish<O: Orchestrator + ?Sized>(
     orch: &O,
     state: &State,
@@ -269,6 +333,11 @@ pub async fn publish<O: Orchestrator + ?Sized>(
             "Knot refused the zone — the one it serves is unchanged: {}",
             out.output.join(" | ")
         )));
+    }
+    let parent = zone::parent_records(&out.output);
+    // A Knot not running yet signed nothing: what was kept stays.
+    if !parent.ds.is_empty() {
+        state.keep_zone_parent(&parent.ds, &parent.dnskey).await?;
     }
     Ok(Followed::Published {
         soa: out.output.last().cloned().unwrap_or_default(),
@@ -311,6 +380,90 @@ mod tests {
             extra: String::new(),
             delegated: false,
         }
+    }
+
+    /// Librespeed's own step, as its guide declares it.
+    fn dns_record(expect: Option<&str>) -> hlb_types::GuideStep {
+        hlb_types::GuideStep {
+            id: "dns-record".into(),
+            title: "Create the DNS record".into(),
+            phase: hlb_types::Phase::PreInstall,
+            severity: hlb_types::guide::Severity::Blocking,
+            body: String::new(),
+            after: Vec::new(),
+            automate: Vec::new(),
+            verify: hlb_types::guide::Verify::Dns {
+                record: "{{ domain }}".into(),
+                expect_contains: expect.map(str::to_string),
+            },
+            deeplink: None,
+            recheck: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delegated_zone_answers_a_dns_step_for_a_name_it_holds_and_no_other() {
+        let s = State::in_memory().await.expect("state");
+        let vars = |d: &'static str| [("domain", d)];
+        let step = dns_record(None);
+        // No zone, then a zone the registrar does not delegate to yet.
+        assert!(!answers(&s, &step, &vars("speed.example.org"))
+            .await
+            .unwrap());
+        s.set_zone(&config()).await.expect("zone");
+        assert!(!answers(&s, &step, &vars("speed.example.org"))
+            .await
+            .unwrap());
+        s.set_zone(&ZoneConfig {
+            delegated: true,
+            ..config()
+        })
+        .await
+        .expect("switch");
+        assert!(answers(&s, &step, &vars("speed.example.org"))
+            .await
+            .unwrap());
+        assert!(answers(&s, &step, &vars("Example.org.")).await.unwrap());
+        // A suffix is not a parent, and another zone is the owner's.
+        assert!(!answers(&s, &step, &vars("speed.notexample.org"))
+            .await
+            .unwrap());
+        assert!(!answers(&s, &step, &vars("speed.other.net")).await.unwrap());
+        // An address expected is one the zone gives, or not the zone's to answer.
+        let at_door = dns_record(Some("203.0.113.4"));
+        assert!(answers(&s, &at_door, &vars("speed.example.org"))
+            .await
+            .unwrap());
+        let elsewhere = dns_record(Some("198.51.100.7"));
+        assert!(!answers(&s, &elsewhere, &vars("speed.example.org"))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_install_takes_the_zones_answer_as_its_prerequisite_met() {
+        let s = State::in_memory().await.expect("state");
+        s.set_zone(&ZoneConfig {
+            apex: "example.invalid".into(),
+            delegated: true,
+            ..config()
+        })
+        .await
+        .expect("zone");
+        let mut plan = hlb_resolver::Plan::default();
+        plan.push(hlb_resolver::Action::PendingGuideStep {
+            id: "dns-record".into(),
+            title: "Create the DNS record".into(),
+            blocking: true,
+            service: "librespeed".into(),
+            step: Box::new(dns_record(None)),
+        });
+        let found =
+            crate::prerequisites(&s, None, "librespeed", &plan, Some("speed.example.invalid"))
+                .await
+                .expect("prerequisites");
+        assert_eq!(found.verified, ["dns-record"]);
+        assert!(found.open.is_empty());
     }
 
     #[tokio::test]

@@ -21,6 +21,8 @@ pub struct ZoneConfig {
 /// Stored names: the settings the zone's other records are kept under.
 const MAIL: &str = "zone-mail-records";
 const CAA: &str = "zone-caa-pins";
+const DS: &str = "zone-parent-ds";
+const DNSKEY: &str = "zone-parent-dnskey";
 
 impl State {
     /// The lines of the house's mail the zone carries, as Stalwart computed them, kept
@@ -49,6 +51,25 @@ impl State {
     /// Keeps them; `true` when they changed.
     pub async fn keep_zone_caa(&self, records: &[String]) -> Result<bool> {
         self.keep(CAA, &records.join("\n")).await
+    }
+
+    /// What the registrar must hold for the zone, as Knot last published it: each DS's
+    /// data, then each key's. Empty before Knot first signed it.
+    pub async fn zone_parent(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let lines = |v: Option<String>| -> Vec<String> {
+            v.unwrap_or_default().lines().map(str::to_string).collect()
+        };
+        Ok((
+            lines(self.setting(DS).await?),
+            lines(self.setting(DNSKEY).await?),
+        ))
+    }
+
+    /// Keeps them; `true` when they changed — Knot signs with another key, and the DS
+    /// the registrar holds no longer names it.
+    pub async fn keep_zone_parent(&self, ds: &[String], dnskey: &[String]) -> Result<bool> {
+        let ds = self.keep(DS, &ds.join("\n")).await?;
+        Ok(self.keep(DNSKEY, &dnskey.join("\n")).await? || ds)
     }
 
     async fn keep(&self, key: &str, value: &str) -> Result<bool> {
@@ -98,6 +119,24 @@ mod tests {
     use crate::State;
 
     use super::ZoneConfig;
+
+    #[tokio::test]
+    async fn the_parents_records_are_kept_and_a_new_key_is_said() {
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(
+            s.zone_parent().await.expect("read"),
+            (Vec::new(), Vec::new())
+        );
+        let ds = vec!["1 13 2 AB".to_string()];
+        let key = vec!["257 3 13 k1".to_string()];
+        assert!(s.keep_zone_parent(&ds, &key).await.expect("keep"));
+        assert!(!s.keep_zone_parent(&ds, &key).await.expect("again"));
+        assert_eq!(s.zone_parent().await.expect("read"), (ds.clone(), key));
+        assert!(s
+            .keep_zone_parent(&ds, &["257 3 13 k2".to_string()])
+            .await
+            .expect("a new key"));
+    }
 
     #[tokio::test]
     async fn the_zone_is_kept_as_declared_and_replaced_whole() {
