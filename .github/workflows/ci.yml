@@ -86,8 +86,13 @@ jobs:
       # patterns, and `generate` runs with no config over our own `openapi.json` — no
       # pattern comes from outside, nothing in `build/` carries it. Revisit when
       # `openapi-typescript` takes `@redocly/openapi-core` 2, which has no minimatch.
+      # GHSA-fc5q-39xc-vjpf, picomatch's ReDoS on repeated extglobs (2026-11): no fixed
+      # version exists (4.0.7 is its last). vite, vitest, svelte-check and paraglide's
+      # unplugin take it through tinyglobby and fdir, at build and test time, to match
+      # this repository's own patterns against its own files — nothing in `build/`
+      # carries it. Revisit when a fix is released.
       - name: bun audit
-        run: bun audit --ignore=GHSA-gcqx-w48m-w2h4 --ignore=GHSA-g3hv-75wg-m249
+        run: bun audit --ignore=GHSA-gcqx-w48m-w2h4 --ignore=GHSA-g3hv-75wg-m249 --ignore=GHSA-fc5q-39xc-vjpf
       - name: bun run check
         run: bun run check
       - name: bun run test
