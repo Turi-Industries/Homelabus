@@ -31,7 +31,8 @@ fn docker(args: &[&str]) -> (bool, String) {
 
 fn ok(args: &[&str]) -> String {
     let (ok, out) = docker(args);
-    assert!(ok, "docker {args:?}: {out}");
+    // The subcommand alone: the arguments carry the update key.
+    assert!(ok, "docker {}: {out}", args.first().unwrap_or(&""));
     out.trim().to_string()
 }
 

@@ -1075,7 +1075,8 @@ mod tests {
         assert!(conf.contains("catalog-role: interpret\n    catalog-template: member\n"));
         assert!(
             conf.contains("  - id: member\n    master: house\n"),
-            "every zone of the catalog transfers from the house: {conf}"
+            // Not printed: the configuration carries the transfer key.
+            "every zone of the catalog transfers from the house"
         );
         assert_eq!(conf.matches("zonefile-load: none\n").count(), 2);
         assert!(conf.contains("listen: [ 0.0.0.0@10053, ::@10053 ]\n"));
