@@ -206,9 +206,25 @@ pub async fn config(
                 },
             },
             Certificates::Acme => {
-                let wildcard = match &e.dns_provider {
-                    None => None,
-                    Some(name) => {
+                let delegation = crate::zone::delegation(state, vault).await?;
+                let wildcard = match (&e.dns_provider, delegation) {
+                    // The registrar delegates to the house's zone: the challenge is
+                    // written there, whatever provider the exposure named before.
+                    (_, Some(d)) => Some(Wildcard {
+                        provider: hlb_ingress::dns::provider("rfc2136").ok_or_else(|| {
+                            crate::Error::Exposure("rfc2136 is not built into the ingress".into())
+                        })?,
+                        credentials: vec![
+                            hlb_ingress::zone::UPDATE_KEY_ID.to_string(),
+                            hlb_ingress::zone::UPDATE_ALGORITHM.to_string(),
+                            d.key.0,
+                            format!("{}:{}", hlb_ingress::zone::SERVICE, hlb_ingress::zone::PORT),
+                        ],
+                        base_domain: e.domain.clone(),
+                        resolvers: d.resolver.iter().map(ToString::to_string).collect(),
+                    }),
+                    (None, None) => None,
+                    (Some(name), None) => {
                         let provider = hlb_ingress::dns::provider(name).ok_or_else(|| {
                             crate::Error::Exposure(format!(
                                 "DNS provider \"{name}\" is not built into the ingress — \
@@ -221,6 +237,7 @@ pub async fn config(
                             provider,
                             credentials,
                             base_domain: e.domain.clone(),
+                            resolvers: Vec::new(),
                         })
                     }
                 };

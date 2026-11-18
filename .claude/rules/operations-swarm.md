@@ -175,6 +175,12 @@ Most of these fail behind a healthy task.
   use the app — a message, an upload, a search, a call — and read every log for `EROFS`.
   What an image writes outside its volumes goes to `security.tmpfs`, mode 1777 (root's
   0755 shut Fluxer's api, run as 65532, out of its socket's directory).
+- **🔴 A service's files (`ServiceSpec::file`) are mounted 0444, and `cp` keeps the
+  mode.** The zone's writer copied its staged zone into Knot's volume and then appended
+  the children's DS to the copy: as Knot's user with every capability dropped, the
+  append was refused, and the lab's `zone switch` with it (2026-11-18). Copy with
+  `cat src > dst`. Its tests had staged their files 0644 and passed; a test standing in
+  for Swarm's mount stages 0444 too.
 
 ## Invariants, encoded in tests
 

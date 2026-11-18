@@ -24,6 +24,7 @@ pub async fn run(cli: &Cli, cmd: &ZoneCmd) -> Result<ExitCode> {
             extra,
             apply,
         } => set(cli, apex, address, extra.as_deref(), *apply).await,
+        ZoneCmd::Switch { back, apply } => switch(cli, !*back, *apply).await,
     }
 }
 
@@ -118,14 +119,17 @@ async fn set(
             return Ok(ExitCode::FAILURE);
         }
     };
+    let before = state.zone().await?;
     let extra = match extra {
         Some(path) => std::fs::read_to_string(path)?,
-        None => state.zone().await?.map(|z| z.extra).unwrap_or_default(),
+        None => before.as_ref().map(|z| z.extra.clone()).unwrap_or_default(),
     };
     let config = ZoneConfig {
         apex,
         addresses,
         extra,
+        // Only the switch moves it: a new address is no new registrar.
+        delegated: before.is_some_and(|z| z.delegated),
     };
 
     let rendered =
@@ -184,6 +188,92 @@ async fn set(
         println!("The internet asks the site, which serves the zone from: hlb site sync --apply");
     }
     Ok(code)
+}
+
+/// The registrar delegates to the zone, or no longer does. The update key is drawn the
+/// first time, the zone published with its children, the routes with Caddy's challenge
+/// through it; Stalwart writes its next DKIM key there.
+async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
+    let state = open_state(cli).await?;
+    let vault = open_vault(cli)?;
+    let Some(mut config) = state.zone().await? else {
+        eprintln!("🔴 No zone to delegate to: hlb zone set --apex <registered name> --apply");
+        return Ok(ExitCode::FAILURE);
+    };
+    if config.delegated == delegated {
+        println!(
+            "{}",
+            if delegated {
+                "The zone is already delegated: Caddy and Stalwart write into it."
+            } else {
+                "The zone is not delegated: Caddy and Stalwart write at the DNS provider."
+            }
+        );
+        // 🔴 The switch is recorded before the zone and the routes follow it: one they
+        // refused is finished by running it again, which publishes both once more.
+        if !apply {
+            return Ok(ExitCode::SUCCESS);
+        }
+        return follow_switch(cli, &state, &vault).await;
+    }
+    if delegated {
+        println!(
+            "From now on the house's zone is the one the internet asks, and the house writes \
+             into it:"
+        );
+        println!("  Caddy's ACME challenges   _acme-challenge.<domain>, a zone of its own");
+        println!("  Stalwart's DKIM keys      _domainkey.<domain>, a zone of its own");
+        println!(
+            "⚠️  Only once the registrar names ns1.{0} and ns2.{0} and holds the zone's DS: \
+             before, the authority asks the provider, where nothing is written any more.",
+            config.apex
+        );
+    } else {
+        println!(
+            "The house's challenges and DKIM keys go back to the DNS provider; the zones \
+             below the house's are no longer written."
+        );
+    }
+    if !apply {
+        println!("Rerun with --apply.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    if delegated {
+        hlb_engine::zone::update_key(&state, &vault).await?;
+    }
+    config.delegated = delegated;
+    state.set_zone(&config).await?;
+    state
+        .audit(
+            "cli",
+            ACTOR_ROLE,
+            "zone-switch",
+            &config.apex,
+            "ok",
+            Some(if delegated { "delegated" } else { "back" }),
+        )
+        .await?;
+    follow_switch(cli, &state, &vault).await
+}
+
+/// The zone, then the routes, published as the switch now says.
+async fn follow_switch(
+    cli: &Cli,
+    state: &hlb_state::State,
+    vault: &hlb_secrets::Vault,
+) -> Result<ExitCode> {
+    let orch = SwarmOrchestrator::connect().await?;
+    // The zones below first: Caddy, told next, may write a challenge at once.
+    match hlb_engine::zone::publish(&orch, state, Some(vault)).await {
+        Ok(f) => say(&Ok(f)),
+        Err(e) => {
+            say(&Err(e.to_string()));
+            println!("Once it is fixed, the same switch run again finishes it.");
+            return Ok(ExitCode::FAILURE);
+        }
+    }
+    crate::exposure::republish(cli, state).await;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn say_withheld(withheld: &[String]) {

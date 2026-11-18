@@ -698,6 +698,16 @@ and is said:
 ./target/debug/hlb zone set --apex example.org --extra own-lines.zone --apply
 ```
 
+Once the registrar names `ns1` and `ns2` of the zone and holds its DS, the house writes
+into it: Caddy's ACME challenges and Stalwart's DKIM keys, each in a zone of its own
+below the house's, over RFC 2136 with a key that can write a TXT there and nothing else:
+
+```sh
+./target/debug/hlb zone switch               # preview: what is written into the zone from now on
+./target/debug/hlb zone switch --apply
+./target/debug/hlb zone switch --back --apply  # the DNS provider's again
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its

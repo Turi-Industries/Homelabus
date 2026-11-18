@@ -80,9 +80,9 @@ async fn run(hub: &dyn Runner, what: &str, cmd: Vec<String>) -> Result<String, S
 
 /// The site's configuration for this site's members: a house node's address on the
 /// link is where Knot runs, whichever it is.
-pub fn config(s: &Site, apex: &str, key: &TransferKey) -> String {
+pub fn config(s: &Site, key: &TransferKey) -> String {
     let house: Vec<_> = s.members.iter().map(|m| m.address).collect();
-    zone::site_conf(apex, &house, key)
+    zone::site_conf(&house, key)
 }
 
 /// The service's arguments after `docker service create`, its label left out.
@@ -311,16 +311,11 @@ pub async fn free_port(hub: &dyn Runner) -> Result<Port, String> {
 }
 
 /// Puts the name server in place on the site, or brings it up to date.
-pub async fn deploy(
-    hub: &dyn Runner,
-    s: &Site,
-    apex: &str,
-    key: &TransferKey,
-) -> Result<Outcome, String> {
+pub async fn deploy(hub: &dyn Runner, s: &Site, key: &TransferKey) -> Result<Outcome, String> {
     if s.members.is_empty() {
         return Err("no house node is linked: there is nothing to transfer the zone from".into());
     }
-    let changed = put(hub, &config(s, apex, key)).await?;
+    let changed = put(hub, &config(s, key)).await?;
 
     let label = format!("{{{{index .Spec.Labels \"{SPEC_LABEL}\"}}}}");
     let inspected = hub

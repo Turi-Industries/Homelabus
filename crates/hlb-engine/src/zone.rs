@@ -7,7 +7,7 @@
 
 use std::net::IpAddr;
 
-use hlb_ingress::zone::{self, Transfer, TransferKey, Zone};
+use hlb_ingress::zone::{self, Delegated, Transfer, TransferKey, UpdateKey, Zone};
 use hlb_orchestrator::{Orchestrator, ServiceSpec};
 use hlb_secrets::Vault;
 use hlb_state::{State, ZoneConfig};
@@ -16,38 +16,68 @@ use hlb_types::manifest::Tmpfs;
 /// The TSIG key both Knots share, in the vault. A stored name.
 pub const TRANSFER_SECRET: &str = "zone-transfer-key";
 
+/// The TSIG key Caddy and Stalwart sign their updates with, in the vault. A stored name.
+pub const UPDATE_SECRET: &str = "zone-update-key";
+
 /// The key, drawn once and kept: both ends hold it, and a new one would stop every
 /// transfer until the site has it too.
 pub async fn transfer_key(state: &State, vault: &Vault) -> crate::Result<TransferKey> {
+    Ok(TransferKey(
+        draw_once(
+            state,
+            vault,
+            TRANSFER_SECRET,
+            "the TSIG key the house's and the site's Knot share",
+        )
+        .await?,
+    ))
+}
+
+/// The update key, drawn once and kept: Caddy's and Stalwart's configurations hold it,
+/// and one drawn again would refuse their next write until both were redeployed.
+pub async fn update_key(state: &State, vault: &Vault) -> crate::Result<UpdateKey> {
+    Ok(UpdateKey(
+        draw_once(
+            state,
+            vault,
+            UPDATE_SECRET,
+            "the TSIG key Caddy and Stalwart write into the house's zone with",
+        )
+        .await?,
+    ))
+}
+
+async fn draw_once(
+    state: &State,
+    vault: &Vault,
+    name: &str,
+    purpose: &str,
+) -> crate::Result<String> {
     let mut raw = [0u8; 32];
     hlb_secrets::fill_random(&mut raw);
     let drawn = hlb_types::token::base64_standard(&raw);
     state
-        .store_secret_if_absent(
-            TRANSFER_SECRET,
-            &vault.encrypt(&drawn)?,
-            "the TSIG key the house's and the site's Knot share",
-        )
+        .store_secret_if_absent(name, &vault.encrypt(&drawn)?, purpose)
         .await?;
-    stored_key(state, Some(vault))
+    stored(state, Some(vault), name)
         .await?
-        .ok_or_else(|| crate::Error::Exposure("the zone's transfer key vanished".into()))
+        .ok_or_else(|| crate::Error::Exposure(format!("the zone's {name} vanished")))
 }
 
-/// The key the site was given, if any. 🔴 One there and no vault to read it with is an
-/// error, never a zone rendered without it: that zone would take the site's access away.
-async fn stored_key(state: &State, vault: Option<&Vault>) -> crate::Result<Option<TransferKey>> {
-    let Some(ct) = state.secret(TRANSFER_SECRET).await? else {
+/// A key of the zone's, if drawn. 🔴 One there and no vault to read it with is an
+/// error, never a zone rendered without it: that zone would take the site's access
+/// away, or refuse every update Caddy and Stalwart sign.
+async fn stored(state: &State, vault: Option<&Vault>, name: &str) -> crate::Result<Option<String>> {
+    let Some(ct) = state.secret(name).await? else {
         return Ok(None);
     };
     let vault = vault.ok_or_else(|| {
-        crate::Error::Exposure(
-            "the zone's transfer key is in the vault, which this publication was not given: \
+        crate::Error::Exposure(format!(
+            "the zone's {name} is in the vault, which this publication was not given: \
              the zone served is unchanged"
-                .into(),
-        )
+        ))
     })?;
-    Ok(Some(TransferKey(vault.decrypt(&ct)?)))
+    Ok(Some(vault.decrypt(&ct)?))
 }
 
 /// The one-off service that writes the zone on Knot's node.
@@ -90,11 +120,13 @@ pub async fn wanted(
         .into_iter()
         .map(|(host, _, _)| host)
         .collect();
-    let transfer = stored_key(state, vault).await?.map(|key| Transfer {
-        key,
-        site: hlb_mesh::site::HUB,
-        port: zone::SITE_PORT,
-    });
+    let transfer = stored(state, vault, TRANSFER_SECRET)
+        .await?
+        .map(|key| Transfer {
+            key: TransferKey(key),
+            site: hlb_mesh::site::HUB,
+            port: zone::SITE_PORT,
+        });
     let mail = hlb_api::mail_dns::parse_zone(&state.zone_mail().await?)
         .into_iter()
         .map(|r| zone::Record {
@@ -104,6 +136,14 @@ pub async fn wanted(
             line: r.line,
         })
         .collect();
+    let delegated = if config.delegated {
+        Some(Delegated {
+            key: delegated_key(state, vault).await?,
+            challenge: challenge(state).await?,
+        })
+    } else {
+        None
+    };
     Ok(Zone {
         apex: config.apex.clone(),
         addresses,
@@ -112,7 +152,61 @@ pub async fn wanted(
         transfer,
         mail,
         caa: caa(state).await?,
+        delegated,
     })
+}
+
+async fn delegated_key(state: &State, vault: Option<&Vault>) -> crate::Result<UpdateKey> {
+    stored(state, vault, UPDATE_SECRET)
+        .await?
+        .map(UpdateKey)
+        .ok_or_else(|| {
+            crate::Error::Exposure(
+                "the zone is delegated and its update key was never drawn: hlb zone switch --apply"
+                    .into(),
+            )
+        })
+}
+
+/// How Caddy writes its challenges into the delegated zone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delegation {
+    pub key: UpdateKey,
+    /// Where it asks whether the challenge is in place: the zone's server as the
+    /// internet reaches it. One address — certmagic fails on any resolver given that
+    /// does not answer, and the house may not reach the site over IPv6 —, IPv4 first.
+    pub resolver: Option<IpAddr>,
+}
+
+/// The delegation Caddy writes through; `None` while the registrar points at the
+/// provider.
+pub async fn delegation(state: &State, vault: Option<&Vault>) -> crate::Result<Option<Delegation>> {
+    let Some(config) = state.zone().await? else {
+        return Ok(None);
+    };
+    if !config.delegated {
+        return Ok(None);
+    }
+    let mut addresses: Vec<IpAddr> = config
+        .addresses
+        .iter()
+        .filter_map(|a| a.parse().ok())
+        .collect();
+    addresses.sort_by_key(|a| !a.is_ipv4());
+    Ok(Some(Delegation {
+        key: delegated_key(state, vault).await?,
+        resolver: addresses.first().copied(),
+    }))
+}
+
+/// The domain whose wildcard Caddy asks an ACME authority for, through the zone: none
+/// under the house's own root, which challenges nothing.
+async fn challenge(state: &State) -> crate::Result<Option<String>> {
+    Ok(state
+        .exposure()
+        .await?
+        .filter(|e| e.certificates == hlb_state::Certificates::Acme)
+        .map(|e| e.domain))
 }
 
 /// Who may issue for the house's names: under its own root, no public authority at
@@ -190,15 +284,15 @@ pub fn writer(image: &str, apex: &str, rendered: &zone::Rendered) -> ServiceSpec
             "node.labels.{}==true",
             hlb_types::manifest::data_label(zone::SERVICE)
         ))
-        .mount(VOLUME, zone::STORAGE)
-        .file(zone::STAGED_ZONE, rendered.zone.as_str())
-        .file(zone::STAGED_CONF, rendered.conf.as_str())
-        .file(zone::STAGED_CHECK, zone::check_conf())
-        .command([
-            "sh".to_string(),
-            "-c".to_string(),
-            zone::writer_script(apex),
-        ]);
+        .mount(VOLUME, zone::STORAGE);
+    for (path, content) in rendered.staged() {
+        job = job.file(path, content);
+    }
+    let mut job = job.command([
+        "sh".to_string(),
+        "-c".to_string(),
+        zone::writer_script(apex, &rendered.children),
+    ]);
     // Knot's own user, so what it writes in the volume stays Knot's; `conf-check`
     // compiles the configuration under /tmp.
     job.hardening.user = Some("53:53".into());
@@ -215,6 +309,7 @@ mod tests {
             apex: "example.org".into(),
             addresses: vec!["203.0.113.4".into()],
             extra: String::new(),
+            delegated: false,
         }
     }
 
@@ -348,6 +443,118 @@ mod tests {
         assert!(err.contains("unchanged"), "{err}");
     }
 
+    #[tokio::test]
+    async fn a_delegated_zone_is_written_with_the_key_drawn_once() {
+        let s = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let mut c = config();
+        c.delegated = true;
+        let err = wanted(&s, &c, Some(&vault)).await.unwrap_err().to_string();
+        assert!(err.contains("hlb zone switch"), "no key, no zone: {err}");
+
+        let key = update_key(&s, &vault).await.expect("key");
+        assert_eq!(
+            update_key(&s, &vault).await.expect("again"),
+            key,
+            "drawn once"
+        );
+        assert_ne!(
+            key.0,
+            transfer_key(&s, &vault).await.expect("transfer").0,
+            "the site never holds the key that writes the challenges"
+        );
+        let d = wanted(&s, &c, Some(&vault))
+            .await
+            .expect("wanted")
+            .delegated
+            .expect("delegated");
+        assert_eq!(
+            (d.key, d.challenge),
+            (key.clone(), None),
+            "no exposure: no challenge"
+        );
+
+        s.set_exposure(&exposure(hlb_state::Certificates::Acme))
+            .await
+            .expect("exposure");
+        let d = wanted(&s, &c, Some(&vault))
+            .await
+            .expect("wanted")
+            .delegated;
+        assert_eq!(
+            d.and_then(|d| d.challenge).as_deref(),
+            Some("home.example.org")
+        );
+        s.set_exposure(&exposure(hlb_state::Certificates::Internal))
+            .await
+            .expect("exposure");
+        let d = wanted(&s, &c, Some(&vault))
+            .await
+            .expect("wanted")
+            .delegated;
+        assert_eq!(
+            d.and_then(|d| d.challenge),
+            None,
+            "its own root asks no challenge"
+        );
+
+        assert!(wanted(&s, &c, None).await.is_err(), "the key, or nothing");
+        c.delegated = false;
+        assert_eq!(
+            wanted(&s, &c, Some(&vault)).await.expect("back").delegated,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn once_delegated_caddy_writes_its_challenge_into_the_zone() {
+        let s = State::in_memory().await.expect("state");
+        let vault = Vault::ephemeral();
+        let mut e = exposure(hlb_state::Certificates::Acme);
+        e.dns_provider = Some("hetzner".into());
+        s.set_exposure(&e).await.expect("exposure");
+        let mut c = config();
+        c.delegated = true;
+        s.set_zone(&c).await.expect("zone");
+        let key = update_key(&s, &vault).await.expect("key");
+
+        // No provider token in the vault: the delegation needs none.
+        let cfg = crate::ingress::config(&s, Some(&vault), Some(&e), &[], false)
+            .await
+            .expect("config");
+        let hlb_ingress::Tls::Acme {
+            wildcard: Some(w), ..
+        } = &cfg.tls
+        else {
+            panic!("no wildcard: {:?}", cfg.tls);
+        };
+        assert_eq!(w.provider.name, "rfc2136");
+        assert_eq!(
+            w.credentials,
+            [
+                "hlb-update".to_string(),
+                "hmac-sha256".into(),
+                key.0.clone(),
+                "knot:10053".into()
+            ]
+        );
+        assert_eq!(w.resolvers, ["203.0.113.4"]);
+        assert_eq!(w.base_domain, "home.example.org");
+        let shown = hlb_ingress::render(&[], &cfg.redacted());
+        assert!(!shown.contains(&key.0), "a preview never prints the key");
+
+        c.delegated = false;
+        s.set_zone(&c).await.expect("zone");
+        let err = crate::ingress::config(&s, Some(&vault), Some(&e), &[], false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("dns-hetzner-api-token"),
+            "the provider's again: {err}"
+        );
+    }
+
     #[test]
     fn the_writer_runs_on_knots_node_as_knot() {
         let r = zone::render(&Zone {
@@ -358,6 +565,7 @@ mod tests {
             transfer: None,
             mail: Vec::new(),
             caa: None,
+            delegated: None,
         });
         let job = writer("cznic/knot:v3.6.2", "example.org", &r);
         assert!(job.constraints.contains(&format!(

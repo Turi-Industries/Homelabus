@@ -1886,8 +1886,9 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
      already resolves to the door, so a house answering too adds nothing the day the
      VPS is down, and it would need a port open at home — none behind a CGNAT — and
      name the address the door hides. 9a the house's Knot, 9b the VPS's secondary, 9c
-     what the zone must hold before anything is pointed at it (mail, CAA), 9d the
-     switch at the registrar (NS, DS, the drift check expecting them), then OPNsense.
+     what the zone must hold before anything is pointed at it (mail, CAA), 9d what is
+     written into it once delegated (Caddy's challenges, Stalwart's DKIM), 9e the switch
+     at the registrar (NS, DS, the drift check expecting them), then OPNsense.
      - 9a. Knot at home. Built 2026-11-18: `hlb zone set --apex … [--address …]
        [--extra file] --apply` (refused without a site, or an apex not holding the
        exposure's domain), the catalog's `knot` (3.6.2, its user, read-only, port
@@ -1963,6 +1964,44 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        challenges must reach the house's Knot (RFC 2136 with a key of its own; Knot
        signs an update as it signs the rest). And librespeed's `dns-record` step: a
        name in the zone answers it only once the delegation is the zone's.
+     - 9d. What is written into the zone once delegated. Built 2026-11-18: `hlb zone
+       switch [--back] --apply` (audited) draws the update key once (`zone-update-key`,
+       not the transfer key: a site holding it could rewrite the challenges), marks the
+       zone delegated, publishes it, then the routes. 🔴 RFC 2136 never writes into the
+       zone hlb renders — `difference-no-serial` reverts it at every reload and restart
+       (measured) — but into zones of their own below it: `_acme-challenge.<exposure
+       domain>` (a TXT at its own name) and `_domainkey.<mail domain>` (TXT below it),
+       each signed, its DS the child's CDS, the key refused everywhere else (an A, a
+       name below the challenge, the apex: NOTAUTH), what Stalwart had published seeded
+       in. The site reads them from a catalog zone: a static list would leave a child
+       delegated later served by nobody. Caddy's wildcard goes over `caddy-dns/rfc2136`
+       into `knot:10053`, whatever the exposure's provider, asking ONE resolver, the
+       zone's first IPv4 — certmagic fails if any resolver given errors. Stalwart 1.0
+       publishes into `_domainkey.<domain>` with `dnsManagement.origin`, through a
+       `Tsig` server at Knot's overlay address (it takes no name); 0.16 is refused by
+       name, and that domain's certificate goes HTTP-01, a challenge sent into the DKIM
+       zone being refused. Proved on the real images: `tests/zone_signs.rs`,
+       `tests/zone_transfers.rs`, `tests/wildcard_through_zone.rs` (Caddy, Knot and
+       Pebble issuing `*.home.lab.test`), `live_mail`'s delegated test (both keys erased
+       from the child, then written back by Stalwart, the RSA one included). Found on
+       the way: the `rfc2136` provider Caddy needed had no Stalwart mapping, which a
+       test said and nobody had run — a person's own RFC 2136 server now publishes
+       DKIM too, by address (Stalwart decodes the key at creation). Switched back with
+       no provider, Stalwart's server is withdrawn and its domains go back to the
+       person. On the lab (deb1's Knot, vps1's site): the switch was first REFUSED —
+       Swarm mounts the writer's files 0444, `cp` kept the mode, and Knot's user could
+       not append the DS, which the tests (staging 0644) never saw; they stage as Swarm
+       does now. Then both children signed, their DS in the parent, served by the site
+       through the catalog; the update key wrote into `_domainkey.lab.test` at Knot's
+       overlay VIP over TCP and was refused at the apex; `zone switch --back` put the
+       routes back. A switch refused half-way is finished by running it again. Not on
+       the lab: Caddy's half — the 0.4.8 image has no `rfc2136` and refuses the routes,
+       leaving them as they were — until the next release image; and Stalwart's own
+       write, which only `hlb role sync --apply` asks for, and which would also have
+       changed the lab's PocketID groups and Vaultwarden.
+       Left for 9e: the registrar's switch itself — `hlb zone show` printing the NS and
+       the DS (`knotc zone-read <apex> @ CDS`), the drift check expecting them — and
+       librespeed's `dns-record` step.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

@@ -25,6 +25,7 @@ RUN xcaddy build v2.11.4 \
     --with github.com/caddy-dns/hetzner/v2@v2.0.1 \
     --with github.com/caddy-dns/ovh@v1.1.0 \
     --with github.com/caddy-dns/porkbun@v0.3.1 \
+    --with github.com/caddy-dns/rfc2136@v1.0.0 \
     --with github.com/hslatman/caddy-crowdsec-bouncer/http@v0.14.1 \
     --with github.com/mholt/caddy-ratelimit@v0.1.0
 

@@ -122,9 +122,14 @@ impl Net {
         let r = zone::render(z);
         let staged = self.dir.path().join("staged");
         std::fs::create_dir_all(&staged).unwrap();
-        std::fs::write(staged.join("zone"), &r.zone).unwrap();
-        std::fs::write(staged.join("zone.conf"), &r.conf).unwrap();
-        std::fs::write(staged.join("check.conf"), zone::check_conf()).unwrap();
+        for (path, content) in r.staged() {
+            let file = staged.join(std::path::Path::new(path).file_name().unwrap());
+            let _ = std::fs::remove_file(&file);
+            std::fs::write(&file, content).unwrap();
+            // As Swarm mounts a job's files: read-only, to their owner too.
+            std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+                .unwrap();
+        }
         let staged = format!("{}:/run/hlb:ro", staged.display());
         let storage = format!("{house}:{}", zone::STORAGE);
         let (ok, out) = docker(&[
@@ -146,7 +151,7 @@ impl Net {
             zone::SITE_IMAGE,
             "sh",
             "-c",
-            &zone::writer_script(&z.apex),
+            &zone::writer_script(&z.apex, &zone::render(z).children),
         ]);
         assert!(ok, "{out}");
     }
@@ -222,6 +227,7 @@ fn the_zone(site: Ipv4Addr) -> Zone {
         }),
         mail: Vec::new(),
         caa: None,
+        delegated: None,
     }
 }
 
@@ -232,7 +238,7 @@ fn the_site_transfers_the_signed_zone_follows_it_and_serves_it_alone() {
     let (house_at, site_at) = (net.at(20), net.at(10));
     let house = net.knot("house", house_at, zone::BASE_CONF);
     net.write(&house, &the_zone(site_at));
-    let conf = zone::site_conf("lab.test", &[house_at], &key());
+    let conf = zone::site_conf(&[house_at], &key());
     let site = net.knot("site", site_at, &conf);
 
     until(
@@ -258,7 +264,13 @@ fn the_site_transfers_the_signed_zone_follows_it_and_serves_it_alone() {
         Duration::from_secs(20),
         || dig(&site, "photos.lab.test", "A").contains("RRSIG"),
     );
-    assert_eq!(serial(&site), serial(&house));
+    // The house may sign once more after the name lands: the site catches up with it.
+    until(
+        "the site stayed behind the house's serial",
+        &site,
+        Duration::from_secs(20),
+        || serial(&site) == serial(&house),
+    );
 
     // The house gone, and the site restarted: its journal still holds the zone.
     docker(&["stop", &house]);
@@ -280,7 +292,7 @@ fn a_knot_without_the_key_is_handed_nothing() {
     // The stranger stands where the site would: only the key tells them apart.
     net.write(&house, &the_zone(stranger_at));
     let other = TransferKey("b3RoZXItdHJhbnNmZXIta2V5LXRoaXJ0eS10d28tYnk=".into());
-    let conf = zone::site_conf("lab.test", &[house_at], &other);
+    let conf = zone::site_conf(&[house_at], &other);
     let stranger = net.knot("stranger", stranger_at, &conf);
     std::thread::sleep(Duration::from_secs(5));
     let answer = dig(&stranger, "vault.lab.test", "A");
@@ -289,6 +301,63 @@ fn a_knot_without_the_key_is_handed_nothing() {
     assert!(
         logs.contains("refresh, failed (no usable master)"),
         "{logs}"
+    );
+}
+
+/// A zone below the house's, delegated after the site started, reaches it through the
+/// catalog — no `hlb site sync` — and so does what is written into it over RFC 2136.
+#[test]
+#[ignore = "needs Docker"]
+fn a_zone_delegated_later_reaches_the_site_through_the_catalog() {
+    let mut net = Net::up("catalog", 3);
+    let (house_at, site_at) = (net.at(20), net.at(10));
+    let house = net.knot("house", house_at, zone::BASE_CONF);
+    net.write(&house, &the_zone(site_at));
+    let site = net.knot("site", site_at, &zone::site_conf(&[house_at], &key()));
+    until(
+        "the site never transferred the zone",
+        &site,
+        Duration::from_secs(30),
+        || dig(&site, "vault.lab.test", "A").contains("RRSIG"),
+    );
+
+    let update = zone::UpdateKey("6Dq1Ixb3Tn8bJjXyOJKiwq/0aP5Dq8XJm3AOlSxPKkk=".into());
+    let mut delegated = the_zone(site_at);
+    delegated.delegated = Some(zone::Delegated {
+        key: update.clone(),
+        challenge: Some("lab.test".into()),
+    });
+    net.write(&house, &delegated);
+    let challenge = "_acme-challenge.lab.test";
+    until(
+        "the catalog never brought the new zone to the site",
+        &site,
+        Duration::from_secs(30),
+        || dig(&site, challenge, "SOA").contains("RRSIG\tSOA"),
+    );
+    // Its DS lands in the house's zone after the child is signed, a serial later.
+    until(
+        "the site serves no delegation to the new zone",
+        &site,
+        Duration::from_secs(20),
+        || dig(&site, challenge, "DS").contains("\tDS\t"),
+    );
+
+    let script = format!(
+        "printf 'server 127.0.0.1 {port}\\nzone {challenge}.\\nupdate add {challenge}. 60 TXT \"token-1\"\\nsend\\n' \
+         | knsupdate -y {alg}:{id}:{secret}",
+        port = zone::PORT,
+        alg = zone::UPDATE_ALGORITHM,
+        id = zone::UPDATE_KEY_ID,
+        secret = update.0,
+    );
+    let (ok, out) = exec(&house, &["sh", "-c", &script]);
+    assert!(ok && !out.contains("failed"), "{out}");
+    until(
+        "the update never reached the site",
+        &site,
+        Duration::from_secs(20),
+        || dig(&site, challenge, "TXT").contains("\"token-1\""),
     );
 }
 

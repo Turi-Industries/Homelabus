@@ -89,6 +89,22 @@ pub const PROVIDERS: &[Provider] = &[
         positional: false,
     },
     Provider {
+        name: "rfc2136",
+        // Any server taking dynamic updates — the house's own Knot once the registrar
+        // delegates to its zone, whatever provider the exposure names.
+        module: "github.com/caddy-dns/rfc2136",
+        fields: &[
+            secret("key_name"),
+            Field {
+                name: "key_alg",
+                default: Some("hmac-sha256"),
+            },
+            secret("key"),
+            secret("server"),
+        ],
+        positional: false,
+    },
+    Provider {
         name: "porkbun",
         module: "github.com/caddy-dns/porkbun",
         fields: &[secret("api_key"), secret("api_secret_key")],
