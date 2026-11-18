@@ -1902,8 +1902,15 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        (`tests/zone_signs.rs`, the real image: signed, a CNAME beside a published name
        refused and nothing of it served, a Knot stopped reading it at start). Every
        publication of the routes publishes the zone after them, a failure said beside
-       the routes and never taking them back. Left: the lab, and mail's records and the
-       CAA pins in the zone (9c).
+       the routes and never taking them back. Proved on the lab 2026-11-18: `zone set
+       --apex lab.test --apply` installed Knot on deb1 and served the zone signed (one
+       CSK, ECDSA P-256, 18 RRSIGs); installing librespeed put its name in the zone,
+       signed by the same key, the serial moved; Knot restarted kept its key. Knot
+       publishes its port in host mode, so it answers on its own node alone: 9b's
+       secondary asks that node. Found on the way: `site sync` wrote the guard's unit
+       with `HLB_CATALOG` naming the carried catalog's temporary directory, gone once
+       the command ended; a carried catalog is never named in it now. Left: mail's
+       records and the CAA pins in the zone (9c).
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

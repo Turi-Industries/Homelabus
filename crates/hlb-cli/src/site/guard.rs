@@ -333,20 +333,32 @@ fn units(exe: &str, env: &[(&str, String)]) -> (String, String) {
     (service, timer)
 }
 
+fn abs(p: &std::path::Path) -> std::result::Result<String, String> {
+    std::path::absolute(p)
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// The paths the guard's unit fixes for every run.
+fn unit_env(cli: &Cli) -> std::result::Result<Vec<(&'static str, String)>, String> {
+    let mut paths = vec![
+        ("HLB_STATE", abs(&cli.state)?),
+        ("HLB_MASTER_KEY", abs(&cli.master_key)?),
+    ];
+    // A carried catalog sits in a directory removed when this command ends: named in
+    // the unit, every later guard would run on a catalog that is gone (seen on the lab,
+    // 2026-11-18). Left unset, each run carries the same one, from the same binary.
+    if !cli.catalog_carried {
+        paths.push(("HLB_CATALOG", abs(&cli.catalog)?));
+    }
+    Ok(paths)
+}
+
 /// Puts the guard on this node, the one `hlb` runs on with the state and the vault —
 /// the paths this run was given, made absolute.
 pub async fn install(cli: &Cli) -> std::result::Result<(), String> {
-    let abs = |p: &std::path::Path| {
-        std::path::absolute(p)
-            .map(|p| p.display().to_string())
-            .map_err(|e| format!("{}: {e}", p.display()))
-    };
     let exe = std::env::current_exe().map_err(|e| format!("this hlb's path: {e}"))?;
-    let paths = [
-        ("HLB_STATE", abs(&cli.state)?),
-        ("HLB_MASTER_KEY", abs(&cli.master_key)?),
-        ("HLB_CATALOG", abs(&cli.catalog)?),
-    ];
+    let paths = unit_env(cli)?;
     if let Some((k, v)) = paths
         .iter()
         .find(|(_, v)| v.contains(['"', '\\', '\n', '%']))
@@ -565,5 +577,26 @@ mod tests {
         let every = site_guard::GUARD_EVERY_SECS;
         assert!(timer.contains(&format!("OnUnitActiveSec={every}s\n")));
         assert!(timer.contains(&format!("OnBootSec={every}s\n")));
+    }
+
+    #[test]
+    fn a_carried_catalog_is_never_named_in_the_unit() {
+        use clap::Parser;
+        let mut cli = Cli::try_parse_from(["hlb", "--catalog", "/srv/catalog", "site", "guard"])
+            .expect("parses");
+        let named = |cli: &Cli| {
+            unit_env(cli)
+                .expect("paths")
+                .into_iter()
+                .find(|(k, _)| *k == "HLB_CATALOG")
+                .map(|(_, v)| v)
+        };
+        assert_eq!(named(&cli).as_deref(), Some("/srv/catalog"));
+        cli.catalog_carried = true;
+        assert_eq!(
+            named(&cli),
+            None,
+            "a temporary directory, gone after the command"
+        );
     }
 }

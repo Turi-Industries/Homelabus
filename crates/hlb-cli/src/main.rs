@@ -156,6 +156,11 @@ struct Cli {
     /// may create it itself before it opens the vault.
     #[arg(skip)]
     state_existed: bool,
+
+    /// Is `catalog` the one this binary carries, written into a temporary directory
+    /// removed when the command ends? Nothing outliving the command may name it.
+    #[arg(skip)]
+    catalog_carried: bool,
 }
 
 #[derive(Subcommand)]
@@ -6608,6 +6613,7 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
             std::fs::write(&path, content)?;
         }
         cli.catalog = dir.path().to_path_buf();
+        cli.catalog_carried = true;
         Some(dir)
     } else {
         None
