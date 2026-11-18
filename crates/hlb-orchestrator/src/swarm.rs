@@ -2713,10 +2713,7 @@ mod tests {
         // on the one ingress node, and the update never ended (the lab, 2026-10-27).
         use bollard::models::ServiceSpecUpdateConfigOrderEnum as Order;
         let mut livekit = ServiceSpec::new("fluxer-livekit", "livekit/livekit-server:v1");
-        livekit.hardening.published_ports = vec![hlb_types::manifest::PublishedPort {
-            port: 7882,
-            protocol: hlb_types::manifest::Protocol::Udp,
-        }];
+        livekit.hardening.published_ports = vec![hlb_types::manifest::PublishedPort::udp(7882)];
         let created = SwarmOrchestrator::to_bollard(&livekit);
         assert_eq!(
             created.update_config.as_ref().and_then(|u| u.order),

@@ -711,18 +711,12 @@ async fn a_run_swarm_refuses_leaves_no_secret() {
 #[tokio::test]
 #[ignore = "needs an active Swarm"]
 async fn declared_ports_are_published_on_the_node_itself() {
-    use hlb_types::manifest::{Protocol, PublishedPort};
+    use hlb_types::manifest::PublishedPort;
     let o = orch().await;
     let n = name("ports");
     cleanup(&o, &n).await;
     let mut spec = sleeper(&n);
-    spec.hardening.published_ports = vec![
-        PublishedPort::tcp(18025),
-        PublishedPort {
-            port: 18026,
-            protocol: Protocol::Udp,
-        },
-    ];
+    spec.hardening.published_ports = vec![PublishedPort::tcp(18025), PublishedPort::udp(18026)];
     o.deploy(&spec).await.expect("deploy");
     o.wait_healthy(&n, 60)
         .await

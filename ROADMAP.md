@@ -2066,8 +2066,17 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        synced or not for two days unknown. A run that stopped short — the key gone
        from the vault, Caddy moved off the router's networks — counts as failed: a
        router is connected, so every name since goes unanswered inside. No router
-       connected is no line. Left: the port forwards and NAT reflection through the
-       savepoint, and the router as the lab's gateway.
+       connected is no line. 🔴 OPNsense 26.7 has no savepoint: read on the machine,
+       its firewall controllers have no `savepoint` or `cancelRollback`, and `apply`
+       takes no revision. Decided 2026-11-18: the guarantee is structural instead —
+       Homelabus writes only its own destination-NAT rules, on WAN, for Caddy's and
+       Stalwart's ports and their reflection, never a LAN rule nor the anti-lockout;
+       it reaches the API by the LAN address, which such rules cannot cut. After an
+       apply the API is read again, and its own rules are withdrawn if a forward did
+       not hold. A watchdog on the router (a cron restoring the previous
+       configuration) was ruled out: it guards against what the structure rules out,
+       and a lost cancellation would revert a good configuration by itself. Left: the
+       port forwards and NAT reflection, and the router as the lab's gateway.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

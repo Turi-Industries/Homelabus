@@ -41,7 +41,7 @@ spec:
     user: "53:53"
     # A hidden primary: the site's Knot alone asks it, over the site link, which lets
     # this port through and nothing else of the house's.
-    publishedPorts: [10053, "10053/udp"]
+    publishedPorts: [{ port: 10053, reach: site }, { port: "10053/udp", reach: site }]
     # A text configuration is compiled into a database under /tmp at start.
     tmpfs: [/tmp]
   swarm:

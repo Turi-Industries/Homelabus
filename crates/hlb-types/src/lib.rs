@@ -297,9 +297,10 @@ pub fn validate_with_guide(m: &Manifest, g: &Guide) -> Result<()> {
         )));
     }
     // Host mode binds one port once per node: a second service asking for it would
-    // never be placed beside the first, with "no suitable node" as the only reason.
+    // never be placed beside the first, with "no suitable node" as the only reason —
+    // whoever each is for.
     for (i, p) in published.iter().enumerate() {
-        if p.port == 0 || published[..i].contains(p) {
+        if p.port == 0 || published[..i].iter().any(|q| q.binds_as(p)) {
             return Err(Error::Validation(format!(
                 "{}: port {p} — published twice, or zero",
                 m.metadata.name

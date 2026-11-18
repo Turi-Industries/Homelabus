@@ -13,6 +13,13 @@
 # reaches br0: it serves 192.168.1.0/24 out of the box, and a node rebooting would take
 # the first offer — the lab's dnsmasq stays the house's DHCP. Reached over SSH by the
 # lab's key (`vm.sh ssh opn1`), root/opnsense on the console.
+#
+# 🔴 A hard stop of the host leaves its disk UNBOOTABLE: twice on 2026-11-18 (Docker
+# restarted, then the host rebooted) the loader read garbage for /boot.config ("No
+# accep") — nano's UFS does not survive a killed QEMU, where the Debian VMs' ext4 does.
+# Nothing on the console says so; a screendump over QMP shows it. `router.sh down`
+# before stopping the lab; otherwise move disk.qcow2 and bootstrapped aside and `up`
+# rebuilds it, with a new certificate — `hlb router connect` again.
 
 set -euo pipefail
 
