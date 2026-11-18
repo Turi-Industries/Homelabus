@@ -262,6 +262,25 @@ fn the_house_zone_is_signed_and_a_refused_one_changes_nothing() {
         key.contains("lab.test. DS ") && key.contains(" 13 2 "),
         "{key}"
     );
+    // What the house keeps for the registrar is the DS Knot's own tool computes, and
+    // the key it is computed from.
+    let lines: Vec<&str> = out.lines().collect();
+    let parent = zone::parent_records(&lines);
+    assert_eq!(parent.ds.len(), 1, "{out}");
+    assert!(
+        // `knotc` writes the digest in capitals, `keymgr` in small letters.
+        key.contains(&format!("lab.test. DS {}", parent.ds[0].to_lowercase())),
+        "{key}\n{:?}",
+        parent.ds
+    );
+    assert_eq!(parent.dnskey.len(), 1, "{out}");
+    assert!(
+        parent.dnskey[0].starts_with("257 3 13 "),
+        "{:?}",
+        parent.dnskey
+    );
+    // The SOA is still the last line, as the publication reads it.
+    assert!(lines.last().unwrap().contains(" SOA "), "{out}");
 
     // A CNAME beside the addresses of a published name: Knot refuses the zone, and
     // nothing of it reaches what is served.

@@ -193,6 +193,21 @@
 					</Card>
 				{/if}
 
+				{#if view.unmet.length > 0}
+					<Card title={m.domain_unmet_title()}>
+						<p class="mb-2 text-sm font-medium text-critical">{m.domain_unmet_explanation()}</p>
+						<ul>
+							{#each view.unmet as u (u.what)}
+								<Row>
+									<p class="font-medium">{domainChange[u.what]()}</p>
+									<p class="text-sm wrap-anywhere">{m.domain_unmet({ needs: list(u.needs), found: list(u.found) })}</p>
+									{#snippet aside()}<Mark attention="critical" />{/snippet}
+								</Row>
+							{/each}
+						</ul>
+					</Card>
+				{/if}
+
 				<Card title={m.domain_baseline_title()}>
 					{#if view.baseline_at === null}
 						<p class="text-sm text-attention">{m.domain_baseline_none()}</p>

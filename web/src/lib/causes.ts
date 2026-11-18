@@ -140,6 +140,8 @@ export function title(issue: Issue): string {
 			return m.cause_mail_blocklists_refused(n);
 		case 'domain_moved':
 			return m.cause_domain_moved();
+		case 'delegation_unmet':
+			return m.cause_delegation_unmet();
 		case 'caa_refuses_account':
 			return m.cause_caa_refuses_account(n);
 		case 'certificate_foreign':
@@ -208,6 +210,7 @@ export function where(issue: Issue): string {
 		case 'mail_waiting':
 			return '/apps/stalwart';
 		case 'domain_moved':
+		case 'delegation_unmet':
 		case 'caa_refuses_account':
 		case 'certificate_foreign':
 		case 'domain_unwatched':
@@ -399,6 +402,8 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_mail_blocklists_refused();
 		case 'domain_moved':
 			return m.reason_domain_moved();
+		case 'delegation_unmet':
+			return m.reason_delegation_unmet();
 		case 'caa_refuses_account':
 			return m.reason_caa_refuses_account();
 		case 'certificate_foreign':

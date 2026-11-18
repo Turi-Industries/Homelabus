@@ -24,11 +24,13 @@ pub async fn view(state: &State, now: i64) -> Result<DomainView, hlb_state::Erro
     let reading = state.domain_reading().await?;
     let baseline = state.domain_baseline().await?;
     let transparency = state.domain_transparency().await.map_err(|e| e.to_string());
+    let delegation = hlb_engine::zone::delegation_needed(state).await?;
     Ok(DomainView::Public(Box::new(DomainPublic::judge(
         &exposure.domain,
         reading.as_ref(),
         baseline.as_ref(),
         transparency.as_ref().map_err(Clone::clone),
+        delegation.as_ref(),
         now,
     ))))
 }
@@ -65,6 +67,9 @@ fn findings_of(p: &DomainPublic) -> Vec<Finding> {
                     )
                 }),
         );
+        if !p.unmet.is_empty() {
+            out.push((Cause::DelegationUnmet, Attention::Critical, zone()));
+        }
         if p.baseline_at.is_none() {
             out.push((Cause::DomainUnwatched, Attention::Notice, zone()));
         } else if !p.drifts.is_empty() {
@@ -227,6 +232,7 @@ mod tests {
             panic!("the demonstration's domain is public");
         };
         assert_eq!(p.drifts.len(), 1, "{:?}", p.drifts);
+        assert_eq!(p.unmet.len(), 1, "{:?}", p.unmet);
         let seen = p.reading.as_ref().expect("read");
         assert!(
             seen.advice.iter().any(|a| matches!(a, Advice::Pin { .. })),
@@ -239,6 +245,51 @@ mod tests {
             .into_iter()
             .map(|i| i.cause)
             .collect();
-        assert_eq!(said, [Cause::DomainMoved, Cause::CertificateForeign]);
+        assert_eq!(
+            said,
+            [
+                Cause::DelegationUnmet,
+                Cause::DomainMoved,
+                Cause::CertificateForeign
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delegated_zone_the_registrar_does_not_name_is_critical_baseline_or_not() {
+        let s = exposed(Certificates::Acme).await;
+        s.set_zone(&hlb_state::ZoneConfig {
+            apex: "home.org".into(),
+            addresses: vec!["203.0.113.4".into()],
+            extra: String::new(),
+            delegated: false,
+        })
+        .await
+        .expect("zone");
+        s.set_domain_transparency(&Transparency {
+            after: Some("1".into()),
+            foreign: vec![],
+        })
+        .await
+        .expect("watch");
+        s.set_domain_baseline(&reading("ns1.desec.io", 1_000))
+            .await
+            .expect("baseline");
+        s.record_domain_reading(&reading("ns1.desec.io", 1_000))
+            .await
+            .expect("reading");
+        // Before the switch, the provider's servers are the right ones.
+        assert!(findings(&s, 1_000).await.is_empty());
+        let mut z = s.zone().await.expect("read").expect("a zone");
+        z.delegated = true;
+        s.set_zone(&z).await.expect("switch");
+        assert_eq!(
+            causes(findings(&s, 1_000).await),
+            [(
+                Cause::DelegationUnmet,
+                Attention::Critical,
+                vec!["home.org".into()]
+            )]
+        );
     }
 }

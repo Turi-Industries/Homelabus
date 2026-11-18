@@ -316,7 +316,8 @@ pub struct Prerequisites<'p> {
 
 /// The blocking pre-install steps of `plan` for `app`: those the state holds as
 /// handled are met, the others are checked by their `verify:` — under a wildcard
-/// record, "create the DNS record" is true before anyone attests it. Writes nothing.
+/// record, "create the DNS record" is true before anyone attests it, and in the
+/// house's delegated zone the install writes it (`zone::answers`). Writes nothing.
 ///
 /// One reading for the executor and the interface's install: the interface counted
 /// the plan's steps without checking them, and refused for good every app whose guide
@@ -339,7 +340,9 @@ pub async fn prerequisites<'p>(
         if handled.contains(id) {
             continue;
         }
-        if verifier.check(step, &vars).await.is_verified() {
+        if zone::answers(state, step, &vars).await?
+            || verifier.check(step, &vars).await.is_verified()
+        {
             out.verified.push(id);
         } else {
             out.open.push(a);

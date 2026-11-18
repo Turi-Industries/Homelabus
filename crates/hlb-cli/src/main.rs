@@ -1766,7 +1766,9 @@ enum DomainCmd {
 
 #[derive(Subcommand)]
 enum ZoneCmd {
-    /// The zone as the house would serve it now, and whether Knot runs.
+    /// The zone as the house would serve it now, whether Knot runs, and what the
+    /// registrar must hold — the name servers, their addresses, the DS — against what
+    /// the internet reads.
     Show,
     /// Declare the zone the house signs: every name Caddy serves and both name servers
     /// resolve to the site's addresses, followed at each publication of the routes.
@@ -1794,6 +1796,10 @@ enum ZoneCmd {
         /// The registrar points at the DNS provider again: they are written there.
         #[arg(long)]
         back: bool,
+        /// Switch though the internet does not read the delegation yet — a parent's
+        /// cache still naming the provider, or a zone no public resolver can see.
+        #[arg(long, conflicts_with = "back")]
+        force: bool,
         #[arg(long)]
         apply: bool,
     },

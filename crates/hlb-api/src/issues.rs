@@ -192,6 +192,12 @@ pub enum Cause {
     /// hands a domain to a thief. The subject is the zone; `hlb domain watch` says
     /// what moved.
     DomainMoved,
+    /// 🔴 The house's own zone is delegated (`hlb zone switch`), and the parent does
+    /// not name its two servers alone, or holds no DS of the key Knot signs with: the
+    /// internet asks a zone the house no longer writes, or refuses the house's as
+    /// forged. The subject is the zone; `hlb zone show` prints what the registrar must
+    /// hold.
+    DelegationUnmet,
     /// 🔴 The CAA governing the house's names refuses one of its ACME accounts: its
     /// certificates stop renewing. The subjects are who holds the account (`Caddy`,
     /// `Stalwart`); `hlb domain watch` prints the line to add.

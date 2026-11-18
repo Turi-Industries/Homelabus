@@ -2002,6 +2002,30 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        Left for 9e: the registrar's switch itself — `hlb zone show` printing the NS and
        the DS (`knotc zone-read <apex> @ CDS`), the drift check expecting them — and
        librespeed's `dns-record` step.
+     - 9e. The registrar's switch. Built 2026-11-18: every publication's writer ends
+       with the apex's CDS and CDNSKEY, kept in the state (`zone-parent-ds`,
+       `zone-parent-dnskey`) — a Knot that lost its volume signs with a new key, and
+       the next publication says it. `hlb zone show` ends with what the registrar must
+       hold: `ns1`/`ns2`, their glue (they are inside the zone they serve), the DS, or
+       the key for a registrar computing it, and what the public resolvers read of it.
+       `hlb zone switch --apply` is refused until they read that delegation (`--force`
+       for a parent's cache, audited so); from then on every reading of the domain is
+       held to it (`hlb_api::domain::unmet`): exactly the two servers — a third answers
+       for the zone with what it likes —, and a DS naming Knot's key, its tag and
+       algorithm, the same digest where the type is the same (a registrar's SHA-384
+       is right too). Unmet is critical, baseline or not: `DelegationUnmet` in the
+       inbox and on the domain screen, notified each night, said by `hlb domain
+       watch`. And a guide's DNS step for a name in the delegated zone is met by the
+       zone (`zone::answers`): the install itself publishes the name, on the door's
+       addresses — an `expectContains` elsewhere stays the person's. Proved on the real
+       image (`tests/zone_signs.rs`: the DS kept is `keymgr`'s, the SOA still last).
+       Proved on the lab 2026-11-18: `zone show` printed `61550 13 2 ab31…`, the CDS the
+       site's Knot serves; the switch was refused, lab.test being nobody's delegation,
+       then forced; librespeed removed and installed again passed its `dns-record`
+       prerequisite — before, the install stopped there — and stopped where 9d said,
+       Caddy 0.4.8 refusing `rfc2136`; switched back, its install finished and the site
+       served its name. Left: the registrar's switch on a real domain, with the next
+       release image, then OPNsense.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

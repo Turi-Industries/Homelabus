@@ -24,7 +24,7 @@ pub async fn run(cli: &Cli, cmd: &ZoneCmd) -> Result<ExitCode> {
             extra,
             apply,
         } => set(cli, apex, address, extra.as_deref(), *apply).await,
-        ZoneCmd::Switch { back, apply } => switch(cli, !*back, *apply).await,
+        ZoneCmd::Switch { back, force, apply } => switch(cli, !*back, *force, *apply).await,
     }
 }
 
@@ -41,6 +41,7 @@ async fn show(cli: &Cli) -> Result<ExitCode> {
     println!("{}", rendered.zone);
     say_outside(&rendered.outside);
     say_withheld(&rendered.withheld);
+    registrar(&state, &config).await?;
     let orch = SwarmOrchestrator::connect().await?;
     match orch.status(hlb_ingress::zone::SERVICE).await {
         Ok(s) if s.is_converged() => println!("✓ Knot runs ({})", s.replicas_text()),
@@ -54,6 +55,58 @@ async fn show(cli: &Cli) -> Result<ExitCode> {
         Err(e) => return Err(e.into()),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// What the registrar must hold, and what the internet reads of it now.
+async fn registrar(state: &hlb_state::State, config: &ZoneConfig) -> Result<()> {
+    let needs = hlb_engine::zone::parent(state, config).await?;
+    let (_, keys) = state.zone_parent().await?;
+    println!("\nAt the registrar, for {}:", config.apex);
+    println!("  name servers  {}", needs.ns.join(", "));
+    // Inside the zone they name: the parent holds their addresses too, or nobody can
+    // reach them.
+    for ns in &needs.ns {
+        println!("  glue          {ns}  {}", config.addresses.join(", "));
+    }
+    if needs.ds.is_empty() {
+        println!(
+            "  DS            not read yet: Knot signs the zone at its next publication — \
+             hlb zone set --apex {} --apply",
+            config.apex
+        );
+    }
+    for ds in &needs.ds {
+        println!("  DS            {ds}");
+    }
+    for key in &keys {
+        println!("  or its key    {key}   (a registrar asking for the DNSKEY)");
+    }
+    match delegated_now(&config.apex).await {
+        Err(e) => println!("⚠️  What the internet reads could not be told: {e}"),
+        Ok(dns) => {
+            let unmet = hlb_api::domain::unmet(&needs, &dns);
+            if unmet.is_empty() {
+                println!("✓ The internet reads that delegation");
+            }
+            for u in &unmet {
+                println!(
+                    "{} {}",
+                    if config.delegated { "🔴" } else { "  ·" },
+                    u.line()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The apex's name servers and DS as the public resolvers read them.
+async fn delegated_now(apex: &str) -> std::result::Result<hlb_api::domain::DnsSide, String> {
+    use hlb_engine::domain::Internet;
+    let net = hlb_engine::domain::Public::default();
+    let (ns, _) = net.query(apex, "NS").await?;
+    let (ds, validated) = net.query(apex, "DS").await?;
+    Ok(hlb_api::domain::DnsSide::new(ns, ds, validated, Vec::new()))
 }
 
 /// The zone declared, or why it cannot be: its apex holds the exposure's domain, and
@@ -193,7 +246,7 @@ async fn set(
 /// The registrar delegates to the zone, or no longer does. The update key is drawn the
 /// first time, the zone published with its children, the routes with Caddy's challenge
 /// through it; Stalwart writes its next DKIM key there.
-async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
+async fn switch(cli: &Cli, delegated: bool, force: bool, apply: bool) -> Result<ExitCode> {
     let state = open_state(cli).await?;
     let vault = open_vault(cli)?;
     let Some(mut config) = state.zone().await? else {
@@ -223,11 +276,45 @@ async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
         );
         println!("  Caddy's ACME challenges   _acme-challenge.<domain>, a zone of its own");
         println!("  Stalwart's DKIM keys      _domainkey.<domain>, a zone of its own");
-        println!(
-            "⚠️  Only once the registrar names ns1.{0} and ns2.{0} and holds the zone's DS: \
-             before, the authority asks the provider, where nothing is written any more.",
-            config.apex
-        );
+        // 🔴 Switched before the registrar, Caddy's next challenge is written where no
+        // authority asks, and Stalwart's next DKIM key where no receiver reads it.
+        let needs = hlb_engine::zone::parent(&state, &config).await?;
+        let refusal = match delegated_now(&config.apex).await {
+            Err(e) => Some(format!("what the internet reads could not be told: {e}")),
+            Ok(dns) => {
+                let unmet = hlb_api::domain::unmet(&needs, &dns);
+                (!unmet.is_empty()).then(|| {
+                    unmet
+                        .iter()
+                        .map(|u| u.line())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+            }
+        };
+        match &refusal {
+            None => println!("✓ The internet reads the delegation the zone needs."),
+            Some(why) if force => println!("⚠️  Switched all the same (--force): {why}"),
+            Some(why) => {
+                println!(
+                    "🔴 The registrar does not delegate to the zone yet — {why}. Before it \
+                     does, the authority asks the provider, where nothing is written any \
+                     more: hlb zone show says what it must hold."
+                );
+                if !apply {
+                    println!(
+                        "--apply is refused until then; a parent's cache may name the \
+                         provider for a day — --force switches anyway."
+                    );
+                    return Ok(ExitCode::SUCCESS);
+                }
+                println!(
+                    "Refused. Once the registrar holds it, run this again; a parent's cache \
+                     may name the provider for a day — --force switches anyway."
+                );
+                return Ok(ExitCode::FAILURE);
+            }
+        }
     } else {
         println!(
             "The house's challenges and DKIM keys go back to the DNS provider; the zones \
@@ -250,7 +337,11 @@ async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
             "zone-switch",
             &config.apex,
             "ok",
-            Some(if delegated { "delegated" } else { "back" }),
+            Some(match (delegated, force) {
+                (true, false) => "delegated",
+                (true, true) => "delegated, forced",
+                (false, _) => "back",
+            }),
         )
         .await?;
     follow_switch(cli, &state, &vault).await

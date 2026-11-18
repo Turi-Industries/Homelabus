@@ -825,8 +825,9 @@ impl Rendered {
 /// The writer: a job on Knot's node, from Knot's image, mounting its volume. Both
 /// files are checked by Knot's own tools before either is put in place; the zones below
 /// the house's are created when Knot has none of them yet, and their DS appended to the
-/// house's zone — checked again — before Knot reloads it. Its last line is the SOA Knot
-/// serves.
+/// house's zone — checked again — before Knot reloads it. It ends with the apex's CDS
+/// and CDNSKEY, what the registrar must hold ([`parent_records`]), and its last line
+/// is the SOA Knot serves.
 ///
 /// 🔴 A zone refused leaves the one served unchanged: nothing is put in place until the
 /// first checks pass, and the house's zone only once it holds every DS. The
@@ -908,8 +909,38 @@ pub fn writer_script(apex: &str, children: &[Child]) -> String {
          \x20   [ $i -lt 30 ] || {{ echo 'Knot did not sign the zone within 30 s' >&2; exit 1; }}\n\
          \x20   sleep 1\n\
          done\n\
+         {knotc} zone-read '{apex}' @ CDS\n\
+         {knotc} zone-read '{apex}' @ CDNSKEY\n\
          {knotc} zone-read '{apex}' @ SOA\n"
     );
+    out
+}
+
+/// What the parent must hold for the zone, read from the zone itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParentRecords {
+    /// Each DS's data, `keytag algorithm digest-type digest`: Knot's CDS.
+    pub ds: Vec<String>,
+    /// Each key's data, `flags protocol algorithm key`, for the registrars asking for
+    /// the key and computing the DS themselves: Knot's CDNSKEY.
+    pub dnskey: Vec<String>,
+}
+
+/// The CDS and CDNSKEY lines of the writer's output, whatever `knotc` writes before
+/// the type (`[zone] owner ttl` or `owner ttl`). Empty when Knot was not running.
+pub fn parent_records<S: AsRef<str>>(output: &[S]) -> ParentRecords {
+    let mut out = ParentRecords::default();
+    for line in output {
+        let words: Vec<&str> = line.as_ref().split_whitespace().collect();
+        for (kind, into) in [("CDS", &mut out.ds), ("CDNSKEY", &mut out.dnskey)] {
+            if let Some(at) = words.iter().position(|w| *w == kind) {
+                let data = words[at + 1..].join(" ");
+                if !data.is_empty() && !into.contains(&data) {
+                    into.push(data);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -982,6 +1013,24 @@ mod tests {
         assert!(r
             .zone
             .contains("@ 3600 NS ns1.example.org.\n@ 3600 NS ns2.example.org.\n"));
+    }
+
+    #[test]
+    fn the_parents_records_are_read_from_knots_own_lines() {
+        let out = [
+            "[example.org.] example.org. 0 CDS 12345 13 2 ABCDEF0123",
+            "example.org. 0 CDNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0d xCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+            "example.org. 0 CDS 12345 13 2 ABCDEF0123",
+            "[example.org.] example.org. 3600 SOA ns1.example.org. hostmaster.example.org. 7 3600 900 1209600 300",
+        ];
+        let r = parent_records(&out);
+        assert_eq!(r.ds, ["12345 13 2 ABCDEF0123"]);
+        assert_eq!(r.dnskey.len(), 1);
+        assert!(r.dnskey[0].starts_with("257 3 13 mdss"), "{:?}", r.dnskey);
+        assert_eq!(
+            parent_records(&["Knot is not running"]),
+            ParentRecords::default()
+        );
     }
 
     #[test]
