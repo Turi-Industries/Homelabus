@@ -5,6 +5,9 @@
 #   router.sh up       made on first use (image fetched and checked), booted otherwise
 #   router.sh key      an API key for root, written to /vms/opn1/apikey.txt — the file
 #                      `hlb router connect` reads, as the interface would download it
+#   router.sh address <optN> <ip/len>
+#                      a person's step on the router's pages, for a network Homelabus
+#                      made (`hlb router network`): its interface enabled and addressed
 #   router.sh down     powered off
 #   router.sh console  the serial console (Ctrl-] then q to leave... socat: Ctrl-C)
 #
@@ -212,6 +215,28 @@ EOF
     echo "root's API key in $DIR/apikey.txt"
 }
 
+# What Interfaces → <name> → Enable, Static IPv4, Save, Apply changes does. OPNsense 26.7
+# has no API for it, so `hlb router sync` asks a person: this is that person.
+address() {
+    local ifname=${1:-} cidr=${2:-}
+    [[ $ifname =~ ^opt[0-9]+$ && $cidr =~ ^[0-9.]+/[0-9]+$ ]] ||
+        die "address <optN> <ip/len>: opt1 192.168.20.1/24, say"
+    cat >"$DIR/address.php" <<EOF
+<?php
+require_once("script/load_phalcon.php");
+use OPNsense\Core\Config;
+Config::getInstance()->lock();
+\$i = Config::getInstance()->object()->interfaces->$ifname;
+if (\$i === null || (string)\$i->if === "") { fwrite(STDERR, "no interface $ifname\n"); exit(1); }
+\$i->enable = "1"; \$i->ipaddr = "${cidr%/*}"; \$i->subnet = "${cidr#*/}";
+Config::getInstance()->save();
+EOF
+    ssh_opn 'cat > /tmp/address.php' <"$DIR/address.php"
+    ssh_opn "sh -c 'cd /usr/local/opnsense/mvc && php /tmp/address.php && rm /tmp/address.php && configctl interface reconfigure $ifname && configctl filter reload'" \
+        </dev/null >/dev/null
+    echo "$ifname at $cidr"
+}
+
 down() {
     running || { echo "$NAME not running"; return; }
     printf '{"execute":"qmp_capabilities"}\n{"execute":"system_powerdown"}\n' |
@@ -225,7 +250,8 @@ down() {
 case ${1:-} in
     up) up ;;
     key) key ;;
+    address) shift; address "$@" ;;
     down) down ;;
     console) exec socat -,raw,echo=0,escape=0x1d "UNIX-CONNECT:$DIR/console.sock" ;;
-    *) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

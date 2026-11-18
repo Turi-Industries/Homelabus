@@ -1904,6 +1904,21 @@ enum RouterCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Declare the house's devices or guests network, carried on a VLAN tagged on the
+    /// trusted network's port. The next sync makes the VLAN and its interface, and hands
+    /// out its addresses once a person has addressed it on the router.
+    Network {
+        #[arg(value_enum)]
+        kind: router::NetworkKind,
+        /// Its VLAN tag, 2 to 4094.
+        #[arg(long, required_unless_present = "off", conflicts_with = "off")]
+        vlan: Option<u16>,
+        /// No longer Homelabus's: its DHCP range goes, its VLAN and interface stay.
+        #[arg(long)]
+        off: bool,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]

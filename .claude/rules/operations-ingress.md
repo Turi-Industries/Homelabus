@@ -121,3 +121,43 @@ some mistakes loudly; the others are a 502, or a door left open.
   reflection" has no API: each forward gets an outbound NAT rule of Homelabus's own
   (`hlb_router::forwards`), its source and translation named by the network
   (`lan`, `lanip`) so a renumbering carries it.
+- **🔴 26.7 cannot address an interface through its API.** `interfaces/assignment`
+  takes a device and a name — `NetworkInterface.xml` has nothing else — and enabling it
+  and giving it an address are the legacy page's. Homelabus makes the VLAN and its
+  assignment, says the one step a person takes on the router's pages, and reads the
+  address back from `interfaces_info` (`hlb_router::networks`).
+- **🔴 A VLAN made a moment ago cannot be assigned.** The device list the assignment is
+  checked against is configd's `interface list assign-opts`, cached 30 s: a VLAN made
+  since a listing is refused "Option [] not in list" — the value it prints is empty, not
+  the device asked for. `Opnsense::add_assignment` asks again for up to 40 s.
+- **🔴 An assigned VLAN's device is listed with its interface's name.** `search_item`
+  says `"vlanif": "vlan01"` until it is assigned, `"vlan01 [Devices]"` after: matched
+  as listed, the VLAN read as no interface's and the next sync assigned it again —
+  refused, "Option [] not in list", once the lab's opt1 was addressed (2026-11-18).
+  `Vlan::device` reads the first word; the field is private.
+- **🔴 A filter rule takes a list of NAMES, and a literal network only alone.**
+  `destination_net` is multiple, each item checked against the names it knows (`any`,
+  `(self)`, `opt1`, `opt1ip`, the aliases); a typed network joins them only when the
+  WHOLE value is one (`NetworkAliasField.php`), so `10.0.0.0/8,172.16.0.0/12` is
+  refused "not a valid source IP address or alias" (26.7, measured). One block rule
+  per private range (`hlb_router::filter`); an alias would hold the list, and a rule
+  naming an alias a person removed loads nothing.
+- **A new filter rule is read last.** pf decides by the first matching rule, in
+  `sequence` order, and the router numbers a new one after every other (highest plus
+  100). A person's rule on Devices or Guests is therefore read after Homelabus's `pass`
+  to the internet, never reached, unless its sequence is below `filter::SEQUENCE`
+  (300000): the sync says which of theirs are, and puts its own back where they were.
+- **🔴 Unbound serves `home.arpa` itself, and answers NXDOMAIN under it.** 1.25's
+  default local zones hold `home.arpa.`, `service.arpa.` and `resolver.arpa.` as
+  `static`: a forward of `home.arpa` to dnsmasq was written, loaded (`list_forwards`)
+  and never asked, while dnsmasq answered `deb2.home.arpa` on 53053 (2026-11-18). The
+  fix is `local-zone: … nodefault`, which no API of 26.7 writes: the networks' names
+  live under the router's own domain, the zone OPNsense makes transparent
+  (`networks::domain_of`). A reverse zone escapes it — OPNsense writes a forwarded
+  `in-addr.arpa` zone `typetransparent`.
+- **A forwarded reverse zone would loop without `bogus-priv`.** dnsmasq asks its
+  upstream — Unbound, on the same router (`using nameserver 127.0.0.1#53`) — for an
+  address it has no lease for, and Unbound forwards the zone back to it. `dnsmasq_wanted` turns on `no_private_reverse`.
+- **`drill` reads its options BEFORE the server.** `drill @127.0.0.1 -p 53053 name`
+  asks port 53 — Unbound — and looked like dnsmasq answering nothing; `drill -p 53053
+  name @127.0.0.1` asks dnsmasq.

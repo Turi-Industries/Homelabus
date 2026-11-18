@@ -104,6 +104,9 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
                 for (node, address) in state.router_addresses().await? {
                     println!("  {node:<12} {address}, inside the house");
                 }
+                for (kind, vlan) in state.router_networks().await? {
+                    println!("  {kind:<12} network, on VLAN {vlan}");
+                }
             }
             (report, false, "router-show")
         }
@@ -128,6 +131,17 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
             target = node.clone();
             let report = router.address(&orch, node, *address, *apply).await?;
             (report, *apply, "router-address")
+        }
+        RouterCmd::Network {
+            kind,
+            vlan,
+            off: _,
+            apply,
+        } => {
+            let kind = kind.kind();
+            target = kind.wire().to_string();
+            let report = router.network(kind, *vlan, *apply).await?;
+            (report, *apply, "router-network")
         }
     };
     print(&report);
@@ -176,6 +190,28 @@ fn print(r: &Report) {
             hlb_api::plural(r.unchanged as u64, "name", "names")
         );
     }
+    if r.networks_unchanged > 0 {
+        println!(
+            "{} already handing out {} addresses.",
+            hlb_api::plural(r.networks_unchanged as u64, "network", "networks"),
+            if r.networks_unchanged == 1 {
+                "its"
+            } else {
+                "their"
+            }
+        );
+    }
+    if r.rules_unchanged > 0 {
+        println!(
+            "{} of those networks' already as {}.",
+            hlb_api::plural(r.rules_unchanged as u64, "filter rule", "filter rules"),
+            if r.rules_unchanged == 1 {
+                "it should be"
+            } else {
+                "they should be"
+            }
+        );
+    }
     if r.forwards_unchanged > 0 {
         println!(
             "{} already forwarded from the internet.",
@@ -187,6 +223,22 @@ fn print(r: &Report) {
     }
     if let Some(why) = &r.stopped {
         println!("\n{why}");
+    }
+}
+
+/// The networks `hlb router network` declares, as typed.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum NetworkKind {
+    Devices,
+    Guests,
+}
+
+impl NetworkKind {
+    pub fn kind(self) -> hlb_router::networks::Kind {
+        match self {
+            Self::Devices => hlb_router::networks::Kind::Devices,
+            Self::Guests => hlb_router::networks::Kind::Guests,
+        }
     }
 }
 
@@ -216,6 +268,15 @@ mod tests {
     fn two_bare_lines_are_the_key_then_the_secret() {
         let c = credentials("  AbC\n\nsecret-ish\n").expect("two lines");
         assert_eq!((c.key.as_str(), c.secret.as_str()), ("AbC", "secret-ish"));
+    }
+
+    #[test]
+    fn a_network_is_typed_as_it_is_stored() {
+        use clap::ValueEnum;
+        for k in super::NetworkKind::value_variants() {
+            let typed = k.to_possible_value().expect("listed");
+            assert_eq!(typed.get_name(), k.kind().wire());
+        }
     }
 
     #[test]

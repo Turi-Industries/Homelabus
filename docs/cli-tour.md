@@ -746,6 +746,24 @@ is left as it is, and said:
 ./target/debug/hlb router sync               # preview: each port, forwarded to its node
 ```
 
+Beside the trusted network, the house can have one for its devices (a television, a
+console) and one for its guests, each a VLAN tagged on the trusted network's port — a
+VLAN-aware switch or access point carries all three on the router's one LAN cable. The
+sync makes the VLAN and the router's interface on it; OPNsense's API cannot address an
+interface, so the sync says what to do on the router's pages, then reads the address
+back and hands out a DHCP range there. Its machines are named under the network's own
+domain beneath the router's (`tv.devices.internal`), which the router's DNS answers.
+Each network may then ask that DNS and reach the internet, the devices network Caddy's
+80 and 443 too, and nothing else: not the trusted network, not the router. The rules are
+written on those two interfaces only, never on the one the API is reached by:
+
+```sh
+./target/debug/hlb router network devices --vlan 20 --apply
+./target/debug/hlb router network guests --vlan 30 --apply
+./target/debug/hlb router sync --apply       # the VLANs, their interfaces; the address is a person's
+./target/debug/hlb router network guests --off --apply   # its range and rules go, its VLAN stays
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its
