@@ -31,6 +31,7 @@ pub mod guard;
 pub mod homecoming;
 pub mod lifeboat;
 pub mod litestream;
+pub mod name_server;
 pub mod pitr;
 mod positions;
 pub mod promote;
@@ -401,6 +402,62 @@ async fn watch_site(state: &State, vault: &Vault, s: &Site) -> bool {
     }
 }
 
+/// The site's name server, once the house declared a zone: the transfer key drawn, the
+/// house's Knot told to hand the zone to the site, the site's started or reloaded, and
+/// the house's serial waited for there. Nothing to do without a zone.
+async fn serve_zone(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) -> bool {
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        eprintln!("\n🔴 The name server: {what}: {e}");
+        eprintln!("   The site serves what it served. Once fixed: hlb site sync --apply");
+        false
+    };
+    let config = match state.zone().await {
+        Ok(Some(c)) => c,
+        Ok(None) => return true,
+        Err(e) => return fail("the zone could not be read", &e),
+    };
+    let key = match hlb_engine::zone::transfer_key(state, vault).await {
+        Ok(k) => k,
+        Err(e) => return fail("the transfer key", &e),
+    };
+    let orch = match hlb_orchestrator::SwarmOrchestrator::connect().await {
+        Ok(o) => o,
+        Err(e) => return fail("the house's Swarm", &e),
+    };
+    let house = match hlb_engine::zone::publish(&orch, state, Some(vault)).await {
+        Ok(hlb_engine::zone::Followed::Published { soa, .. }) => {
+            match hlb_ingress::zone::soa_serial(&soa) {
+                Some(serial) => serial,
+                None => return fail("the house's Knot answered no SOA", &soa),
+            }
+        }
+        Ok(_) => {
+            return fail(
+                "the house's Knot is not deployed",
+                &format!("hlb zone set --apex {} --apply", config.apex),
+            )
+        }
+        Err(e) => return fail("the house's zone", &e),
+    };
+    let how = match name_server::deploy(hub, s, &config.apex, &key).await {
+        Ok(how) => how,
+        Err(e) => return fail("its service", &e),
+    };
+    if let Err(e) = name_server::holds(hub, &config.apex, house).await {
+        return fail("the transfer", &e);
+    }
+    println!(
+        "\nThe name server: {} — {} served at serial {house}, signed at home.",
+        how.says(),
+        config.apex
+    );
+    println!(
+        "   It answers once the registrar delegates {} to ns1 and ns2.{} at {}.",
+        config.apex, config.apex, s.endpoint
+    );
+    true
+}
+
 /// What `hlb site add` was given.
 pub struct Add<'a> {
     pub host: &'a str,
@@ -622,6 +679,13 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
             hlb_ingress::status_page::NTFY,
             hlb_ingress::front_door::SITE_EDGE
         );
+        if let Some(zone) = state.zone().await? {
+            println!(
+                "and its name server ({}), serving {} as the house signs it.",
+                hlb_ingress::zone::SITE_SERVICE,
+                zone.apex
+            );
+        }
         // A site added before the vital server existed gets it here.
         vital::run(cli, &state, &vault, false).await?;
         let delay = guard::stop_after(&state).await?;
@@ -647,9 +711,10 @@ pub async fn sync(cli: &Cli, apply: bool) -> Result<ExitCode> {
     // Opened even when a node failed to link: its health check keeps it out of the door.
     let door = open_door(&state, &vault, hub.as_ref(), &s).await;
     let watched = watch_site(&state, &vault, &s).await;
+    let named = serve_zone(&state, &vault, hub.as_ref(), &s).await;
     let vital = vital::run(cli, &state, &vault, true).await?;
     let guarded = guard_site(cli, &state, hub.as_ref()).await;
-    let all = linked && door && watched && vital && guarded;
+    let all = linked && door && watched && named && vital && guarded;
     let outcome = if all { "ok" } else { "partial" };
     state
         .audit("cli", ACTOR_ROLE, "site-sync", &s.name, outcome, None)
@@ -1004,6 +1069,12 @@ mod tests {
             [80, hlb_ingress::caddyfile::RELAY_HTTPS_PORT],
             "a port the door relays to and the house drops is a door that never opens"
         );
+    }
+
+    #[test]
+    fn the_house_opens_to_the_site_the_port_its_knot_answers_on() {
+        assert_eq!(site::ZONE_PORT, hlb_ingress::zone::PORT);
+        assert_eq!(site::SITE_DNS_PORT, hlb_ingress::zone::SITE_PORT);
     }
 
     #[test]
