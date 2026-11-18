@@ -1911,6 +1911,28 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        with `HLB_CATALOG` naming the carried catalog's temporary directory, gone once
        the command ended; a carried catalog is never named in it now. Left: mail's
        records and the CAA pins in the zone (9c).
+     - 9b. The VPS's secondary. Built 2026-11-18: `hlb site sync` draws the TSIG key
+       both Knots share (the vault's `zone-transfer-key`, on top of the link's address
+       ACL: the house's Knot listens on its node's LAN too), republishes the house's
+       zone handing it to the site and notifying it, puts `hlb-site-knot` in place
+       (the catalog's image, 53 published from 10053 in host mode, its configuration
+       checked by the image before it replaces the one running, reloaded in place) and
+       waits for the house's serial there (`tests/zone_transfers.rs`, the real image:
+       transferred signed, a new serial followed by NOTIFY, served with the house gone
+       and the site restarted, a Knot with another key handed nothing). Proved on the
+       lab 2026-11-18: `kdig @10.99.0.40 vaultwarden.lab.test +dnssec` answered by the
+       site, signed at home; librespeed removed was NXDOMAIN there within 5 s and back
+       once reinstalled, the serial following each time; the house's Knot scaled to 0,
+       the site kept answering. Found on the way: vps1, a Debian 12 cloud image, runs
+       systemd-resolved, whose stub on 127.0.0.53:53 kept Docker from binding 0.0.0.0:53
+       — the task failed at every start, `site sync` said only "Ready 4 seconds ago",
+       and a second run would have said "already up to date". The stub is turned off
+       now (a drop-in, `/etc/resolv.conf` pointed at the upstream servers), anything
+       else on 53 is named and refused, the reason read on the latest failed task, and
+       an unchanged service still has to run. Docker's own hold on 53 is `dockerd`, not
+       only `docker-proxy`. Left for 9c: librespeed's `dns-record` step still blocks
+       its install — the system resolver is asked, while the zone publishing the name
+       is what the install itself does.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

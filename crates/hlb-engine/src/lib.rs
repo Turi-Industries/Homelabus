@@ -1432,7 +1432,7 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 // Knot up on a configuration with no zone: the house's is written now,
                 // and a zone it refuses fails its install.
                 if name == hlb_ingress::zone::SERVICE {
-                    let followed = zone::publish(self.orchestrator, self.state).await?;
+                    let followed = zone::publish(self.orchestrator, self.state, self.vault).await?;
                     tracing::info!(?followed, "zone published");
                 }
                 Ok(Step::Done)

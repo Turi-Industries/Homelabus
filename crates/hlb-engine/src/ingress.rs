@@ -413,7 +413,7 @@ pub async fn publish<O: Orchestrator + ?Sized>(
         settle(orch).await?;
     }
     published(state, &routes).await?;
-    let zone = crate::zone::publish(orch, state)
+    let zone = crate::zone::publish(orch, state, vault)
         .await
         .map_err(|e| e.to_string());
     if let Err(e) = &zone {

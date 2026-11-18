@@ -34,7 +34,8 @@ async fn show(cli: &Cli) -> Result<ExitCode> {
         println!("  hlb zone set --apex <registered name>   signs it at home, served by the site");
         return Ok(ExitCode::SUCCESS);
     };
-    let wanted = hlb_engine::zone::wanted(&state, &config).await?;
+    let vault = open_vault(cli)?;
+    let wanted = hlb_engine::zone::wanted(&state, &config, Some(&vault)).await?;
     let rendered = hlb_ingress::zone::render(&wanted);
     println!("{}", rendered.zone);
     say_outside(&rendered.outside);
@@ -126,7 +127,8 @@ async fn set(
         extra,
     };
 
-    let rendered = hlb_ingress::zone::render(&hlb_engine::zone::wanted(&state, &config).await?);
+    let rendered =
+        hlb_ingress::zone::render(&hlb_engine::zone::wanted(&state, &config, Some(&vault)).await?);
     println!("{}", rendered.zone);
     say_outside(&rendered.outside);
     let orch = SwarmOrchestrator::connect().await?;
@@ -154,20 +156,32 @@ async fn set(
             Some(&config.addresses.join(" ")),
         )
         .await?;
-    if !deployed {
+    let code = if !deployed {
         // Its deployment publishes the zone once it answers.
-        return crate::install(cli, hlb_ingress::zone::SERVICE, None, None, true).await;
+        crate::install(cli, hlb_ingress::zone::SERVICE, None, None, true).await?
+    } else {
+        match hlb_engine::zone::publish(&orch, &state, Some(&vault)).await {
+            Ok(f) => {
+                say(&Ok(f));
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                say(&Err(e.to_string()));
+                ExitCode::FAILURE
+            }
+        }
+    };
+    // The site's name server, its key and the link's firewall go together, and the
+    // site sync puts all three in place.
+    if code == ExitCode::SUCCESS
+        && state
+            .secret(hlb_engine::zone::TRANSFER_SECRET)
+            .await?
+            .is_none()
+    {
+        println!("The internet asks the site, which serves the zone from: hlb site sync --apply");
     }
-    Ok(match hlb_engine::zone::publish(&orch, &state).await {
-        Ok(f) => {
-            say(&Ok(f));
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            say(&Err(e.to_string()));
-            ExitCode::FAILURE
-        }
-    })
+    Ok(code)
 }
 
 fn say_outside(outside: &[String]) {

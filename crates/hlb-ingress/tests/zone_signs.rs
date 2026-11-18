@@ -163,6 +163,7 @@ fn the_zone() -> Zone {
         addresses: vec!["10.99.0.40".parse().unwrap()],
         names: vec!["vault.lab.test".into(), "id.lab.test".into()],
         extra: "@ TXT \"kept\"\n".into(),
+        transfer: None,
     }
 }
 
