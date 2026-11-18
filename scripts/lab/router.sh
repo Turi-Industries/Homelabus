@@ -9,7 +9,9 @@
 #   router.sh console  the serial console (Ctrl-] then q to leave... socat: Ctrl-C)
 #
 # Its LAN (vtnet0) is on the house's bridge at 10.77.0.3, its WAN (vtnet1) on the
-# internet's, unaddressed. 🔴 OPNsense's own DHCP is turned off before its LAN ever
+# internet's at 10.99.0.3: the house's gateway and public address, as a box's would be.
+# `up` addresses it, and points the house's DHCP and its running nodes at the router —
+# the house has no way out while it is down. 🔴 OPNsense's own DHCP is turned off before its LAN ever
 # reaches br0: it serves 192.168.1.0/24 out of the box, and a node rebooting would take
 # the first offer — the lab's dnsmasq stays the house's DHCP. Reached over SSH by the
 # lab's key (`vm.sh ssh opn1`), root/opnsense on the console.
@@ -28,6 +30,7 @@ NAME=opn1
 DIR=$VMS/$NAME
 KEY=$VMS/keys/id_ed25519
 LAN=10.77.0.3
+WAN=10.99.0.3
 RELEASE=26.7
 # From the release's checksums file (pkg.opnsense.org/releases/26.7/), the same as the
 # announcement's: the image is refused unless it matches.
@@ -105,7 +108,11 @@ EOF
 }
 
 up() {
-    running && { echo "$NAME already running"; return; }
+    if running; then
+        wan
+        echo "$NAME already running, the house's gateway at $WAN"
+        return
+    fi
     ip link show br0 >/dev/null 2>&1 || /lab/vm.sh net >/dev/null
     mkdir -p "$DIR"
     if [[ ! -f $DIR/disk.qcow2 ]]; then
@@ -137,8 +144,52 @@ up() {
         ((SECONDS - start < 300)) || die "$NAME did not answer SSH in 300 s"
         sleep 5
     done
-    echo "$NAME up at https://$LAN ($(ssh_opn opnsense-version </dev/null))"
+    wan
+    echo "$NAME up at https://$LAN ($(ssh_opn opnsense-version </dev/null)), the house's gateway at $WAN"
     grep -a -A1 'HTTPS: SHA256' "$DIR/console.log" | tail -2
+}
+
+# The WAN addressed through the router's own models, then the house sent through it.
+# Private sources are not blocked on it: the lab's internet is 10.99.0.0/24, and a WAN
+# refusing them would refuse every client.
+wan() {
+    if ! ssh_opn "grep -q '<ipaddr>$WAN</ipaddr>' /conf/config.xml" </dev/null; then
+        cat >"$DIR/wan.php" <<EOF
+<?php
+require_once("script/load_phalcon.php");
+use OPNsense\Core\Config;
+Config::getInstance()->lock();
+\$gws = new OPNsense\Routing\Gateways();
+\$have = false;
+foreach (\$gws->gateway_item->iterateItems() as \$g) { \$have = \$have || (string)\$g->name == "WAN_GW"; }
+if (!\$have) {
+    \$gws->gateway_item->Add()->setNodes(["name" => "WAN_GW", "interface" => "wan",
+        "ipprotocol" => "inet", "gateway" => "10.99.0.1", "defaultgw" => "1"]);
+    \$gws->serializeToConfig(false, true);
+}
+\$w = Config::getInstance()->object()->interfaces->wan;
+\$w->ipaddr = "$WAN"; \$w->subnet = "24"; \$w->gateway = "WAN_GW"; \$w->ipaddrv6 = "";
+unset(\$w->blockpriv, \$w->blockbogons);
+Config::getInstance()->save();
+EOF
+        ssh_opn 'cat > /tmp/wan.php' <"$DIR/wan.php"
+        ssh_opn "sh -c 'cd /usr/local/opnsense/mvc && php /tmp/wan.php && rm /tmp/wan.php && /usr/local/etc/rc.reload_all'" \
+            </dev/null >/dev/null
+    fi
+    ssh_opn "netstat -rn -f inet | grep -q '^default  *10.99.0.1 '" </dev/null ||
+        die "$NAME's WAN has no default route through 10.99.0.1"
+
+    # dnsmasq reads the gateway once, at start: `vm.sh net` starts it again with this one.
+    if ! pgrep -af dnsmasq-hlb-lab | grep -q "option:router,$LAN"; then
+        pkill -f dnsmasq-hlb-lab || true
+        while pgrep -f dnsmasq-hlb-lab >/dev/null; do sleep 0.2; done
+        /lab/vm.sh net >/dev/null
+    fi
+    # A running node would renew its lease only in hours: its route is changed now.
+    local vm
+    for vm in $(/lab/vm.sh ls | awk '$2 ~ /^10\.77\./ && $3 == "up" {print $1}'); do
+        /lab/vm.sh ssh "$vm" ip route replace default via "$LAN" dev ens4 proto dhcp metric 100 </dev/null
+    done
 }
 
 # The router's own model makes the key, as its interface does: the secret is shown

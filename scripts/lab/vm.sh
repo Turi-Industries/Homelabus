@@ -33,6 +33,11 @@ running() {
     ps -o stat= -p "$pid" 2>/dev/null | grep -qv Z
 }
 
+# The house's gateway: the router once it is made (router.sh), the container before.
+gateway() {
+    if [[ -f $VMS/opn1/bootstrapped ]]; then echo "$HOUSE.3"; else echo "$HOUSE.1"; fi
+}
+
 net() {
     sysctl -qw net.ipv4.ip_forward=1
     mkdir -p "$VMS/keys" "$VMS/base" "$VMS/www"
@@ -68,7 +73,7 @@ net() {
         for n in $(seq 2 99); do pins+=("--dhcp-host=52:54:00:77:00:$(printf %02d "$n"),$HOUSE.$n"); done
         dnsmasq --conf-file=/dev/null --pid-file=/run/dnsmasq-hlb-lab.pid \
             --interface=br0 --bind-interfaces \
-            --dhcp-range="$HOUSE.100,$HOUSE.199,12h" --dhcp-option=option:router,"$HOUSE.1" \
+            --dhcp-range="$HOUSE.100,$HOUSE.199,12h" --dhcp-option=option:router,"$(gateway)" \
             --dhcp-option=option:dns-server,"$HOUSE.1" "${pins[@]}" \
             --dhcp-leasefile="$VMS/dnsmasq.leases" --log-facility="$VMS/dnsmasq.log" \
             --dhcp-authoritative
@@ -86,6 +91,11 @@ net() {
         iptables -A HLB-HOUSE-IN -j DROP
         iptables -A FORWARD -o br0 -j HLB-HOUSE-IN
     fi
+    # The VPS reaches that authority through the container, not the house's router: deb2's
+    # reply would leave by its gateway, reach a router that never saw the request, and be
+    # dropped. The container stands as the client, on deb2's own link.
+    iptables -t nat -C POSTROUTING -o br0 -p tcp -d "$HOUSE.12" --dport 9000 -j MASQUERADE 2>/dev/null ||
+        iptables -t nat -A POSTROUTING -o br0 -p tcp -d "$HOUSE.12" --dport 9000 -j MASQUERADE
     echo "net: br0 $HOUSE.1/24, brinet $(ip -4 -o addr show dev brinet | awk '{print $4}')"
 }
 

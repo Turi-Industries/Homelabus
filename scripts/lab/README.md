@@ -5,15 +5,18 @@ VPS on the Docker network `hlb-internet` — the internet the house reaches thro
 The drills (`scripts/drills/`) drive it through `/lab/vm.sh` and `/lab/vps.sh`.
 
 ```
-host 10.99.0.1 ── hlb-internet 10.99.0.0/24 ── vps1 10.99.0.40
-                        │
-                  hlb-lab 10.99.0.2  (NAT, dnsmasq)
-                        │
-                  br0 10.77.0.0/24 ── deb1 .11, deb2 .12
+host 10.99.0.1 ── hlb-internet 10.99.0.0/24 ──┬── vps1 10.99.0.40
+                        │                      └── opn1 WAN 10.99.0.3
+                  hlb-lab 10.99.0.2  (dnsmasq)          │ (the house's gateway)
+                        │                               │
+                  br0 10.77.0.0/24 ── deb1 .11, deb2 .12, opn1 LAN .3
 ```
 
-From the house's side only replies come in, and the ACME authority on deb2 (`:9000`),
-which plays Let's Encrypt for the VPS.
+Once `router.sh up` has made opn1, it is the house's gateway and public address, as a
+box is: the nodes go out through it, and the internet reaches the house only by its
+port forwards. Before, the container is, by NAT. Through the container itself only
+replies come in, and the ACME authority on deb2 (`:9000`), which plays Let's Encrypt
+for the VPS.
 
 ## The machines
 
@@ -24,7 +27,7 @@ docker exec hlb-lab /lab/vps.sh up vps1 40 4096
 docker exec hlb-lab /lab/vm.sh up deb1 11 debian-12 4096 2
 docker exec hlb-lab /lab/vm.sh up deb2 12 debian-12 4096 2
 scripts/lab/lab.sh off                     # every VM powered off, then the container
-scripts/lab/lab.sh boot                    # later: vps1 first, then the house
+scripts/lab/lab.sh boot                    # later: opn1, vps1, then the house
 ```
 
 The container mounts the whole repository, read-only: a container made before
