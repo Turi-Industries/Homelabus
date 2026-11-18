@@ -121,3 +121,12 @@ some mistakes loudly; the others are a 502, or a door left open.
   reflection" has no API: each forward gets an outbound NAT rule of Homelabus's own
   (`hlb_router::forwards`), its source and translation named by the network
   (`lan`, `lanip`) so a renumbering carries it.
+- **🔴 26.7 cannot address an interface through its API.** `interfaces/assignment`
+  takes a device and a name — `NetworkInterface.xml` has nothing else — and enabling it
+  and giving it an address are the legacy page's. Homelabus makes the VLAN and its
+  assignment, says the one step a person takes on the router's pages, and reads the
+  address back from `interfaces_info` (`hlb_router::networks`).
+- **🔴 A VLAN made a moment ago cannot be assigned.** The device list the assignment is
+  checked against is configd's `interface list assign-opts`, cached 30 s: a VLAN made
+  since a listing is refused "Option [] not in list" — the value it prints is empty, not
+  the device asked for. `Opnsense::add_assignment` asks again for up to 40 s.

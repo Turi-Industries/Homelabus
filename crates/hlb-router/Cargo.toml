@@ -17,6 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 thiserror.workspace = true
+# A VLAN made a moment ago is refused by a listing the router caches: asked again.
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

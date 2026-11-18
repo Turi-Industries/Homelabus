@@ -5,6 +5,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::networks::{DhcpRange, Dnsmasq, Vlan};
 use crate::tls::{self, Fingerprint};
 use crate::{Error, Result};
 
@@ -563,9 +564,13 @@ impl Opnsense {
     /// Loads what was saved into the firewall: a saved rule forwards nothing until then.
     /// `which` is `d_nat` or `source_nat`.
     pub async fn apply_firewall(&self, which: &str) -> Result<()> {
-        let call = format!("firewall/{which}/apply");
+        self.reloaded(&format!("firewall/{which}/apply")).await
+    }
+
+    /// A call that reloads a service, its answer `{"status": "ok"}`.
+    async fn reloaded(&self, call: &str) -> Result<()> {
         let v = self
-            .call(reqwest::Method::POST, &call, Some(json!({})))
+            .call(reqwest::Method::POST, call, Some(json!({})))
             .await?;
         // `{"status":"OK\n\n"}`: the reload's own output, newlines and all.
         match v.get("status").and_then(Value::as_str).map(str::trim) {
@@ -575,6 +580,123 @@ impl Opnsense {
                 other.unwrap_or("nothing")
             ))),
         }
+    }
+
+    pub async fn vlans(&self) -> Result<Vec<Vlan>> {
+        self.search("interfaces/vlan_settings/search_item").await
+    }
+
+    /// `vlan` as [`crate::networks::vlan_body`] writes it; the router names its device.
+    pub async fn add_vlan(&self, vlan: &Value) -> Result<String> {
+        let call = "interfaces/vlan_settings/add_item";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "vlan": vlan })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    /// A saved VLAN is no device until then.
+    pub async fn reconfigure_vlans(&self) -> Result<()> {
+        self.reloaded("interfaces/vlan_settings/reconfigure").await
+    }
+
+    /// Makes `device` an interface of the router's, named `descr`.
+    ///
+    /// 🔴 The router checks the device against a list configd keeps for 30 s
+    /// (`interface list assign-opts`, `cache_ttl:30`): a VLAN made since the last listing
+    /// is refused, "Option [] not in list". Refused so, it is asked again until the list
+    /// is fresh.
+    pub async fn add_assignment(&self, device: &str, descr: &str) -> Result<()> {
+        let call = "interfaces/assignment/add_item";
+        let body = json!({"interface": {"if": device, "descr": descr}});
+        let mut tries = 0;
+        loop {
+            match self
+                .call(reqwest::Method::POST, call, Some(body.clone()))
+                .await
+            {
+                Err(Error::Refused { why, .. }) if why.contains("not in list") && tries < 8 => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                other => return other.map(|_| ()),
+            }
+        }
+    }
+
+    /// A saved assignment is no interface until then.
+    pub async fn reconfigure_assignments(&self) -> Result<()> {
+        self.reloaded("interfaces/assignment/reconfigure").await
+    }
+
+    pub async fn dhcp_ranges(&self) -> Result<Vec<DhcpRange>> {
+        self.search("dnsmasq/settings/search_range").await
+    }
+
+    pub async fn add_dhcp_range(&self, range: &Value) -> Result<String> {
+        let call = "dnsmasq/settings/add_range";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "range": range })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    pub async fn set_dhcp_range(&self, uuid: &str, range: &Value) -> Result<()> {
+        let call = format!("dnsmasq/settings/set_range/{uuid}");
+        self.call(
+            reqwest::Method::POST,
+            &call,
+            Some(json!({ "range": range })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn del_dhcp_range(&self, uuid: &str) -> Result<()> {
+        self.deleted(&format!("dnsmasq/settings/del_range/{uuid}"))
+            .await
+    }
+
+    pub async fn dnsmasq(&self) -> Result<Dnsmasq> {
+        let call = "dnsmasq/settings/get";
+        let v = self.call(reqwest::Method::GET, call, None).await?;
+        let d = &v["dnsmasq"];
+        let enabled = match d["enable"].as_str() {
+            Some(s) => s == "1",
+            None => return Err(Error::Unexpected(format!("{call} said nothing of dnsmasq"))),
+        };
+        let mut interfaces: Vec<String> = d["interface"]
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter(|(_, v)| v.get("selected").and_then(Value::as_i64) == Some(1))
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        interfaces.sort();
+        Ok(Dnsmasq {
+            enabled,
+            interfaces,
+        })
+    }
+
+    pub async fn set_dnsmasq(&self, d: &Dnsmasq) -> Result<()> {
+        self.call(
+            reqwest::Method::POST,
+            "dnsmasq/settings/set",
+            Some(json!({"dnsmasq": {
+                "enable": if d.enabled { "1" } else { "0" },
+                "interface": d.interfaces.join(","),
+            }})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Saved is not served: dnsmasq reads its settings when reconfigured.
+    pub async fn reconfigure_dnsmasq(&self) -> Result<()> {
+        self.reloaded("dnsmasq/service/reconfigure").await
     }
 }
 
