@@ -274,6 +274,10 @@ pub struct Wildcard {
     pub credentials: Vec<String>,
     /// The base domain, without the `*.`.
     pub base_domain: String,
+    /// The servers asked whether the challenge is in place. Empty: the public
+    /// resolvers, then the name's authoritative servers. Given, Caddy asks them alone —
+    /// the house's zone's own server, which the authority asks too.
+    pub resolvers: Vec<String>,
 }
 
 impl Wildcard {
@@ -543,6 +547,9 @@ fn render_blocks(
         let _ = writeln!(out, "{} {{", on_listener(&w.subjects(), relayed));
         let _ = writeln!(out, "\ttls {{");
         out.push_str(&w.provider.directive(&w.credentials, "\t\t"));
+        if !w.resolvers.is_empty() {
+            let _ = writeln!(out, "\t\tresolvers {}", w.resolvers.join(" "));
+        }
         // A site's own `tls` makes its own issuer: the global directory is said again,
         // or the wildcard would be asked of Let's Encrypt's production whatever was set.
         if let Tls::Acme {
@@ -1072,6 +1079,7 @@ mod tests {
                 ca_root: false,
                 wildcard: Some(Wildcard {
                     base_domain: "example.fr".into(),
+                    resolvers: Vec::new(),
                     provider: crate::dns::provider("cloudflare").expect("known"),
                     credentials: vec!["token".into()],
                 }),
@@ -1700,6 +1708,7 @@ spec:
             provider: crate::dns::provider("cloudflare").expect("known"),
             credentials: vec!["TEST-TOKEN".into()],
             base_domain: "example.fr".into(),
+            resolvers: Vec::new(),
         }
     }
 
@@ -1824,6 +1833,28 @@ spec:
         assert!(
             wildcard.contains("\t\tca https://acme-staging-v02"),
             "{wildcard}"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_checks_its_challenge_where_it_is_told_to() {
+        let mut cfg = with_acme(false);
+        if let Tls::Acme {
+            wildcard: Some(w), ..
+        } = &mut cfg.tls
+        {
+            w.resolvers = vec!["203.0.113.4".into()];
+        }
+        let out = render(&[gitea()], &cfg);
+        let tls = out
+            .split("*.example.fr, example.fr {\n\ttls {\n")
+            .nth(1)
+            .and_then(|b| b.split("\t}\n").next())
+            .expect("the wildcard's tls block");
+        assert!(tls.contains("\t\tresolvers 203.0.113.4\n"), "{tls}");
+        assert!(
+            !render(&[gitea()], &with_acme(false)).contains("resolvers"),
+            "none given: the public resolvers, then the authoritative servers"
         );
     }
 

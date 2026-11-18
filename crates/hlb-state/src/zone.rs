@@ -13,6 +13,9 @@ pub struct ZoneConfig {
     pub addresses: Vec<String>,
     /// The owner's own lines, relative to the apex.
     pub extra: String,
+    /// The registrar delegates to it (`hlb zone switch`): what the house writes over
+    /// RFC 2136 goes into it from then on.
+    pub delegated: bool,
 }
 
 /// Stored names: the settings the zone's other records are kept under.
@@ -57,9 +60,10 @@ impl State {
     }
 
     pub async fn zone(&self) -> Result<Option<ZoneConfig>> {
-        let Some(r) = sqlx::query("SELECT apex, addresses, extra FROM zone WHERE id = 1")
-            .fetch_optional(&self.pool)
-            .await?
+        let Some(r) =
+            sqlx::query("SELECT apex, addresses, extra, delegated FROM zone WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?
         else {
             return Ok(None);
         };
@@ -68,19 +72,21 @@ impl State {
             apex: r.try_get("apex")?,
             addresses: addresses.split_whitespace().map(str::to_string).collect(),
             extra: r.try_get("extra")?,
+            delegated: r.try_get::<i64, _>("delegated")? != 0,
         }))
     }
 
     pub async fn set_zone(&self, z: &ZoneConfig) -> Result<()> {
         sqlx::query(
-            "INSERT INTO zone (id, apex, addresses, extra) VALUES (1, ?1, ?2, ?3)
+            "INSERT INTO zone (id, apex, addresses, extra, delegated) VALUES (1, ?1, ?2, ?3, ?4)
              ON CONFLICT(id) DO UPDATE SET
                apex = excluded.apex, addresses = excluded.addresses, extra = excluded.extra,
-               modified_at = datetime('now')",
+               delegated = excluded.delegated, modified_at = datetime('now')",
         )
         .bind(&z.apex)
         .bind(z.addresses.join(" "))
         .bind(&z.extra)
+        .bind(i64::from(z.delegated))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -101,11 +107,13 @@ mod tests {
             apex: "example.org".into(),
             addresses: vec!["203.0.113.4".into(), "2001:db8::4".into()],
             extra: "@ TXT \"x\"\n".into(),
+            delegated: false,
         };
         s.set_zone(&z).await.expect("set");
         assert_eq!(s.zone().await.expect("read").as_ref(), Some(&z));
         z.addresses.truncate(1);
         z.extra.clear();
+        z.delegated = true;
         s.set_zone(&z).await.expect("set again");
         assert_eq!(s.zone().await.expect("read"), Some(z));
     }

@@ -1787,6 +1787,16 @@ enum ZoneCmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Say the registrar now delegates to the zone — its name servers the site's, its
+    /// DS the zone's: Caddy's challenges and Stalwart's DKIM keys are written into it
+    /// over RFC 2136 from then on, each in a zone of its own. Preview by default.
+    Switch {
+        /// The registrar points at the DNS provider again: they are written there.
+        #[arg(long)]
+        back: bool,
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]

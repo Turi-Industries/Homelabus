@@ -264,6 +264,8 @@ fn every_provider_s_wildcard_is_accepted() {
                     .map(|f| f.default.map_or_else(|| "a".repeat(40), str::to_string))
                     .collect(),
                 base_domain: "example.fr".into(),
+                // The house's zone's server, as a delegated zone gives it.
+                resolvers: vec!["203.0.113.4".into()],
             }),
             staging: false,
             ca: None,

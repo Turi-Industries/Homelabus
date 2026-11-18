@@ -311,11 +311,7 @@ pub async fn free_port(hub: &dyn Runner) -> Result<Port, String> {
 }
 
 /// Puts the name server in place on the site, or brings it up to date.
-pub async fn deploy(
-    hub: &dyn Runner,
-    s: &Site,
-    key: &TransferKey,
-) -> Result<Outcome, String> {
+pub async fn deploy(hub: &dyn Runner, s: &Site, key: &TransferKey) -> Result<Outcome, String> {
     if s.members.is_empty() {
         return Err("no house node is linked: there is nothing to transfer the zone from".into());
     }
