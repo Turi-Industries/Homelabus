@@ -1071,20 +1071,35 @@ impl std::fmt::Display for Tmpfs {
     }
 }
 
-/// A port published on the node, by its protocol.
+/// A port published on the node, by its protocol, and who may reach it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "PortWritten", into = "PortWritten")]
 #[schemars(with = "PortWritten")]
 pub struct PublishedPort {
     pub port: u16,
     pub protocol: Protocol,
+    pub reach: Reach,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
+    #[default]
     Tcp,
     Udp,
+}
+
+/// Who a published port is for. The house's router forwards the internet's to the node
+/// the service runs on (`hlb router sync`); a site's port it never forwards.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Reach {
+    /// Anyone: mail from the world, a call's media.
+    #[default]
+    Internet,
+    /// The site alone, over its link — what the VPS relays home, what its secondary
+    /// asks. Forwarded from the internet, it would be a door around the site's.
+    Site,
 }
 
 impl PublishedPort {
@@ -1092,7 +1107,20 @@ impl PublishedPort {
         Self {
             port,
             protocol: Protocol::Tcp,
+            reach: Reach::Internet,
         }
+    }
+
+    pub fn udp(port: u16) -> Self {
+        Self {
+            protocol: Protocol::Udp,
+            ..Self::tcp(port)
+        }
+    }
+
+    /// The same port on the node — the same bind —, whoever it is for.
+    pub fn binds_as(&self, other: &Self) -> bool {
+        (self.port, self.protocol) == (other.port, other.protocol)
     }
 }
 
@@ -1106,39 +1134,74 @@ impl std::fmt::Display for PublishedPort {
 }
 
 /// How a port is written: a number for TCP — as every manifest frozen before UDP was —,
-/// `"<port>/<protocol>"` otherwise.
+/// `"<port>/<protocol>"` otherwise, and `{ port, reach }` for one the internet is not
+/// to reach. Absent, `reach` is the internet's: every manifest frozen before it was.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PortWritten {
     Number(u16),
     Text(String),
+    Detailed(PortDetailed),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PortDetailed {
+    /// `10443`, or `"10053/udp"`.
+    pub port: PortNumber,
+    pub reach: Reach,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PortNumber {
+    Number(u16),
+    Text(String),
+}
+
+fn port_text(text: &str) -> Result<(u16, Protocol), String> {
+    let (port, protocol) = text.split_once('/').unwrap_or((text, "tcp"));
+    let port = port
+        .parse()
+        .map_err(|_| format!("\"{text}\": a port is a number from 1 to 65535"))?;
+    let protocol = match protocol {
+        "tcp" => Protocol::Tcp,
+        "udp" => Protocol::Udp,
+        other => return Err(format!("\"{text}\": protocol \"{other}\" — tcp or udp")),
+    };
+    Ok((port, protocol))
 }
 
 impl TryFrom<PortWritten> for PublishedPort {
     type Error = String;
     fn try_from(w: PortWritten) -> Result<Self, String> {
-        let text = match w {
-            PortWritten::Number(port) => return Ok(Self::tcp(port)),
-            PortWritten::Text(t) => t,
+        let (number, reach) = match w {
+            PortWritten::Number(port) => (PortNumber::Number(port), Reach::Internet),
+            PortWritten::Text(t) => (PortNumber::Text(t), Reach::Internet),
+            PortWritten::Detailed(d) => (d.port, d.reach),
         };
-        let (port, protocol) = text.split_once('/').unwrap_or((&text, "tcp"));
-        let port = port
-            .parse()
-            .map_err(|_| format!("\"{text}\": a port is a number from 1 to 65535"))?;
-        let protocol = match protocol {
-            "tcp" => Protocol::Tcp,
-            "udp" => Protocol::Udp,
-            other => return Err(format!("\"{text}\": protocol \"{other}\" — tcp or udp")),
+        let (port, protocol) = match number {
+            PortNumber::Number(port) => (port, Protocol::Tcp),
+            PortNumber::Text(t) => port_text(&t)?,
         };
-        Ok(Self { port, protocol })
+        Ok(Self {
+            port,
+            protocol,
+            reach,
+        })
     }
 }
 
 impl From<PublishedPort> for PortWritten {
     fn from(p: PublishedPort) -> Self {
-        match p.protocol {
-            Protocol::Tcp => Self::Number(p.port),
-            Protocol::Udp => Self::Text(p.to_string()),
+        let number = match p.protocol {
+            Protocol::Tcp => PortNumber::Number(p.port),
+            Protocol::Udp => PortNumber::Text(p.to_string()),
+        };
+        match (p.reach, number) {
+            (Reach::Internet, PortNumber::Number(n)) => Self::Number(n),
+            (Reach::Internet, PortNumber::Text(t)) => Self::Text(t),
+            (reach, port) => Self::Detailed(PortDetailed { port, reach }),
         }
     }
 }
@@ -1245,16 +1308,47 @@ mod tests {
             [
                 PublishedPort::tcp(25),
                 PublishedPort::tcp(7881),
-                PublishedPort {
-                    port: 7882,
-                    protocol: Protocol::Udp
-                }
+                PublishedPort::udp(7882),
             ]
         );
         // Written back as every manifest frozen before UDP reads: a number for TCP.
         let back = serde_yaml_ng::to_string(&ports).expect("written");
         assert_eq!(back, "- 25\n- 7881\n- 7882/udp\n");
         for bad in ["\"7882/sctp\"", "\"x/udp\"", "\"70000/udp\"", "70000"] {
+            assert!(read(&format!("publishedPorts: [{bad}]")).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_port_for_the_site_says_so_and_every_other_is_the_internets() {
+        let read = |y: &str| serde_yaml_ng::from_str::<SecuritySpec>(y).map(|s| s.published_ports);
+        let ports = read(
+            "publishedPorts: [443, { port: 10443, reach: site }, { port: \"10053/udp\", reach: site }]",
+        )
+        .expect("read");
+        assert_eq!(
+            ports[0].reach,
+            Reach::Internet,
+            "as every manifest frozen before"
+        );
+        assert_eq!(
+            (ports[1].port, ports[1].protocol, ports[1].reach),
+            (10443, Protocol::Tcp, Reach::Site)
+        );
+        assert_eq!(
+            (ports[2].protocol, ports[2].reach),
+            (Protocol::Udp, Reach::Site)
+        );
+        let back = serde_yaml_ng::to_string(&ports).expect("written");
+        assert_eq!(
+            read(&format!("publishedPorts:\n{back}")).expect("again"),
+            ports
+        );
+        for bad in [
+            "{ port: 10443 }",
+            "{ port: 10443, reach: lan }",
+            "{ port: 10443, reach: site, protocol: udp }",
+        ] {
             assert!(read(&format!("publishedPorts: [{bad}]")).is_err(), "{bad}");
         }
     }

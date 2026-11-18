@@ -191,6 +191,13 @@ pub struct Config {
     #[arg(long, default_value = "86400", env = "HLB_TERMIX_SECS")]
     pub termix_secs: u64,
 
+    /// How often the house is synced to its router: every name Caddy serves answered
+    /// inside the house, every port published for the internet forwarded. Once a day:
+    /// an app installed since is reached by the next morning; `hlb router sync --apply`
+    /// does it at once.
+    #[arg(long, default_value = "86400", env = "HLB_ROUTER_SECS")]
+    pub router_secs: u64,
+
     /// How often the backup destinations are looked at: each one proved more than a week
     /// ago is proved again — a policy changed since is seen —, and kept to the retention
     /// policy where it can be erased anyway.
@@ -2063,6 +2070,55 @@ pub async fn start(
                             .await;
                     } else if let Some(why) = &r.stopped {
                         tracing::info!("termix: {why}");
+                    }
+                }
+            },
+        )));
+    }
+
+    // The house's names and ports on its router. A failure is recorded for the inbox and
+    // notified; no router connected stays quiet — a house may have none Homelabus works on.
+    {
+        let held = held.clone();
+        let notif_router = notif.clone();
+        let catalog_dir = cfg.catalog.clone();
+        tracing::info!(interval = cfg.router_secs, "router loop");
+        tasks.push(tokio::spawn(schedule::every(
+            Duration::from_secs(cfg.router_secs),
+            shutdown_rx.clone(),
+            move || {
+                let held = held.clone();
+                let notif = notif_router.clone();
+                let catalog_dir = catalog_dir.clone();
+                async move {
+                    let (Some(install), Some(orch)) = (&held.install, &held.orchestrator) else {
+                        return;
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let synced = super::router::sync(
+                        &held.state,
+                        &install.vault,
+                        orch.as_ref(),
+                        &catalog_dir,
+                        now,
+                    )
+                    .await;
+                    match synced {
+                        None => {}
+                        Some(None) => tracing::info!("router synced"),
+                        Some(Some(failed)) => {
+                            tracing::warn!("router not synced: {failed}");
+                            notif
+                                .tell(&hlb_notify::Notification::critical(
+                                    "router",
+                                    "The router does not hold what the house asks of it",
+                                    &failed,
+                                ))
+                                .await;
+                        }
                     }
                 }
             },

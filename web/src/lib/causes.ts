@@ -150,6 +150,10 @@ export function title(issue: Issue): string {
 			return m.cause_domain_unwatched();
 		case 'domain_unknown':
 			return m.cause_domain_unknown();
+		case 'router_unsynced':
+			return m.cause_router_unsynced();
+		case 'router_unknown':
+			return m.cause_router_unknown();
 		case 'account_without_mailbox':
 			return m.cause_account_without_mailbox(n);
 		case 'account_without_identity':
@@ -216,6 +220,11 @@ export function where(issue: Issue): string {
 		case 'domain_unwatched':
 		case 'domain_unknown':
 			return '/domain';
+		// The names Caddy serves and the ports published are the exposure's; the router
+		// answers the first inside and forwards the second.
+		case 'router_unsynced':
+		case 'router_unknown':
+			return '/exposure';
 		case 'guide_blocking':
 		case 'guide_pending':
 			return '/todo';
@@ -412,6 +421,10 @@ export function reason(kind: CauseKind): string | null {
 			return m.reason_domain_unwatched();
 		case 'domain_unknown':
 			return m.reason_domain_unknown();
+		case 'router_unsynced':
+			return m.reason_router_unsynced();
+		case 'router_unknown':
+			return m.reason_router_unknown();
 		case 'no_backup_destination':
 		case 'single_destination':
 		case 'drill_never':

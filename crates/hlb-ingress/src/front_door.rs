@@ -28,6 +28,11 @@ pub const CONFIG_DIR: &str = "/etc/hlb/front-door";
 /// Where the image reads it, inside the container.
 pub const MOUNTED_AT: &str = "/usr/local/etc/haproxy";
 
+/// The ports visitors open: the door's own, and the house router's forwards when there is
+/// no door.
+pub const HTTP_PORT: u16 = 80;
+pub const HTTPS_PORT: u16 = 443;
+
 /// The link's network: what Caddy takes a PROXY header from, and what is never private.
 pub const SITE_NETWORK: &str = "10.43.0.0/24";
 
@@ -119,11 +124,11 @@ fn render_with(backends: &[Backend], detours: &[Detour]) -> String {
     // the PROXY header and nothing is ever taken for the house.
     let relay = crate::caddyfile::RELAY_HTTPS_PORT;
     for (port, home, name, proxy) in [
-        (80, 80, "http", ""),
-        (443, relay, "https", " send-proxy-v2"),
+        (HTTP_PORT, 80, "http", ""),
+        (HTTPS_PORT, relay, "https", " send-proxy-v2"),
     ] {
         let _ = write!(out, "\nfrontend {name}\n");
-        if detoured && port == 80 {
+        if detoured && port == HTTP_PORT {
             // Plain HTTP is read for its `Host`, where ACME asks a detour for its
             // HTTP-01 challenges. Still nothing decrypted: 443 is told apart below.
             out.push_str(
@@ -141,7 +146,7 @@ fn render_with(backends: &[Backend], detours: &[Detour]) -> String {
                 );
             }
         }
-        if detoured && port == 443 {
+        if detoured && port == HTTPS_PORT {
             // By the name the client's hello asks for (SNI), read in the clear.
             out.push_str(
                 "\ttcp-request inspect-delay 5s\n\
@@ -162,7 +167,7 @@ fn render_with(backends: &[Backend], detours: &[Detour]) -> String {
              \tdefault_backend house_{name}\n\
              \nbackend house_{name}\n"
         );
-        if detoured && port == 80 {
+        if detoured && port == HTTP_PORT {
             out.push_str("\tmode http\n");
         }
         out.push_str(

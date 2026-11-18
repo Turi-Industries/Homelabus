@@ -2028,8 +2028,8 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        release image, then OPNsense.
      - OPNsense, in steps of its own (decided 2026-11-18): 9f Homelabus let in, and
        the house's names answered inside; 9g the firewall and NAT — the port forwards
-       to Caddy and Stalwart, NAT reflection (plan 0⁗'s calls), applied through
-       OPNsense's savepoint so a change that cuts the API rolls back by itself; 9h the
+       to Caddy and Stalwart, NAT reflection (plan 0⁗'s calls), written so that no change can cut the API
+       (26.7 has no savepoint: below); 9h the
        three networks (trusted, devices, guests) and DHCP registering names; 9i
        WireGuard for the family, NTS, the UPS's NUT server; 9j Unbound recursive with
        DNSSEC validation and blocklists, and the configuration to restic nightly.
@@ -2055,9 +2055,40 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        the console's; a wrong fingerprint and the mesh address refused before any
        write; connect made the account and the key, and root's key then answered 401;
        the four names Caddy serves added, a second sync unchanged, and
-       `librespeed.lab.test` answered 10.77.0.11 by the router. Left for 9g: the
-       router is not yet the house's gateway in the lab (the container still is), and
-       nothing runs `sync` nightly yet — an app installed since answers outside only.
+       `librespeed.lab.test` answered 10.77.0.11 by the router.
+     - 9g. The firewall and NAT. The nightly sync, built 2026-11-18: privd runs
+       `router sync --apply` once a day (`HLB_ROUTER_SECS`) and notifies a failure;
+       it and a person's `hlb router sync --apply` alike record when and what did not
+       hold (`Router::sync_recorded`) — the command the inbox advises clears what it
+       says, not the next night. The inbox says a failure critical
+       (`router_unsynced`) until a sync holds, however old, and a router never
+       synced or not for two days unknown. A run that stopped short — the key gone
+       from the vault, Caddy moved off the router's networks — counts as failed: a
+       router is connected, so every name since goes unanswered inside. No router
+       connected is no line. 🔴 OPNsense 26.7 has no savepoint: read on the machine,
+       its firewall controllers have no `savepoint` or `cancelRollback`, and `apply`
+       takes no revision. Decided 2026-11-18: the guarantee is structural instead —
+       Homelabus writes only its own rules: destination NAT on WAN, and per forward
+       one outbound NAT rule on the target's network for the target's address and
+       port alone, never a filter rule nor the anti-lockout; it reaches the API by a
+       LAN address, which such rules cannot cut, and refuses to forward the API's own
+       port when the router is reached any other way. A reload that fails takes back
+       the rules the run added. A watchdog on the router (a cron restoring the
+       previous configuration) was ruled out: it guards against what the structure
+       rules out, and a lost cancellation would revert a good configuration by
+       itself. The forwards, built 2026-11-18: every port an installed manifest
+       publishes with `reach: internet` (the front door's 80 and 443 only without a
+       site), to the node its task runs on, at the address declared for it (`hlb
+       router address`, Caddy's node falling back to `connect`'s); a service running
+       nowhere keeps its rules, a person's forward of the port keeps it. Reflection
+       for a client in the target's own network is the outbound NAT rule, since the
+       system's switch for it has no API — and 🔴 outbound NAT in `automatic` loads
+       no rule written by hand, so the sync turns it `hybrid`. The lab's router is
+       its gateway since 2026-11-18 (WAN 10.99.0.3, `router.sh up`). Proved there
+       from outside: vps1 got Stalwart's SMTP banner and its IMAPS certificate at
+       10.99.0.3, deb2 the banner by reflection, the nodes go out through it, the
+       mesh's links came back from 10.99.0.3, and a second sync changed nothing.
+       Done.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

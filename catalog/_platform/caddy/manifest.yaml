@@ -2,7 +2,7 @@ apiVersion: hlb/v1
 kind: PlatformService
 metadata:
   name: caddy
-  hlb: ">=0.4.0"
+  hlb: ">=0.4.9"
   displayName: Caddy
   category: platform
   homepage: https://caddyserver.com
@@ -40,8 +40,9 @@ spec:
     # the CrowdSec bouncer both decide on. Through the routing mesh every request
     # would come from an overlay address.
     # 10443 is the front door's: what a site relays, each visitor's address in a PROXY
-    # header, and never taken for someone at home.
-    publishedPorts: [80, 443, 10443]
+    # header, and never taken for someone at home — the site's, which the house's
+    # router never forwards.
+    publishedPorts: [80, 443, { port: 10443, reach: site }]
     # The binary carries the capability to bind below 1024: with every capability
     # dropped, the kernel refuses to execute it at all.
     capAdd: [NET_BIND_SERVICE]

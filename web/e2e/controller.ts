@@ -64,7 +64,9 @@ export interface Owned {
  * cargo would leave the controller it started serving. `webServer` has built it by now.
  */
 export async function start(address: string, extra: string[], { open = true } = {}): Promise<Owned> {
-	const child = spawn(join('..', 'target', 'debug', 'hlb-controller'), args(address, extra, open), {
+	// Where `cargo run` put it: a `CARGO_TARGET_DIR` moves every build out of `target/`.
+	const target = process.env.CARGO_TARGET_DIR || join('..', 'target');
+	const child = spawn(join(target, 'debug', 'hlb-controller'), args(address, extra, open), {
 		env,
 		stdio: ['ignore', 'ignore', 'pipe']
 	});

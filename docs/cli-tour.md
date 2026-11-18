@@ -731,6 +731,21 @@ cat apikey.txt | ./target/debug/hlb router connect --url https://10.77.0.3 \
 ./target/debug/hlb router show
 ```
 
+The same sync forwards from the internet every port an installed app publishes for it
+(`reach: internet`, the default) to the node its service runs on — never a site's port,
+and never 80 and 443 when a site's front door has them. A node is reached at its address
+on the house's network, declared once; Caddy's falls back to the one `connect` was given.
+Each forward gets an outbound NAT rule too, so a machine in the target's own network
+reaches the house at its public address: the router's outbound NAT turns `hybrid` for it,
+since in `automatic` it loads no rule written by hand. A person's own forward of a port
+is left as it is, and said:
+
+```sh
+./target/debug/hlb router address deb2 --address 10.77.0.12          # preview: checked against the router's networks
+./target/debug/hlb router address deb2 --address 10.77.0.12 --apply
+./target/debug/hlb router sync               # preview: each port, forwarded to its node
+```
+
 Most residential lines close port 25 outward: mail to other domains then waits for days
 and bounces. `hlb mail relay` says whether Stalwart's node reaches it, and sends every
 remote domain through a provider's submission service instead — TLS required, its

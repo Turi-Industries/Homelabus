@@ -4,7 +4,7 @@
 # the internet on. The VMs inside are scripts/lab/vm.sh's.
 #
 #   scripts/lab/lab.sh up      build the image if missing, start the container, its network
-#   scripts/lab/lab.sh boot    up, then the house (deb1, deb2) and the VPS (vps1)
+#   scripts/lab/lab.sh boot    up, then the router (opn1), the VPS (vps1) and the house
 #   scripts/lab/lab.sh off     every VM powered off cleanly, then the container stopped
 #   scripts/lab/lab.sh build   rebuild the image (the scripts are mounted: edits need none)
 #
@@ -41,7 +41,9 @@ up() {
 
 boot() {
     up
-    # The VPS first: deb1's site guard runs 30 s after boot, and a link that never
+    # The router before all: once made, it is the house's way out.
+    if lab test -f /vms/opn1/bootstrapped; then lab /lab/router.sh up; fi
+    # The VPS next: deb1's site guard runs 30 s after boot, and a link that never
     # handshook stops the vital apps until it does.
     lab /lab/vps.sh up vps1 2>/dev/null || echo "vps1 not made yet: /lab/vps.sh up vps1 40 4096"
     lab /lab/vm.sh up deb1 2>/dev/null || echo "deb1 not made yet"
@@ -57,6 +59,8 @@ off() {
     docker container inspect hlb-lab >/dev/null 2>&1 || return 0
     local vm
     for vm in $(lab /lab/vm.sh ls | awk '$3 == "up" {print $1}'); do lab /lab/vm.sh down "$vm"; done
+    # Not in vm.sh's list, and a router killed with the container does not boot again.
+    lab /lab/router.sh down
     docker stop hlb-lab >/dev/null
 }
 

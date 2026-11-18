@@ -42,8 +42,7 @@ pub mod watch;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// The vault's entry holding the site and its members. A stored name.
-pub const TOPOLOGY: &str = "site-topology";
+pub use hlb_engine::site_guard::TOPOLOGY;
 
 /// The VPS's private key in the vault. A stored name.
 const HUB_KEY: &str = "site-hub-key";
@@ -300,13 +299,11 @@ async fn own_swarm(hub: &dyn Runner) -> std::result::Result<&'static str, String
 /// opens, its health checks pass on 80, and every visitor's HTTPS is refused at home —
 /// found on the lab, whose Caddy predated it.
 fn relays_https(caddy: &hlb_types::Manifest) -> bool {
-    caddy
-        .spec
-        .security
-        .published_ports
-        .contains(&hlb_types::manifest::PublishedPort::tcp(
+    caddy.spec.security.published_ports.iter().any(|p| {
+        p.binds_as(&hlb_types::manifest::PublishedPort::tcp(
             hlb_ingress::caddyfile::RELAY_HTTPS_PORT,
         ))
+    })
 }
 
 /// Puts the front door in place, or brings it up to date, and says what visitors need

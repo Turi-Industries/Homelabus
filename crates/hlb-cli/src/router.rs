@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use std::process::ExitCode;
 
 use hlb_engine::roles::Outcome;
-use hlb_engine::router::{house_names, Report, Router};
+use hlb_engine::router::{Report, Router};
 use hlb_orchestrator::SwarmOrchestrator;
 use hlb_router::client::Credentials;
 
@@ -43,6 +43,9 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
         state: &state,
         vault: &vault,
     };
+    // The audit's target: the router account for what touches the router, the node for
+    // an address declared.
+    let mut target = hlb_engine::router::ACCOUNT.to_string();
     let (report, apply, action) = match cmd {
         RouterCmd::Connect {
             url,
@@ -90,21 +93,41 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
         }
         RouterCmd::Show => {
             let orch = SwarmOrchestrator::connect().await?;
-            let names = house_names(&orch, &state).await?;
-            let (config, report) = router.show(&names).await?;
+            let catalog = hlb_catalog::Catalog::load(&cli.catalog)?;
+            let (config, report) = router.show(&orch, &catalog).await?;
             if let Some(c) = &config {
                 println!("Router  {}", c.url);
                 if let Some(pin) = hlb_router::Fingerprint::parse(&c.fingerprint) {
                     println!("  certificate  SHA256 {pin}");
                 }
                 println!("  Caddy        {}, inside the house", c.caddy);
+                for (node, address) in state.router_addresses().await? {
+                    println!("  {node:<12} {address}, inside the house");
+                }
             }
             (report, false, "router-show")
         }
         RouterCmd::Sync { apply } => {
             let orch = SwarmOrchestrator::connect().await?;
-            let names = house_names(&orch, &state).await?;
-            (router.sync(&names, *apply).await?, *apply, "router-sync")
+            // Applied, it is recorded as the night's run is: the inbox advises this
+            // command, which must clear what it says.
+            let catalog = hlb_catalog::Catalog::load(&cli.catalog)?;
+            let report = if *apply {
+                router.sync_recorded(&orch, &catalog, crate::now()).await?
+            } else {
+                router.sync(&orch, &catalog, false).await?
+            };
+            (report, *apply, "router-sync")
+        }
+        RouterCmd::Address {
+            node,
+            address,
+            apply,
+        } => {
+            let orch = SwarmOrchestrator::connect().await?;
+            target = node.clone();
+            let report = router.address(&orch, node, *address, *apply).await?;
+            (report, *apply, "router-address")
         }
     };
     print(&report);
@@ -115,7 +138,7 @@ pub async fn run(cli: &Cli, cmd: &RouterCmd) -> Result<ExitCode> {
                 "cli",
                 ACTOR_ROLE,
                 action,
-                hlb_engine::router::ACCOUNT,
+                &target,
                 if failed { "failed" } else { "ok" },
                 None,
             )
@@ -153,6 +176,12 @@ fn print(r: &Report) {
             hlb_api::plural(r.unchanged as u64, "name", "names")
         );
     }
+    if r.forwards_unchanged > 0 {
+        println!(
+            "{} already forwarded from the internet.",
+            hlb_api::plural(r.forwards_unchanged as u64, "port", "ports")
+        );
+    }
     for n in &r.notes {
         println!("⚠️  {n}");
     }
@@ -165,6 +194,12 @@ fn print(r: &Report) {
 pub fn caddy_address(s: &str) -> std::result::Result<Ipv4Addr, String> {
     s.parse()
         .map_err(|_| format!("{s}: Caddy's IPv4 address on the router's network"))
+}
+
+/// Parsed by clap: an address, never a name to resolve.
+pub fn node_address(s: &str) -> std::result::Result<Ipv4Addr, String> {
+    s.parse()
+        .map_err(|_| format!("{s}: the node's IPv4 address on the router's network"))
 }
 
 #[cfg(test)]

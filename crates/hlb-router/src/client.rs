@@ -109,8 +109,117 @@ impl HostOverride {
     }
 }
 
+/// A port forward — destination NAT — as `firewall/d_nat/search_rule` lists it: its
+/// fields FLATTENED (`destination.port`), where a write nests them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PortForward {
+    pub uuid: String,
+    #[serde(default, deserialize_with = "flag")]
+    pub disabled: bool,
+    /// The network it listens on: `wan`.
+    #[serde(default)]
+    pub interface: String,
+    /// `tcp`, `udp`, `tcp/udp`; empty for any.
+    #[serde(default)]
+    pub protocol: String,
+    /// `wanip`, an address, an alias.
+    #[serde(default, rename = "destination.network")]
+    pub destination: String,
+    /// `25`, `1000:2000`, an alias.
+    #[serde(default, rename = "destination.port")]
+    pub port: String,
+    /// The address it forwards to.
+    #[serde(default)]
+    pub target: String,
+    #[serde(default, rename = "local-port")]
+    pub local_port: String,
+    #[serde(default)]
+    pub descr: String,
+    /// The anti-lockout rules (`uuid: lockout_N`): the router's, listed among the rest.
+    #[serde(default, deserialize_with = "truthy")]
+    pub is_automatic: bool,
+}
+
+/// An outbound NAT rule, as `firewall/source_nat/search_rule` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct OutboundNat {
+    pub uuid: String,
+    #[serde(default, deserialize_with = "flag")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub interface: String,
+    /// Listed in capitals (`TCP`), whatever was written.
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub source_net: String,
+    #[serde(default)]
+    pub destination_net: String,
+    #[serde(default)]
+    pub destination_port: String,
+    /// What the source becomes: `lanip`, the router's own address there.
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub description: String,
+    /// The rules the router generates itself, shown beside the written ones.
+    #[serde(default, deserialize_with = "truthy")]
+    pub is_automatic: bool,
+}
+
+/// How the router writes its outbound NAT. 🔴 In `Automatic`, a rule written by hand is
+/// SAVED and ignored: neither listed nor loaded (measured on 26.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboundMode {
+    /// Generated rules only.
+    Automatic,
+    /// Generated rules and written ones.
+    Hybrid,
+    /// Written rules only.
+    Advanced,
+    /// None at all.
+    Disabled,
+}
+
+impl OutboundMode {
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Hybrid => "hybrid",
+            Self::Advanced => "advanced",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        [
+            Self::Automatic,
+            Self::Hybrid,
+            Self::Advanced,
+            Self::Disabled,
+        ]
+        .into_iter()
+        .find(|m| m.wire() == s)
+    }
+
+    /// Whether a rule written by hand is loaded.
+    pub fn reads_written(self) -> bool {
+        matches!(self, Self::Hybrid | Self::Advanced)
+    }
+}
+
 fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
     flag_text::deserialize(d)
+}
+
+/// `true` or `"1"`: the router lists its own rules with a JSON boolean, and every other
+/// flag as text.
+fn truthy<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::Bool(b) => b,
+        Value::String(s) => s == "1",
+        _ => false,
+    })
 }
 
 mod flag_text {
@@ -368,6 +477,112 @@ impl Opnsense {
             ))),
         }
     }
+
+    pub async fn port_forwards(&self) -> Result<Vec<PortForward>> {
+        self.search("firewall/d_nat/search_rule").await
+    }
+
+    /// `rule` as [`crate::forwards::ForwardRule::body`] writes it.
+    pub async fn add_port_forward(&self, rule: &Value) -> Result<String> {
+        let call = "firewall/d_nat/add_rule";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "rule": rule })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    pub async fn set_port_forward(&self, uuid: &str, rule: &Value) -> Result<()> {
+        let call = format!("firewall/d_nat/set_rule/{uuid}");
+        self.call(reqwest::Method::POST, &call, Some(json!({ "rule": rule })))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn del_port_forward(&self, uuid: &str) -> Result<()> {
+        self.deleted(&format!("firewall/d_nat/del_rule/{uuid}"))
+            .await
+    }
+
+    pub async fn outbound_nat(&self) -> Result<Vec<OutboundNat>> {
+        self.search("firewall/source_nat/search_rule").await
+    }
+
+    pub async fn add_outbound_nat(&self, rule: &Value) -> Result<String> {
+        let call = "firewall/source_nat/add_rule";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "rule": rule })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    pub async fn set_outbound_nat(&self, uuid: &str, rule: &Value) -> Result<()> {
+        let call = format!("firewall/source_nat/set_rule/{uuid}");
+        self.call(reqwest::Method::POST, &call, Some(json!({ "rule": rule })))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn del_outbound_nat(&self, uuid: &str) -> Result<()> {
+        self.deleted(&format!("firewall/source_nat/del_rule/{uuid}"))
+            .await
+    }
+
+    /// A rule already gone is as deleted as one this call removed: a run resuming after
+    /// a failure deletes again what it had.
+    async fn deleted(&self, call: &str) -> Result<()> {
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({})))
+            .await?;
+        match v.get("result").and_then(Value::as_str) {
+            Some("deleted" | "not found") => Ok(()),
+            other => Err(Error::Unexpected(format!(
+                "{call} answered {}",
+                other.unwrap_or("nothing")
+            ))),
+        }
+    }
+
+    pub async fn outbound_mode(&self) -> Result<OutboundMode> {
+        let call = "firewall/source_nat/get";
+        let v = self.call(reqwest::Method::GET, call, None).await?;
+        selected(&v["filter"]["general"]["snat_mode"])
+            .and_then(OutboundMode::parse)
+            .ok_or_else(|| Error::Unexpected(format!("{call} named no outbound NAT mode")))
+    }
+
+    pub async fn set_outbound_mode(&self, mode: OutboundMode) -> Result<()> {
+        self.call(
+            reqwest::Method::POST,
+            "firewall/source_nat/set",
+            Some(json!({"filter": {"general": {"snat_mode": mode.wire()}}})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Loads what was saved into the firewall: a saved rule forwards nothing until then.
+    /// `which` is `d_nat` or `source_nat`.
+    pub async fn apply_firewall(&self, which: &str) -> Result<()> {
+        let call = format!("firewall/{which}/apply");
+        let v = self
+            .call(reqwest::Method::POST, &call, Some(json!({})))
+            .await?;
+        // `{"status":"OK\n\n"}`: the reload's own output, newlines and all.
+        match v.get("status").and_then(Value::as_str).map(str::trim) {
+            Some(s) if s.eq_ignore_ascii_case("ok") => Ok(()),
+            other => Err(Error::Unexpected(format!(
+                "{call} answered {}",
+                other.unwrap_or("nothing")
+            ))),
+        }
+    }
+}
+
+/// The key a `get` marks `"selected": 1` among an option field's choices.
+fn selected(options: &Value) -> Option<&str> {
+    options.as_object()?.iter().find_map(|(k, v)| {
+        (v.get("selected").and_then(Value::as_i64) == Some(1)).then_some(k.as_str())
+    })
 }
 
 #[cfg(test)]

@@ -2,7 +2,8 @@
 //! cluster, which needs the network to start. Homelabus drives it through its API.
 //!
 //! What it holds: the API client ([`client`]), the pinned certificate it is reached
-//! through ([`tls`]), and the names it answers inside the house ([`names`]). Putting
+//! through ([`tls`]), the names it answers inside the house ([`names`]) and the ports it
+//! forwards from the internet ([`forwards`]). Putting
 //! it together — the vault, the state, the routes — is `hlb_engine::router`.
 //!
 //! ## The API, as it is
@@ -18,6 +19,8 @@
 //! | API keys | `auth/user/search_api_key`, `add_api_key/{user}`, `del_api_key/{base64 key}` |
 //! | Networks | `interfaces/overview/interfaces_info` |
 //! | Unbound's overrides | `unbound/settings/{search,add,set,del}_host_override`, then `unbound/service/reconfigure` |
+//! | Port forwards | `firewall/d_nat/{search,add,set,del}_rule`, then `firewall/d_nat/apply` |
+//! | Outbound NAT | `firewall/source_nat/{search,add,set,del}_rule`, its mode `firewall/source_nat/{get,set}`, then `firewall/source_nat/apply` |
 //!
 //! Authentication by HTTP Basic, an API key and its secret, which act as the account
 //! they belong to. A key is made by an administrator (System → Access → Users → the
@@ -29,6 +32,7 @@
 //! [`Error::Refused`], never a success.
 
 pub mod client;
+pub mod forwards;
 pub mod names;
 pub mod tls;
 

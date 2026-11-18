@@ -2329,7 +2329,9 @@ mod tests {
         /// What every `exec_in_service` prints.
         exec_stdout: String,
         /// What `nodes` answers, and every label set.
-        nodes: Mutex<Vec<hlb_orchestrator::NodeInfo>>,
+        pub(crate) nodes: Mutex<Vec<hlb_orchestrator::NodeInfo>>,
+        /// What `tasks` answers, filtered by service.
+        pub(crate) tasks: Mutex<Vec<hlb_orchestrator::TaskInfo>>,
         labelled: Mutex<Vec<(String, String, String)>>,
     }
 
@@ -2518,10 +2520,17 @@ mod tests {
 
         async fn tasks(
             &self,
-            _: Option<&str>,
+            service: Option<&str>,
         ) -> hlb_orchestrator::Result<Vec<hlb_orchestrator::TaskInfo>> {
-            // A fake orchestrator has no tasks: empty is the honest answer.
-            Ok(Vec::new())
+            // None unless a test gave some: empty is the honest answer.
+            Ok(self
+                .tasks
+                .lock()
+                .expect("mutex")
+                .iter()
+                .filter(|t| service.is_none_or(|s| t.service == s))
+                .cloned()
+                .collect())
         }
 
         async fn logs(
