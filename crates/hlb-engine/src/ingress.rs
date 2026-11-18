@@ -67,8 +67,14 @@ pub enum Published {
     /// route there is.
     NoIngress,
     /// Caddy serves `routes`. `restarted`: its names on the overlay changed, which
-    /// only a new task carries — a new route alone restarts nothing.
-    Done { routes: Vec<Route>, restarted: bool },
+    /// only a new task carries — a new route alone restarts nothing. `zone`: the
+    /// house's own zone, which follows the names served; `Err` says why it did not,
+    /// the routes being published all the same.
+    Done {
+        routes: Vec<Route>,
+        restarted: bool,
+        zone: Result<crate::zone::Followed, String>,
+    },
 }
 
 /// Every route there is to publish: the installed apps', and the interface's once the
@@ -407,7 +413,17 @@ pub async fn publish<O: Orchestrator + ?Sized>(
         settle(orch).await?;
     }
     published(state, &routes).await?;
-    Ok(Published::Done { routes, restarted })
+    let zone = crate::zone::publish(orch, state)
+        .await
+        .map_err(|e| e.to_string());
+    if let Err(e) = &zone {
+        tracing::warn!(error = %e, "the zone did not follow the routes");
+    }
+    Ok(Published::Done {
+        routes,
+        restarted,
+        zone,
+    })
 }
 
 /// Records what Caddy now serves: the exposure screen compares it to what the manifests

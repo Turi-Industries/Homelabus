@@ -39,6 +39,7 @@ pub mod submission;
 pub mod termix;
 pub mod trust;
 pub mod upgrade;
+pub mod zone;
 
 pub use reconcile::{claimed_callbacks, AppBucket, Drift, PortalClient, Reconciler, Report};
 
@@ -1428,6 +1429,12 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                 if name == hlb_ingress::crowdsec::SERVICE {
                     ingress::publish(self.orchestrator, self.state, self.vault).await?;
                 }
+                // Knot up on a configuration with no zone: the house's is written now,
+                // and a zone it refuses fails its install.
+                if name == hlb_ingress::zone::SERVICE {
+                    let followed = zone::publish(self.orchestrator, self.state).await?;
+                    tracing::info!(?followed, "zone published");
+                }
                 Ok(Step::Done)
             }
 
@@ -1811,7 +1818,13 @@ impl<'a, O: Orchestrator + ?Sized> Executor<'a, O> {
                     // Done when THIS app's route is among those published: one withheld
                     // — its chain naming a link gone from hlb — is not served, and the
                     // publication after `hlb upgrade` completes it.
-                    ingress::Published::Done { routes, restarted } => {
+                    // The zone's outcome is logged by the publication: a zone refused
+                    // takes nothing from the route.
+                    ingress::Published::Done {
+                        routes,
+                        restarted,
+                        zone: _,
+                    } => {
                         tracing::info!(routes = routes.len(), restarted, "routes published");
                         if routes.iter().any(|r| r.service == app) {
                             Ok(Step::Done)

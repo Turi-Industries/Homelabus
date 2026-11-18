@@ -1879,7 +1879,31 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        files (a round a minute). The promotion is 160 s slower than on 2026-11-10
        (259): 8e's wait, the house's last handshake 360 s old before anything starts —
        the price of never having both sides written.
-  9. Then Knot (the house signing, the VPS secondary) and OPNsense.
+  9. Then Knot (the house signing, the VPS secondary) and OPNsense. A hidden primary
+     (decided by the owner 2026-11-18, revising 2026-10-31's "both are the zone's NS"):
+     the house's Knot answers the site alone, over the link, and the VPS's is the only
+     server the internet asks, its two NS names on its addresses. Every public name
+     already resolves to the door, so a house answering too adds nothing the day the
+     VPS is down, and it would need a port open at home — none behind a CGNAT — and
+     name the address the door hides. 9a the house's Knot, 9b the VPS's secondary, 9c
+     the switch at the registrar (NS, DS, the drift check expecting them), then
+     OPNsense.
+     - 9a. Knot at home. Built 2026-11-18: `hlb zone set --apex … [--address …]
+       [--extra file] --apply` (refused without a site, or an apex not holding the
+       exposure's domain), the catalog's `knot` (3.6.2, its user, read-only, port
+       10053, its volume backed up: the key cannot be made again without a new DS).
+       `hlb_ingress::zone` renders the zone — SOA, `ns1`/`ns2`, every name Caddy
+       serves on the site's addresses, the owner's own lines — and its configuration:
+       ECDSA P-256, one CSK never rolled on its own (`ksk-lifetime: 0`), NSEC3 with no
+       iteration, the serial Knot's (`difference-no-serial`, so one house renders one
+       file). A job on Knot's node, from its image, runs `kzonecheck` and `knotc
+       conf-check` before renaming either file into the volume, reloads Knot over its
+       socket and waits for the DNSKEY; a zone refused leaves the one served
+       (`tests/zone_signs.rs`, the real image: signed, a CNAME beside a published name
+       refused and nothing of it served, a Knot stopped reading it at start). Every
+       publication of the routes publishes the zone after them, a failure said beside
+       the routes and never taking them back. Left: the lab, and mail's records and the
+       CAA pins in the zone (9c).
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

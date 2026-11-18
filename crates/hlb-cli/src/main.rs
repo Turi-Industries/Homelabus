@@ -23,6 +23,7 @@ mod termix;
 mod undo;
 mod ups;
 mod verify_boot;
+mod zone;
 
 /// The catalog's YAML, carried in the binary by `build.rs`.
 mod carried_catalog {
@@ -311,6 +312,11 @@ enum Command {
     /// by a registrar's support, a lock lifted, a transfer begun.
     #[command(subcommand)]
     Domain(DomainCmd),
+
+    /// The house's own zone: signed at home by Knot, served to the internet by the
+    /// site's alone. Needs the site.
+    #[command(subcommand)]
+    Zone(ZoneCmd),
 
     /// Read the manifests' assertions from the running apps now — what each must keep
     /// true, by its effect — and record them for the inbox.
@@ -1748,6 +1754,31 @@ enum DomainCmd {
     /// the certificates issued until now — those found foreign included — accepted.
     /// Preview by default.
     Accept {
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ZoneCmd {
+    /// The zone as the house would serve it now, and whether Knot runs.
+    Show,
+    /// Declare the zone the house signs: every name Caddy serves and both name servers
+    /// resolve to the site's addresses, followed at each publication of the routes.
+    /// Installs Knot the first time. Preview by default.
+    Set {
+        /// The registered name whose name servers the registrar holds: the exposure's
+        /// domain or a parent of it.
+        #[arg(long)]
+        apex: String,
+        /// The site's public addresses, repeated for IPv4 and IPv6. The site's endpoint
+        /// when it is an address.
+        #[arg(long)]
+        address: Vec<String>,
+        /// A file of the owner's own lines, relative to the apex — what the house does
+        /// not publish itself. Kept from the last declaration when absent.
+        #[arg(long)]
+        extra: Option<std::path::PathBuf>,
         #[arg(long)]
         apply: bool,
     },
@@ -7428,7 +7459,12 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
                 }
 
                 match hlb_engine::ingress::publish(&orch, &state, Some(&vault)).await? {
-                    hlb_engine::ingress::Published::Done { routes, restarted } => {
+                    hlb_engine::ingress::Published::Done {
+                        routes,
+                        restarted,
+                        zone,
+                    } => {
+                        zone::say(&zone);
                         let n = hlb_api::plural(routes.len() as u64, "route", "routes");
                         state
                             .audit(
@@ -8582,6 +8618,11 @@ fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
         Command::Domain(cmd) => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(domain::run(&cli, cmd))
+        }
+
+        Command::Zone(cmd) => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(zone::run(&cli, cmd))
         }
 
         Command::User(cmd) => {

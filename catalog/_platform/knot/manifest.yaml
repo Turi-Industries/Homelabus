@@ -1,0 +1,56 @@
+apiVersion: hlb/v1
+kind: PlatformService
+metadata:
+  name: knot
+  hlb: ">=0.4.9"
+  displayName: Knot DNS
+  category: platform
+  homepage: https://www.knot-dns.cz
+spec:
+  image: { repo: cznic/knot, tag: "v3.6.2", digest: "sha256:174b0fcb24c6c3bc5065c9d1ce46b588eec607a5f32bc40ff0cda60150f00bd9" }
+  requires:
+    # The signing key, the journal holding the serial, and the zone `hlb` writes.
+    # Backed up: lost, the DS the registrar holds signs nothing, and every resolver
+    # validating DNSSEC refuses the whole domain until the owner enters a new one.
+    - kind: storage
+      name: data
+      path: /storage
+      tier: local
+      backup: true
+  # The image's command is a shell. Its run directory, which holds the control socket a
+  # job on this node reloads it through, lives in the volume.
+  command: [sh, -c, "mkdir -p /storage/run /storage/hlb && exec knotd -c /etc/knot/knot.conf"]
+  # Everything but the zone, which `hlb zone` writes into the volume at each
+  # publication and this includes. Held equal to `hlb_ingress::zone::BASE_CONF`.
+  files:
+    - path: /etc/knot/knot.conf
+      content: |
+        server:
+            rundir: /storage/run
+            listen: [ 0.0.0.0@10053, ::@10053 ]
+            identity: ""
+            version: ""
+        log:
+          - target: stdout
+            any: info
+        database:
+            storage: /storage
+        include: /storage/hlb/*.conf
+  security:
+    # The image's own user, which owns the volume's directory in the image.
+    user: "53:53"
+    # A hidden primary: the site's Knot alone asks it, over the site link, which lets
+    # this port through and nothing else of the house's.
+    publishedPorts: [10053, "10053/udp"]
+    # A text configuration is compiled into a database under /tmp at start.
+    tmpfs: [/tmp]
+  swarm:
+    memory: { reserve: 16M, limit: 128M }
+    # One signer: two would each make a key, and the zone would carry both.
+    replicas: 1
+    tier: light
+    healthcheck:
+      test: ["CMD", "knotc", "-s", "/storage/run/knot.sock", "status"]
+  update:
+    channel: minor
+    notes: { github: CZ-NIC/knot }
