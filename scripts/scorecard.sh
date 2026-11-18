@@ -153,7 +153,13 @@ row "4 no Rust" "apps that reached an installed house through a catalog pull req
 # owner's reaction comes after it and no drill can count that.
 promote=$(measured available-promote-seconds)
 if [[ -n $promote ]]; then
-    row "5 available" "seconds until the vital apps answer from the VPS, the house cut" "$promote, the alert after $(measured available-alert-seconds); home again $(measured available-return-seconds) after the line" "measured each release"
+    lost=$(measured available-lost-postgres-seconds)
+    if [[ -n $lost ]]; then
+        lost="; the writes lost before the cut: $lost s of the vital database, $(measured available-lost-sqlite-seconds) of a SQLite, $(measured available-lost-files-seconds) of files"
+    else
+        lost="; the writes lost UNMEASURED"
+    fi
+    row "5 available" "seconds until the vital apps answer from the VPS, the house cut" "$promote, the alert after $(measured available-alert-seconds); home again $(measured available-return-seconds) after the line$lost" "measured each release"
 else
     row "5 available" "seconds until the vital apps answer from the VPS, the house cut" "UNMEASURED — probe: \`scripts/drills/available.sh\`" "measured each release"
 fi

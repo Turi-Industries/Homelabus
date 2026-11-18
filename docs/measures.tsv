@@ -71,3 +71,9 @@ date	hlb	measure	value	note
 2026-11-10	0.4.9-dev	available-alert-seconds	140	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; Gatus every minute, 3 failures
 2026-11-10	0.4.9-dev	available-promote-seconds	259	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; promoted over SSH at the alert, the owner's reaction not counted
 2026-11-10	0.4.9-dev	available-return-seconds	122	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.hlb.test vw.lab; hlb site return at once, the site's writes brought home
+2026-11-15	0.4.9-dev	available-alert-seconds	176	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; Gatus every minute, 3 failures
+2026-11-15	0.4.9-dev	available-promote-seconds	418	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; promoted over SSH at the alert, the owner's reaction not counted
+2026-11-15	0.4.9-dev	available-return-seconds	158	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; hlb site return at once, the site's writes brought home
+2026-11-15	0.4.9-dev	available-lost-postgres-seconds	22	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; a row a second into Vaultwarden's database, the newest the site's standby replayed
+2026-11-15	0.4.9-dev	available-lost-sqlite-seconds	1	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; a row a second into PocketID's SQLite, the newest its Litestream replica restored
+2026-11-15	0.4.9-dev	available-lost-files-seconds	30	lab: 4 GB VPS on hlb-internet, house deb1+deb2; pocket-id.lab.test vaultwarden.lab.test; a file a second in Vaultwarden's volume, the newest round laid

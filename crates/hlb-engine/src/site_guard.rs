@@ -411,7 +411,9 @@ mod tests {
         let (code, took, said) = wait(&format!("a\\t{}\\n", epoch(5)), 7);
         assert_eq!(code, 0, "{said}");
         assert!(said.ends_with("waited\n"), "{said}");
-        assert!((2..6).contains(&took.as_secs()), "{took:?}");
+        // From 1 s: a second turning between `epoch` and the script's `date` makes it 6 s
+        // old (CI waited 1.03 s).
+        assert!((1..6).contains(&took.as_secs()), "{took:?}");
     }
 
     #[test]
@@ -428,8 +430,12 @@ mod tests {
     fn the_promotion_waits_out_what_is_left() {
         let (code, took, said) = wait(&format!("a\\t{}\\n", epoch(298)), 300);
         assert_eq!(code, 0, "{said}");
-        assert!(said.contains("waiting 2 s more"), "{said}");
+        // 1 s when a second turns between `epoch` and the script's `date`.
+        assert!(
+            said.contains("waiting 2 s more") || said.contains("waiting 1 s more"),
+            "{said}"
+        );
         assert!(said.ends_with("waited\n"), "{said}");
-        assert!((2..6).contains(&took.as_secs()), "{took:?}");
+        assert!((1..6).contains(&took.as_secs()), "{took:?}");
     }
 }
