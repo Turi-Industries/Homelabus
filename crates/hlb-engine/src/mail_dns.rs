@@ -273,7 +273,7 @@ pub fn stalwart_dns_server(
                     Ok(ip) => (ip, 53).into(),
                     Err(_) => {
                         return Err("Stalwart reaches an RFC 2136 server by its IP address, \
-                                    and the exposure names it otherwise")
+                                    and the exposure names it otherwise");
                     }
                 },
             };
@@ -291,7 +291,7 @@ pub fn stalwart_dns_server(
         // through it would overwrite the certificate challenge's, and a duckdns.org
         // name has no MX of its own to receive mail by anyway.
         "duckdns" => {
-            return Err("DuckDNS keeps one TXT a name, which the certificate's challenge holds")
+            return Err("DuckDNS keeps one TXT a name, which the certificate's challenge holds");
         }
         _ => return Err("Homelabus does not know how Stalwart publishes through it"),
     })
@@ -397,7 +397,7 @@ async fn through(
                 return Err(hlb_mail::Error::NeedsV1(
                     "publishing DKIM into the house's delegated zone".into(),
                 )
-                .into())
+                .into());
             }
         }
         let knot = knot.ok_or_else(|| {
@@ -452,6 +452,41 @@ async fn through(
     }))
 }
 
+/// Nothing left to publish through: the domains Homelabus's server publishes go back to
+/// the person, and the server goes.
+///
+/// 🔴 Left in place after `hlb zone switch --back` with no provider, the server kept
+/// writing into a `_domainkey` child the zone no longer delegates: every update refused,
+/// and a rotated key published nowhere.
+async fn withdraw(mail: &hlb_mail::Stalwart, apply: bool) -> crate::Result<Vec<String>> {
+    let servers = mail.dns_servers().await?;
+    let Some(ours) = servers.iter().find(|s| s.description.starts_with(OURS)) else {
+        return Ok(Vec::new());
+    };
+    let mut changed = Vec::new();
+    for d in mail.domains_dns().await?.iter().filter(|d| {
+        d.published_by
+            .as_ref()
+            .is_some_and(|(server, _)| *server == ours.id)
+    }) {
+        changed.push(format!(
+            "{}: DKIM no longer published by Stalwart — nothing to publish through",
+            d.name
+        ));
+        if apply {
+            mail.set_manual_dns(&d.id).await?;
+        }
+    }
+    changed.push(format!(
+        "Stalwart's DNS server removed ({})",
+        ours.description
+    ));
+    if apply {
+        mail.destroy_dns_server(&ours.id).await?;
+    }
+    Ok(changed)
+}
+
 /// Stalwart publishes and rotates the DKIM keys of the mail domains through the DNS
 /// provider the exposure uses — the credential `hlb config exposure` already keeps — or,
 /// once the registrar delegates to it, into the house's own zone, on Knot at `knot`.
@@ -483,7 +518,7 @@ pub async fn publish_dkim(
         origins,
     }) = through(state, vault, mail, knot, &exposure).await?
     else {
-        return Ok(Vec::new());
+        return withdraw(mail, apply).await;
     };
     let kind = body
         .get("@type")

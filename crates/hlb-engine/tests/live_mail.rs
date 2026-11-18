@@ -982,7 +982,9 @@ async fn dkim_goes_through_the_exposures_provider_once_and_follows_its_credentia
         !said.is_empty() && said.iter().all(|o| o.contains(why)),
         "the reason beside the missing key: {said:?}"
     );
-    println!("✓ through the exposure's provider, once; its credential followed; retried; said why: {said:?}");
+    println!(
+        "✓ through the exposure's provider, once; its credential followed; retried; said why: {said:?}"
+    );
     stop();
 }
 
@@ -1253,6 +1255,32 @@ async fn dkim_goes_into_the_houses_delegated_zone_once_stalwart_is_told_its_orig
             .is_err_and(|e| e.to_string().contains("Knot is not running")),
         "{lost:?}"
     );
+
+    // Switched back with no provider: the child is gone, so is Stalwart's server.
+    state
+        .set_zone(&hlb_state::ZoneConfig {
+            delegated: false,
+            ..config.clone()
+        })
+        .await
+        .expect("back");
+    let withdrawn = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, knot_ip, true)
+        .await
+        .expect("withdrawn");
+    assert_eq!(withdrawn.len(), 2, "{withdrawn:?}");
+    let d = s
+        .domains_dns()
+        .await
+        .expect("read")
+        .into_iter()
+        .find(|d| d.id == domain)
+        .expect("the domain");
+    assert_eq!(d.published_by, None, "back to the person");
+    assert!(s.dns_servers().await.expect("read").is_empty());
+    let again = hlb_engine::mail_dns::publish_dkim(&state, &vault, &s, knot_ip, true)
+        .await
+        .expect("again");
+    assert!(again.is_empty(), "once: {again:?}");
     println!("✓ both keys written by Stalwart into _domainkey.example.org, once");
     knot_down();
     stop();
