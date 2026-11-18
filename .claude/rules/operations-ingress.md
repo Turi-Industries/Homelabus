@@ -139,11 +139,25 @@ some mistakes loudly; the others are a 502, or a door left open.
   `destination_net` is multiple, each item checked against the names it knows (`any`,
   `(self)`, `opt1`, `opt1ip`, the aliases); a typed network joins them only when the
   WHOLE value is one (`NetworkAliasField.php`), so `10.0.0.0/8,172.16.0.0/12` is
-  refused "not a valid source IP address or alias" (26.7, measured). One block rule per private range (`hlb_router::filter`);
-  an alias would hold the list, and a rule naming an alias a person removed loads
-  nothing.
+  refused "not a valid source IP address or alias" (26.7, measured). One block rule
+  per private range (`hlb_router::filter`); an alias would hold the list, and a rule
+  naming an alias a person removed loads nothing.
 - **A new filter rule is read last.** pf decides by the first matching rule, in
   `sequence` order, and the router numbers a new one after every other (highest plus
   100). A person's rule on Devices or Guests is therefore read after Homelabus's `pass`
   to the internet, never reached, unless its sequence is below `filter::SEQUENCE`
   (300000): the sync says which of theirs are, and puts its own back where they were.
+- **🔴 Unbound serves `home.arpa` itself, and answers NXDOMAIN under it.** 1.25's
+  default local zones hold `home.arpa.`, `service.arpa.` and `resolver.arpa.` as
+  `static`: a forward of `home.arpa` to dnsmasq was written, loaded (`list_forwards`)
+  and never asked, while dnsmasq answered `deb2.home.arpa` on 53053 (2026-11-18). The
+  fix is `local-zone: … nodefault`, which no API of 26.7 writes: the networks' names
+  live under the router's own domain, the zone OPNsense makes transparent
+  (`networks::domain_of`). A reverse zone escapes it — OPNsense writes a forwarded
+  `in-addr.arpa` zone `typetransparent`.
+- **A forwarded reverse zone would loop without `bogus-priv`.** dnsmasq asks its
+  upstream — Unbound, on the same router (`using nameserver 127.0.0.1#53`) — for an
+  address it has no lease for, and Unbound forwards the zone back to it. `dnsmasq_wanted` turns on `no_private_reverse`.
+- **`drill` reads its options BEFORE the server.** `drill @127.0.0.1 -p 53053 name`
+  asks port 53 — Unbound — and looked like dnsmasq answering nothing; `drill -p 53053
+  name @127.0.0.1` asks dnsmasq.

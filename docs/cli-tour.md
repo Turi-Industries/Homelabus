@@ -751,10 +751,11 @@ console) and one for its guests, each a VLAN tagged on the trusted network's por
 VLAN-aware switch or access point carries all three on the router's one LAN cable. The
 sync makes the VLAN and the router's interface on it; OPNsense's API cannot address an
 interface, so the sync says what to do on the router's pages, then reads the address
-back and hands out a DHCP range there, the names under `home.arpa`. Each network may
-then ask the router's DNS and reach the internet, the devices network Caddy's 80 and 443
-too, and nothing else: not the trusted network, not the router. The rules are written
-on those two interfaces only, never on the one the API is reached by:
+back and hands out a DHCP range there. Its machines are named under the network's own
+domain beneath the router's (`tv.devices.internal`), which the router's DNS answers.
+Each network may then ask that DNS and reach the internet, the devices network Caddy's
+80 and 443 too, and nothing else: not the trusted network, not the router. The rules are
+written on those two interfaces only, never on the one the API is reached by:
 
 ```sh
 ./target/debug/hlb router network devices --vlan 20 --apply

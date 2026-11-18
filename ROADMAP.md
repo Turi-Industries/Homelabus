@@ -2089,6 +2089,29 @@ until Vaultwarden and PocketID answer from the VPS, then the way back, both time
        10.99.0.3, deb2 the banner by reflection, the nodes go out through it, the
        mesh's links came back from 10.99.0.3, and a second sync changed nothing.
        Done.
+     - 9h. The house's three networks. Built 2026-11-18 (decided that day: VLANs tagged
+       on the LAN port, the trusted network untagged, so the router needs two ports).
+       `hlb router network devices|guests --vlan N` declares one; the sync makes the
+       VLAN and its interface, and 🔴 26.7's API cannot address an interface: it says
+       the step a person takes on the router's pages, then reads the address back —
+       the router is where it lives. Then a dnsmasq range from the tenth address,
+       dnsmasq turned on for those interfaces alone (a fresh router holds a LAN range
+       it must not start serving). The filter rules, on those interfaces only — 9g's
+       guarantee holds, the LAN the API is reached by is never written: the router's
+       DNS, Caddy's 80 and 443 for devices, the router itself and every private range
+       blocked, the internet passed; from sequence 300000, a person's own rule below
+       it read first and said. The names: 🔴 never `home.arpa` (decided first) —
+       Unbound serves it as a static zone whatever forward exists, and the API cannot
+       lift it; each network's own domain under the router's (`tv.devices.internal`,
+       decided 2026-11-18), Unbound forwarding it and the network's reverse zone to
+       dnsmasq, which answers NXDOMAIN for a private address it does not know rather
+       than ask Unbound back. Proved on the lab from clients on deb2 in VLANs 20 and
+       30: leases, DNS, the internet, Caddy from devices only; deb1, deb2, the router
+       and 10.99 refused; `deb2.devices.internal` and `deb2.guests.internal` both
+       answered with their PTRs; a second sync changed nothing, `--off` took a
+       network's range and rules away. Left: the trusted network's own DHCP (the lab's
+       dnsmasq serves it), and IPv6 on the two networks, which their rules leave to
+       the router's default deny. Done.
 
 **5. Always up to date.** Gate: a patch applied with nobody there; an exploited CVE
 reported within 24 hours.

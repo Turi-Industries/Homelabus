@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::filter::Listed as FilterRule;
-use crate::networks::{DhcpRange, Dnsmasq, Vlan};
+use crate::networks::{DhcpRange, Dnsmasq, Forward, Vlan};
 use crate::tls::{self, Fingerprint};
 use crate::{Error, Result};
 
@@ -466,6 +466,32 @@ impl Opnsense {
         Ok(())
     }
 
+    /// Unbound's query forwards — not its DNS-over-TLS ones, listed apart.
+    pub async fn unbound_forwards(&self) -> Result<Vec<Forward>> {
+        self.search("unbound/settings/search_forward").await
+    }
+
+    /// `f` as [`crate::networks::ForwardRule::body`] writes it.
+    pub async fn add_unbound_forward(&self, f: &Value) -> Result<String> {
+        let call = "unbound/settings/add_forward";
+        let v = self
+            .call(reqwest::Method::POST, call, Some(json!({ "dot": f })))
+            .await?;
+        Self::saved(&v, call)
+    }
+
+    pub async fn set_unbound_forward(&self, uuid: &str, f: &Value) -> Result<()> {
+        let call = format!("unbound/settings/set_forward/{uuid}");
+        self.call(reqwest::Method::POST, &call, Some(json!({ "dot": f })))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn del_unbound_forward(&self, uuid: &str) -> Result<()> {
+        self.deleted(&format!("unbound/settings/del_forward/{uuid}"))
+            .await
+    }
+
     /// Unbound reads what was saved only once reconfigured: a saved override answers
     /// nothing until then.
     pub async fn reconfigure_unbound(&self) -> Result<()> {
@@ -708,6 +734,8 @@ impl Opnsense {
         Ok(Dnsmasq {
             enabled,
             interfaces,
+            port: d["port"].as_str().unwrap_or_default().to_string(),
+            bogus_priv: d["no_private_reverse"].as_str() == Some("1"),
         })
     }
 
@@ -718,6 +746,7 @@ impl Opnsense {
             Some(json!({"dnsmasq": {
                 "enable": if d.enabled { "1" } else { "0" },
                 "interface": d.interfaces.join(","),
+                "no_private_reverse": if d.bogus_priv { "1" } else { "0" },
             }})),
         )
         .await?;

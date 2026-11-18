@@ -804,6 +804,11 @@ impl Router<'_> {
         apply: bool,
         r: &mut Report,
     ) -> crate::Result<()> {
+        let router_name = r
+            .system
+            .as_ref()
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let declared: Vec<(Kind, u16)> = self
             .state
             .router_networks()
@@ -903,16 +908,19 @@ impl Router<'_> {
         }
 
         let mut wanted: Vec<networks::RangeRule> = Vec::new();
+        // Each addressed network's zones: its names, and its reverse zone when it has one.
+        let mut zones: Vec<(Kind, String)> = Vec::new();
         for (k, tag) in &declared {
             let Some(net) = networks::vlan_of(&vlans, &parent, *tag)
                 .and_then(|v| networks::interface_of(&networks, v.device()))
             else {
                 continue;
             };
-            let change = format!(
-                "addresses handed out by DHCP, named under {}",
-                networks::DOMAIN
-            );
+            let domain = networks::domain_of(*k, &router_name);
+            let change = match &domain {
+                Some(d) => format!("addresses handed out by DHCP, named under {d}"),
+                None => "addresses handed out by DHCP".to_string(),
+            };
             if net.addr4.is_empty() {
                 r.push(
                     &subject(*k),
@@ -922,12 +930,30 @@ impl Router<'_> {
                 continue;
             }
             match networks::range_of(&net.addr4) {
-                Ok((start, end)) => wanted.push(networks::RangeRule {
-                    kind: *k,
-                    interface: net.identifier.clone(),
-                    start,
-                    end,
-                }),
+                Ok((start, end)) => {
+                    match &domain {
+                        Some(d) => zones.push((*k, d.clone())),
+                        // Served without names: an address is still a network.
+                        None => r.push(
+                            &subject(*k),
+                            "its machines named by the router's DNS",
+                            Outcome::NotConfigured(format!(
+                                "the router is named {router_name:?}, with no domain to name \
+                                 them under: System → Settings → General → Domain"
+                            )),
+                        ),
+                    }
+                    if let Some(z) = networks::reverse_zone(&net.addr4) {
+                        zones.push((*k, z));
+                    }
+                    wanted.push(networks::RangeRule {
+                        kind: *k,
+                        interface: net.identifier.clone(),
+                        start,
+                        end,
+                        domain: domain.unwrap_or_default(),
+                    });
+                }
                 Err(why) => r.push(&subject(*k), change, Outcome::NotConfigured(why)),
             }
         }
@@ -946,12 +972,19 @@ impl Router<'_> {
         let mut changed = false;
         for e in &plan.edits {
             let (who, change) = match e {
-                networks::RangeEdit::Add(w) => {
-                    (subject(w.kind), format!("hands out {}–{}", w.start, w.end))
-                }
+                networks::RangeEdit::Add(w) => (
+                    subject(w.kind),
+                    format!(
+                        "hands out {}",
+                        networks::spans(&w.start.to_string(), &w.end.to_string(), &w.domain)
+                    ),
+                ),
                 networks::RangeEdit::Update { to, was, .. } => (
                     subject(to.kind),
-                    format!("hands out {}–{} (was {was})", to.start, to.end),
+                    format!(
+                        "hands out {} (was {was})",
+                        networks::spans(&to.start.to_string(), &to.end.to_string(), &to.domain)
+                    ),
                 ),
                 networks::RangeEdit::Remove { interface, .. } => (
                     kind_of(interface),
@@ -979,8 +1012,16 @@ impl Router<'_> {
         }
 
         let ours: Vec<String> = wanted.iter().map(|w| w.interface.clone()).collect();
-        if let Some(d) = networks::dnsmasq_wanted(&router.dnsmasq().await?, &ours) {
-            let change = format!("DHCP served on {}", d.interfaces.join(", "));
+        let current = router.dnsmasq().await?;
+        if let Some(d) = networks::dnsmasq_wanted(&current, &ours) {
+            let change = format!(
+                "DHCP served on {}, an address it has no name for never asked back of Unbound",
+                if d.interfaces.is_empty() {
+                    "every interface".to_string()
+                } else {
+                    d.interfaces.join(", ")
+                }
+            );
             if !apply {
                 r.push("dnsmasq", change, Outcome::ToDo);
             } else {
@@ -1003,7 +1044,100 @@ impl Router<'_> {
             }
         }
         r.networks_unchanged = plan.unchanged;
+        self.sync_zones(router, &current, &zones, apply, r).await?;
         self.sync_rules(router, caddy, &wanted, apply, r).await
+    }
+
+    /// Unbound — the DNS the networks ask — forwarding each network's zones to dnsmasq,
+    /// which names what it hands out.
+    async fn sync_zones(
+        &self,
+        router: &Opnsense,
+        dnsmasq: &networks::Dnsmasq,
+        zones: &[(Kind, String)],
+        apply: bool,
+        r: &mut Report,
+    ) -> crate::Result<()> {
+        let subject = |k: Kind| format!("{} network", k.wire());
+        let port = match dnsmasq.dns_port() {
+            Ok(p) => p,
+            Err(why) => {
+                if let Some((k, _)) = zones.first() {
+                    r.push(
+                        &subject(*k),
+                        "its machines named by the router's DNS",
+                        Outcome::NotConfigured(why),
+                    );
+                }
+                return Ok(());
+            }
+        };
+        let wanted: Vec<networks::ForwardRule> = zones
+            .iter()
+            .map(|(kind, zone)| networks::ForwardRule {
+                kind: *kind,
+                zone: zone.clone(),
+                port,
+            })
+            .collect();
+        let plan = networks::forwards(&wanted, &router.unbound_forwards().await?);
+        for (zone, to) in &plan.theirs {
+            r.notes.push(format!(
+                "{zone} is forwarded to {to} by a forward of someone else's: left as it is"
+            ));
+        }
+        let says = |w: &networks::ForwardRule| {
+            if w.zone.ends_with(".in-addr.arpa") {
+                format!("its addresses named back by the router's DNS ({})", w.zone)
+            } else {
+                format!("its machines named by the router's DNS, under {}", w.zone)
+            }
+        };
+        let mut changed = false;
+        let mut done =
+            |r: &mut Report, who: &str, change: String, res: hlb_router::Result<()>| match res {
+                Ok(()) => {
+                    changed = true;
+                    r.push(who, change, Outcome::Done);
+                }
+                Err(e) => r.push(who, change, Outcome::Failed(e.to_string())),
+            };
+        for w in &plan.adds {
+            if !apply {
+                r.push(&subject(w.kind), says(w), Outcome::ToDo);
+                continue;
+            }
+            let res = router.add_unbound_forward(&w.body()).await.map(|_| ());
+            done(r, &subject(w.kind), says(w), res);
+        }
+        for (uuid, w) in &plan.updates {
+            let change = format!("{} (its forward rewritten)", says(w));
+            if !apply {
+                r.push(&subject(w.kind), change, Outcome::ToDo);
+                continue;
+            }
+            let res = router.set_unbound_forward(uuid, &w.body()).await;
+            done(r, &subject(w.kind), change, res);
+        }
+        for (uuid, zone) in &plan.removes {
+            let change = format!("Unbound's forward of {zone} to dnsmasq, removed");
+            if !apply {
+                r.push("unbound", change, Outcome::ToDo);
+                continue;
+            }
+            let res = router.del_unbound_forward(uuid).await;
+            done(r, "unbound", change, res);
+        }
+        if changed {
+            if let Err(e) = router.reconfigure_unbound().await {
+                r.push(
+                    "unbound",
+                    "reconfigured, to forward what was saved",
+                    Outcome::Failed(e.to_string()),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// What each addressed network may reach (`hlb_router::filter`), on its interface

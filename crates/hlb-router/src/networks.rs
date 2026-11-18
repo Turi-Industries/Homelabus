@@ -11,7 +11,15 @@
 //!    API for an interface's addressing (`interfaces/assignment` takes a device and a
 //!    name, nothing more; the rest is the legacy page's), so Homelabus says what to do
 //!    and reads the address back. The router is where the address lives.
-//! 4. A DHCP range of dnsmasq's on it, its names under [`DOMAIN`].
+//! 4. A DHCP range of dnsmasq's on it, the names it hands out under the network's
+//!    own domain ([`domain_of`]: `devices.internal`), and Unbound — the router's DNS —
+//!    forwarding that domain and the network's reverse zone to dnsmasq.
+//!
+//! 🔴 Never `home.arpa` (RFC 8375): Unbound serves it as a `static` local zone by
+//! default, which answers NXDOMAIN under it whatever forward exists, and 26.7's API
+//! cannot write the `nodefault` lifting it — dnsmasq answered `deb2.home.arpa`, the
+//! router's DNS never did (1.25.1, measured). The router's own domain is the one zone
+//! OPNsense makes transparent itself.
 //!
 //! The network is recognised by its VLAN's tag and parent, whoever made it: a VLAN a
 //! person made with the declared tag IS the declared network.
@@ -26,9 +34,8 @@ use crate::client::Network;
 /// The description of what Homelabus writes. ⚠️ A stored value: the router keeps it.
 pub const MARK: &str = crate::names::MARK;
 
-/// The domain a machine's name is registered under by DHCP (RFC 8375): never the
-/// internet's, never the house's public zone.
-pub const DOMAIN: &str = "home.arpa";
+/// Where Unbound reaches dnsmasq's DNS: on the router itself.
+const DNSMASQ_ADDRESS: &str = "127.0.0.1";
 
 /// How far into a network the range starts: the first addresses stay a person's, for a
 /// machine they number by hand.
@@ -132,6 +139,36 @@ pub fn address_steps(kind: Kind, identifier: &str, tag: u16) -> String {
     )
 }
 
+/// The domain a network's machines are named under: the network's own, under the
+/// router's (`OPNsense.internal` → `devices.internal`), so a laptop on each network
+/// keeps its name and the name says the network. `None` for a router named without a
+/// domain.
+pub fn domain_of(kind: Kind, router_name: &str) -> Option<String> {
+    let (_, domain) = router_name.trim().trim_end_matches('.').split_once('.')?;
+    (!domain.is_empty()).then(|| format!("{}.{}", kind.wire(), domain.to_ascii_lowercase()))
+}
+
+/// The reverse zone of the network the router is at `addr4` on, for a private one cut
+/// at an octet: `192.168.20.1/24` → `20.168.192.in-addr.arpa`. Another prefix has no
+/// zone of its own, and a public one is the internet's to answer.
+pub fn reverse_zone(addr4: &str) -> Option<String> {
+    let (own, len) = addr4.split_once('/')?;
+    let own: Ipv4Addr = own.parse().ok()?;
+    let octets = match len.parse::<u8>().ok()? {
+        8 => 1,
+        16 => 2,
+        24 => 3,
+        _ => return None,
+    };
+    if !own.is_private() {
+        return None;
+    }
+    let o = own.octets();
+    let mut labels: Vec<String> = o[..octets].iter().rev().map(u8::to_string).collect();
+    labels.push("in-addr.arpa".into());
+    Some(labels.join("."))
+}
+
 /// A dnsmasq DHCP range, as `dnsmasq/settings/search_range` lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DhcpRange {
@@ -168,6 +205,8 @@ pub struct RangeRule {
     pub interface: String,
     pub start: Ipv4Addr,
     pub end: Ipv4Addr,
+    /// What its machines are named under: [`domain_of`].
+    pub domain: String,
 }
 
 impl RangeRule {
@@ -177,7 +216,7 @@ impl RangeRule {
             "start_addr": self.start.to_string(),
             "end_addr": self.end.to_string(),
             "domain_type": "range",
-            "domain": DOMAIN,
+            "domain": self.domain,
             "description": MARK,
         })
     }
@@ -186,7 +225,7 @@ impl RangeRule {
         l.interface == self.interface
             && l.start_addr == self.start.to_string()
             && l.end_addr == self.end.to_string()
-            && l.domain == DOMAIN
+            && l.domain == self.domain
     }
 }
 
@@ -222,6 +261,15 @@ pub fn range_of(addr4: &str) -> Result<(Ipv4Addr, Ipv4Addr), String> {
         ));
     }
     Ok((Ipv4Addr::from(start), Ipv4Addr::from(end)))
+}
+
+/// A range as said: `192.168.20.10–192.168.20.254 under devices.internal`.
+pub fn spans(start: &str, end: &str, domain: &str) -> String {
+    if domain.is_empty() {
+        format!("{start}–{end}")
+    } else {
+        format!("{start}–{end} under {domain}")
+    }
 }
 
 /// One change to the ranges.
@@ -276,7 +324,7 @@ pub fn ranges(wanted: &[RangeRule], actual: &[DhcpRange]) -> RangePlan {
                     out.edits.push(RangeEdit::Update {
                         uuid: first.uuid.clone(),
                         to: w.clone(),
-                        was: format!("{}–{}", first.start_addr, first.end_addr),
+                        was: spans(&first.start_addr, &first.end_addr, &first.domain),
                     });
                 }
                 for extra in rest {
@@ -313,12 +361,144 @@ pub fn ranges(wanted: &[RangeRule], actual: &[DhcpRange]) -> RangePlan {
     out
 }
 
+/// A query forward of Unbound's, as `unbound/settings/search_forward` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Forward {
+    pub uuid: String,
+    #[serde(default, deserialize_with = "crate::client::flag")]
+    pub enabled: bool,
+    /// Empty for every domain.
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
+    pub server: String,
+    #[serde(default)]
+    pub port: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl Forward {
+    fn ours(&self) -> bool {
+        self.description == MARK
+    }
+
+    fn zone(&self) -> String {
+        self.domain.trim_end_matches('.').to_ascii_lowercase()
+    }
+}
+
+/// A zone Unbound asks dnsmasq for: a network's names, or its reverse zone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardRule {
+    pub kind: Kind,
+    pub zone: String,
+    /// dnsmasq's DNS port: [`Dnsmasq::dns_port`].
+    pub port: u16,
+}
+
+impl ForwardRule {
+    /// As `unbound/settings/add_forward` takes it; the call sets its type.
+    pub fn body(&self) -> Value {
+        json!({
+            "enabled": "1",
+            "domain": self.zone,
+            "server": DNSMASQ_ADDRESS,
+            "port": self.port.to_string(),
+            "description": MARK,
+        })
+    }
+
+    fn same(&self, l: &Forward) -> bool {
+        l.enabled && l.server == DNSMASQ_ADDRESS && l.port == self.port.to_string()
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ForwardPlan {
+    pub adds: Vec<ForwardRule>,
+    pub updates: Vec<(String, ForwardRule)>,
+    /// `(uuid, zone)`: Homelabus's, for a zone no longer a network's, or a second one.
+    pub removes: Vec<(String, String)>,
+    pub unchanged: usize,
+    /// A person's own forward of the zone: `(zone, where to)`. It decides where the
+    /// zone is asked, and Homelabus writes none beside it.
+    pub theirs: Vec<(String, String)>,
+}
+
+/// The changes making Unbound's forwards of Homelabus's hold `wanted`.
+pub fn forwards(wanted: &[ForwardRule], actual: &[Forward]) -> ForwardPlan {
+    let mut out = ForwardPlan::default();
+    let mut kept: Vec<&str> = Vec::new();
+    for w in wanted {
+        if let Some(t) = actual.iter().find(|l| !l.ours() && l.zone() == w.zone) {
+            let to = if t.port.is_empty() {
+                t.server.clone()
+            } else {
+                format!("{}@{}", t.server, t.port)
+            };
+            out.theirs.push((w.zone.clone(), to));
+            continue;
+        }
+        let mine: Vec<&Forward> = actual
+            .iter()
+            .filter(|l| l.ours() && l.zone() == w.zone)
+            .collect();
+        match mine.split_first() {
+            None => out.adds.push(w.clone()),
+            Some((first, rest)) => {
+                kept.push(&first.uuid);
+                if w.same(first) {
+                    out.unchanged += 1;
+                } else {
+                    out.updates.push((first.uuid.clone(), w.clone()));
+                }
+                for extra in rest {
+                    kept.push(&extra.uuid);
+                    out.removes.push((extra.uuid.clone(), extra.zone()));
+                }
+            }
+        }
+    }
+    for gone in actual
+        .iter()
+        .filter(|l| l.ours() && !kept.contains(&l.uuid.as_str()))
+    {
+        out.removes.push((gone.uuid.clone(), gone.zone()));
+    }
+    out
+}
+
 /// What of dnsmasq's general settings Homelabus reads and writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dnsmasq {
     pub enabled: bool,
     /// Where it listens; empty for every interface.
     pub interfaces: Vec<String>,
+    /// Its DNS's port: `0` for none, empty for 53.
+    pub port: String,
+    /// `no_private_reverse`: a private address it has no name for is NXDOMAIN, never
+    /// asked upstream — which is Unbound, forwarding the zone back to it.
+    pub bogus_priv: bool,
+}
+
+impl Dnsmasq {
+    /// Where Unbound reaches its DNS, or why it cannot.
+    pub fn dns_port(&self) -> Result<u16, String> {
+        match self.port.trim() {
+            "0" => Err(
+                "dnsmasq answers no DNS (its port is 0): the names it hands out \
+                        cannot be resolved"
+                    .into(),
+            ),
+            "" | "53" => Err("dnsmasq's DNS is on port 53, Unbound's: give it another \
+                              (Services → Dnsmasq → General → Listen port, 53053 by default)"
+                .into()),
+            p => p
+                .parse()
+                .map_err(|_| format!("dnsmasq's DNS port {p} is no port")),
+        }
+    }
 }
 
 /// The settings making dnsmasq serve `ours` too, or `None` when it already does.
@@ -333,7 +513,10 @@ pub fn dnsmasq_wanted(current: &Dnsmasq, ours: &[String]) -> Option<Dnsmasq> {
     }
     let mut interfaces: Vec<String> = if current.enabled {
         if current.interfaces.is_empty() {
-            return None;
+            return (!current.bogus_priv).then(|| Dnsmasq {
+                bogus_priv: true,
+                ..current.clone()
+            });
         }
         current.interfaces.clone()
     } else {
@@ -350,8 +533,10 @@ pub fn dnsmasq_wanted(current: &Dnsmasq, ours: &[String]) -> Option<Dnsmasq> {
     let wanted = Dnsmasq {
         enabled: true,
         interfaces,
+        port: current.port.clone(),
+        bogus_priv: true,
     };
-    (!(current.enabled && was == wanted.interfaces)).then_some(wanted)
+    (!(current.enabled && current.bogus_priv && was == wanted.interfaces)).then_some(wanted)
 }
 
 #[cfg(test)]
@@ -373,6 +558,7 @@ mod tests {
             interface: interface.into(),
             start: start.into(),
             end: end.into(),
+            domain: "devices.internal".into(),
         }
     }
 
@@ -382,7 +568,7 @@ mod tests {
             interface: r.interface.clone(),
             start_addr: r.start.to_string(),
             end_addr: r.end.to_string(),
-            domain: DOMAIN.into(),
+            domain: r.domain.clone(),
             description: MARK.into(),
         }
     }
@@ -460,7 +646,7 @@ mod tests {
         let body = w.body();
         assert_eq!(
             (&body["domain"], &body["description"]),
-            (&json!(DOMAIN), &json!(MARK))
+            (&json!("devices.internal"), &json!(MARK))
         );
         let again = ranges(std::slice::from_ref(&w), &[listed("r1", &w)]);
         assert!(again.edits.is_empty(), "{again:?}");
@@ -477,7 +663,7 @@ mod tests {
             vec![RangeEdit::Update {
                 uuid: "r1".into(),
                 to: after,
-                was: "192.168.20.10–192.168.20.254".into()
+                was: "192.168.20.10–192.168.20.254 under devices.internal".into()
             }]
         );
         let gone = ranges(&[], &[listed("r1", &before)]);
@@ -527,41 +713,138 @@ mod tests {
         );
     }
 
+    fn dnsmasq(enabled: bool, interfaces: &[&str], bogus_priv: bool) -> Dnsmasq {
+        Dnsmasq {
+            enabled,
+            interfaces: interfaces.iter().map(|i| i.to_string()).collect(),
+            port: "53053".into(),
+            bogus_priv,
+        }
+    }
+
     #[test]
     fn dnsmasq_turned_on_listens_on_homelabuss_networks_alone() {
-        let off = Dnsmasq {
-            enabled: false,
-            interfaces: vec!["lan".into()],
-        };
+        let off = dnsmasq(false, &["lan"], false);
         assert_eq!(
             dnsmasq_wanted(&off, &["opt2".into(), "opt1".into()]),
-            Some(Dnsmasq {
-                enabled: true,
-                interfaces: vec!["opt1".into(), "opt2".into()]
-            }),
+            Some(dnsmasq(true, &["opt1", "opt2"], true)),
             "the LAN's first-boot range stays unserved"
         );
-        let on = Dnsmasq {
-            enabled: true,
-            interfaces: vec!["lan".into()],
-        };
+        let on = dnsmasq(true, &["lan"], false);
         assert_eq!(
             dnsmasq_wanted(&on, &["opt1".into()]),
-            Some(Dnsmasq {
-                enabled: true,
-                interfaces: vec!["lan".into(), "opt1".into()]
-            })
+            Some(dnsmasq(true, &["lan", "opt1"], true))
         );
-        let done = Dnsmasq {
-            enabled: true,
-            interfaces: vec!["opt1".into(), "lan".into()],
-        };
+        let done = dnsmasq(true, &["opt1", "lan"], true);
         assert_eq!(dnsmasq_wanted(&done, &["opt1".into()]), None);
-        let everywhere = Dnsmasq {
-            enabled: true,
-            interfaces: vec![],
-        };
+        assert_eq!(
+            dnsmasq_wanted(&dnsmasq(true, &["opt1", "lan"], false), &["opt1".into()]),
+            Some(dnsmasq(true, &["lan", "opt1"], true)),
+            "a reverse zone asked of it is never asked back of Unbound"
+        );
+        let everywhere = dnsmasq(true, &[], true);
         assert_eq!(dnsmasq_wanted(&everywhere, &["opt1".into()]), None);
+        assert_eq!(
+            dnsmasq_wanted(&dnsmasq(true, &[], false), &["opt1".into()]),
+            Some(dnsmasq(true, &[], true))
+        );
         assert_eq!(dnsmasq_wanted(&off, &[]), None, "nothing of ours: left");
+    }
+
+    #[test]
+    fn a_networks_names_are_its_own_under_the_routers_domain() {
+        assert_eq!(
+            domain_of(Kind::Devices, "OPNsense.internal").as_deref(),
+            Some("devices.internal")
+        );
+        assert_eq!(
+            domain_of(Kind::Guests, "fw.Home.Example.org.").as_deref(),
+            Some("guests.home.example.org")
+        );
+        assert_eq!(domain_of(Kind::Guests, "OPNsense"), None);
+        assert_eq!(domain_of(Kind::Guests, ""), None);
+    }
+
+    #[test]
+    fn a_private_network_cut_at_an_octet_has_a_reverse_zone() {
+        assert_eq!(
+            reverse_zone("192.168.20.1/24").as_deref(),
+            Some("20.168.192.in-addr.arpa")
+        );
+        assert_eq!(
+            reverse_zone("10.20.0.1/16").as_deref(),
+            Some("20.10.in-addr.arpa")
+        );
+        assert_eq!(
+            reverse_zone("10.0.0.1/8").as_deref(),
+            Some("10.in-addr.arpa")
+        );
+        assert_eq!(reverse_zone("192.168.16.1/20"), None, "no zone of its own");
+        assert_eq!(reverse_zone("203.0.113.1/24"), None, "the internet's");
+        assert_eq!(reverse_zone(""), None);
+    }
+
+    #[test]
+    fn dnsmasq_is_reached_on_a_port_of_its_own() {
+        assert_eq!(dnsmasq(true, &[], true).dns_port(), Ok(53053));
+        for port in ["", "53", "0", "x"] {
+            let mut d = dnsmasq(true, &[], true);
+            d.port = port.into();
+            assert!(d.dns_port().is_err(), "{port:?}");
+        }
+    }
+
+    fn zone(z: &str) -> ForwardRule {
+        ForwardRule {
+            kind: Kind::Devices,
+            zone: z.into(),
+            port: 53053,
+        }
+    }
+
+    #[test]
+    fn a_networks_zones_are_forwarded_to_dnsmasq_and_a_persons_left() {
+        // As OPNsense 26.7 listed the probe written on the lab.
+        let row = r#"{"uuid":"a9a5","enabled":"1","type":"forward","%type":"Forward","domain":"devices.internal","server":"127.0.0.1","port":"53053","verify":"","forward_tcp_upstream":"0","forward_first":"0","description":"homelabus"}"#;
+        let ours: Forward = serde_json::from_str(row).expect("a row");
+        let names = zone("devices.internal");
+        let body = names.body();
+        assert_eq!(
+            (&body["server"], &body["port"], &body["description"]),
+            (&json!("127.0.0.1"), &json!("53053"), &json!(MARK))
+        );
+        let p = forwards(
+            &[names.clone(), zone("20.168.192.in-addr.arpa")],
+            std::slice::from_ref(&ours),
+        );
+        assert_eq!(p.unchanged, 1);
+        assert_eq!(p.adds, vec![zone("20.168.192.in-addr.arpa")]);
+
+        let mut moved = ours.clone();
+        moved.port = "5353".into();
+        let p = forwards(std::slice::from_ref(&names), &[moved]);
+        assert_eq!(p.updates, vec![("a9a5".to_string(), names.clone())]);
+
+        let gone = forwards(&[], std::slice::from_ref(&ours));
+        assert_eq!(
+            gone.removes,
+            vec![("a9a5".into(), "devices.internal".into())]
+        );
+
+        let mut theirs = ours.clone();
+        theirs.uuid = "p1".into();
+        theirs.description = "pihole".into();
+        theirs.server = "192.168.1.5".into();
+        theirs.port = String::new();
+        let p = forwards(std::slice::from_ref(&names), &[theirs, ours]);
+        assert_eq!(
+            p.theirs,
+            vec![("devices.internal".into(), "192.168.1.5".into())]
+        );
+        assert_eq!(
+            p.removes,
+            vec![("a9a5".into(), "devices.internal".into())],
+            "one forward of a zone: theirs decides"
+        );
     }
 }
