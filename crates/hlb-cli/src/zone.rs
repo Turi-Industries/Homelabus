@@ -209,7 +209,12 @@ async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
                 "The zone is not delegated: Caddy and Stalwart write at the DNS provider."
             }
         );
-        return Ok(ExitCode::SUCCESS);
+        // 🔴 The switch is recorded before the zone and the routes follow it: one they
+        // refused is finished by running it again, which publishes both once more.
+        if !apply {
+            return Ok(ExitCode::SUCCESS);
+        }
+        return follow_switch(cli, &state, &vault).await;
     }
     if delegated {
         println!(
@@ -248,16 +253,26 @@ async fn switch(cli: &Cli, delegated: bool, apply: bool) -> Result<ExitCode> {
             Some(if delegated { "delegated" } else { "back" }),
         )
         .await?;
+    follow_switch(cli, &state, &vault).await
+}
+
+/// The zone, then the routes, published as the switch now says.
+async fn follow_switch(
+    cli: &Cli,
+    state: &hlb_state::State,
+    vault: &hlb_secrets::Vault,
+) -> Result<ExitCode> {
     let orch = SwarmOrchestrator::connect().await?;
     // The zones below first: Caddy, told next, may write a challenge at once.
-    match hlb_engine::zone::publish(&orch, &state, Some(&vault)).await {
+    match hlb_engine::zone::publish(&orch, state, Some(vault)).await {
         Ok(f) => say(&Ok(f)),
         Err(e) => {
             say(&Err(e.to_string()));
+            println!("Once it is fixed, the same switch run again finishes it.");
             return Ok(ExitCode::FAILURE);
         }
     }
-    crate::exposure::republish(cli, &state).await;
+    crate::exposure::republish(cli, state).await;
     Ok(ExitCode::SUCCESS)
 }
 
