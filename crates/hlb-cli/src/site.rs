@@ -439,6 +439,10 @@ async fn serve_zone(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) ->
         }
         Err(e) => return fail("the house's zone", &e),
     };
+    let port = match name_server::free_port(hub).await {
+        Ok(port) => port,
+        Err(e) => return fail("port 53", &e),
+    };
     let how = match name_server::deploy(hub, s, &config.apex, &key).await {
         Ok(how) => how,
         Err(e) => return fail("its service", &e),
@@ -451,6 +455,12 @@ async fn serve_zone(state: &State, vault: &Vault, hub: &dyn Runner, s: &Site) ->
         how.says(),
         config.apex
     );
+    if port == name_server::Port::StubTurnedOff {
+        println!(
+            "   Port 53 was systemd-resolved's stub: turned off, the site now asks its \
+             upstream resolvers directly."
+        );
+    }
     println!(
         "   It answers once the registrar delegates {} to ns1 and ns2.{} at {}.",
         config.apex, config.apex, s.endpoint
