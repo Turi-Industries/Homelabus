@@ -164,6 +164,27 @@ fn the_zone() -> Zone {
         names: vec!["vault.lab.test".into(), "id.lab.test".into()],
         extra: "@ TXT \"kept\"\n".into(),
         transfer: None,
+        mail: Vec::new(),
+        caa: None,
+    }
+}
+
+/// A record as Stalwart writes it, its data the zone line's after the type.
+fn stalwart(line: &str) -> zone::Record {
+    let mut words = line.split_whitespace();
+    let name = words.next().unwrap().trim_end_matches('.').to_string();
+    let kind = words.nth(1).unwrap().to_string();
+    let data = line.split_once(&format!(" IN {kind} ")).unwrap().1;
+    let value = if kind == "TXT" {
+        data.split('"').skip(1).step_by(2).collect()
+    } else {
+        data.to_string()
+    };
+    zone::Record {
+        name,
+        kind,
+        value,
+        line: line.to_string(),
     }
 }
 
@@ -211,6 +232,58 @@ fn the_house_zone_is_signed_and_a_refused_one_changes_nothing() {
     assert!(
         answer.contains("10.99.0.40") && answer.contains("RRSIG"),
         "{answer}"
+    );
+}
+
+/// Stalwart's own lines — an RSA key across lines in `( … )`, absolute names — and the
+/// house's CAA pins, as Knot reads them.
+#[test]
+#[ignore = "needs Docker"]
+fn the_houses_mail_and_its_caa_are_signed_with_the_rest() {
+    let lab = Lab::up("mail");
+    let mut z = the_zone();
+    z.mail = [
+        "v1-rsa-20261019._domainkey.lab.test. IN TXT (\n    \"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApjfTAXunf\"\n    \"ZJ+iTnTjRq7hKHVGM1RiiMBtBdRNZC2NlPeycSEV+/5EI//2/AMhIn/rCQZtYEq58d2a9+KHuIDAQAB\"\n)",
+        "mail.lab.test. IN TXT \"v=spf1 a -all\"",
+        "lab.test. IN TXT \"v=spf1 mx -all\"",
+        "lab.test. IN MX 10 mail.lab.test.",
+        "_dmarc.lab.test. IN TXT \"v=DMARC1; p=reject; rua=mailto:postmaster@lab.test\"",
+        "_imaps._tcp.lab.test. IN SRV 0 1 993 mail.lab.test.",
+    ]
+    .map(stalwart)
+    .to_vec();
+    z.caa = Some(zone::Caa {
+        at: "lab.test".into(),
+        records: vec![
+            "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\""
+                .into(),
+        ],
+    });
+    let (ok, out) = lab.write(&z);
+    assert!(ok, "{out}");
+
+    let dkim = lab.dig("v1-rsa-20261019._domainkey.lab.test", "TXT");
+    assert!(
+        dkim.contains("ZJ+iTnTjRq7hKHVGM1Ri") && dkim.contains("RRSIG"),
+        "{dkim}"
+    );
+    let mx = lab.dig("lab.test", "MX");
+    assert!(
+        mx.contains("10 mail.lab.test.") && mx.contains("RRSIG"),
+        "{mx}"
+    );
+    let txt = lab.dig("lab.test", "TXT");
+    assert!(
+        txt.contains("v=spf1 mx -all") && txt.contains("\"kept\""),
+        "{txt}"
+    );
+    let srv = lab.dig("_imaps._tcp.lab.test", "SRV");
+    assert!(srv.contains("0 1 993 mail.lab.test."), "{srv}");
+    let caa = lab.dig("lab.test", "CAA");
+    assert!(
+        caa.contains("issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"")
+            && caa.contains("RRSIG\tCAA"),
+        "{caa}"
     );
 }
 

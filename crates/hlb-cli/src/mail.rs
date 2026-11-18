@@ -29,7 +29,7 @@ pub async fn run(cli: &Cli, cmd: &MailCmd) -> Result<ExitCode> {
         },
     );
     match cmd {
-        MailCmd::Dns { domain } => dns(&state, &mail, domain.as_deref()).await,
+        MailCmd::Dns { domain } => dns(cli, &state, &mail, domain.as_deref()).await,
         MailCmd::Relay { action } => relay_cmd(cli, &state, &mail, action.as_ref()).await,
         MailCmd::Queue => queue(&state, &mail).await,
         MailCmd::Migrate { apply } => migrate(cli, &state, *apply).await,
@@ -173,6 +173,7 @@ async fn relay_cmd(
 }
 
 async fn dns(
+    cli: &Cli,
     state: &hlb_state::State,
     mail: &hlb_mail::Stalwart,
     only: Option<&str>,
@@ -182,14 +183,13 @@ async fn dns(
         .map_or(0, |d| d.as_secs() as i64);
     let dns = hlb_mail::public_dns::PublicDns::default();
     let ports = hlb_engine::mail_dns::served_ports(state).await?;
-    let reading = hlb_engine::mail_dns::read(
-        mail,
-        &dns,
-        state.mail_relay_spf().await?.as_deref(),
-        &ports,
-        now,
-    )
-    .await?;
+    let relay_spf = state.mail_relay_spf().await?;
+    // The house's own zone follows Stalwart's before the internet is asked.
+    let lines = hlb_engine::mail_dns::zone_lines(mail, relay_spf.as_deref(), &ports).await?;
+    if state.keep_zone_mail(&lines).await? {
+        crate::zone::follow(cli, state).await;
+    }
+    let reading = hlb_engine::mail_dns::read(mail, &dns, relay_spf.as_deref(), &ports, now).await?;
     // Recorded whole, every domain: the inbox reads what was found now.
     state.record_mail_records(&reading.records).await?;
     if let Ok(tags) = &reading.refused_blocklists {

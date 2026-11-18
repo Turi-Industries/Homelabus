@@ -76,6 +76,9 @@ pub async fn run(cli: &Cli, cmd: &DomainCmd) -> Result<ExitCode> {
     match cmd {
         DomainCmd::Watch => {
             state.record_domain_reading(&reading).await?;
+            if hlb_engine::zone::keep_pins(&state, &reading.accounts, &unread).await? {
+                crate::zone::follow(cli, &state).await;
+            }
             if !refused.is_empty() {
                 println!(
                     "\nThe CAA refuses {}: renewals will fail — add its line, or remove the \

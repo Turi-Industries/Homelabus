@@ -95,13 +95,61 @@ pub async fn wanted(
         site: hlb_mesh::site::HUB,
         port: zone::SITE_PORT,
     });
+    let mail = hlb_api::mail_dns::parse_zone(&state.zone_mail().await?)
+        .into_iter()
+        .map(|r| zone::Record {
+            name: r.name,
+            kind: r.kind,
+            value: r.value,
+            line: r.line,
+        })
+        .collect();
     Ok(Zone {
         apex: config.apex.clone(),
         addresses,
         names,
         extra: config.extra.clone(),
         transfer,
+        mail,
+        caa: caa(state).await?,
     })
+}
+
+/// Who may issue for the house's names: under its own root, no public authority at
+/// all; under Let's Encrypt's production, its accounts as last read whole. A staging or
+/// private authority pins nothing — staging checks the CAA a pin would refuse it by.
+async fn caa(state: &State) -> crate::Result<Option<zone::Caa>> {
+    let Some(exposure) = state.exposure().await? else {
+        return Ok(None);
+    };
+    let records = if exposure.certificates == hlb_state::Certificates::Internal {
+        vec!["0 issue \";\"".to_string()]
+    } else if exposure.acme_ca.is_some() || exposure.staging {
+        return Ok(None);
+    } else {
+        state.zone_caa().await?
+    };
+    Ok((!records.is_empty()).then_some(zone::Caa {
+        at: exposure.domain,
+        records,
+    }))
+}
+
+/// Keeps the pins of a reading of the house's ACME accounts — only one that read every
+/// account: 🔴 a night Caddy's could not be read would pin Stalwart's alone, and every
+/// renewal of Caddy's would be refused by the house's own zone. `true` when they moved.
+pub async fn keep_pins(
+    state: &State,
+    accounts: &[hlb_api::domain::Account],
+    unread: &[String],
+) -> crate::Result<bool> {
+    if !unread.is_empty() || accounts.is_empty() {
+        return Ok(false);
+    }
+    let mut pins: Vec<String> = accounts.iter().map(hlb_api::domain::pin).collect();
+    pins.sort();
+    pins.dedup();
+    Ok(state.keep_zone_caa(&pins).await?)
 }
 
 /// Publishes the zone on the running Knot.
@@ -184,6 +232,92 @@ mod tests {
         assert_eq!(z.addresses, ["203.0.113.4".parse::<IpAddr>().unwrap()]);
     }
 
+    fn exposure(certificates: hlb_state::Certificates) -> hlb_state::Exposure {
+        hlb_state::Exposure {
+            domain: "home.example.org".into(),
+            certificates,
+            acme_email: Some("admin@example.org".into()),
+            dns_provider: None,
+            staging: false,
+            controller_host: None,
+            acme_ca: None,
+            acme_ca_root: None,
+        }
+    }
+
+    fn account(who: &str, n: u32) -> hlb_api::domain::Account {
+        hlb_api::domain::Account {
+            who: who.into(),
+            issuer: "letsencrypt.org".into(),
+            uri: format!("https://acme-v02.api.letsencrypt.org/acme/acct/{n}"),
+            wildcard: false,
+            validations: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stalwarts_lines_kept_are_the_zones() {
+        let s = State::in_memory().await.expect("state");
+        s.keep_zone_mail(
+            "example.org. IN MX 10 mail.example.org.\n\
+             k._domainkey.example.org. IN TXT (\n    \"v=DKIM1; p=AB\"\n    \"CD\"\n)",
+        )
+        .await
+        .expect("keep");
+        let z = wanted(&s, &config(), None).await.expect("wanted");
+        assert_eq!(z.mail.len(), 2, "{:?}", z.mail);
+        assert_eq!(
+            (z.mail[1].name.as_str(), z.mail[1].value.as_str()),
+            ("k._domainkey.example.org", "v=DKIM1; p=ABCD")
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_houses_accounts_may_issue_and_none_under_its_own_root() {
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(caa(&s).await.expect("caa"), None, "no exposure");
+
+        s.set_exposure(&exposure(hlb_state::Certificates::Internal))
+            .await
+            .expect("exposure");
+        let c = caa(&s).await.expect("caa").expect("internal");
+        assert_eq!(
+            (c.at.as_str(), c.records),
+            ("home.example.org", vec!["0 issue \";\"".to_string()])
+        );
+
+        s.set_exposure(&exposure(hlb_state::Certificates::Acme))
+            .await
+            .expect("exposure");
+        assert_eq!(caa(&s).await.expect("caa"), None, "no account read yet");
+        let both = [account("Caddy", 1), account("Stalwart", 2)];
+        assert!(keep_pins(&s, &both, &[]).await.expect("pins"));
+        assert!(!keep_pins(&s, &both, &[]).await.expect("again"));
+        // A night that read Stalwart's alone pins nothing: Caddy's stays allowed.
+        assert!(
+            !keep_pins(&s, &both[1..], &["Caddy's account not read".into()])
+                .await
+                .expect("partial")
+        );
+        let c = caa(&s).await.expect("caa").expect("acme");
+        assert_eq!(
+            c.records,
+            [
+                "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/1\"",
+                "0 issue \"letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/2\"",
+            ]
+        );
+
+        let mut staging = exposure(hlb_state::Certificates::Acme);
+        staging.staging = true;
+        s.set_exposure(&staging).await.expect("exposure");
+        assert_eq!(
+            caa(&s).await.expect("caa"),
+            None,
+            "staging checks the CAA too"
+        );
+    }
+
     #[tokio::test]
     async fn an_address_that_is_none_is_refused_before_anything_is_written() {
         let s = State::in_memory().await.expect("state");
@@ -222,6 +356,8 @@ mod tests {
             names: vec![],
             extra: String::new(),
             transfer: None,
+            mail: Vec::new(),
+            caa: None,
         });
         let job = writer("cznic/knot:v3.6.2", "example.org", &r);
         assert!(job.constraints.contains(&format!(

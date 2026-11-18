@@ -15,7 +15,47 @@ pub struct ZoneConfig {
     pub extra: String,
 }
 
+/// Stored names: the settings the zone's other records are kept under.
+const MAIL: &str = "zone-mail-records";
+const CAA: &str = "zone-caa-pins";
+
 impl State {
+    /// The lines of the house's mail the zone carries, as Stalwart computed them, kept
+    /// by the last reading of its zones; empty before one.
+    pub async fn zone_mail(&self) -> Result<String> {
+        Ok(self.setting(MAIL).await?.unwrap_or_default())
+    }
+
+    /// Keeps them; `true` when they changed, and the zone must be published again.
+    pub async fn keep_zone_mail(&self, lines: &str) -> Result<bool> {
+        self.keep(MAIL, lines).await
+    }
+
+    /// The CAA records pinning the house's ACME accounts, from the last reading that
+    /// read every one of them.
+    pub async fn zone_caa(&self) -> Result<Vec<String>> {
+        Ok(self
+            .setting(CAA)
+            .await?
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Keeps them; `true` when they changed.
+    pub async fn keep_zone_caa(&self, records: &[String]) -> Result<bool> {
+        self.keep(CAA, &records.join("\n")).await
+    }
+
+    async fn keep(&self, key: &str, value: &str) -> Result<bool> {
+        if self.setting(key).await?.unwrap_or_default() == value {
+            return Ok(false);
+        }
+        self.put_setting(key, Some(value)).await?;
+        Ok(true)
+    }
+
     pub async fn zone(&self) -> Result<Option<ZoneConfig>> {
         let Some(r) = sqlx::query("SELECT apex, addresses, extra FROM zone WHERE id = 1")
             .fetch_optional(&self.pool)
@@ -68,5 +108,20 @@ mod tests {
         z.extra.clear();
         s.set_zone(&z).await.expect("set again");
         assert_eq!(s.zone().await.expect("read"), Some(z));
+    }
+
+    #[tokio::test]
+    async fn the_zones_other_records_say_when_they_change() {
+        let s = State::in_memory().await.expect("state");
+        assert_eq!(s.zone_mail().await.expect("read"), "");
+        assert!(s.keep_zone_mail("a. IN MX 10 b.").await.expect("keep"));
+        assert!(!s.keep_zone_mail("a. IN MX 10 b.").await.expect("again"));
+        assert_eq!(s.zone_mail().await.expect("read"), "a. IN MX 10 b.");
+
+        assert!(s.zone_caa().await.expect("read").is_empty());
+        let pins = vec!["0 issue \"a\"".to_string(), "0 issue \"b\"".to_string()];
+        assert!(s.keep_zone_caa(&pins).await.expect("keep"));
+        assert!(!s.keep_zone_caa(&pins).await.expect("again"));
+        assert_eq!(s.zone_caa().await.expect("read"), pins);
     }
 }

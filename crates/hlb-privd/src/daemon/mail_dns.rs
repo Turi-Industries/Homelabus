@@ -3,6 +3,22 @@
 use hlb_api::mail_dns::{MailRecord, RecordState};
 use hlb_state::State;
 
+/// Keeps the lines of Stalwart's zones the house's own zone carries; `true` when they
+/// moved, and the zone is to be published before the records are judged.
+pub async fn keep_zone(state: &State, mail: &hlb_mail::Stalwart) -> Result<bool, String> {
+    let relay = state.mail_relay_spf().await.map_err(|e| e.to_string())?;
+    let ports = hlb_engine::mail_dns::served_ports(state)
+        .await
+        .map_err(|e| e.to_string())?;
+    let lines = hlb_engine::mail_dns::zone_lines(mail, relay.as_deref(), &ports)
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .keep_zone_mail(&lines)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Reads every record and records the reading. What is wrong, one line each, for the
 /// notification; `Err` when Stalwart could not be read, the last reading then kept.
 pub async fn read_and_record(

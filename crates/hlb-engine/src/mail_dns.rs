@@ -136,6 +136,37 @@ pub async fn read(
     Ok(out)
 }
 
+/// The lines the house's own zone carries for its mail: every record judged, as it
+/// must read, and the others offered — Stalwart's zones read alone, no resolver asked.
+/// Read before the records are judged, so a key Stalwart made today is served by the
+/// time the internet is asked for it.
+pub async fn zone_lines(
+    mail: &hlb_mail::Stalwart,
+    relay_spf: Option<&str>,
+    ports: &[u16],
+) -> crate::Result<String> {
+    let mut out = Vec::new();
+    for (domain, zone) in mail.zones().await? {
+        out.extend(lines_of(&domain, &zone, relay_spf, ports));
+    }
+    Ok(out.join("\n"))
+}
+
+fn lines_of(domain: &str, zone: &str, relay_spf: Option<&str>, ports: &[u16]) -> Vec<String> {
+    let zone = mail_dns::parse_zone(zone);
+    let needed = mail_dns::needed(domain, &zone);
+    let offered: Vec<String> = zone
+        .iter()
+        .filter(|r| !needed.iter().any(|(_, n)| n == *r) && mail_dns::served(r, ports))
+        .map(|r| r.line.clone())
+        .collect();
+    expected(domain, needed, relay_spf)
+        .into_iter()
+        .map(|(_, r)| r.line)
+        .chain(offered)
+        .collect()
+}
+
 /// Why Stalwart's publishing did not land, from its latest task that says: a task done
 /// is removed, so what is left is pending or has failed.
 fn publishing_failure(tasks: &[hlb_mail::DnsTask]) -> Option<String> {
@@ -453,6 +484,29 @@ pub async fn publish_dkim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_zone_carries_what_is_judged_as_it_must_read_and_what_is_offered() {
+        let zone =
+            "v1-ed25519-20261019._domainkey.example.org. IN TXT \"v=DKIM1; k=ed25519; p=AB\"\n\
+                    mail.example.org. IN TXT \"v=spf1 a -all\"\n\
+                    example.org. IN TXT \"v=spf1 mx -all\"\n\
+                    example.org. IN MX 10 mail.example.org.\n\
+                    _imaps._tcp.example.org. IN SRV 0 1 993 mail.example.org.\n\
+                    _pop3s._tcp.example.org. IN SRV 0 1 995 mail.example.org.\n\
+                    mta-sts.example.org. IN CNAME mail.example.org.\n";
+        let lines = lines_of("example.org", zone, Some("include:relay.example"), &[993]);
+        assert_eq!(
+            lines,
+            [
+                "v1-ed25519-20261019._domainkey.example.org. IN TXT \"v=DKIM1; k=ed25519; p=AB\"",
+                "mail.example.org. IN TXT \"v=spf1 a -all\"",
+                "example.org. IN TXT \"v=spf1 mx include:relay.example -all\"",
+                "example.org. IN MX 10 mail.example.org.",
+                "_imaps._tcp.example.org. IN SRV 0 1 993 mail.example.org.",
+            ]
+        );
+    }
 
     #[test]
     fn a_key_missing_says_why_stalwart_did_not_publish_it() {
