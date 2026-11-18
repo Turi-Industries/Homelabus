@@ -155,9 +155,14 @@ fn the_wildcard_is_validated_through_the_houses_zone() {
     let r = zone::render(&z);
     let staged = stand.dir.path().join("staged");
     std::fs::create_dir_all(&staged).unwrap();
-    std::fs::write(staged.join("zone"), &r.zone).unwrap();
-    std::fs::write(staged.join("zone.conf"), &r.conf).unwrap();
-    std::fs::write(staged.join("check.conf"), zone::check_conf()).unwrap();
+    for (path, content) in r.staged() {
+        let file = staged.join(std::path::Path::new(path).file_name().unwrap());
+        let _ = std::fs::remove_file(&file);
+        std::fs::write(&file, content).unwrap();
+        // As Swarm mounts a job's files: read-only, to their owner too.
+        std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+            .unwrap();
+    }
     let staged = format!("{}:/run/hlb:ro", staged.display());
     ok(&[
         "run",

@@ -1047,9 +1047,14 @@ fn knot(z: &hlb_ingress::zone::Zone) -> String {
     let r = zone::render(z);
     let staged = dir.path().join("staged");
     std::fs::create_dir_all(&staged).expect("staged");
-    std::fs::write(staged.join("zone"), &r.zone).expect("zone");
-    std::fs::write(staged.join("zone.conf"), &r.conf).expect("zone.conf");
-    std::fs::write(staged.join("check.conf"), zone::check_conf()).expect("check.conf");
+    for (path, content) in r.staged() {
+        let file = staged.join(std::path::Path::new(path).file_name().expect("staged"));
+        let _ = std::fs::remove_file(&file);
+        std::fs::write(&file, content).expect("staged");
+        // As Swarm mounts a job's files: read-only, to their owner too.
+        std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o444))
+            .expect("staged");
+    }
     let staged = format!("{}:/run/hlb:ro", staged.display());
     let out = run(
         &["--rm", "-v", &staged],

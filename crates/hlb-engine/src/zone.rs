@@ -284,15 +284,15 @@ pub fn writer(image: &str, apex: &str, rendered: &zone::Rendered) -> ServiceSpec
             "node.labels.{}==true",
             hlb_types::manifest::data_label(zone::SERVICE)
         ))
-        .mount(VOLUME, zone::STORAGE)
-        .file(zone::STAGED_ZONE, rendered.zone.as_str())
-        .file(zone::STAGED_CONF, rendered.conf.as_str())
-        .file(zone::STAGED_CHECK, zone::check_conf())
-        .command([
-            "sh".to_string(),
-            "-c".to_string(),
-            zone::writer_script(apex, &rendered.children),
-        ]);
+        .mount(VOLUME, zone::STORAGE);
+    for (path, content) in rendered.staged() {
+        job = job.file(path, content);
+    }
+    let mut job = job.command([
+        "sh".to_string(),
+        "-c".to_string(),
+        zone::writer_script(apex, &rendered.children),
+    ]);
     // Knot's own user, so what it writes in the volume stays Knot's; `conf-check`
     // compiles the configuration under /tmp.
     job.hardening.user = Some("53:53".into());

@@ -811,6 +811,17 @@ pub fn check_conf() -> String {
     format!("include: {STAGED_CONF}\n")
 }
 
+/// The files the writer is given, where it finds each.
+impl Rendered {
+    pub fn staged(&self) -> [(&'static str, String); 3] {
+        [
+            (STAGED_ZONE, self.zone.clone()),
+            (STAGED_CONF, self.conf.clone()),
+            (STAGED_CHECK, check_conf()),
+        ]
+    }
+}
+
 /// The writer: a job on Knot's node, from Knot's image, mounting its volume. Both
 /// files are checked by Knot's own tools before either is put in place; the zones below
 /// the house's are created when Knot has none of them yet, and their DS appended to the
@@ -821,22 +832,28 @@ pub fn check_conf() -> String {
 /// first checks pass, and the house's zone only once it holds every DS. The
 /// configuration goes first: the zones it declares exist before the zone delegating to
 /// them is served.
+///
+/// 🔴 Copied with `cat`, never `cp`: Swarm mounts the staged files 0444, `cp` carries
+/// that mode over, and Knot's user — every capability dropped — could not append the
+/// children's DS to its own copy (lab, 2026-11-18). A copy a refused run left behind
+/// is removed first, for the same reason.
 pub fn writer_script(apex: &str, children: &[Child]) -> String {
     let knotc = format!("knotc -s {SOCKET}");
     let mut out = format!(
         "set -e\n\
          mkdir -p {DIR} {STORAGE}/run\n\
+         rm -f {DIR}/.zone.next {DIR}/.conf.next\n\
          kzonecheck -o '{apex}' {STAGED_ZONE}\n\
          knotc -c {STAGED_CHECK} conf-check\n\
          if [ ! -S {SOCKET} ]; then\n\
-         \x20   cp {STAGED_ZONE} {DIR}/.zone.next && mv {DIR}/.zone.next {DIR}/zone\n\
-         \x20   cp {STAGED_CONF} {DIR}/.conf.next && mv {DIR}/.conf.next {DIR}/zone.conf\n\
+         \x20   cat {STAGED_ZONE} > {DIR}/.zone.next && mv {DIR}/.zone.next {DIR}/zone\n\
+         \x20   cat {STAGED_CONF} > {DIR}/.conf.next && mv {DIR}/.conf.next {DIR}/zone.conf\n\
          \x20   echo 'Knot is not running: it reads the zone when it starts'\n\
          \x20   exit 0\n\
          fi\n\
-         cp {STAGED_CONF} {DIR}/.conf.next && mv {DIR}/.conf.next {DIR}/zone.conf\n\
+         cat {STAGED_CONF} > {DIR}/.conf.next && mv {DIR}/.conf.next {DIR}/zone.conf\n\
          {knotc} reload\n\
-         cp {STAGED_ZONE} {DIR}/.zone.next\n"
+         cat {STAGED_ZONE} > {DIR}/.zone.next\n"
     );
     for c in children {
         let name = c.name.as_str();
