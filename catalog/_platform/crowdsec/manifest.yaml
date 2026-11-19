@@ -9,7 +9,7 @@ metadata:
 spec:
   # A patch version: the project publishes NO rolling `v1.7` tag — the one written
   # here until 2026-10-11 passed validation and could not be pulled.
-  image: { repo: crowdsecurity/crowdsec, tag: "v1.8.1", digest: "sha256:0f2523fa61ef507f15d953045cface490cc880670c62f2755ced17524107f71a" }
+  image: { repo: crowdsecurity/crowdsec, tag: "v1.8.2", digest: "sha256:65b74942f7e7ed5c60fde4ac15fc4ba715904c398c8b16dd451f4907d90347d4" }
   requires:
     # The decisions database and the machine credentials. Backed up: losing it again
     # means re-enrolling every bouncer by hand.
