@@ -66,7 +66,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 # The Docker CLI: backups and dumps run in containers it starts. A static binary,
 # taken from Docker's own image rather than a distribution's lagging package.
-COPY --from=docker:29.9-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29.9-cli@sha256:5a7af0dcb0e46c803efe9b45371dd21cb500e5b4453250394ac6f06d49b6e6f1 /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/target/release/hlb-controller /usr/local/bin/hlb-controller
 # The daemon, run from the same image: `hlb fleet controller` gives its service the
 # command `hlb-privd`, and the web side's the entrypoint below.
